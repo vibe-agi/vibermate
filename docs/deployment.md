@@ -21,6 +21,24 @@ connects from another device, choose one of the HTTPS modes or use an
 authenticated, trusted tunnel. Never hand users `0.0.0.0`, a container `172.x`
 address, or a certificate warning page.
 
+## Capturing Codex sessions
+
+`vibermate run -- codex`, `vibermate run -- codex resume` and
+`vibermate run -- codex fork` start work with this capture's own backend and
+traffic policy. Supported clients receive `--no-daemon` automatically; the
+verified 0.145.0 launch recipe uses config overrides that prevent daemon reuse.
+Ordinary `codex exec`, `codex review` and foreground `codex app-server` keep
+their native startup behavior.
+
+Connecting with `--remote`, `codex agents` or `app-server daemon/proxy` would
+reuse a backend whose traffic policy belongs to another process. These modes
+and unproven session controls are rejected before launch. Use a Codex version
+supporting `--no-daemon` and run one of the independent commands above without
+those modes. ViberMate leaves existing backends and session locks in place;
+resuming a locked session may require waiting for its owner or forking saved
+history. An isolation error also means the client help contract could not be
+read within its limits or the argument mode could not be safely classified.
+
 ## Three connections, three kinds of trust
 
 1. Browser/CLI → ViberMate: protected by the **Server HTTPS certificate**
@@ -104,6 +122,31 @@ Proxy CA does not fix a server certificate error. Remote clients should prefer
 HTTPS; HTTP is only for trusted local or private networks.
 
 ## Private HTTPS without a public domain
+
+### Install the client CA on another device
+
+Run these on the **device or container that actually runs the Agent**:
+
+```sh
+vibermate login --server https://vibermate.home.arpa:9666
+vibermate ca install --server https://vibermate.home.arpa:9666
+vibermate ca status --server https://vibermate.home.arpa:9666
+```
+
+Upgrade both the client and Server to a version supporting these commands.
+A logged-in client can download only the public CA, without management access.
+If an older Server rejects the download, upgrade the Server first.
+
+The CLI detects macOS or Linux. macOS uses current-user trust; Linux uses the native
+distribution tool and requests administrator permission when needed. Use
+`vibermate ca download --server <origin> --out root.crt` to export without installation
+or overwriting a file. Check the server and SHA-256 fingerprint before consenting;
+installation is followed by a fresh local trust check.
+
+This is the **traffic-inspection CA**, not a login credential or public HTTPS leaf.
+Trust on the host does not enter containers automatically. Unattended HTTP installation
+requires an independently checked `--fingerprint <SHA-256>` together with `--yes`.
+The command never disables server TLS verification.
 
 ### Option A: a custom name plus the hosts file
 
@@ -367,6 +410,52 @@ Everyone signs in to the Web page and the CLI with their own account. Users can
 change their own password, and the owner can reset members' passwords. The
 recovery key can only be read on the server itself. Rotate it after use, and
 never share it with members.
+
+## Private rollback snapshots
+
+The internal schema-upgrade snapshot is a private, local rollback copy. It
+includes every present persistent file in the data directory, including local
+provider credential stores, configuration, history, evidence and CA private
+keys. Keep it in a private location with owner-only directories (0700) and
+files (0600). It is not encrypted at rest. Ordinary backups retain their
+existing credential exclusions; this snapshot is not a downloadable export.
+
+Stop every Runtime and attached Server host before restoring. Independently
+validate the snapshot, restore into a new directory, then validate the restored
+data before selecting it. Retain the original source directory; a failed copy
+or restore never makes the destination authoritative. An incomplete snapshot
+without a verified completion manifest must not be used for rollback.
+If creation reports a failure, treat any remaining directory or manifest as
+incomplete. A later independent validation must verify the entire snapshot
+and flush its files and directory entries before it can be used.
+
+Local file credentials retain their original account references after restore.
+External and keychain credentials stay in their existing locations on the
+original host and are not exported.
+
+Stopped revision-1 data upgrades automatically to revision 2 at startup, under
+exclusive data and server locks. Startup first creates and verifies a fresh
+private snapshot of the complete directory, including local secrets, then
+upgrades SQLite in one fully synchronized transaction. Keep the snapshot
+private and retain it; it is not an ordinary shareable backup.
+
+Desktop readiness normally has a two-minute budget after its initial starting
+frame. One storage preparation or upgrade frame allows at most twenty minutes
+from process launch, with fifteen minutes for owned work and bounded commit
+reconciliation. Large retained WAL data may show preparation before its format
+is checked. Preparation conveys no credential or permission authority.
+
+“Data upgrade incomplete; original data retained” means startup did not activate
+the runtime. Keep the source directory, snapshot and any private upgrade receipt.
+An uncertain commit is checked again synchronously on the next owned startup;
+it is never blindly restored. Once a committed upgrade is proved, the receipt
+is removed and synchronized before normal writes begin. Retry only after the
+previous process exits and releases its locks. A storage upgrade failure never
+selects a previous directory or starts another daemon automatically.
+
+To recover old data, restore the verified private snapshot to a new sibling
+directory and verify it before selecting it. Do not overwrite the source or
+restore over an active runtime. There is no manual primary upgrade command.
 
 ## Diagnostics and checks
 

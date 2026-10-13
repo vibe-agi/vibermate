@@ -42,11 +42,11 @@ func TestBodyAdmissionHTTPFourActiveFourUnreadWaiters(t *testing.T) {
 				}
 			}()
 			raw := &admissionRawCounter{}
-			fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), raw, "", func(o *loopbackproxy.Options) {
+			fixture := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), raw, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), configureProxy: func(o *loopbackproxy.Options) {
 				o.BodyAdmission = gate
 				o.Assignments = admissionAssignments{o.Assignments, entered}
 				o.Exchanges = admissionExecutor{o.Exchanges, executing, release}
-			})
+			}})
 			defer fixture.Close(t)
 			if _, err := fixture.runs.Attach(context.Background(), fixture.grant.Run.ID, fixture.grant.ControlCapability, 321); err != nil {
 				t.Fatal(err)
@@ -212,7 +212,7 @@ func TestBodyAdmissionHTTPRetainsSlotThroughDownstreamFinalize(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := &heldFinalRaw{entered: make(chan struct{}), release: make(chan struct{})}
-	fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), raw, "", func(o *loopbackproxy.Options) { o.BodyAdmission = gate })
+	fixture := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), raw, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), configureProxy: func(o *loopbackproxy.Options) { o.BodyAdmission = gate }})
 	defer fixture.Close(t)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(fixture.authority.Certificate().CertificatePEM())
@@ -287,10 +287,10 @@ func TestBodyAdmissionHTTPCancellationAndReadConstructorFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			entered := make(chan struct{}, 8)
-			fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), nil, "", func(o *loopbackproxy.Options) {
+			fixture := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), nil, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), configureProxy: func(o *loopbackproxy.Options) {
 				o.BodyAdmission = gate
 				o.Assignments = admissionAssignments{o.Assignments, entered}
-			})
+			}})
 			defer fixture.Close(t)
 			roots := x509.NewCertPool()
 			roots.AppendCertsFromPEM(fixture.authority.Certificate().CertificatePEM())

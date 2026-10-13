@@ -147,6 +147,7 @@ type Options struct {
 	Authorities         CaptureAuthorityResolver
 	ProxyOrigin         string
 	ManualProxyOrigin   string
+	ManualSOCKSAddress  string
 	Generation          string
 	RootIdentity        localca.RootIdentity
 	Root                localca.RootCertificate
@@ -177,20 +178,21 @@ func (delivery ProxyDelivery) Valid() bool {
 // creation. Transport handlers authenticate and decode; neither may recreate
 // ownership, Root delivery, or proxy grant policy.
 type Issuer struct {
-	runs              capturerun.Controller
-	manuals           manualcapture.Controller
-	verifier          clientadapter.Verifier
-	authorities       CaptureAuthorityResolver
-	proxyOrigin       string
-	manualProxyOrigin string
-	generation        string
-	rootID            localca.RootIdentity
-	root              localca.RootCertificate
-	runLifetime       time.Duration
-	workspaces        WorkspaceResolver
-	rootAsk           ClientRootApprovals
-	companions        clientadapter.Catalog
-	proxy             ProxyDelivery
+	runs               capturerun.Controller
+	manuals            manualcapture.Controller
+	verifier           clientadapter.Verifier
+	authorities        CaptureAuthorityResolver
+	proxyOrigin        string
+	manualProxyOrigin  string
+	manualSOCKSAddress string
+	generation         string
+	rootID             localca.RootIdentity
+	root               localca.RootCertificate
+	runLifetime        time.Duration
+	workspaces         WorkspaceResolver
+	rootAsk            ClientRootApprovals
+	companions         clientadapter.Catalog
+	proxy              ProxyDelivery
 }
 
 func New(options Options) (*Issuer, error) {
@@ -204,6 +206,18 @@ func New(options Options) (*Issuer, error) {
 	}
 	if !options.ProxyDelivery.Valid() {
 		return nil, errors.New("capture grant proxy delivery is invalid")
+	}
+	if options.ManualSOCKSAddress != "" {
+		address, err := serverconnection.ParseAddress(options.ManualSOCKSAddress)
+		if err != nil || address.String() != options.ManualSOCKSAddress {
+			return nil, errors.New("ManualCapture SOCKS address is not canonical")
+		}
+		if options.ProxyDelivery == ProxyDeliveryLocalListener {
+			host, _, _ := net.SplitHostPort(address.String())
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				return nil, errors.New("local ManualCapture SOCKS address is not literal loopback")
+			}
+		}
 	}
 	switch options.ProxyDelivery {
 	case ProxyDeliveryLocalListener:
@@ -230,20 +244,21 @@ func New(options Options) (*Issuer, error) {
 		return nil, errors.New("capture grant public Root delivery is incomplete")
 	}
 	return &Issuer{
-		runs:              options.Runs,
-		manuals:           options.ManualCaptures,
-		verifier:          options.Verifier,
-		authorities:       options.Authorities,
-		proxyOrigin:       options.ProxyOrigin,
-		manualProxyOrigin: options.ManualProxyOrigin,
-		generation:        options.Generation,
-		rootID:            options.RootIdentity,
-		root:              options.Root,
-		runLifetime:       options.RunLifetime,
-		workspaces:        options.Workspaces,
-		rootAsk:           options.ClientRootApprovals,
-		companions:        options.CompanionCatalog,
-		proxy:             options.ProxyDelivery,
+		runs:               options.Runs,
+		manuals:            options.ManualCaptures,
+		verifier:           options.Verifier,
+		authorities:        options.Authorities,
+		proxyOrigin:        options.ProxyOrigin,
+		manualProxyOrigin:  options.ManualProxyOrigin,
+		manualSOCKSAddress: options.ManualSOCKSAddress,
+		generation:         options.Generation,
+		rootID:             options.RootIdentity,
+		root:               options.Root,
+		runLifetime:        options.RunLifetime,
+		workspaces:         options.Workspaces,
+		rootAsk:            options.ClientRootApprovals,
+		companions:         options.CompanionCatalog,
+		proxy:              options.ProxyDelivery,
 	}, nil
 }
 
@@ -259,6 +274,7 @@ type ManualCaptureRequest struct {
 type ManualCaptureContext struct {
 	ConfirmationToken        string
 	ProxyAddress             string
+	SOCKSAddress             string
 	EnvironmentID            environment.EnvironmentID
 	EnvironmentRevision      environment.Revision
 	EnvironmentDigest        environment.CandidateDigest
@@ -519,6 +535,7 @@ func (issuer *Issuer) manualCaptureContext(
 	context := ManualCaptureContext{
 		ConfirmationToken:        issuer.manualCaptureConfirmation(owner, review),
 		ProxyAddress:             issuer.manualProxyOrigin,
+		SOCKSAddress:             issuer.manualSOCKSAddress,
 		EnvironmentID:            review.EnvironmentID(),
 		EnvironmentRevision:      review.EnvironmentRevision(),
 		EnvironmentDigest:        review.EnvironmentDigest(),
@@ -549,6 +566,7 @@ func (issuer *Issuer) manualCaptureConfirmation(
 		"vibermate:manual-capture-confirmation",
 		issuer.generation,
 		issuer.manualProxyOrigin,
+		issuer.manualSOCKSAddress,
 		issuer.rootID.Digest().String(),
 		issuer.root.Path(),
 		string(owner.Kind()),
@@ -632,6 +650,7 @@ type CompanionAttestation struct {
 }
 
 type CaptureRunGrant struct {
+	NativeToolLogin              *NativeToolLoginView
 	Run                          capturerun.LaunchGrant
 	CatalogRevision              clientadapter.CatalogRevision
 	Recognition                  clientadapter.Recognition
@@ -853,6 +872,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 		LaunchEnvironment:            authorities.LaunchEnvironment(),
+		NativeToolLogin:              authorities.NativeToolLogin(),
 	}, nil
 }
 

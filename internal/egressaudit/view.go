@@ -1,6 +1,10 @@
 package egressaudit
 
-import "time"
+import (
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+)
 
 // View is the wire shape of one outbound attempt.
 //
@@ -32,12 +36,14 @@ type View struct {
 	StartedAt       time.Time `json:"startedAt"`
 	// Terminal says whether this attempt has finished. Until it has, an
 	// outcome and a byte count would be guesses.
-	Terminal    bool       `json:"terminal"`
-	Outcome     Outcome    `json:"outcome,omitempty"`
-	ErrorClass  string     `json:"errorClass,omitempty"`
-	BytesOut    int64      `json:"bytesOut"`
-	BytesIn     int64      `json:"bytesIn"`
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	Terminal          bool       `json:"terminal"`
+	Outcome           Outcome    `json:"outcome,omitempty"`
+	ErrorClass        string     `json:"errorClass,omitempty"`
+	BytesOut          int64      `json:"bytesOut"`
+	BytesIn           int64      `json:"bytesIn"`
+	ByteCountsKnown   bool       `json:"byteCountsKnown"`
+	NativeOperationID string     `json:"nativeOperationId,omitempty"`
+	CompletedAt       *time.Time `json:"completedAt,omitempty"`
 }
 
 type ParentView struct {
@@ -47,14 +53,16 @@ type ParentView struct {
 }
 
 type DecisionView struct {
-	PolicyID                string              `json:"policyId,omitempty"`
-	PolicyRevision          uint64              `json:"policyRevision,omitempty"`
-	Authority               PolicyAuthorityKind `json:"authority"`
-	RuleID                  string              `json:"ruleId,omitempty"`
-	ProxyID                 string              `json:"proxyId,omitempty"`
-	ProxyRevision           uint64              `json:"proxyRevision,omitempty"`
-	AccountID               string              `json:"accountId,omitempty"`
-	AccountSettingsRevision uint64              `json:"accountSettingsRevision,omitempty"`
+	SelectionSource         egressprofile.SelectionSource `json:"selectionSource,omitempty"`
+	DefaultRevision         uint64                        `json:"defaultRevision,omitempty"`
+	PolicyID                string                        `json:"policyId,omitempty"`
+	PolicyRevision          uint64                        `json:"policyRevision,omitempty"`
+	Authority               PolicyAuthorityKind           `json:"authority"`
+	RuleID                  string                        `json:"ruleId,omitempty"`
+	ProxyID                 string                        `json:"proxyId,omitempty"`
+	ProxyRevision           uint64                        `json:"proxyRevision,omitempty"`
+	AccountID               string                        `json:"accountId,omitempty"`
+	AccountSettingsRevision uint64                        `json:"accountSettingsRevision,omitempty"`
 }
 
 // ViewOf renders one stored attempt for a reader.
@@ -75,6 +83,8 @@ func ViewOf(record Record) View {
 		CallerID:     attempt.CallerID(),
 		TargetOrigin: attempt.TargetOrigin(),
 		Decision: DecisionView{
+			SelectionSource:         attempt.Decision().SelectionSource,
+			DefaultRevision:         attempt.Decision().DefaultRevision,
 			PolicyID:                attempt.Decision().PolicyID,
 			PolicyRevision:          attempt.Decision().PolicyRevision,
 			Authority:               attempt.Decision().Authority,
@@ -91,6 +101,10 @@ func ViewOf(record Record) View {
 		ErrorClass:      attempt.ErrorClass(),
 		BytesOut:        attempt.BytesOut(),
 		BytesIn:         attempt.BytesIn(),
+		ByteCountsKnown: attempt.ByteCountsKnown(),
+	}
+	if attempt.Purpose() == PurposeClientToolService {
+		view.NativeOperationID = attempt.Parent().ID
 	}
 	if !attempt.CompletedAt().IsZero() {
 		completed := attempt.CompletedAt()

@@ -13,6 +13,54 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'preview client tool permission survives draft publish and OFF creates a fresh route',
+    () async {
+      final preview = PreviewControlApi();
+      addTearDown(preview.close);
+      var work = (await preview.loadDashboard()).environments.firstWhere(
+        (e) => e.id == 'work',
+      );
+      Future<EnvironmentRecord> publish(bool enabled) async {
+        final draft = await preview.saveEnvironmentDraft(
+          environmentId: work.id,
+          expectedBaseRevision: work.revision,
+          input: EnvironmentDraftInput.fromEnvironment(
+            work,
+            expectedDraftRevision: 0,
+            clientToolAccessEnabled: enabled,
+          ),
+        );
+        expect(draft.candidate.clientToolAccessEnabled, enabled);
+        await preview.previewEnvironmentDraft(work.id, draft.draftRevision);
+        final result = await preview.publishEnvironmentDraft(
+          work.id,
+          draft.draftRevision,
+        );
+        work = result.environment;
+        return work;
+      }
+
+      final first = await publish(true);
+      final route = first.clientToolAccess!.route!;
+      expect(route.credentialOwner, 'original_client');
+      final unchanged = await publish(true);
+      expect(unchanged.clientToolAccess!.route!.id, route.id);
+      final off = await publish(false);
+      expect(off.toJson().containsKey('clientToolAccess'), isFalse);
+      final reenabled = await publish(true);
+      expect(reenabled.clientToolAccess!.route!.id, isNot(route.id));
+      expect(reenabled.clientToolAccess!.route!.revision, 1);
+      expect(
+        reenabled.contentRecording.toJson(),
+        first.contentRecording.toJson(),
+      );
+      final personal = (await preview.loadDashboard()).environments.firstWhere(
+        (e) => e.id == 'research',
+      );
+      expect(personal.clientToolAccessEnabled, isFalse);
+    },
+  );
   late PreviewControlApi api;
   late UpstreamEndpoint service;
   late ProviderAccount oauth;

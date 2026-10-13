@@ -6,10 +6,49 @@ import 'package:crypto/crypto.dart' as crypto;
 import '../core/api/control_api.dart';
 import '../core/api/account_facts_models.dart';
 import '../core/api/control_models.dart';
+import '../core/api/native_tool_models.dart';
 import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi implements ControlApi {
+  @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async =>
+      throw const ControlContractException(
+        'Product update unavailable in preview',
+      );
+  @override
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async => NativeToolOperationPage(const [], afterSequence);
+  @override
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  ) => throw UnsupportedError('No native operation in preview');
+  @override
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  }) => throw UnsupportedError('No native content in preview');
+  @override
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async => NativeApprovalPage(const [], afterSequence);
+  @override
+  Future<NativeApproval> nativeApproval(String captureKey, String approvalId) =>
+      throw UnsupportedError('No native approvals in preview');
+  @override
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  ) => throw UnsupportedError('No native approvals in preview');
   RuntimeUsageCollection _usageCollection = RuntimeUsageCollection(
     enabled: true,
     retentionDays: 365,
@@ -1179,6 +1218,9 @@ final class PreviewControlApi implements ControlApi {
       contentRecording: input.contentRecording,
       launchEnvironment: input.launchEnvironment,
       policySet: input.policySet,
+      clientToolAccess: input.clientToolAccessEnabled
+          ? _previewClientToolAccess(current, environmentId, draftRevision)
+          : null,
     );
     final draft = EnvironmentDraft(
       environmentId: environmentId,
@@ -1190,6 +1232,27 @@ final class PreviewControlApi implements ControlApi {
     _environmentDrafts[environmentId] = draft;
     return draft;
   }
+
+  // Demo-only shape: this API has no native transport, login, or execution
+  // authority. Production preparation lives in the Go runtime's builder.
+  EnvironmentClientToolAccess _previewClientToolAccess(
+    EnvironmentRecord? published,
+    String environmentId,
+    int draftRevision,
+  ) => EnvironmentClientToolAccess(
+    enabled: true,
+    route:
+        published?.clientToolAccess?.route ??
+        EnvironmentClientToolRoute(
+          id: 'preview.tools.${_environmentDigest(environmentId).substring(0, 16)}.$draftRevision',
+          revision: 1,
+          targetOrigin: Uri.parse('https://chatgpt.com'),
+          path: '/backend-api/ps/mcp',
+          credentialOwner: 'original_client',
+          egressProfile: EgressProfileRevision.direct,
+          contract: 'codex_legacy_2025_06_18',
+        ),
+  );
 
   @override
   Future<EnvironmentImpact> previewEnvironmentDraft(
@@ -1385,6 +1448,47 @@ final class PreviewControlApi implements ControlApi {
     );
   }
 
+  int _egressDefaultRevision = 1;
+  EgressProfileRevision? _egressDefaultProfile;
+
+  @override
+  Future<EgressDefaultSetting> egressDefault() async {
+    _requireOpen();
+    return EgressDefaultSetting.fromJson({
+      'revision': _egressDefaultRevision,
+      'profile': _egressDefaultProfile?.toJson(),
+      'effective': {
+        'profile': (_egressDefaultProfile ?? EgressProfileRevision.direct)
+            .toJson(),
+        'source': _egressDefaultProfile == null ? 'builtin' : 'global',
+        'defaultRevision': _egressDefaultRevision,
+      },
+    });
+  }
+
+  @override
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) async {
+    _requireOpen();
+    if (current.revision != _egressDefaultRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'egress_profile_conflict',
+        messageKey: 'error.egress_profile_conflict',
+      );
+    }
+    final selected = profile == null
+        ? null
+        : await egressProfileRevision(profile.id, profile.revision);
+    if (_egressDefaultProfile != selected) {
+      _egressDefaultProfile = selected;
+      _egressDefaultRevision++;
+    }
+    return egressDefault();
+  }
+
   @override
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
@@ -1415,6 +1519,29 @@ final class PreviewControlApi implements ControlApi {
     }, 'egressProfile');
     _egressProfileRevisions[id] = [...revisions, revision];
     return revision;
+  }
+
+  @override
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) async {
+    _requireOpen();
+    throw UnsupportedError('Private node import is unavailable in preview');
+  }
+
+  @override
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) async {
+    _requireOpen();
+    throw UnsupportedError('Private node settings are unavailable in preview');
   }
 
   @override
@@ -3148,6 +3275,13 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) async => const ToolResultPage(items: []);
+
+  @override
   Future<RevealedRawEvidence> revealRawEvidence({
     required String envelopeId,
   }) async {
@@ -3226,6 +3360,18 @@ final class PreviewControlApi implements ControlApi {
       trailers: const [],
       body: Uint8List.fromList(utf8.encode(body)),
       frames: const [],
+    );
+  }
+
+  @override
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  }) async {
+    throw const ControlProblem(
+      status: 410,
+      reasonCode: 'image_unavailable',
+      messageKey: 'reader.image_unavailable',
     );
   }
 

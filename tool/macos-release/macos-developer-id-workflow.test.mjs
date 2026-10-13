@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   diskImageCreationArguments,
   signingCommandArguments,
+  applicationSigningCommands,
 } from "./bundle-macos-distribution-candidate.mjs";
 import { macOSDistributionPolicy } from "./macos-distribution-policy.mjs";
 
@@ -343,6 +344,35 @@ test("signing commands are closed, inside-out, and entitlement-free", () => {
   assert.throws(() =>
     signingCommandArguments("vibermate-desktop", identity, keychain, "/app/main"),
   );
+});
+
+test("the kernel receives its exact Developer ID signing command", () => {
+  assert.deepEqual(
+    signingCommandArguments("vibermate-xray", "1".repeat(40), "/runner/keychain", "/app/ViberMate.app/Contents/MacOS/vibermate-xray"),
+    ["--force", "--sign", "1".repeat(40), "--keychain", "/runner/keychain", "--timestamp",
+      "--options", "runtime", "--identifier", "io.vibermate.desktop.vibermate-xray",
+      "/app/ViberMate.app/Contents/MacOS/vibermate-xray"],
+  );
+});
+
+test("the actual application signing sequence signs every nested object before the outer App", () => {
+  const commands = applicationSigningCommands("/app/ViberMate.app", "1".repeat(40), "/runner/keychain");
+  assert.deepEqual(commands.map((command) => command.arguments.at(-1)), [
+    "/app/ViberMate.app/Contents/Frameworks/App.framework",
+    "/app/ViberMate.app/Contents/Frameworks/file_selector_macos.framework",
+    "/app/ViberMate.app/Contents/Frameworks/FlutterMacOS.framework",
+    "/app/ViberMate.app/Contents/Frameworks/url_launcher_macos.framework",
+    "/app/ViberMate.app/Contents/MacOS/vibermate",
+    "/app/ViberMate.app/Contents/MacOS/vibermate-xray",
+    "/app/ViberMate.app/Contents/MacOS/vibermated",
+    "/app/ViberMate.app",
+  ]);
+  const helper = commands[5];
+  assert.equal(helper.command, "/usr/bin/codesign");
+  assert.deepEqual(helper.arguments, ["--force", "--sign", "1".repeat(40), "--keychain", "/runner/keychain", "--timestamp",
+    "--options", "runtime", "--identifier", "io.vibermate.desktop.vibermate-xray",
+    "/app/ViberMate.app/Contents/MacOS/vibermate-xray"]);
+  assert.equal(helper.label, "vibermate-xray Developer ID signing");
 });
 
 test("DMG creation is fixed read-only UDZO with no overwrite option", () => {

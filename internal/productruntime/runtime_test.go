@@ -144,7 +144,11 @@ func TestProductRuntimeRequiresPersistentClientAnnotationSigning(t *testing.T) {
 func TestProductRuntimePublishesEnvironmentAndRestoresCaptureAssignment(t *testing.T) {
 	t.Parallel()
 
-	paths, err := NewRuntimePaths(filepath.Join(t.TempDir(), "runtime-data"))
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := NewRuntimePaths(filepath.Join(root, "runtime-data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +479,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 				ID: environment.ClientProtocolPlanID("plan." + id), Revision: 1, ClientProtocol: protocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter." + id, Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}

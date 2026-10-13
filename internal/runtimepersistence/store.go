@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -42,7 +43,10 @@ type Options struct {
 	DatabasePath           string
 	BusyTimeout            time.Duration
 	CommitReconcileTimeout time.Duration
-	ContentLimits          *exchangecontent.SourceLimits
+	// NativeStreamLifetime bounds process-local observation authority from the
+	// original Start claim. Zero selects the trusted 30-minute ceiling.
+	NativeStreamLifetime time.Duration
+	ContentLimits        *exchangecontent.SourceLimits
 }
 
 // Store owns a SQLite connection pool and its repositories.
@@ -56,6 +60,7 @@ type Store struct {
 	captureRepo        *captureRunRepository
 	codeLibrary        *codeLibraryRepository
 	egressProfiles     *egressProfileRepository
+	egressDefault      *egressDefaultRepository
 	manualCapture      *manualCaptureRepository
 	proxyClients       *proxyClientRepository
 	connectionRepo     *connectionEventRepository
@@ -69,6 +74,7 @@ type Store struct {
 	rawEvidence        *rawEvidenceRepository
 	runtimeUsers       *runtimeUserRepository
 	operations         *operationGate
+	nativeTools        *nativeToolRepository
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -80,6 +86,12 @@ type Store struct {
 // Open creates the data directory, opens SQLite through an explicit typed
 // connector, initializes the current schema, and reads its durable state.
 func Open(ctx context.Context, options Options) (*Store, error) {
+	if options.NativeStreamLifetime == 0 {
+		options.NativeStreamLifetime = 30 * time.Minute
+	}
+	if options.NativeStreamLifetime < 0 || options.NativeStreamLifetime > 30*time.Minute {
+		return nil, fmt.Errorf("%w: invalid native stream lifetime", ErrInvalidDatabasePath)
+	}
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: context is nil", ErrInvalidDatabasePath)
 	}
@@ -113,6 +125,9 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := prepareDatabasePath(options.DatabasePath); err != nil {
 		return nil, err
 	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(options.DatabasePath), SchemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
+		return nil, ErrMigrationRequired
+	}
 	// Reject an old baseline before even enabling WAL: journal_mode itself can
 	// change the database header despite a later schema transaction rollback.
 	if err := validateExistingSchema(ctx, options.DatabasePath, options.BusyTimeout); err != nil {
@@ -142,6 +157,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	operations := newOperationGate()
+	issuer, err := nativetool.NewStartReceiptIssuer()
+	if err != nil {
+		return fail(fmt.Errorf("create native receipt issuer: %w", err))
+	}
 	repository := newRepository(database, operations)
 	captureRepo := newCaptureRunRepository(database, operations)
 	codeLibrary := newCodeLibraryRepository(
@@ -218,6 +237,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		captureRepo:        captureRepo,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
+		egressDefault:      &egressDefaultRepository{database: database, reads: reads, operations: operations, reconcileTimeout: options.CommitReconcileTimeout, committer: sqlTransactionCommitter{}},
 		manualCapture:      manualCaptureRepo,
 		proxyClients:       proxyClientRepo,
 		connectionRepo:     connectionRepo,
@@ -231,6 +251,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
+		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery)},
 		closeDone:          make(chan struct{}),
 	}, nil
 }
@@ -366,7 +387,27 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	}
 	s.closeMu.Unlock()
 
-	closeErr := errors.Join(s.reads.Close(), s.database.Close())
+	// Admission is closed and drained; the final native boundary uses the
+	// Store's writer directly, without reopening public operation admission.
+	s.nativeTools.issuerMu.Lock()
+	for a := range s.nativeTools.streams {
+		s.nativeTools.dropNativeStream(a)
+	}
+	clear(s.nativeTools.recovery)
+	clear(s.nativeTools.streamOpened)
+	defer s.nativeTools.issuerMu.Unlock()
+	tx, err := s.database.BeginTx(ctx, nil)
+	var nativeErr error
+	if err != nil {
+		nativeErr = err
+	} else {
+		nativeErr = revokeNativeScopesWhere(ctx, tx, "state<>'closed'", time.Now().UTC())
+		if nativeErr == nil {
+			nativeErr = tx.Commit()
+		}
+		_ = tx.Rollback()
+	}
+	closeErr := errors.Join(nativeErr, s.reads.Close(), s.database.Close())
 	s.closeMu.Lock()
 	s.closeErr = closeErr
 	s.closed = true

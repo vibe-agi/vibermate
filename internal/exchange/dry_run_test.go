@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
@@ -19,6 +20,29 @@ import (
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 )
 
+func TestDryRunUnresolvedInheritanceShowsExecutionDependentExitWithoutSideEffects(t *testing.T) {
+	for _, destination := range []environment.DestinationKind{environment.DestinationKindOriginal, environment.DestinationKindUpstream} {
+		t.Run(string(destination), func(t *testing.T) {
+			choice := egressprofile.Inherit()
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{choice: &choice, destination: destination, providerOrigin: "https://provider.example/v1", backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap, mappedModel: "provider-model", accounts: []testAccount{{id: "account.primary", revision: 3, epoch: 7}}, preferred: "account.primary"})
+			authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7})
+			provider := &providerDouble{}
+			observer := &attemptObserverDouble{}
+			pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), observer)
+			defer shutdownPipeline(t, pipeline)
+			preview, err := pipeline.DryRun(t.Context(), mustClientRequestWithOptions(t, "inherit-preview", plan, completeClientRequest(), WithOriginalHeaders(http.Header{})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preview.NetworkExitID != "" || preview.NetworkExitRevision != 0 || !slices.Contains(preview.Unverified, "network_exit") {
+				t.Fatalf("unresolved inheritance masquerades as configured exit: id=%q rev=%d unverified=%v", preview.NetworkExitID, preview.NetworkExitRevision, preview.Unverified)
+			}
+			if len(authority.snapshot()) != 0 || provider.callCount() != 0 || len(observer.snapshot()) != 0 {
+				t.Fatal("preview acquired account/network/audit")
+			}
+		})
+	}
+}
 func TestCandidateOriginalDryRunReadmissionParity(t *testing.T) {
 	for _, test := range []struct {
 		name, script, encoding string

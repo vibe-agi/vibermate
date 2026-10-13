@@ -12,6 +12,27 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('concurrent quota refreshes join the same fresh result', () async {
+    final preview = PreviewControlApi(seedCaptures: false);
+    final account = await _import(preview);
+    final api = _DelayedFactsApi(preview);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: preview.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await preview.loadDashboard();
+    final first = controller.refreshProviderAccountQuota(account);
+    final second = controller.refreshProviderAccountQuota(account);
+    expect(api.pending, hasLength(1));
+    final facts = await preview.accountFacts(account.id);
+    api.pending.single.complete(facts);
+    expect(await first, same(facts));
+    expect(await second, same(facts));
+  });
+
   test(
     'imports start off, login starts on, manual refresh preserves settings',
     () async {

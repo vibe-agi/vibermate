@@ -3,7 +3,9 @@ package provideraccount
 import (
 	"context"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
@@ -14,21 +16,24 @@ type SettingsCommand struct {
 	AutomaticRefresh bool
 }
 
-func (account Account) credentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
-	return account.CredentialScope(realm, epoch, fallback)
+func (account Account) credentialScope(realm string, epoch uint64, resolved egressprofile.Resolved) providerauth.AccountRef {
+	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: resolved.Profile(), ResolvedEgress: resolved}
 }
 
-// CredentialScope freezes the same exit precedence used by credential leases
-// for account operations which must not acquire or refresh an access token.
+// CredentialScope freezes the account profile for callers without a resolved exit.
 func (account Account) CredentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
 	if fallback == (egressprofile.ProfileRevision{}) {
 		fallback = egressprofile.Direct()
 	}
+	source := egressprofile.SelectionTransport
 	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
 		fallback = account.EgressProfile
+		source = egressprofile.SelectionAccount
 	}
+	resolved, _ := egressprofile.RestoreResolved(fallback, source, 0)
 	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
-		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback}
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback, ResolvedEgress: resolved}
 }
 
 func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) error {
@@ -42,6 +47,91 @@ func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) er
 	}
 	manager.egressProfiles = profiles
 	return nil
+}
+
+func (manager *Manager) BindEgressDefaults(defaults egressprofile.Resolver) error {
+	if manager == nil || defaults == nil {
+		return ErrSettingsUnavailable
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing || manager.egressDefaults != nil {
+		return ErrSettingsUnavailable
+	}
+	manager.egressDefaults = defaults
+	return nil
+}
+
+func accountEgressChoices(account Account, flow egressprofile.Choice) (egressprofile.Choice, egressprofile.Choice, error) {
+	if flow.Validate() != nil {
+		return egressprofile.Choice{}, egressprofile.Choice{}, ErrInvalidAccount
+	}
+	accountChoice, flowChoice := egressprofile.Inherit(), flow
+	var err error
+	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
+		accountChoice, err = egressprofile.Explicit(account.EgressProfile)
+		if err != nil {
+			return egressprofile.Choice{}, egressprofile.Choice{}, err
+		}
+	}
+	return accountChoice, flowChoice, nil
+}
+
+func (manager *Manager) resolveTargetEgress(ctx context.Context, account Account, flow egressprofile.Choice, target originidentity.ProviderOrigin) (egressprofile.Resolved, error) {
+	if err := target.Validate(); err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	switch target.Transport() {
+	case originidentity.ProviderTransportStrictTLS:
+		return manager.resolveEgress(ctx, account, flow)
+	case originidentity.ProviderTransportLoopbackCleartext, originidentity.ProviderTransportPrivateCleartext:
+	default:
+		return egressprofile.Resolved{}, ErrEndpointMismatch
+	}
+	// This driver's preparation uses a different, fixed HTTPS token target;
+	// its data authenticator already refuses a cleartext provider target.
+	if account.Driver == providerauth.CodexOAuthDriverRef() {
+		return egressprofile.Resolved{}, ErrEndpointMismatch
+	}
+	a, f, err := accountEgressChoices(account, flow)
+	if err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	for i, choice := range []egressprofile.Choice{a, f} {
+		if profile, explicit := choice.ExplicitProfile(); explicit {
+			if profile.Policy.Proxy.Kind != egressnetwork.ProxyDirect {
+				return egressprofile.Resolved{}, ErrInvalidAccount
+			}
+			source := egressprofile.SelectionAccount
+			if i == 1 {
+				source = egressprofile.SelectionFlow
+			}
+			return egressprofile.RestoreResolved(profile, source, 0)
+		}
+	}
+	return egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionTransport, 0)
+}
+
+func (manager *Manager) resolveEgress(ctx context.Context, account Account, flow egressprofile.Choice) (egressprofile.Resolved, error) {
+	accountChoice, flowChoice, err := accountEgressChoices(account, flow)
+	if err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	manager.mu.RLock()
+	resolver := manager.egressDefaults
+	manager.mu.RUnlock()
+	if resolver != nil {
+		return resolver.Resolve(ctx, accountChoice, flowChoice)
+	}
+	// Explicit choices need no default storage. An unbound inherited path has
+	// no knowledge of the real default revision and must not invent Direct.
+	if profile, ok := accountChoice.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(profile, egressprofile.SelectionAccount, 0)
+	}
+	if profile, ok := flowChoice.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+	}
+	return egressprofile.Resolved{}, ErrSettingsUnavailable
 }
 
 // SetSettings changes the next lease, not the identity authorized by an

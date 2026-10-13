@@ -1,95 +1,76 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/api/product_update_api.dart';
+
+class _ReleaseApi implements ControlApi {
+  _ReleaseApi({this.tag = 'v9.8.7', this.failure});
+  final String tag;
+  final Object? failure;
+  int checks = 0;
+  @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async {
+    checks++;
+    if (failure != null) throw failure!;
+    return ProductUpdateMetadata(
+      checkedAt: DateTime.utc(2026, 9, 26, 1),
+      tag: tag,
+      name: 'ViberMate release',
+      url: Uri.parse('https://github.com/vibe-agi/vibermate/releases/tag/$tag'),
+      publishedAt: DateTime.utc(2026, 9, 26),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   test(
-    'release check is bounded, strict, and reports an available version',
+    'Runtime release metadata compares locally and preserves local install channel',
     () async {
-      final service = GitHubProductUpdateService(
-        clientFactory: () => MockClient((request) async {
-          expect(
-            request.url.toString(),
-            'https://api.github.com/repos/vibe-agi/vibermate/releases/latest',
-          );
-          return http.Response(
-            jsonEncode({
-              'tag_name': 'v9.8.7',
-              'name': 'ViberMate 9.8.7',
-              'html_url':
-                  'https://github.com/vibe-agi/vibermate/releases/tag/v9.8.7',
-              'published_at': '2026-09-26T00:00:00Z',
-              'draft': false,
-              'prerelease': false,
-            }),
-            200,
-          );
-        }),
+      final api = _ReleaseApi();
+      final service = ControlProductUpdateService(
+        api: api,
         channelResolver: () async => ProductInstallChannel.homebrew,
-        clock: () => DateTime.utc(2026, 9, 26, 1),
+        clock: () => DateTime.utc(2026, 9, 26, 2),
       );
       final result = await service.check();
       expect(result.state, ProductUpdateState.available);
       expect(result.channel, ProductInstallChannel.homebrew);
       expect(result.availableVersion, 'v9.8.7');
-      expect(result.releaseName, 'ViberMate 9.8.7');
+      expect(result.releaseName, 'ViberMate release');
       expect(result.checkedAt, DateTime.utc(2026, 9, 26, 1));
+      expect(api.checks, 1);
     },
   );
-
   test(
-    'network and untrusted release responses degrade without throwing',
+    'Unavailable Runtime never falls back, and local channel remains independent',
     () async {
-      for (final response in [
-        http.Response('offline', 503),
-        http.Response('x' * (300 * 1024), 200),
-        http.Response(
-          jsonEncode({
-            'tag_name': 'v9.8.7',
-            'name': 'ViberMate 9.8.7',
-            'html_url': 'https://example.com/untrusted',
-            'published_at': '2026-09-26T00:00:00Z',
-            'draft': false,
-            'prerelease': false,
-          }),
-          200,
-        ),
+      for (final failure in [
+        StateError('old server 404'),
+        StateError('owner unauthorized'),
+        StateError('Runtime offline'),
       ]) {
-        final result = await GitHubProductUpdateService(
-          clientFactory: () => MockClient((_) async => response),
+        final api = _ReleaseApi(failure: failure);
+        final result = await ControlProductUpdateService(
+          api: api,
           channelResolver: () async => ProductInstallChannel.manual,
         ).check();
         expect(result.state, ProductUpdateState.unavailable);
         expect(result.availableVersion, isNull);
+        expect(api.checks, 1);
       }
     },
   );
-
-  test('the published current version is not reported as an update', () async {
-    final result = await GitHubProductUpdateService(
-      clientFactory: () => MockClient(
-        (_) async => http.Response(
-          jsonEncode({
-            'tag_name': 'v0.1.13',
-            'name': 'ViberMate 0.1.13',
-            'html_url':
-                'https://github.com/vibe-agi/vibermate/releases/tag/v0.1.13',
-            'published_at': '2026-09-22T00:00:00Z',
-            'draft': false,
-            'prerelease': false,
-          }),
-          200,
-        ),
-      ),
+  test('Older release is not reported as an update', () async {
+    final result = await ControlProductUpdateService(
+      api: _ReleaseApi(tag: 'v0.1.13'),
       channelResolver: () async => ProductInstallChannel.manual,
     ).check();
     expect(result.state, ProductUpdateState.current);
   });
-
-  test('semantic release comparison does not use lexical ordering', () {
+  test('Semantic comparison and bounded version grammar remain local', () {
     expect(
       compareProductVersions(
         parseProductVersion('v0.10.0')!,
@@ -97,6 +78,8 @@ void main() {
       ),
       greaterThan(0),
     );
-    expect(parseProductVersion('latest'), isNull);
+    for (final tag in ['latest', 'v1.2.3-beta', 'v2147483648.0.1']) {
+      expect(parseProductVersion(tag), isNull);
+    }
   });
 }

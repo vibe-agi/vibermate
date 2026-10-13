@@ -28,7 +28,7 @@ func TestLocalCodexRequiresTrustedRootBeforeStartingChild(t *testing.T) {
 			directory := t.TempDir()
 			marker := filepath.Join(directory, "started")
 			executable := filepath.Join(directory, "codex")
-			if err := os.WriteFile(executable, []byte("#!/bin/sh\ntouch started\n"), 0700); err != nil {
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\nif [ \"$1\" = --help ]; then printf '      --no-daemon\\n'; exit 0; fi\ntouch started\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
 			control := &controlFixture{

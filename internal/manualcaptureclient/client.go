@@ -15,9 +15,12 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,7 +352,7 @@ func validateContext(context capturecontrol.ManualCaptureContext) error {
 		!validDERSHA256(context.LaunchAuthorityDigest) ||
 		!validAuthorityScopes(context.ProtectedAuthorities, context.ManagedAuthorities) ||
 		context.DefaultTemporarySeconds < 60 ||
-		context.MaxTemporarySeconds < context.DefaultTemporarySeconds {
+		context.MaxTemporarySeconds < context.DefaultTemporarySeconds || !validLocalSOCKSAddress(context.SOCKSAddress) {
 		return errors.New("ManualCapture context is invalid")
 	}
 	if (len(context.ProtectedAuthorities) == 0) != (context.Root == nil) {
@@ -367,7 +370,8 @@ func validateGrant(grant capturecontrol.ManualCaptureGrant) error {
 		grant.ProxyUsername != manualcapture.ProxyUsername ||
 		grant.ProxyPassword == "" || grant.AssignmentRevision == 0 ||
 		!validDERSHA256(grant.LaunchAuthorityDigest) ||
-		!validAuthorityScopes(grant.ProtectedAuthorities, grant.ManagedAuthorities) {
+		!validAuthorityScopes(grant.ProtectedAuthorities, grant.ManagedAuthorities) ||
+		!validLocalSOCKSAddress(grant.SOCKSAddress) {
 		return errors.New("ManualCapture grant is invalid")
 	}
 	if _, err := environment.NewEnvironmentID(grant.EnvironmentID); err != nil {
@@ -394,6 +398,23 @@ func validateDelivery(
 		return validateRoot(*root)
 	}
 	return nil
+}
+
+func validLocalSOCKSAddress(value string) bool {
+	if value == "" {
+		return true
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return false
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil || !address.IsLoopback() || address.Zone() != "" {
+		return false
+	}
+	number, err := strconv.Atoi(port)
+	return err == nil && number > 0 && number <= 65535 &&
+		value == net.JoinHostPort(address.String(), strconv.Itoa(number))
 }
 
 func validateRoot(root capturecontrol.RootPublicDelivery) error {

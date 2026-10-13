@@ -115,6 +115,8 @@ type RequestView string
 const (
 	RequestViewFull        RequestView = "full"
 	RequestViewIncremental RequestView = "incremental"
+	// Reading exposes the last observed user group, not an asserted new suffix.
+	RequestViewReading RequestView = "reading"
 )
 
 func (ref FrozenRef) Validate() error {

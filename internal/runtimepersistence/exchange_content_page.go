@@ -82,7 +82,7 @@ func deferredPageBlock(cursor contentCursor, size int) exchangecontent.Block {
 }
 
 func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Context, id string, now time.Time, view exchangecontent.RequestView) (exchangecontent.Projection, error) {
-	if view != exchangecontent.RequestViewFull && view != exchangecontent.RequestViewIncremental {
+	if view != exchangecontent.RequestViewFull && view != exchangecontent.RequestViewIncremental && view != exchangecontent.RequestViewReading {
 		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -100,8 +100,6 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 	}
 	paging := &exchangecontent.ProjectionPage{RequestOffset: ref.requestCount}
 	var messages []exchangecontent.Message
-	// Reserve the later system/response shells before filling request history;
-	// all inline placements in this projection share one presentation window.
 	inlineBudget := exchangecontent.PageContentBytes
 	if ref.systemDigest.Valid {
 		inlineBudget -= 1024
@@ -109,7 +107,14 @@ func (repository *exchangeContentRepository) GetPagedProjection(ctx context.Cont
 	if ref.responseDigest.Valid {
 		inlineBudget -= 1024
 	}
-	if view == exchangecontent.RequestViewFull || ref.inherited > 0 {
+	if view == exchangecontent.RequestViewReading {
+		messages, paging.RequestOffset, paging.InputAnchor, err = repository.readingUserGroup(operation, ref, ledger)
+		if err != nil {
+			return exchangecontent.Projection{}, err
+		}
+		paging.RequestNextCursor = encodeContentCursor(pageCursor(ref, "request", "request", ref.requestCount))
+	}
+	if view == exchangecontent.RequestViewFull || view == exchangecontent.RequestViewIncremental && ref.inherited > 0 {
 		cursor := pageCursor(ref, "request", "request", ref.requestCount)
 		if view == exchangecontent.RequestViewIncremental {
 			cursor.Lower = ref.inherited
@@ -309,14 +314,12 @@ func (repository *exchangeContentRepository) contentNodes(ctx context.Context, r
 		if rows.Scan(&node.digest, &parent, &node.messageDigest, &node.depth) != nil {
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
-		if node.depth != wantDepth || node.digest != wantDigest || !validStoredDigest(node.messageDigest) ||
-			(node.depth > 1 && (!parent.Valid || !validStoredDigest(parent.String))) || (node.depth == 1 && parent.Valid) ||
-			transcriptNodeDigest(parent.String, node.messageDigest) != node.digest {
-			return nil, exchangecontent.ErrInvalidEvidence
-		}
 		if parent.Valid {
 			value := parent.String
 			node.parentDigest = &value
+		}
+		if err := validateContentNode(node, wantDigest, wantDepth); err != nil {
+			return nil, err
 		}
 		if node.depth <= before {
 			result = append(result, node)
@@ -364,6 +367,10 @@ func (repository *exchangeContentRepository) requestContentPage(ctx context.Cont
 	return repository.checkedContentPage(ctx, page)
 }
 
+// Sizes are computed from the ordered manifest (including repeated blocks),
+// not the deduplicated reference index, and without fetching block payloads.
+// Actual SQLite payload lengths must agree with the codec/size contract before
+// hydration: a forged plain_bytes cannot authorize a larger payload read.
 // The metadata-only probe may defer immediately. A candidate must still pass
 // authenticated token/indentation accounting before arguments are allocated.
 func (repository *exchangeContentRepository) inlinePageMessage(ctx context.Context, digest string, cursor contentCursor, budget int, mode environment.ContentRecordingMode, ledger *storedReadLedger, envelope uint16) (exchangecontent.Message, int, error) {
@@ -437,16 +444,22 @@ func pageCompatibleMessage(message exchangecontent.Message, cursor contentCursor
 	return message, nil
 }
 
+// Use BLOB lengths/offsets so preflight accounts for the exact bytes the Go
+// loader consumes. Require ASCII hex separately; SQLite TEXT matching alone
+// stops at NUL and cannot prove the rest of a manifest is valid.
 func (repository *exchangeContentRepository) inlineMessageSize(ctx context.Context, digest string, blockLimit int) (int, int, error) {
 	var count, sum, missing, metadataBytes int
 	err := repository.reads.QueryRowContext(ctx, `WITH RECURSIVE message AS (
-	 SELECT role,agent_json,block_manifest FROM runtime_exchange_content_messages WHERE digest=?
-	 AND length(block_manifest)%64=0 AND length(block_manifest) BETWEEN 64 AND ?
+	 SELECT role,agent_json,CAST(block_manifest AS BLOB) AS manifest FROM runtime_exchange_content_messages WHERE digest=?
+	 AND length(CAST(block_manifest AS BLOB))%64=0 AND length(CAST(block_manifest AS BLOB)) BETWEEN 64 AND ?
+	 AND instr(CAST(block_manifest AS BLOB),x'00')=0 AND block_manifest NOT GLOB '*[^0-9a-f]*'
 	 AND coalesce(length(agent_json),0)<=4096
-	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.block_manifest),?))
-	SELECT length(message.block_manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>? THEN 1 ELSE 0 END),
+	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.manifest),?))
+	SELECT length(message.manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR b.plain_bytes<1 OR b.plain_bytes>?
+	 OR b.codec NOT IN ('identity','zstd') OR length(b.payload)<1 OR length(b.payload)>b.plain_bytes
+	 OR (b.codec='identity' AND length(b.payload)<>b.plain_bytes) THEN 1 ELSE 0 END),
 	 coalesce(length(message.agent_json),0)+length(message.role)+64
-	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=substr(message.block_manifest,spans.position,64)`, digest, protocolcore.MaxContentBlocks*64, blockLimit*64, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadataBytes)
+	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=CAST(substr(message.manifest,spans.position,64) AS TEXT)`, digest, protocolcore.MaxContentBlocks*64, blockLimit*64, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadataBytes)
 	if err != nil || missing != 0 || count < 1 || sum > exchangecontent.MaxEncodedBytes {
 		return 0, 0, exchangecontent.ErrInvalidEvidence
 	}
@@ -489,13 +502,14 @@ type storedInlineProbe struct {
 func (repository *exchangeContentRepository) probeInlineMessage(ctx context.Context, digest string, window, budget int) (storedInlineProbe, error) {
 	var count, sum, missing, metadata int64
 	err := repository.reads.QueryRowContext(ctx, `WITH RECURSIVE message AS (
-	 SELECT role,agent_json,block_manifest FROM runtime_exchange_content_messages WHERE digest=?
+	 SELECT role,agent_json,CAST(block_manifest AS BLOB) AS manifest FROM runtime_exchange_content_messages WHERE digest=?
 	 AND length(CAST(block_manifest AS BLOB))%64=0 AND length(CAST(block_manifest AS BLOB)) BETWEEN 64 AND ?
+	 AND instr(CAST(block_manifest AS BLOB),x'00')=0 AND block_manifest NOT GLOB '*[^0-9a-f]*'
 	 AND coalesce(length(agent_json),0)<=4096 AND length(CAST(role AS BLOB))<=32
-	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.block_manifest),?))
-	SELECT length(CAST(message.block_manifest AS BLOB))/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR length(CAST(b.digest AS BLOB))!=64 OR b.digest GLOB '*[^0-9a-f]*' OR b.plain_bytes<1 OR b.plain_bytes>? OR length(b.payload) NOT BETWEEN 1 AND ? OR b.codec NOT IN ('identity','zstd') THEN 1 ELSE 0 END),
+	), spans(position) AS (SELECT 1 FROM message UNION ALL SELECT position+64 FROM spans,message WHERE position+64<=min(length(message.manifest),?))
+	SELECT length(message.manifest)/64,coalesce(sum(b.plain_bytes),0),sum(CASE WHEN b.digest IS NULL OR length(CAST(b.digest AS BLOB))!=64 OR b.digest GLOB '*[^0-9a-f]*' OR b.plain_bytes<1 OR b.plain_bytes>? OR length(b.payload) NOT BETWEEN 1 AND ? OR b.codec NOT IN ('identity','zstd') OR (b.codec='identity' AND length(b.payload)<>b.plain_bytes) THEN 1 ELSE 0 END),
 	 6*(coalesce(length(message.agent_json),0)+length(message.role))+64
-	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=substr(message.block_manifest,spans.position,64)`, digest, storedManifestSlots*storedDigestHexBytes, window*storedDigestHexBytes, exchangecontent.MaxEncodedBytes, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadata)
+	FROM message,spans LEFT JOIN runtime_exchange_content_blocks b ON b.digest=CAST(substr(message.manifest,spans.position,64) AS TEXT)`, digest, storedManifestSlots*storedDigestHexBytes, window*storedDigestHexBytes, exchangecontent.MaxEncodedBytes, exchangecontent.MaxEncodedBytes).Scan(&count, &sum, &missing, &metadata)
 	if err != nil || count < 1 || count > storedManifestSlots || sum < 1 || missing != 0 || metadata < 0 {
 		return storedInlineProbe{}, exchangecontent.ErrInvalidEvidence
 	}

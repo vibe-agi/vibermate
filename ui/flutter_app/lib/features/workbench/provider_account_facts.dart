@@ -446,6 +446,7 @@ final class _ProviderAccountFactsPanelState
           Wrap(
             spacing: 14,
             runSpacing: 3,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (credits != null)
                 _caption(
@@ -1133,7 +1134,7 @@ final class _ProviderAccountQuotaMiniState
     final caption = Theme.of(
       context,
     ).textTheme.bodySmall?.copyWith(color: colors.textMuted);
-    if (windows.isEmpty) {
+    if (windows.isEmpty && facts?.credits == null) {
       return Text(
         copy(
           failed
@@ -1148,6 +1149,20 @@ final class _ProviderAccountQuotaMiniState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (facts?.credits case final credits?)
+          Text(
+            copy.format('account_facts.credits', {
+              'balance': credits.unlimited
+                  ? copy('account_facts.unlimited')
+                  : !credits.hasCredits
+                  ? copy('account_facts.no_credits')
+                  : accountCreditsLabel(
+                      credits.balance,
+                      copy('account_facts.unknown'),
+                    ),
+            }),
+            style: caption,
+          ),
         for (final window in windows)
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -1158,21 +1173,20 @@ final class _ProviderAccountQuotaMiniState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 6,
+                    alignment: WrapAlignment.spaceBetween,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '${_compactQuotaPeriod(window.windowSeconds)} · ${window.usedPercent}%',
-                          style: monoStyle.copyWith(
-                            fontSize: 11,
-                            color: accountQuotaUsageColor(
-                              colors,
-                              window.usedPercent,
-                            ),
+                      Text(
+                        '${_compactQuotaPeriod(window.windowSeconds)} · ${window.usedPercent}%',
+                        style: monoStyle.copyWith(
+                          fontSize: 11,
+                          color: accountQuotaUsageColor(
+                            colors,
+                            window.usedPercent,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
                       Text(
                         accountQuotaCountdown(window.resetAt, now, copy),
                         style: monoStyle.copyWith(

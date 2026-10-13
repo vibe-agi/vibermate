@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
+  verifyKernelMaterialDigests,
+} from "../vless-kernel/verify_package.mjs";
+import {
   closeSync,
   constants,
   fstatSync,
@@ -1901,6 +1904,8 @@ export async function prepareR0ReleaseEvidence(
         main: "vibermate-desktop",
         vibermate: "vibermate",
         vibermated: "vibermated",
+        "vibermate-xray": "vibermate-xray",
+        kernelMaterials: "vless-kernel",
         desktopBuild: "vibermate-build-manifest.json",
         license: "LICENSE",
         dist: "dist",
@@ -1909,6 +1914,8 @@ export async function prepareR0ReleaseEvidence(
         main: "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/MacOS/vibermate-desktop",
         vibermate: "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/MacOS/vibermate",
         vibermated: "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/MacOS/vibermated",
+        "vibermate-xray": "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/MacOS/vibermate-xray",
+        kernelMaterials: "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/Resources/vless-kernel",
         desktopBuild: "ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app/Contents/Resources/vibermate-build-manifest.json",
         license: "LICENSE",
         dist: "ui/flutter_app/build/distribution/universal-apple-darwin/release/r0-dist",
@@ -2003,6 +2010,7 @@ export async function prepareR0ReleaseEvidence(
       ["main", "vibermate-desktop", 0o755, true],
       ["vibermate", "vibermate", 0o755, true],
       ["vibermated", "vibermated", 0o755, true],
+      ["vibermate-xray", "vibermate-xray", 0o755, true],
       ["license", "LICENSE", 0o644, false],
     ];
     const copied = {};
@@ -2025,7 +2033,8 @@ export async function prepareR0ReleaseEvidence(
     }
     if (
       copied.vibermate.digest !== buildManifest.nestedCodeSHA256.vibermate ||
-      copied.vibermated.digest !== buildManifest.nestedCodeSHA256.vibermated
+      copied.vibermated.digest !== buildManifest.nestedCodeSHA256.vibermated ||
+      copied["vibermate-xray"].digest !== buildManifest.nestedCodeSHA256["vibermate-xray"]
     ) {
       throw new Error("actual sidecar bytes do not match Desktop nested-code provenance");
     }
@@ -2047,6 +2056,17 @@ export async function prepareR0ReleaseEvidence(
       join(payloadRoot, "dist"),
       limits,
     );
+    const kernelState = await stageDistTree(
+      inspected.kernelMaterials.path,
+      join(payloadRoot, "vless-kernel"),
+      limits,
+    );
+    const kernelPackage = await verifyKernelMaterialDigests(join(payloadRoot, "vless-kernel"), "darwin/universal");
+    if (kernelPackage.materials["kernel-lock.json"]?.SHA256 !==
+        buildManifest.configurationSHA256["tool/vless-kernel/kernel-lock.json"]) {
+      throw new Error("Kernel materials do not bind the clean source lock");
+    }
+    fixedBytes += kernelState.totalBytes;
     for (const [name, relativePath] of Object.entries({
       "app-framework": "App.framework/App",
       "file-selector-framework": "file_selector_macos.framework/file_selector_macos",
@@ -2078,6 +2098,7 @@ export async function prepareR0ReleaseEvidence(
       ["vibermate-desktop", "Desktop main binary"],
       ["vibermate", "vibermate sidecar"],
       ["vibermated", "vibermated sidecar"],
+      ["vibermate-xray", "vibermate-xray kernel"],
     ]) {
       const sourceName = name === "vibermate-desktop" ? "main" : name;
       await verifyUniversalBinary(
@@ -2108,6 +2129,7 @@ export async function prepareR0ReleaseEvidence(
       ["main", "vibermate-desktop"],
       ["vibermate", "vibermate"],
       ["vibermated", "vibermated"],
+      ["vibermate-xray", "vibermate-xray"],
     ]) {
       if (ledgerEntries.get(payloadName)?.sha256 !== copied[sourceName].digest) {
         throw new Error(`${payloadName} ledger digest changed after Mach-O verification`);

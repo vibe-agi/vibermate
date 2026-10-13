@@ -196,9 +196,7 @@ func TestPersistCodexReauthorizationReplacesOnlyCredentialAndClearsReconnect(t *
 	ctx := context.Background()
 	f := reauthorizationStore(t)
 	accounts, secrets, oauth, original := f.accounts, f.secrets, f.oauth, f.original
-	scope := providerauth.AccountRef{ID: original.Account.ID.String(), Revision: original.Account.Revision,
-		CredentialEpoch: original.Health.CredentialEpoch, RealmID: original.Account.RealmID,
-		SettingsRevision: original.Account.SettingsRevision, EgressProfile: egressprofile.Direct()}
+	scope := original.Account.CredentialScope(original.Account.RealmID, original.Health.CredentialEpoch, egressprofile.ProfileRevision{})
 	_, _ = oauth.Prepare(ctx, original.Account.Driver, original.Account.SecretRef, scope, true)
 	original, _ = accounts.Get(ctx, original.Account.ID)
 	before, err := oauth.Inspect(ctx, original.Account.SecretRef, secretstore.Revision(original.Health.CredentialEpoch))

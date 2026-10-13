@@ -167,7 +167,7 @@ func (manager *Manager) GetProjection(
 	view RequestView,
 ) (Projection, error) {
 	if !validIdentity(exchangeID, MaxExchangeIDBytes) ||
-		(view != RequestViewFull && view != RequestViewIncremental) {
+		(view != RequestViewFull && view != RequestViewIncremental && view != RequestViewReading) {
 		return Projection{}, ErrInvalidEvidence
 	}
 	operation, finish, err := manager.begin(ctx)

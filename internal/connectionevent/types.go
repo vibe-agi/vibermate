@@ -43,6 +43,10 @@ const (
 
 type Decision string
 
+type InspectionPurpose string
+
+const InspectionPurposeClientTools InspectionPurpose = "client_tools"
+
 const (
 	DecisionAllow Decision = "allow"
 	DecisionDeny  Decision = "deny"
@@ -121,6 +125,7 @@ func (source Source) validate() error {
 // Event is one immutable phase snapshot for a connection. It contains no URL
 // path, header, body, raw credential, or TLS byte sequence.
 type Event struct {
+	InspectionPurpose      InspectionPurpose            `json:"inspectionPurpose,omitempty"`
 	ConnectionID           string                       `json:"connectionId"`
 	IngressID              string                       `json:"ingressId,omitempty"`
 	SourceLabel            string                       `json:"sourceLabel,omitempty"`
@@ -206,6 +211,10 @@ func (event Event) Validate() error {
 	}
 	clientEndpointEvidencePresent := event.ClientEndpointID != "" ||
 		event.ClientEndpointRevision != 0
+	nativeInspection := event.InspectionPurpose == InspectionPurposeClientTools
+	if event.InspectionPurpose != "" && (!nativeInspection || !environmentEvidencePresent || clientEndpointEvidencePresent || event.Decryption != DecryptionMITM || event.Decision != DecisionAllow) {
+		return fmt.Errorf("%w: native inspection purpose is invalid", ErrInvalidEvent)
+	}
 	if clientEndpointEvidencePresent {
 		_, clientEndpointIDErr := environment.NewClientEndpointID(event.ClientEndpointID.String())
 		if clientEndpointIDErr != nil ||
@@ -267,7 +276,7 @@ func (event Event) Validate() error {
 	}
 	if (event.Decryption == DecryptionMITM || event.Decryption == DecryptionCleartext) &&
 		event.Decision == DecisionAllow &&
-		(!environmentEvidencePresent || !clientEndpointEvidencePresent) {
+		(!environmentEvidencePresent || (!clientEndpointEvidencePresent && !nativeInspection)) {
 		return fmt.Errorf(
 			"%w: allowed inspection has no Environment and ClientEndpoint relation",
 			ErrInvalidEvent,

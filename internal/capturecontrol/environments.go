@@ -17,8 +17,9 @@ const (
 // CaptureEnvironment exposes launch choices, not management configuration,
 // account identities, credentials, or child-process environment values.
 type CaptureEnvironment struct {
-	ID   environment.EnvironmentID `json:"id"`
-	Name string                    `json:"name"`
+	ID                      environment.EnvironmentID `json:"id"`
+	Name                    string                    `json:"name"`
+	ClientToolAccessEnabled bool                      `json:"clientToolAccessEnabled"`
 }
 
 type CaptureEnvironments struct {
@@ -61,7 +62,8 @@ func (handler *Handler) listEnvironments(writer http.ResponseWriter, request *ht
 			principal.Kind() == controlprincipal.KindRuntimeUser && !principal.AllowsEnvironment(snapshot.ID().String()) {
 			continue
 		}
-		page.Items = append(page.Items, CaptureEnvironment{ID: snapshot.ID(), Name: snapshot.Name()})
+		permission := snapshot.Aggregate().ClientToolAccess
+		page.Items = append(page.Items, CaptureEnvironment{ID: snapshot.ID(), Name: snapshot.Name(), ClientToolAccessEnabled: permission != nil && permission.Enabled})
 	}
 	slices.SortFunc(page.Items, func(left, right CaptureEnvironment) int {
 		return strings.Compare(left.ID.String(), right.ID.String())

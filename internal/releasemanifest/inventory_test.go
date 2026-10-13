@@ -4,8 +4,45 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestUnsignedKernelInventoryRequiresHelperAndAdmitsOnlyNoticeLicenseLocations(t *testing.T) {
+	makeLedger := func(extra string, omitKernel bool) ([]appTreeLedgerEntry, map[string]string) {
+		types := map[string]string{".": "directory", "vibermate-desktop": "file", "vibermate": "file", "vibermated": "file", "vibermate-build-manifest.json": "file", "LICENSE": "file", "dist": "directory", "dist/index.html": "file"}
+		if !omitKernel {
+			types["vibermate-xray"] = "file"
+			types["vless-kernel"] = "directory"
+			types["vless-kernel/package-manifest.json"] = "file"
+		}
+		if extra != "" {
+			types[extra] = "file"
+		}
+		var entries []appTreeLedgerEntry
+		for path, kind := range types {
+			mode := uint32(0o755)
+			entries = append(entries, appTreeLedgerEntry{Path: path, Type: kind, Mode: &mode})
+		}
+		return entries, types
+	}
+	for _, path := range []string{"vless-kernel/licenses/go/LICENSE", "vless-kernel/licenses/modules/" + strings.Repeat("a", 64) + "/nested/LICENSE"} {
+		entries, types := makeLedger(path, false)
+		if err := validateUnsignedPayloadLedgerShape(entries, types); err != nil {
+			t.Fatalf("valid kernel notice %q rejected: %v", path, err)
+		}
+	}
+	entries, types := makeLedger("", true)
+	if err := validateUnsignedPayloadLedgerShape(entries, types); err == nil {
+		t.Fatal("missing required kernel accepted")
+	}
+	for _, path := range []string{"dist/LICENSE", "vless-kernel/LICENSE", "vless-kernel/licenses/modules/not-a-digest/LICENSE", "vless-kernel/licenses/go/vibermate-xray"} {
+		entries, types := makeLedger(path, false)
+		if err := validateUnsignedPayloadLedgerShape(entries, types); err == nil {
+			t.Fatalf("illegal reserved alias %q accepted", path)
+		}
+	}
+}
 
 func TestVerifyArtifactsRejectsExtraTopLevelEntry(t *testing.T) {
 	root := artifactTempDir(t)

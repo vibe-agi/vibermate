@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -18,6 +19,7 @@ func blindProbeTarget(t *testing.T, authority string) offlinehold.ProbeTarget {
 
 	target := offlinehold.ProbeTarget{
 		Kind:          offlinehold.EgressBlindTunnel,
+		TargetAccess:  egressnetwork.TargetAccessOwnerConfigured,
 		Transport:     offlinehold.ProbeTransportTCP,
 		TargetRef:     authority,
 		NetworkOrigin: authority,
@@ -27,6 +29,43 @@ func blindProbeTarget(t *testing.T, authority string) offlinehold.ProbeTarget {
 		t.Fatalf("the fixture target is not a valid blind target: %v", err)
 	}
 	return target
+}
+
+func TestRuntimeResumeKeepsDistinctBlindAllowances(t *testing.T) {
+	gate := newEnteredOfflineGate(t, "blind-allowances")
+	one := blindProbeTarget(t, "blind.fixture:443")
+	one.TargetAccess = egressnetwork.TargetAccessPublicOnly
+	two := blindProbeTarget(t, "blind.fixture:443")
+	actionOne, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: "blind-public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionTwo, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: "blind-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := acquireHeld(t, gate, actionOne, "blind-public", one)
+	second := acquireHeld(t, gate, actionTwo, "blind-owner", two)
+	defer func() {
+		gate.BeginShutdown()
+		releaseAcquiredAfterShutdown(t, <-first, actionOne)
+		releaseAcquiredAfterShutdown(t, <-second, actionTwo)
+	}()
+	waitForQueuedTargets(t, gate, 2)
+	r := &Runtime{offlineHold: gate}
+	targets, err := r.resumeProbeTargets()
+	if err != nil || len(targets) != 2 || targets[0].TargetAccess != egressnetwork.TargetAccessPublicOnly || targets[1].TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
+		t.Fatalf("allowances merged/lost: %+v %v", targets, err)
+	}
+}
+
+func releaseAcquiredAfterShutdown(t *testing.T, result acquireResult, action *offlinehold.ActionLease) {
+	t.Helper()
+	if result.lease != nil {
+		result.lease.Release()
+		t.Error("unprobed queued allowance was granted")
+	}
+	action.Release()
 }
 
 // The defect this closes: a queued blind tunnel had no arm in the probe
@@ -80,7 +119,15 @@ func TestAQueuedBlindTunnelDoesNotFailTheWholeProbeSet(t *testing.T) {
 func TestAnUnreachableBlindTunnelFailsAsATransportCondition(t *testing.T) {
 	t.Parallel()
 
-	// Port 1 on loopback refuses immediately on every platform this runs on.
+	// Only an address allocated and closed by this fixture is probed.
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err = listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	blind, err := blindtunnel.NewReachabilityProber()
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +141,7 @@ func TestAnUnreachableBlindTunnelFailsAsATransportCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{
-		Targets: []offlinehold.ProbeTarget{blindProbeTarget(t, "127.0.0.1:1")},
+		Targets: []offlinehold.ProbeTarget{blindProbeTarget(t, address)},
 	})
 	if err == nil {
 		t.Fatal("an unreachable blind tunnel passed the probe")
@@ -172,7 +219,7 @@ func TestAKindWithNoProberIsAProgrammingError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{
-		Targets: []offlinehold.ProbeTarget{{Kind: offlinehold.EgressUpdate}},
+		Targets: []offlinehold.ProbeTarget{{Kind: offlinehold.EgressPlugin}},
 	})
 	var failure *offlinehold.ProbeFailure
 	if !errors.As(err, &failure) ||

@@ -41,6 +41,49 @@ func TestClientTargetMismatchIsActionableAndDoesNotWriteAssignment(t *testing.T)
 	}
 }
 
+func TestNativeRequestPrecedesModelClientTargetPathRestriction(t *testing.T) {
+	policy := environmentFixture(t, "native", "adapter.shared")
+	policy.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://api.anthropic.com")
+	origin, err := originidentity.ParseProviderOrigin("https://api.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
+	profile, err := clienttarget.NewProfile("claude-code", clienttarget.EnvironmentFacts{AnthropicBaseURL: "https://api.example/restricted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(t, newMemoryRepository(), newRevisionResolver(t, policy))
+	assignment, err := manager.Create(context.Background(), CreateCommand{Capture: testCapture(), EnvironmentID: policy.ID, Source: SourceLaunch, ClientProfile: profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := manager.RegisterProviderConnection(context.Background(), testCapture(), "native.shared", origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if connection.Binding().Mode != environment.ConnectionModeSemantic {
+		t.Fatal("model alias lost semantic mode")
+	}
+	facts := semanticRequestFacts()
+	facts.Target.Path = environment.ClientToolMCPPath
+	lease, err := manager.BeginRequest(context.Background(), testCapture(), "native.shared", facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if _, ok := lease.Plan().ClientToolPlan(); !ok || lease.Assignment() != assignment {
+		t.Fatal("native assignment lease missing")
+	}
+	if lease, err := manager.BeginRequest(context.Background(), testCapture(), "native.shared", semanticRequestFacts()); !errors.Is(err, ErrClientTargetPathNotAllowed) {
+		if lease != nil {
+			lease.Release()
+		}
+		t.Fatalf("model path scope relaxed: %v", err)
+	}
+}
+
 func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
@@ -570,7 +613,7 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 				ID: "plan.messages", Revision: 1,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: adapterID, Revision: 1},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

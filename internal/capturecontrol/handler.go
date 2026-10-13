@@ -298,6 +298,7 @@ func (handler *Handler) create(
 		handler.launchSnapshots.Record(grant.Run.Run, *input.EnvironmentInventory)
 	}
 	writeJSON(writer, http.StatusCreated, LaunchGrant{
+		NativeToolLogin:      grant.NativeToolLogin,
 		Run:                  runView,
 		CatalogRevision:      grant.CatalogRevision,
 		LaunchRecipe:         grant.LaunchRecipe,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -649,6 +650,347 @@ func TestManagerFlushScopeUsesTheScopesLatestAdmittedWatermark(t *testing.T) {
 	}
 }
 
+func TestManagerDurableUnreadExchangeFencesAreReleased(t *testing.T) {
+	manager := openFenceTestManager(t, &memoryRepository{}, DefaultConfig())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for index := 0; index < 5000; index++ {
+		observation := testObservation()
+		observation.ExchangeID = fmt.Sprintf("unread-exchange-%d", index)
+		observation.ScopeID = fmt.Sprintf("unread-scope-%d", index)
+		if _, err := manager.Observe(ctx, observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.Flush(ctx, Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	// Flush promises durability and may return via its durable-watermark fast
+	// path. Shutdown also joins the worker, so cleanup has certainly completed.
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoDurableFences(t, manager)
+}
+
+func TestManagerDurableFenceKeepsNewerWatermark(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		sameExchange bool
+		sameScope    bool
+	}{
+		{name: "same exchange and scope", sameExchange: true, sameScope: true},
+		{name: "same exchange different scope kind", sameExchange: true},
+		{name: "same scope different exchange", sameScope: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &blockingAppendRepository{
+				memoryRepository: &memoryRepository{},
+				appendStarted:    make(chan struct{}), appendRelease: make(chan struct{}),
+				nextAppendStarted: make(chan struct{}), nextAppendRelease: make(chan struct{}),
+			}
+			// Release both gates before the manager's registered shutdown cleanup.
+			manager := openFenceTestManager(t, repository, Config{
+				MaximumQueueRecords: 2, MaximumQueueBytes: 1 << 20,
+				MaximumBatchRecords: 1, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour,
+			})
+			t.Cleanup(func() {
+				select {
+				case <-repository.appendRelease:
+				default:
+					close(repository.appendRelease)
+				}
+				select {
+				case <-repository.nextAppendRelease:
+				default:
+					close(repository.nextAppendRelease)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			firstObservation := testObservation()
+			if _, err := manager.Observe(ctx, firstObservation); err != nil {
+				t.Fatal(err)
+			}
+			waitFenceAppend(t, ctx, repository.appendStarted)
+			secondObservation := testObservation()
+			if !test.sameExchange {
+				secondObservation.ExchangeID = "newer-exchange"
+			}
+			if !test.sameScope {
+				secondObservation.ScopeKind = ScopeManualCapture
+			}
+			second, err := manager.Observe(ctx, secondObservation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			close(repository.appendRelease)
+			// The next AppendBatch starts only after the previous commit's whole
+			// success path has returned. Its gate keeps the newer record pending.
+			waitFenceAppend(t, ctx, repository.nextAppendStarted)
+			manager.admissionMu.Lock()
+			exchangeFence := manager.exchangeLatest[firstObservation.ExchangeID]
+			scopeFence := manager.scopeLatest[scopeKey{kind: firstObservation.ScopeKind, id: firstObservation.ScopeID}]
+			newExchangeFence := manager.exchangeLatest[secondObservation.ExchangeID]
+			newScopeFence := manager.scopeLatest[scopeKey{kind: secondObservation.ScopeKind, id: secondObservation.ScopeID}]
+			manager.admissionMu.Unlock()
+			wantExchange, wantScope := uint64(0), uint64(0)
+			if test.sameExchange {
+				wantExchange = second.Sequence
+			}
+			if test.sameScope {
+				wantScope = second.Sequence
+			}
+			if exchangeFence != wantExchange || scopeFence != wantScope ||
+				newExchangeFence != second.Sequence || newScopeFence != second.Sequence {
+				t.Fatalf("old fences exchange=%d scope=%d, want %d/%d; newer fences=%d/%d want %d",
+					exchangeFence, scopeFence, wantExchange, wantScope, newExchangeFence, newScopeFence, second.Sequence)
+			}
+			readDone := make(chan error, 1)
+			go func() {
+				metadata, err := manager.ListExchange(ctx, secondObservation.ExchangeID)
+				want := 1
+				if test.sameExchange {
+					want = 2
+				}
+				if err == nil && len(metadata) != want {
+					err = fmt.Errorf("read returned %d envelopes, want %d", len(metadata), want)
+				}
+				readDone <- err
+			}()
+			select {
+			case err := <-readDone:
+				t.Fatalf("read passed an uncommitted newer watermark: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(repository.nextAppendRelease)
+			if err := <-readDone; err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Shutdown(ctx); err != nil {
+				t.Fatal(err)
+			}
+			assertNoDurableFences(t, manager)
+		})
+	}
+}
+
+func TestManagerFailedCommitKeepsReadFencesAndSlots(t *testing.T) {
+	repository := &failingFenceRepository{memoryRepository: &memoryRepository{}, fail: true}
+	manager := openFenceTestManager(t, repository, Config{
+		MaximumQueueRecords: 2, MaximumQueueBytes: 1 << 20,
+		MaximumBatchRecords: 2, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	observation := testObservation()
+	mark, err := manager.Observe(ctx, observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Flush(ctx, mark); err == nil {
+		t.Fatal("failed commit reported success")
+	}
+	manager.admissionMu.Lock()
+	exchangeFence := manager.exchangeLatest[observation.ExchangeID]
+	scopeFence := manager.scopeLatest[scopeKey{kind: observation.ScopeKind, id: observation.ScopeID}]
+	manager.admissionMu.Unlock()
+	stats := manager.Statistics()
+	if exchangeFence != mark.Sequence || scopeFence != mark.Sequence || stats.DurableWatermark != 0 ||
+		stats.QueueRecords != 1 || stats.QueueBytes == 0 || stats.LastFailure == "" {
+		t.Fatalf("failed commit lost pending work: exchange=%d scope=%d stats=%+v", exchangeFence, scopeFence, stats)
+	}
+	if manager.recordSlots.TryAcquire(2) {
+		manager.recordSlots.Release(2)
+		t.Fatal("failed commit released its record slot")
+	}
+	if manager.byteSlots.TryAcquire(manager.config.MaximumQueueBytes) {
+		manager.byteSlots.Release(manager.config.MaximumQueueBytes)
+		t.Fatal("failed commit released its byte slots")
+	}
+	if _, err := manager.ListExchange(ctx, observation.ExchangeID); err == nil {
+		t.Fatal("read bypassed failed commit fence")
+	}
+	repository.mu.Lock()
+	repository.fail = false
+	repository.mu.Unlock()
+	if err := manager.Flush(ctx, mark); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoDurableFences(t, manager)
+}
+
+func TestManagerDurableFenceCapacity100000UnreadExchanges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("100000-request capacity measurement")
+	}
+	// This repository validates writes but discards committed records. Its
+	// archive cannot obscure the writer's retained memory.
+	repository := &discardFenceRepository{memoryRepository: &memoryRepository{}}
+	manager := openFenceTestManager(t, repository, DefaultConfig())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for index := 0; index < 100000; index++ {
+		observation := testObservation()
+		observation.ExchangeID = fmt.Sprintf("capacity-exchange-%d", index)
+		observation.ScopeID = fmt.Sprintf("capacity-scope-%d", index)
+		if _, err := manager.Observe(ctx, observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.Flush(ctx, Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoDurableFences(t, manager)
+	stats := manager.Statistics()
+	if stats.DurableWatermark != 100000 || stats.QueueRecords != 0 || stats.QueueBytes != 0 || len(manager.records) != 0 {
+		t.Fatalf("capacity workload retained queued work: %+v channel=%d", stats, len(manager.records))
+	}
+	if !manager.recordSlots.TryAcquire(int64(manager.config.MaximumQueueRecords)) {
+		t.Fatal("capacity workload retained record slots")
+	}
+	manager.recordSlots.Release(int64(manager.config.MaximumQueueRecords))
+	if !manager.byteSlots.TryAcquire(manager.config.MaximumQueueBytes) {
+		t.Fatal("capacity workload retained byte slots")
+	}
+	manager.byteSlots.Release(manager.config.MaximumQueueBytes)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	manager.scopeMu.Lock()
+	scopes := len(manager.scopes)
+	manager.scopeMu.Unlock()
+	t.Logf("requests=100000 exchange_fences=0 scope_fences=0 queue_records=%d queue_bytes=%d channel=%d record_slots_used=0 byte_slots_used=0 scope_states=%d heap_delta_bytes=%d allocated_bytes=%d batch_commits=%d",
+		stats.QueueRecords, stats.QueueBytes, len(manager.records), scopes, int64(after.HeapAlloc)-int64(before.HeapAlloc), after.TotalAlloc-before.TotalAlloc, stats.BatchCommits)
+	runtime.KeepAlive(manager)
+}
+
+func TestTerminalScopeDurableFenceCleanupPreservesLateAdmissionGuard(t *testing.T) {
+	manager := openFenceTestManager(t, &discardFenceRepository{memoryRepository: &memoryRepository{}}, DefaultConfig())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for index := 0; index < 5000; index++ {
+		id := fmt.Sprintf("sealed-capacity-scope-%d", index)
+		lease, err := manager.BeginScope(ctx, ScopeManagedRun, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observation := testObservation()
+		observation.ScopeID, observation.ExchangeID = id, fmt.Sprintf("sealed-exchange-%d", index)
+		if _, err := manager.Observe(ctx, observation); err != nil {
+			lease.Release()
+			t.Fatal(err)
+		}
+		lease.Release()
+		terminal, err := manager.PrepareTerminalScope(ctx, ScopeManagedRun, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal.Commit()
+		if lateLease, err := manager.BeginScope(ctx, ScopeManagedRun, id); !errors.Is(err, ErrScopeTerminal) {
+			if lateLease != nil {
+				lateLease.Release()
+			}
+			t.Fatalf("sealed scope %d admitted a late request: %v", index, err)
+		}
+	}
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoDurableFences(t, manager)
+	manager.scopeMu.Lock()
+	sealed := 0
+	for _, state := range manager.scopes {
+		if state.phase == scopeSealed && state.active == 0 {
+			sealed++
+		}
+	}
+	scopes := len(manager.scopes)
+	manager.scopeMu.Unlock()
+	if sealed != 5000 || scopes != 5000 || manager.Statistics().AdmittedRecords != 5000 {
+		t.Fatalf("scope lifecycle states=%d sealed=%d stats=%+v", scopes, sealed, manager.Statistics())
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	t.Logf("terminal_scopes=5000 sealed_tombstones=%d active_requests=0 late_requests_denied=5000 exchange_fences=0 scope_fences=0 heap_delta_bytes=%d", sealed, int64(after.HeapAlloc)-int64(before.HeapAlloc))
+	runtime.KeepAlive(manager)
+}
+
+func openFenceTestManager(t *testing.T, repository Repository, config Config) *Manager {
+	t.Helper()
+	manager, err := Open(context.Background(), Options{
+		Repository: repository, Random: bytes.NewReader(bytes.Repeat([]byte{0x59}, 64)),
+		Clock: fixedClock{value: time.Unix(1_790_000_000, 0).UTC()}, Config: config,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown fence test manager: %v", err)
+		}
+	})
+	return manager
+}
+
+func assertNoDurableFences(t *testing.T, manager *Manager) {
+	t.Helper()
+	manager.admissionMu.Lock()
+	exchanges, scopes := len(manager.exchangeLatest), len(manager.scopeLatest)
+	manager.admissionMu.Unlock()
+	if exchanges != 0 || scopes != 0 {
+		t.Fatalf("durable unread exchanges retained %d exchange and %d scope read fences", exchanges, scopes)
+	}
+}
+
+func waitFenceAppend(t *testing.T, ctx context.Context, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("writer did not reach blocked AppendBatch")
+	}
+}
+
+type failingFenceRepository struct {
+	*memoryRepository
+	fail bool
+}
+
+func (repository *failingFenceRepository) AppendBatch(ctx context.Context, records []StoredEnvelope, now time.Time) error {
+	repository.mu.Lock()
+	fail := repository.fail
+	repository.mu.Unlock()
+	if fail {
+		return errors.New("synthetic append failure")
+	}
+	return repository.memoryRepository.AppendBatch(ctx, records, now)
+}
+
+type discardFenceRepository struct{ *memoryRepository }
+
+func (repository *discardFenceRepository) AppendBatch(_ context.Context, records []StoredEnvelope, _ time.Time) error {
+	for _, record := range records {
+		if err := record.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func testObservation() Observation {
 	return Observation{
 		Context: Context{
@@ -718,9 +1060,12 @@ func (repository *memoryRepository) RedactionSalt(
 
 type blockingAppendRepository struct {
 	*memoryRepository
-	appendStarted chan struct{}
-	appendRelease chan struct{}
-	startOnce     sync.Once
+	appendStarted     chan struct{}
+	appendRelease     chan struct{}
+	startOnce         sync.Once
+	nextAppendStarted chan struct{}
+	nextAppendRelease chan struct{}
+	appendCalls       int
 }
 
 func (repository *blockingAppendRepository) AppendBatch(
@@ -728,6 +1073,19 @@ func (repository *blockingAppendRepository) AppendBatch(
 	records []StoredEnvelope,
 	now time.Time,
 ) error {
+	repository.mu.Lock()
+	repository.appendCalls++
+	call := repository.appendCalls
+	repository.mu.Unlock()
+	if call == 2 && repository.nextAppendStarted != nil {
+		close(repository.nextAppendStarted)
+		select {
+		case <-repository.nextAppendRelease:
+			return repository.memoryRepository.AppendBatch(ctx, records, now)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	repository.startOnce.Do(func() { close(repository.appendStarted) })
 	select {
 	case <-repository.appendRelease:

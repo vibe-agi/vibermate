@@ -19,6 +19,7 @@ const (
 	EgressPlugin      EgressKind = "plugin"
 	EgressUpdate      EgressKind = "update"
 	EgressBlindTunnel EgressKind = "blind_tunnel"
+	EgressDatagram    EgressKind = "datagram"
 )
 
 // RuntimeBinding fences coordinator state to one process-lifetime runtime
@@ -118,6 +119,8 @@ const (
 	// it never interprets, so reachability is all it can establish: there is
 	// no TLS server name to verify and no protocol to speak.
 	ProbeTransportTCP ProbeTransportKind = "tcp"
+	// UDPSetup proves packet-channel construction only, never remote delivery.
+	ProbeTransportUDPSetup ProbeTransportKind = "udp_setup"
 )
 
 type ProbeTarget struct {
@@ -130,6 +133,7 @@ type ProbeTarget struct {
 	PlanRevision  uint64
 	PlanDigest    string
 	EgressPolicy  egressnetwork.Policy
+	TargetAccess  egressnetwork.TargetAccess
 }
 
 func (target ProbeTarget) Validate() error {

@@ -43,11 +43,13 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 		egressaudit.PurposeOriginalOrigin:         offlinehold.EgressOpaque,
 		egressaudit.PurposeAgentProbe:             offlinehold.EgressAuxiliary,
 		egressaudit.PurposeBlindTunnel:            offlinehold.EgressBlindTunnel,
+		egressaudit.PurposeDatagram:               offlinehold.EgressDatagram,
 		egressaudit.PurposeAuxiliaryLLM:           offlinehold.EgressAuxiliary,
 		egressaudit.PurposeLanguageTransform:      offlinehold.EgressAuxiliary,
 		egressaudit.PurposePluginCatalogSync:      offlinehold.EgressPlugin,
 		egressaudit.PurposePluginArtifactFetch:    offlinehold.EgressPlugin,
 		egressaudit.PurposeUpdate:                 offlinehold.EgressUpdate,
+		egressaudit.PurposeClientToolService:      offlinehold.EgressAuxiliary,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

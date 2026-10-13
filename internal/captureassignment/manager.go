@@ -5,18 +5,22 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 type Options struct {
-	Repository   Repository
-	Environments environment.SnapshotResolver
-	Activity     CaptureActivity
-	Clock        Clock
+	EgressDefaults   egressprofile.Resolver
+	Repository       Repository
+	Environments     environment.SnapshotResolver
+	Activity         CaptureActivity
+	Clock            Clock
+	NativeRevocation NativeRevocation
 }
 
 func DefaultOptions(
@@ -44,8 +48,9 @@ type captureState struct {
 	writer    sync.Mutex
 	mu        sync.Mutex
 
-	poisoned bool
-	shutdown bool
+	poisoned      bool
+	shutdown      bool
+	transitioning bool
 
 	connections map[string]*connectionRecord
 }
@@ -58,11 +63,13 @@ func newCaptureState(reference captureidentity.Reference) *captureState {
 }
 
 type Manager struct {
-	repository   Repository
-	environments environment.SnapshotResolver
-	activity     CaptureActivity
-	clock        Clock
-	lifecycle    *lifecycleGate
+	egressDefaults   egressprofile.Resolver
+	repository       Repository
+	environments     environment.SnapshotResolver
+	activity         CaptureActivity
+	clock            Clock
+	lifecycle        *lifecycleGate
+	nativeRevocation NativeRevocation
 
 	statesMu sync.Mutex
 	states   map[string]*captureState
@@ -79,9 +86,11 @@ func NewManager(options Options) (*Manager, error) {
 		return nil, errors.New("Capture assignment dependencies are incomplete")
 	}
 	return &Manager{
-		repository: options.Repository, environments: options.Environments,
+		egressDefaults: options.EgressDefaults,
+		repository:     options.Repository, environments: options.Environments,
 		activity: options.Activity, clock: options.Clock,
-		lifecycle: newLifecycleGate(), states: make(map[string]*captureState),
+		nativeRevocation: options.NativeRevocation,
+		lifecycle:        newLifecycleGate(), states: make(map[string]*captureState),
 	}, nil
 }
 
@@ -211,6 +220,23 @@ func (manager *Manager) ApplyLatest(
 	}
 	state.mu.Unlock()
 
+	state.mu.Lock()
+	state.transitioning = true
+	state.mu.Unlock()
+	defer func() { state.mu.Lock(); state.transitioning = false; state.mu.Unlock() }()
+	if manager.nativeRevocation != nil {
+		reason := "assignment_applied"
+		access := latest.Aggregate().ClientToolAccess
+		if access == nil || !access.Enabled {
+			reason = "permission_off"
+		}
+		if err := manager.nativeRevocation.Revoke(ctx, reference, reason); err != nil {
+			state.mu.Lock()
+			state.poisoned = true
+			state.mu.Unlock()
+			return Assignment{}, errors.Join(ErrAssignmentUnavailable, err)
+		}
+	}
 	candidate := current
 	candidate.Revision++
 	candidate.EnvironmentRevision = latest.Revision()
@@ -270,7 +296,7 @@ func (manager *Manager) finishWrite(state *captureState, expected Assignment, re
 			state.mu.Lock()
 			state.poisoned = true
 			state.mu.Unlock()
-			return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr)
+			return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr, manager.revokeNativeUnknown(state))
 		}
 		return result.Assignment, nil
 	case CommitOutcomeConflict:
@@ -279,7 +305,7 @@ func (manager *Manager) finishWrite(state *captureState, expected Assignment, re
 		state.mu.Lock()
 		state.poisoned = true
 		state.mu.Unlock()
-		return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr)
+		return result.Assignment, errors.Join(ErrCommitOutcomeUnknown, writeErr, manager.revokeNativeUnknown(state))
 	default:
 		return result.Assignment, errors.Join(ErrWriteNotCommitted, writeErr)
 	}
@@ -419,7 +445,7 @@ func (manager *Manager) RegisterProviderConnection(
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.shutdown || state.poisoned {
+	if state.shutdown || state.poisoned || state.transitioning {
 		return fail(ErrOperationInProgress)
 	}
 	if _, exists := state.connections[id]; exists {
@@ -494,12 +520,13 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		return fail(ErrConnectionNotFound)
 	}
-	if state.shutdown || state.poisoned {
+	if state.shutdown || state.poisoned || state.transitioning {
 		state.mu.Unlock()
 		return fail(ErrOperationInProgress)
 	}
 	assignment := connection.assignment
 	snapshot := connection.snapshot
+	binding := connection.binding
 	if assignment.Validate() != nil || assignment.Capture != capture ||
 		snapshot.ID() != assignment.EnvironmentID ||
 		snapshot.Revision() != assignment.EnvironmentRevision ||
@@ -507,15 +534,15 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		return fail(ErrAssignmentUnavailable)
 	}
-	if err := environment.ValidateConnectionBinding(snapshot, connection.binding); err != nil {
+	if err := environment.ValidateConnectionBinding(snapshot, binding); err != nil {
 		state.mu.Unlock()
 		return fail(err)
 	}
-	if !connectionBindingAuthorized(assignment, connection.binding) {
+	if !connectionBindingAuthorized(assignment, binding) {
 		state.mu.Unlock()
 		return fail(ErrAssignmentUnavailable)
 	}
-	if connection.binding.Mode != environment.ConnectionModeSemantic {
+	if binding.Mode != environment.ConnectionModeSemantic && binding.Mode != environment.ConnectionModeClientTools {
 		state.mu.Unlock()
 		return fail(environment.ErrClientProtocolNotMatched)
 	}
@@ -533,15 +560,34 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		finish()
 	}
+	if plan, nativeErr := snapshot.ResolveClientToolRequest(binding, facts); nativeErr == nil {
+		active, activeErr := manager.activity.Active(ctx, capture)
+		if activeErr != nil || !active {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, activeErr)
+		}
+		boundary := assignment.LaunchAuthority
+		initial, initialErr := manager.environments.ResolveRevision(ctx, boundary.InitialEnvironmentID(), boundary.InitialEnvironmentRevision())
+		native, ok := plan.ClientToolPlan()
+		if initialErr != nil || !ok {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, initialErr)
+		}
+		if err := initial.ValidateClientToolLaunchAuthority(boundary, native); err != nil {
+			release()
+			return nil, errors.Join(ErrAssignmentUnavailable, err)
+		}
+		return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil
+	}
 	if assignment.ClientTarget.Available() &&
-		assignment.ClientTarget.MatchesTransport(connection.binding.ProviderOrigin) &&
-		assignment.ClientTarget.CanonicalOrigin() == connection.binding.ClientOrigin &&
+		assignment.ClientTarget.MatchesTransport(binding.ProviderOrigin) &&
+		assignment.ClientTarget.CanonicalOrigin() == binding.ClientOrigin &&
 		!assignment.ClientTarget.ContainsPath(facts.Target.Path) &&
 		!upstreamservice.AllowsClientRead(assignment.ClientTarget.ActualOrigin(), assignment.ClientTarget.CanonicalOrigin(), facts.Target) {
 		release()
 		return nil, errors.Join(environment.ErrClientProtocolNotMatched, ErrClientTargetPathNotAllowed)
 	}
-	plan, err := snapshot.ResolveConnectionRequest(connection.binding, facts)
+	plan, err := snapshot.ResolveConnectionRequest(binding, facts)
 	if err != nil {
 		release()
 		return nil, err
@@ -556,6 +602,24 @@ func (manager *Manager) BeginRequest(
 					}
 				}
 			}
+		}
+	}
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
+		var resolved egressprofile.Resolved
+		choice := plan.EgressChoice()
+		if manager.egressDefaults != nil {
+			resolved, err = manager.egressDefaults.Resolve(ctx, egressprofile.Inherit(), choice)
+		} else if profile, explicit := choice.ExplicitProfile(); explicit {
+			resolved, err = egressprofile.RestoreResolved(profile, egressprofile.SelectionFlow, 0)
+		} else {
+			err = egressprofile.ErrInvalidProfile
+		}
+		if err == nil {
+			plan, err = plan.WithResolvedEgress(resolved)
+		}
+		if err != nil {
+			release()
+			return nil, err
 		}
 	}
 	return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil
@@ -634,11 +698,30 @@ func (manager *Manager) BeginShutdown() {
 		states = append(states, state)
 	}
 	manager.statesMu.Unlock()
+	revokeContext, cancelRevoke := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRevoke()
 	for _, state := range states {
 		state.mu.Lock()
 		state.shutdown = true
 		state.mu.Unlock()
+		if manager.nativeRevocation != nil {
+			err := manager.nativeRevocation.Revoke(revokeContext, state.reference, "shutdown")
+			if err != nil {
+				state.mu.Lock()
+				state.poisoned = true
+				state.mu.Unlock()
+			}
+		}
 	}
+}
+
+func (manager *Manager) revokeNativeUnknown(state *captureState) error {
+	if manager.nativeRevocation == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return manager.nativeRevocation.Revoke(ctx, state.reference, "owner_changed")
 }
 
 func (manager *Manager) Drain(ctx context.Context) error {

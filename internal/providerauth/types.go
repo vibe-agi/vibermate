@@ -56,7 +56,8 @@ type AccountRef struct {
 	RealmID          string
 	SettingsRevision uint64
 	// EgressProfile is the effective, immutable network path for this lease.
-	EgressProfile egressprofile.ProfileRevision
+	EgressProfile  egressprofile.ProfileRevision
+	ResolvedEgress egressprofile.Resolved
 }
 
 func (ref AccountRef) Validate() error {
@@ -64,6 +65,9 @@ func (ref AccountRef) Validate() error {
 		ref.Revision > MaxRevision || ref.CredentialEpoch == 0 || ref.CredentialEpoch > MaxRevision ||
 		ref.SettingsRevision == 0 || ref.SettingsRevision > MaxRevision ||
 		ref.EgressProfile.Validate() != nil {
+		return ErrInvalidAuthentication
+	}
+	if ref.ResolvedEgress.Validate() != nil || !ref.ResolvedEgress.Profile().Equal(ref.EgressProfile) {
 		return ErrInvalidAuthentication
 	}
 	return nil

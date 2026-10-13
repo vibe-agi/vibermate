@@ -8,7 +8,31 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
+
+// NativeToolLoginView describes the original client's service, never its login.
+type NativeToolLoginView struct {
+	Origin      string `json:"origin"`
+	ServicePath string `json:"servicePath"`
+	Contract    string `json:"contract"`
+}
+
+func (view NativeToolLoginView) Validate() error {
+	origin, err := originidentity.ParseProviderOrigin(view.Origin)
+	if err != nil || origin.String() != view.Origin || origin.Scheme() != "https" || view.ServicePath != environment.ClientToolMCPPath || view.Contract != string(environment.ClientToolContractCodexLegacy) {
+		return errors.New("native tool login view is invalid")
+	}
+	return nil
+}
+
+func (set CaptureAuthoritySet) NativeToolLogin() *NativeToolLoginView {
+	if set.nativeToolLogin == nil {
+		return nil
+	}
+	view := *set.nativeToolLogin
+	return &view
+}
 
 // CaptureAuthoritySet freezes the exact non-secret launch boundary attached
 // to a durable Capture assignment. Protected authorities may receive the
@@ -20,6 +44,7 @@ type CaptureAuthoritySet struct {
 	environmentID      environment.EnvironmentID
 	launchAuthority    environment.LaunchAuthorityBoundary
 	launchEnvironment  environment.LaunchEnvironmentPolicy
+	nativeToolLogin    *NativeToolLoginView
 }
 
 func NewCaptureAuthoritySet(
@@ -225,6 +250,11 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 		return CaptureAuthoritySet{}, err
 	}
 	set.launchEnvironment = launchEnvironment.Clone()
+	set, err = resolver.attachLaunchEnvironment(ctx, set)
+	if err != nil {
+		return CaptureAuthoritySet{}, err
+	}
+	set.launchEnvironment = launchEnvironment.Clone()
 	return set, nil
 }
 
@@ -268,5 +298,10 @@ func (resolver *environmentAuthorityResolver) attachLaunchEnvironment(
 		)
 	}
 	set.launchEnvironment = snapshot.LaunchEnvironment()
+	policy := snapshot.Aggregate().ClientToolAccess
+	if policy != nil && policy.Enabled && policy.Validate() == nil {
+		route := policy.Route
+		set.nativeToolLogin = &NativeToolLoginView{Origin: route.TargetOrigin.String(), ServicePath: route.Path, Contract: string(route.Contract)}
+	}
 	return set, nil
 }

@@ -14,12 +14,12 @@ import (
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
 
-func executeProfiles(ctx context.Context, arguments []string, stdout io.Writer) (int, string) {
+func executeProfiles(ctx context.Context, arguments []string, environment []string, stdout io.Writer) (int, string) {
 	flags := flag.NewFlagSet("profiles", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	server := flags.String("server", "", "")
 	jsonOutput := flags.Bool("json", false, "")
-	if err := flags.Parse(arguments); err != nil || len(flags.Args()) != 0 || !*jsonOutput {
+	if err := flags.Parse(arguments); err != nil || len(flags.Args()) != 0 {
 		return 2, keyUsage
 	}
 	config := runlauncher.Config{}
@@ -55,8 +55,20 @@ func executeProfiles(ctx context.Context, arguments []string, stdout io.Writer) 
 	if err != nil {
 		return 1, launchFailureKey(err)
 	}
-	if err := json.NewEncoder(stdout).Encode(page); err != nil {
-		return 1, reasonRenderFailed
+	if *jsonOutput {
+		if err := json.NewEncoder(stdout).Encode(page); err != nil {
+			return 1, reasonRenderFailed
+		}
+	} else {
+		for _, item := range page.Items {
+			key := "cli.profiles.off"
+			if item.ClientToolAccessEnabled {
+				key = "cli.profiles.on"
+			}
+			if err := renderCLIMessage(environment, stdout, key, map[string]string{"name": item.Name}); err != nil {
+				return 1, reasonRenderFailed
+			}
+		}
 	}
 	return 0, ""
 }

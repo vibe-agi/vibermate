@@ -28,6 +28,22 @@ func newSQLiteReadConnector(databasePath string, busyTimeout time.Duration) driv
 	return &sqliteConnector{driver: &sqlite.Driver{}, dsn: sqliteDSN(databasePath, busyTimeout, true)}
 }
 
+// The upgrade writer never changes journal_mode and requires an existing file.
+// Its FULL synchronization applies to the one manually owned transaction.
+func newSQLiteUpgradeConnector(databasePath string, busyTimeout time.Duration) driver.Connector {
+	u := url.URL{Scheme: "file", Path: databasePath}
+	query := u.Query()
+	query.Set("mode", "rw")
+	query.Add("_pragma", "busy_timeout("+strconv.FormatInt(busyTimeout.Milliseconds(), 10)+")")
+	for _, pragma := range []string{"foreign_keys(1)", "synchronous(FULL)", "temp_store(FILE)", "cache_size(-2048)"} {
+		query.Add("_pragma", pragma)
+	}
+	query.Set("_dqs", "false")
+	query.Set("_error_rc", "true")
+	u.RawQuery = query.Encode()
+	return &sqliteConnector{driver: &sqlite.Driver{}, dsn: u.String()}
+}
+
 func (c *sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

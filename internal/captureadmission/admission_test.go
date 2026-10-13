@@ -171,6 +171,50 @@ func TestVerifiedFeatureEvidenceIsFrozenInsideAdmission(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAuthoritySeparatesLocalEvidenceFromPathClaims(t *testing.T) {
+	t.Parallel()
+	local := testWorkspace(t)
+	remote, err := workspaceidentity.NewScope(local.MachineID(), local.WorkspaceID(), "project",
+		workspaceidentity.EvidenceRegisteredCompanion, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		scope workspaceidentity.Scope
+		root  string
+		want  string
+	}{
+		{"local", local, "/workspace/project", "/workspace/project"},
+		{"remote", remote, "/workspace/project", ""},
+		{"unscoped", workspaceidentity.Scope{}, "/workspace/project", ""},
+		{"local-without-root", local, "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, err := NewManagedRun(ManagedRunEvidence{
+				CaptureRunID: "run-authority", SourceLabel: "claude",
+				Workspace: test.scope, WorkspaceRoot: test.root,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if root, ok := admission.LocalWorkspaceRoot(); root != test.want || ok != (test.want != "") {
+				t.Fatalf("local filesystem authority = %q, %v; want %q", root, ok, test.want)
+			}
+			if root, ok := admission.WorkspaceRoot(); root != test.root || ok != (test.root != "") {
+				t.Fatalf("display/redaction path claim = %q, %v; want %q", root, ok, test.root)
+			}
+		})
+	}
+	manual, err := NewManual("manual-authority", 1, "Claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root, ok := manual.LocalWorkspaceRoot(); root != "" || ok {
+		t.Fatalf("manual capture acquired filesystem authority = %q, %v", root, ok)
+	}
+}
+
 func TestManualAdmissionCannotInventManagedEvidence(t *testing.T) {
 	t.Parallel()
 	admission, err := NewManual("manual-one", 3, "Codex App")

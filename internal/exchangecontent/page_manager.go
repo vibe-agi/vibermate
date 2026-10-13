@@ -3,7 +3,7 @@ package exchangecontent
 import "context"
 
 func (manager *Manager) GetPagedProjection(ctx context.Context, exchangeID string, view RequestView) (Projection, error) {
-	if !validIdentity(exchangeID, MaxExchangeIDBytes) || (view != RequestViewFull && view != RequestViewIncremental) {
+	if !validIdentity(exchangeID, MaxExchangeIDBytes) || (view != RequestViewFull && view != RequestViewIncremental && view != RequestViewReading) {
 		return Projection{}, ErrInvalidEvidence
 	}
 	operation, finish, err := manager.begin(ctx)

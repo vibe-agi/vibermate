@@ -601,11 +601,12 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	configuration := make(map[string]string, len(desktopBuildConfigurationNames))
 	configurationDigits := "123456789ab"
 	for index, name := range desktopBuildConfigurationNames {
-		configuration[name] = strings.Repeat(string(configurationDigits[index]), 64)
+		configuration[name] = strings.Repeat(string(configurationDigits[index%len(configurationDigits)]), 64)
 	}
 	sidecarPayloads := map[string][]byte{
-		"vibermate":  []byte("launcher\n"),
-		"vibermated": []byte("daemon!!\n"),
+		"vibermate":      []byte("launcher\n"),
+		"vibermated":     []byte("daemon!!\n"),
+		"vibermate-xray": []byte("locked-kernel\n"),
 	}
 	appFrameworkPayload := []byte("universal App framework\n")
 	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
@@ -618,6 +619,7 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 		"url-launcher-framework":  payloadSHA256(urlLauncherPayload),
 		"vibermate":               payloadSHA256(sidecarPayloads["vibermate"]),
 		"vibermated":              payloadSHA256(sidecarPayloads["vibermated"]),
+		"vibermate-xray":          payloadSHA256(sidecarPayloads["vibermate-xray"]),
 	}
 	desktopPayload := marshalArtifactJSON(t, desktopBuildDocument{
 		Schema: DesktopBuildSchemaV3,
@@ -668,6 +670,8 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	writePayloadFixtureFile(t, root, "vibermate-desktop", mainPayload, 0o755)
 	writePayloadFixtureFile(t, root, "vibermate", sidecarPayloads["vibermate"], 0o755)
 	writePayloadFixtureFile(t, root, "vibermated", sidecarPayloads["vibermated"], 0o755)
+	writePayloadFixtureFile(t, root, "vibermate-xray", sidecarPayloads["vibermate-xray"], 0o755)
+	writePayloadFixtureFile(t, root, "vless-kernel/package-manifest.json", []byte("{}\n"), 0o644)
 	writePayloadFixtureFile(t, root, "dist/App.framework/App", appFrameworkPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755)
@@ -696,7 +700,10 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 			fixtureFileLedgerEntry("vibermate", sidecarPayloads["vibermate"], 0o755),
 			fixtureFileLedgerEntry("vibermate-build-manifest.json", desktopPayload, 0o644),
 			fixtureFileLedgerEntry("vibermate-desktop", mainPayload, 0o755),
+			fixtureFileLedgerEntry("vibermate-xray", sidecarPayloads["vibermate-xray"], 0o755),
 			fixtureFileLedgerEntry("vibermated", sidecarPayloads["vibermated"], 0o755),
+			fixtureDirectoryLedgerEntry("vless-kernel", 0o755),
+			fixtureFileLedgerEntry("vless-kernel/package-manifest.json", []byte("{}\n"), 0o644),
 		},
 	})
 	writeDeclaredArtifact(

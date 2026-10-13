@@ -41,10 +41,19 @@ var (
 var desktopBuildConfigurationNames = []string{
 	"go.mod",
 	"go.sum",
+	"tool/vless-kernel/kernel-lock.json",
+	"tool/vless-kernel/dependency.patch",
+	"tool/vless-kernel/upstream.commit",
+	"tool/vless-kernel/LICENSE.upstream",
+	"tool/vless-kernel/build_kernel.py",
+	"tool/vless-kernel/package_kernel.py",
+	"tool/vless-kernel/verify_package.mjs",
 	"ui/flutter_app/.metadata",
 	"ui/flutter_app/pubspec.yaml",
 	"ui/flutter_app/pubspec.lock",
 	"ui/flutter_app/tool/flutter-sdk.env",
+	"ui/flutter_app/macos/Podfile",
+	"ui/flutter_app/macos/Podfile.lock",
 	"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
 	"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
 	"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
@@ -58,6 +67,7 @@ var desktopNestedCodeNames = []string{
 	"flutter-macos-framework",
 	"url-launcher-framework",
 	"vibermate",
+	"vibermate-xray",
 	"vibermated",
 }
 
@@ -66,8 +76,9 @@ var desktopNestedCodePayloadPaths = map[string]string{
 	"dist/FlutterMacOS.framework/FlutterMacOS":               "flutter-macos-framework",
 	"dist/file_selector_macos.framework/file_selector_macos": "file-selector-framework",
 	"dist/url_launcher_macos.framework/url_launcher_macos":   "url-launcher-framework",
-	"vibermate":  "vibermate",
-	"vibermated": "vibermated",
+	"vibermate":      "vibermate",
+	"vibermate-xray": "vibermate-xray",
+	"vibermated":     "vibermated",
 }
 
 type desktopBuildDocument struct {
@@ -437,9 +448,14 @@ func validateUnsignedPayloadLedgerShape(
 		"vibermate-desktop":             "file",
 		"vibermate":                     "file",
 		"vibermated":                    "file",
+		"vibermate-xray":                "file",
+		"vless-kernel":                  "directory",
 		"vibermate-build-manifest.json": "file",
 		"LICENSE":                       "file",
 		"dist":                          "directory",
+	}
+	if typesByPath["vless-kernel/package-manifest.json"] != "file" {
+		return errors.New("application tree ledger must contain the kernel package success marker")
 	}
 	for requiredPath, requiredType := range required {
 		if typesByPath[requiredPath] != requiredType {
@@ -465,6 +481,7 @@ func validateUnsignedPayloadLedgerShape(
 		"vibermate-desktop",
 		"vibermate",
 		"vibermated",
+		"vibermate-xray",
 	} {
 		for _, entry := range entries {
 			if entry.Path == executablePath && (*entry.Mode)&0o111 == 0 {
@@ -480,6 +497,9 @@ func validateUnsignedPayloadLedgerShape(
 		"vibermate-desktop":             "vibermate-desktop",
 		"vibermate":                     "vibermate",
 		"vibermated":                    "vibermated",
+		"vibermate-xray":                "vibermate-xray",
+		"vless-kernel":                  "vless-kernel",
+		"package-manifest.json":         "vless-kernel/package-manifest.json",
 		"vibermate-build-manifest.json": "vibermate-build-manifest.json",
 		"LICENSE":                       "LICENSE",
 	}
@@ -488,6 +508,9 @@ func validateUnsignedPayloadLedgerShape(
 			distHasFile = true
 		}
 		if rootPath, reserved := reservedNames[pathpkg.Base(entry.Path)]; reserved && entry.Path != rootPath {
+			if pathpkg.Base(entry.Path) == "LICENSE" && isKernelNoticeLicensePath(entry.Path) {
+				continue
+			}
 			return fmt.Errorf(
 				"application tree ledger contains reserved payload name %q outside its fixed location",
 				pathpkg.Base(entry.Path),
@@ -498,6 +521,15 @@ func validateUnsignedPayloadLedgerShape(
 		return errors.New("application tree ledger dist directory must contain at least one file")
 	}
 	return nil
+}
+
+func isKernelNoticeLicensePath(path string) bool {
+	if path == "vless-kernel/licenses/go/LICENSE" {
+		return true
+	}
+	parts := strings.Split(path, "/")
+	return len(parts) >= 5 && parts[0] == "vless-kernel" && parts[1] == "licenses" &&
+		parts[2] == "modules" && sha256Pattern.MatchString(parts[3]) && parts[len(parts)-1] == "LICENSE"
 }
 
 func validateSPDXDocument(payload []byte, manifest Manifest) error {

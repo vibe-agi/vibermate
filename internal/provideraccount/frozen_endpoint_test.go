@@ -2,6 +2,7 @@ package provideraccount
 
 import (
 	"context"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestFrozenEndpointLeaseSurvivesCapabilityUpgradeWithoutRetargeting(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	endpoints := testEndpoints(t)
-	manager, err := NewManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), endpoints, BuiltInRealms(), fixedClock{now: time.Now().UTC()})
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, newMemorySecrets(), endpoints, BuiltInRealms(), fixedClock{now: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,8 @@ func TestFrozenEndpointLeaseSurvivesCapabilityUpgradeWithoutRetargeting(t *testi
 	}
 	endpoint := endpoints[upstreamendpoint.ChatGPTOfficialID]
 	scope := accountLeaseScope{
-		id: view.Account.ID, accountRevision: view.Account.Revision, realmID: endpoint.RealmID,
+		egressProfile: egressprofile.Inherit(),
+		id:            view.Account.ID, accountRevision: view.Account.Revision, realmID: endpoint.RealmID,
 		upstreamEndpointID: endpoint.ID.String(), upstreamEndpointRevision: endpoint.Revision,
 		upstreamEndpointOrigin: endpoint.Origin,
 	}

@@ -3,12 +3,14 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.25**. Latest published release: **v0.1.24**.
+Source package version: **0.1.26**. Latest published release: **v0.1.25**.
 
-[v0.1.24](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.24) is the latest
-published release. Its [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
-describes schema-revision-1 data compatibility. See also
-[ADR 0021](adr/0021-one-schema-revision-without-migrations.md).
+[v0.1.25](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.25) is the latest
+published release. The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
+and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
+schema-revision-1 data compatibility. Current source upgrades and private rollback
+are documented under [private rollback snapshots](deployment.md#private-rollback-snapshots);
+the historical boundary does not establish candidate downgrade compatibility.
 
 - **Released** — part of the latest published release.
 - **Available** — implemented and tested in the current source; not yet part
@@ -50,6 +52,8 @@ describes schema-revision-1 data compatibility. See also
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
 | `retained-evidence` | Released | Conversation-first reading separates verified incremental input and Agent text from tools, system context and raw evidence. History, large bodies and protocol metadata load in bounded pages; unopened checkpoints do not hydrate history. Unloaded content is distinct from omitted recording. Inspector state and reading position are preserved. Recording mode and retention still control semantic and Raw HTTP evidence. The SQLite archive is not encrypted by ViberMate; recognized credential fields are removed by bounded rules, not by a claim that arbitrary content is secret-free. |
+| `reader-human-input` | Available | User rows require verified text, refusal, or an input-image attachment. Claude-style wire-user tool returns stay in the tool inspector; mixed human content retains observed order. Unproved deferred messages use a neutral content-loading entry until canonical blocks are loaded. Flutter VM and Chrome widget fixtures cover text, two retained PNG attachments, and repeat/replay anchors. Deferred navigation is checked at 390px with 200% text in English and Simplified Chinese; the two-image order, preview return, and text-only copy are checked at that size in English. These synthetic fixtures do not certify every client version, image format, or live mobile client. Missing tool content means only that a result is unavailable, not that a tool is running. |
+| `native-tool-reader` | Available | Capture-scoped Tool service rows and separate Parameters/Result details use native operations, never model Exchanges or guessed conversation links. Authenticated reads verify retained bytes, bound pages and image dimensions, and invalidate stale work on lifecycle changes. Synthetic real-executor/SQLite/router tests cover text, structured JSON, PNG, cursor scope and deletion; the codec validates PNG/JPEG/WebP. VM and Chrome fixtures cover actual HTTP parsing, text/PNG details, late results, bounded caching, keyboard access and EN/zh 390px/200% layouts, including the full shell. Production content profiles remain unregistered: unknown content is unavailable. This does not establish actual-client compatibility or production tool-result profiles. Chrome behavior fixtures disable incidental splash shaders; real packaged theme assets still require artifact acceptance. |
 | `body-free-usage` | Released | Runtime-wide statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Inline request details and explicitly bounded loaded-request totals reuse collected usage; missing data is not zero, and reasoning subsets are not counted twice. New databases enable collection with 365-day retention; existing choices are preserved. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
@@ -81,6 +85,19 @@ validate the same generated `api/samples/content-contract.json` fixture, coverin
 preview normalization, all response stop reasons and empty terminals. Local
 macOS Codex capture and `vibermate doctor` check the current Root's trust status
 before recommending or starting a native-trust capture.
+
+Interactive Codex captures, including resume and fork, must own their request
+backend. For a catalog-known Codex family, the launcher reads native help with a
+1500 ms deadline and a combined 64 KiB output limit, without Capture credentials
+or proxy environment. It adds `--no-daemon` when supported (confirmed startup
+contract in 0.159.2 and 0.160.0). The exact verified 0.145.0 adapter instead uses
+its mandatory launch-recipe config overrides, which prevent implicit daemon
+reuse. A help result never changes release recognition or grants Root/tool
+authority. Ordinary exec/review and foreground app-server retain their native
+arguments. Remote connections, app-server daemon/proxy, agents, unknown options
+and unproven session-control modes fail before the captured command starts;
+existing backends are left running. Startup-contract checks do not by themselves
+prove provider or MCP compatibility.
 
 Release packaging evidence proves only the exact tagged artifacts. Deterministic
 or mocked provider tests do not prove a live provider account, and one real

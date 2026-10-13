@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -188,7 +189,21 @@ func (handler *Handler) revealRawEvidence(
 	request *http.Request,
 ) {
 	query, queryErr := url.ParseQuery(request.URL.RawQuery)
-	if queryErr != nil || (len(query) != 0 &&
+	imageView := query.Get("bodyView") == "image"
+	if imageView {
+		fingerprint := query.Get("fingerprint")
+		if queryErr != nil || len(query) != 2 || len(query["bodyView"]) != 1 || len(query["fingerprint"]) != 1 ||
+			len(fingerprint) != 71 || !strings.HasPrefix(fingerprint, "sha256:") {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
+		for _, c := range fingerprint[7:] {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+				return
+			}
+		}
+	} else if queryErr != nil || (len(query) != 0 &&
 		(len(query) != 1 || len(query["bodyView"]) != 1 || query.Get("bodyView") != "decoded")) {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
@@ -218,6 +233,10 @@ func (handler *Handler) revealRawEvidence(
 		return
 	case err != nil:
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
+		return
+	}
+	if imageView {
+		writeImagePreview(writer, revealed, query.Get("fingerprint"))
 		return
 	}
 	var decodedBody *rawevidence.DecodedBodyView

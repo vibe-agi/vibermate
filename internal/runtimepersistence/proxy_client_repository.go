@@ -569,6 +569,9 @@ func (repository *proxyClientRepository) RevokeBinding(
 	if err != nil {
 		return proxyclient.BindingRecord{}, fmt.Errorf("read revoked binding: %w", err)
 	}
+	if err := revokeNativeScopesWhere(permit.context, transaction, `(capture_kind='manual_capture' AND capture_id IN(SELECT capture_id FROM manual_captures WHERE owner_kind='proxy_client_binding' AND owner_id=?)) OR (capture_kind='managed_run' AND capture_id IN(SELECT c.run_id FROM capture_runs c JOIN machine_registrations m ON m.machine_id=c.machine_id WHERE m.binding_id=?))`, now, id.String(), id.String()); err != nil {
+		return proxyclient.BindingRecord{}, err
+	}
 	commitErr := repository.committer.Commit(transaction)
 	if commitErr == nil {
 		return updated, nil

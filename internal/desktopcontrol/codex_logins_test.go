@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -24,8 +25,15 @@ import (
 
 type loginHTTPFunc func(*http.Request) (*http.Response, error)
 
-func (f loginHTTPFunc) Do(r *http.Request, _ providerauth.AccountRef) (*http.Response, error) {
+func (f loginHTTPFunc) ExchangeLoginCode(r *http.Request, resolved egressprofile.Resolved) (*http.Response, error) {
+	if err := resolved.Validate(); err != nil {
+		return nil, err
+	}
 	return f(r)
+}
+
+func (f loginHTTPFunc) FreezeLoginEgress(context.Context) (egressprofile.Resolved, error) {
+	return egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionBuiltin, 1)
 }
 
 func TestCodexLoginControlUsesWriteSessionAndPersistsIndependentAccount(t *testing.T) {
@@ -36,7 +44,7 @@ func TestCodexLoginControlUsesWriteSessionAndPersistsIndependentAccount(t *testi
 	var calls atomic.Int32
 	logins, err := codexoauth.NewLoginManager(codexoauth.LoginOptions{
 		Clock: desktopcontrol.SystemClock{},
-		Client: loginHTTPFunc(func(r *http.Request) (*http.Response, error) {
+		TokenClient: loginHTTPFunc(func(r *http.Request) (*http.Response, error) {
 			calls.Add(1)
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(tokens))}, nil
 		}),

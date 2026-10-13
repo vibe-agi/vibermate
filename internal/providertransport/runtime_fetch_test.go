@@ -50,7 +50,16 @@ func TestCodexOAuthTokenGrantsUseFixedAuditedRuntimeEgress(t *testing.T) {
 				t.Fatal(err)
 			}
 			request.Header.Set("Content-Type", grant.contentType)
-			response, err := client.DoCodexOAuthTokenRequest(request, providerauth.AccountRef{})
+			var response *http.Response
+			if grant.name == "authorization_code" {
+				resolved, freezeErr := client.FreezeLoginEgress(context.Background())
+				if freezeErr != nil {
+					t.Fatal(freezeErr)
+				}
+				response, err = client.ExchangeLoginCode(request, resolved)
+			} else {
+				response, err = client.DoCodexOAuthTokenRequest(request, testAccountRef())
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -563,11 +572,12 @@ func newRuntimeFetchClientWithSecret(
 		t.Fatal(err)
 	}
 	client, err := NewClient(ClientOptions{
-		Coordinator:   gate,
-		Authenticator: authenticator,
-		Transport:     transport,
-		Audit:         audit,
-		InstanceIDs:   &sequentialInstanceIDs{},
+		Coordinator:    gate,
+		Authenticator:  authenticator,
+		Transport:      transport,
+		Audit:          audit,
+		InstanceIDs:    &sequentialInstanceIDs{},
+		EgressDefaults: runtimeUnsetDefaults{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -579,6 +589,24 @@ func newRuntimeFetchClientWithSecret(
 type runtimeDiscoveryCredential struct {
 	secret  secretstore.Reference
 	account providerauth.AccountRef
+}
+
+type runtimeUnsetDefaults struct{}
+
+func (runtimeUnsetDefaults) Resolve(ctx context.Context, account, flow egressprofile.Choice) (egressprofile.Resolved, error) {
+	if err := ctx.Err(); err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	if account.Validate() != nil || flow.Validate() != nil {
+		return egressprofile.Resolved{}, egressprofile.ErrInvalidProfile
+	}
+	if p, ok := account.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(p, egressprofile.SelectionAccount, 0)
+	}
+	if p, ok := flow.ExplicitProfile(); ok {
+		return egressprofile.RestoreResolved(p, egressprofile.SelectionFlow, 0)
+	}
+	return egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionBuiltin, 1)
 }
 
 func (credential *runtimeDiscoveryCredential) Mode() providerauth.CredentialMode {
@@ -614,9 +642,13 @@ func testRuntimeDiscoveryCredential(
 			ID:               "account.catalog-test",
 			SettingsRevision: 1,
 			EgressProfile:    egressprofile.Direct(),
-			Revision:         2,
-			CredentialEpoch:  3,
-			RealmID:          realmID,
+			ResolvedEgress: func() egressprofile.Resolved {
+				r, _ := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionAccount, 0)
+				return r
+			}(),
+			Revision:        2,
+			CredentialEpoch: 3,
+			RealmID:         realmID,
 		},
 	}
 }

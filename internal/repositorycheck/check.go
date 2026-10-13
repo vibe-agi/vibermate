@@ -1024,13 +1024,19 @@ func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 // the small set of transport modules that own an external-network boundary.
 func CheckExternalEgressGate(repositoryRoot string) []Violation {
 	allowedFiles := map[string]struct{}{
-		"internal/providertransport/transport.go": {},
-		"internal/providertransport/loopback.go":  {},
-		"internal/providertransport/probe.go":     {},
-		"internal/originaltransport/transport.go": {},
-		"internal/originaltransport/probe.go":     {},
-		"internal/loopbackclient/client.go":       {},
-		"internal/blindtunnel/dialer.go":          {},
+		// Reviewed standalone synthetic acceptance fixtures, not product entry
+		// points: private loopback TLS, authenticated local management and
+		// deny-unknown proxy probes with a fail-closed blind dialer.
+		"cmd/vibermate-acceptance/native_mcp_audit.go":      {},
+		"cmd/vibermate-acceptance/native_mcp_fixture.go":    {},
+		"cmd/vibermate-acceptance/native_mcp_management.go": {},
+		"internal/providertransport/transport.go":           {},
+		"internal/providertransport/loopback.go":            {},
+		"internal/providertransport/probe.go":               {},
+		"internal/originaltransport/transport.go":           {},
+		"internal/originaltransport/probe.go":               {},
+		"internal/loopbackclient/client.go":                 {},
+		"internal/blindtunnel/dialer.go":                    {},
 		// egressnetwork is the single typed compiler for a frozen per-flow
 		// direct/SOCKS/DoH policy. Only these implementation files may construct
 		// its base dialer and the private HTTP client used for DNS-over-HTTPS;
@@ -1131,6 +1137,7 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 					}
 					imports[name] = importPath
 				}
+				privateDials := privateCoreDialSymbols(relative, parsed, imports)
 				ast.Inspect(parsed, func(node ast.Node) bool {
 					selector, ok := node.(*ast.SelectorExpr)
 					if !ok {
@@ -1145,6 +1152,9 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 						return true
 					}
 					if _, protected := protectedSymbols[importPath][selector.Sel.Name]; !protected {
+						return true
+					}
+					if privateDials[selector] {
 						return true
 					}
 					position := fileSet.Position(selector.Pos())

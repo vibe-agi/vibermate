@@ -78,6 +78,7 @@ type RootPublicDelivery struct {
 type ManualCaptureContext struct {
 	ConfirmationToken       string              `json:"confirmationToken"`
 	ProxyAddress            string              `json:"proxyAddress"`
+	SOCKSAddress            string              `json:"socksAddress,omitempty"`
 	EnvironmentID           string              `json:"environmentId"`
 	EnvironmentRevision     uint64              `json:"environmentRevision"`
 	EnvironmentDigest       string              `json:"environmentDigest"`
@@ -111,6 +112,7 @@ type ManualCapturePage struct {
 type ManualCaptureGrant struct {
 	Capture               ManualCaptureView   `json:"capture"`
 	ProxyAddress          string              `json:"proxyAddress"`
+	SOCKSAddress          string              `json:"socksAddress,omitempty"`
 	ProxyUsername         string              `json:"proxyUsername"`
 	ProxyPassword         string              `json:"proxyPassword"`
 	EnvironmentID         string              `json:"environmentId"`
@@ -410,6 +412,7 @@ func manualContextWire(context capturegrant.ManualCaptureContext, principal cont
 	wired := ManualCaptureContext{
 		ConfirmationToken:       context.ConfirmationToken,
 		ProxyAddress:            context.ProxyAddress,
+		SOCKSAddress:            context.SOCKSAddress,
 		EnvironmentID:           context.EnvironmentID.String(),
 		EnvironmentRevision:     uint64(context.EnvironmentRevision),
 		EnvironmentDigest:       context.EnvironmentDigest.String(),
@@ -430,6 +433,7 @@ func manualGrantWire(grant capturegrant.ManualCaptureGrant, principal controlpri
 	wired := ManualCaptureGrant{
 		Capture:               manualViewWire(grant.Capture.Capture),
 		ProxyAddress:          grant.Context.ProxyAddress,
+		SOCKSAddress:          grant.Context.SOCKSAddress,
 		ProxyUsername:         manualcapture.ProxyUsername,
 		ProxyPassword:         grant.Capture.Credential.Value(),
 		EnvironmentID:         grant.Authority.EnvironmentID().String(),

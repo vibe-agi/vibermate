@@ -1,10 +1,13 @@
 package egressaudit_test
 
 import (
+	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
@@ -48,6 +51,112 @@ func TestNewFreezesACompleteAttempt(t *testing.T) {
 	}
 	if attempt.ReusedTransport() {
 		t.Fatal("a fresh attempt reported a reused transport")
+	}
+}
+
+func TestTypedSelectionEvidenceAndLegacyViewAreClosed(t *testing.T) {
+	for _, source := range []egressprofile.SelectionSource{"", egressprofile.SelectionAccount, egressprofile.SelectionFlow, egressprofile.SelectionGlobal, egressprofile.SelectionBuiltin} {
+		t.Run(string(source), func(t *testing.T) {
+			input := baseInput()
+			input.Decision.SelectionSource = source
+			if source != "" {
+				input.Decision.ProxyID = egressprofile.DirectID.String()
+				input.Decision.ProxyRevision = 1
+			}
+			if source == egressprofile.SelectionGlobal || source == egressprofile.SelectionBuiltin {
+				input.Decision.DefaultRevision = 7
+			}
+			attempt, err := egressaudit.New(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := egressaudit.ViewOf(egressaudit.Record{Sequence: 1, Attempt: attempt})
+			if view.Decision.SelectionSource != source || view.Decision.DefaultRevision != input.Decision.DefaultRevision {
+				t.Fatal("view lost typed selection")
+			}
+			encoded, err := json.Marshal(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err = json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			decision := wire["decision"].(map[string]any)
+			if source == "" {
+				if _, ok := decision["selectionSource"]; ok {
+					t.Fatal("legacy view invented selection")
+				}
+				if _, ok := decision["defaultRevision"]; ok {
+					t.Fatal("legacy view invented revision")
+				}
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*egressaudit.DecisionRef){
+		"legacy revision": func(d *egressaudit.DecisionRef) { d.DefaultRevision = 1 },
+		"unknown source":  func(d *egressaudit.DecisionRef) { d.SelectionSource = "unknown" },
+		"global zero": func(d *egressaudit.DecisionRef) {
+			d.SelectionSource = egressprofile.SelectionGlobal
+			d.ProxyRevision = 1
+		},
+		"builtin foreign": func(d *egressaudit.DecisionRef) {
+			d.SelectionSource = egressprofile.SelectionBuiltin
+			d.DefaultRevision = 1
+			d.ProxyRevision = 1
+		},
+		"explicit revision": func(d *egressaudit.DecisionRef) {
+			d.SelectionSource = egressprofile.SelectionAccount
+			d.DefaultRevision = 1
+			d.ProxyRevision = 1
+		},
+		"missing proxy revision": func(d *egressaudit.DecisionRef) { d.SelectionSource = egressprofile.SelectionFlow },
+		"overflow": func(d *egressaudit.DecisionRef) {
+			d.SelectionSource = egressprofile.SelectionGlobal
+			d.DefaultRevision = math.MaxUint64
+			d.ProxyRevision = 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := baseInput()
+			mutate(&input.Decision)
+			if _, err := egressaudit.New(input); err == nil {
+				t.Fatal("invalid effective selection accepted")
+			}
+		})
+	}
+}
+
+func TestTransportAuditRequiresActualDirectOnlyOrigin(t *testing.T) {
+	for _, test := range []struct {
+		origin string
+		good   bool
+	}{
+		{"http://127.0.0.1:1234/v1", true}, {"http://[::1]:1234", true}, {"http://192.168.1.2:1234/v1", true}, {"http://100.64.0.1:1234", true}, {"http://local.fixture:1234", true},
+		{"https://127.0.0.1:1234", false}, {"https://provider.example", false}, {"http://203.0.113.2:1234", false}, {"http://user:password@127.0.0.1", false}, {"http://127.0.0.1/?query=1", false},
+	} {
+		t.Run(test.origin, func(t *testing.T) {
+			input := baseInput()
+			input.TargetOrigin = test.origin
+			input.Decision.SelectionSource = egressprofile.SelectionTransport
+			input.Decision.ProxyID = "profile.direct"
+			input.Decision.ProxyRevision = 1
+			_, err := egressaudit.New(input)
+			if (err == nil) != test.good {
+				t.Fatalf("direct-only target validation=%v want valid=%t", err, test.good)
+			}
+			if test.good {
+				input.Decision.DefaultRevision = 1
+				if _, err := egressaudit.New(input); err == nil {
+					t.Fatal("transport audit invented default revision")
+				}
+			}
+		})
+	}
+	input := baseInput()
+	input.TargetOrigin = "https://legacy.example/path?historic=1"
+	if _, err := egressaudit.New(input); err != nil {
+		t.Fatal("new target parser retroactively changed unknown-source history", err)
 	}
 }
 
@@ -99,11 +208,13 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 		egressaudit.PurposeOriginalOrigin:         egressaudit.AuthorityNetwork,
 		egressaudit.PurposeAgentProbe:             egressaudit.AuthorityNetwork,
 		egressaudit.PurposeBlindTunnel:            egressaudit.AuthorityNetwork,
+		egressaudit.PurposeDatagram:               egressaudit.AuthorityNetwork,
 		egressaudit.PurposeAuxiliaryLLM:           egressaudit.AuthorityRuntime,
 		egressaudit.PurposeLanguageTransform:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposePluginCatalogSync:      egressaudit.AuthorityRuntime,
 		egressaudit.PurposePluginArtifactFetch:    egressaudit.AuthorityRuntime,
 		egressaudit.PurposeUpdate:                 egressaudit.AuthorityRuntime,
+		egressaudit.PurposeClientToolService:      egressaudit.AuthorityEnvironment,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

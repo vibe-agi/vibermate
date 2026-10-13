@@ -36,7 +36,7 @@ func TestNotePersistenceDoesNotBlockNewUpstreamRequests(t *testing.T) {
 	resume := func() { once.Do(func() { close(repository.resume) }) }
 	defer resume()
 	endpoints := testEndpoints(t)
-	manager, err := NewManager(ctx, repository, newMemorySecrets(), endpoints, BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, repository, newMemorySecrets(), endpoints, BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestAccountNoteIsIndependentOfRoutingAndCredentials(t *testing.T) {
 	endpoints := testEndpoints(t)
 	repository := &memoryRepository{accounts: map[ID]Account{}}
 	secrets := newMemorySecrets()
-	manager, err := NewManager(ctx, repository, secrets, endpoints, BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, repository, secrets, endpoints, BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

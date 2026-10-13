@@ -151,12 +151,7 @@ func executeCapture(
 		return 1, keyCaptureOutcomeUnknown
 	}
 	grant := result.Grant
-	if grant.ProxyAddress != captureContext.ProxyAddress ||
-		grant.EnvironmentID != captureContext.EnvironmentID ||
-		grant.LaunchAuthorityDigest != captureContext.LaunchAuthorityDigest ||
-		!slices.Equal(grant.ProtectedAuthorities, captureContext.ProtectedAuthorities) ||
-		!slices.Equal(grant.ManagedAuthorities, captureContext.ManagedAuthorities) ||
-		!sameRootDelivery(grant.Root, captureContext.Root) {
+	if !captureGrantMatchesReview(grant, captureContext) {
 		return 1, keyCaptureOutcomeUnknown
 	}
 	if err := renderCaptureGrant(
@@ -261,6 +256,15 @@ func renderCaptureReview(
 	if err != nil {
 		return err
 	}
+	if context.SOCKSAddress != "" {
+		socks, renderErr := catalogs.Render(locale, "cli.capture.socksReview", map[string]string{"address": context.SOCKSAddress})
+		if renderErr != nil {
+			return renderErr
+		}
+		if _, err = fmt.Fprintln(output, socks); err != nil {
+			return err
+		}
+	}
 	_, err = fmt.Fprintln(output, message)
 	return err
 }
@@ -334,6 +338,16 @@ func renderCaptureGrant(
 	if err != nil {
 		return err
 	}
+	if _, err = fmt.Fprintln(output, message); err != nil {
+		return err
+	}
+	if grant.SOCKSAddress == "" {
+		return nil
+	}
+	message, err = catalogs.Render(locale, "cli.capture.socks", map[string]string{"address": grant.SOCKSAddress, "username": grant.ProxyUsername})
+	if err != nil {
+		return err
+	}
 	_, err = fmt.Fprintln(output, message)
 	return err
 }
@@ -343,6 +357,16 @@ func sameRootDelivery(left, right *capturecontrol.RootPublicDelivery) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+func captureGrantMatchesReview(grant capturecontrol.ManualCaptureGrant, reviewed capturecontrol.ManualCaptureContext) bool {
+	return grant.ProxyAddress == reviewed.ProxyAddress &&
+		grant.SOCKSAddress == reviewed.SOCKSAddress &&
+		grant.EnvironmentID == reviewed.EnvironmentID &&
+		grant.LaunchAuthorityDigest == reviewed.LaunchAuthorityDigest &&
+		slices.Equal(grant.ProtectedAuthorities, reviewed.ProtectedAuthorities) &&
+		slices.Equal(grant.ManagedAuthorities, reviewed.ManagedAuthorities) &&
+		sameRootDelivery(grant.Root, reviewed.Root)
 }
 
 func captureRootFacts(

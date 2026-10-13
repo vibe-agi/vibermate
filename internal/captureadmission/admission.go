@@ -243,11 +243,20 @@ func (admission Admission) WorkspaceScope() (workspaceidentity.Scope, bool) {
 	return admission.workspace, admission.workspace != (workspaceidentity.Scope{})
 }
 
-// WorkspaceRoot is in-memory admission evidence from the local launcher. It
-// is used only to resolve structured tool paths and is never persisted as a
-// policy rule or emitted in approval evidence.
+// WorkspaceRoot is an observed path claim for display, transforms, and
+// redaction. It does not grant authority to inspect the local filesystem.
 func (admission Admission) WorkspaceRoot() (string, bool) {
 	return admission.workspaceRoot, admission.workspaceRoot != ""
+}
+
+// LocalWorkspaceRoot supplies filesystem authority only for a scope proved by
+// the local launcher. Remote and unscoped path claims cannot grant it.
+func (admission Admission) LocalWorkspaceRoot() (string, bool) {
+	scope, available := admission.WorkspaceScope()
+	if !available || scope.Evidence() != workspaceidentity.EvidenceLocalLauncher {
+		return "", false
+	}
+	return admission.WorkspaceRoot()
 }
 
 func (admission Admission) RuntimeMetadata() (capturerun.RuntimeMetadata, bool) {

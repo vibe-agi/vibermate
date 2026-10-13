@@ -41,7 +41,8 @@ SELECT
     'runtime_evidence_bodies', 'runtime_evidence_chunks',
     'runtime_exchange_content_blocks', 'runtime_exchange_content_messages',
     'runtime_exchange_content_transcripts', 'runtime_exchange_contents',
-    'runtime_raw_evidence_envelopes'
+    'runtime_raw_evidence_envelopes','native_tool_contents','native_tool_operations',
+    'native_tool_sessions','native_tool_bindings','native_tool_events','native_tool_approvals','native_tool_inbound','native_tool_once','native_tool_scopes'
   )), 0),
   (SELECT page_size FROM pragma_page_size),
   (SELECT freelist_count FROM pragma_freelist_count),
@@ -83,7 +84,7 @@ SELECT
   (SELECT COUNT(*) FROM runtime_activities),
   (SELECT COUNT(*) FROM runtime_connection_events),
   (SELECT COUNT(*) FROM runtime_egress_attempts),
-  (SELECT COUNT(*) FROM tool_approvals),
+  (SELECT COUNT(*) FROM tool_approvals) + (SELECT COUNT(*) FROM native_tool_approvals),
   (SELECT COUNT(*) FROM capture_environment_assignments),
   (SELECT COUNT(*) FROM capture_runs) + (SELECT COUNT(*) FROM manual_captures)
 `).Scan(
@@ -152,6 +153,10 @@ func (store *Store) cleanupExpired(
 		return resourcedeletion.Released{}, false, fmt.Errorf("begin expired evidence cleanup: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	nativeReleased, nativePending, err := purgeExpiredNative(operation, transaction, now, limit)
+	if err != nil {
+		return resourcedeletion.Released{}, false, err
+	}
 
 	exchanges, err := purgeExpiredExchangeContent(
 		operation, transaction, toUnixMillis(now.UTC()), limit,
@@ -183,8 +188,8 @@ func (store *Store) cleanupExpired(
 		return resourcedeletion.Released{}, false, fmt.Errorf("commit expired evidence cleanup: %w", err)
 	}
 	return resourcedeletion.Released{
-		Exchanges: uint64(exchanges), Envelopes: uint64(envelopes),
-	}, retentionPending || limit > 0 && (exchanges == int64(limit) || envelopes == int64(limit) || usage == int64(limit)), nil
+		Exchanges: uint64(exchanges), Envelopes: uint64(envelopes), Attempts: nativeReleased.Attempts, Approvals: nativeReleased.Approvals,
+	}, nativePending || retentionPending || limit > 0 && (exchanges == int64(limit) || envelopes == int64(limit) || usage == int64(limit)), nil
 }
 
 func purgeExpiredExchangeContent(

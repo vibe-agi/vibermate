@@ -1090,6 +1090,8 @@ type proxyFixture struct {
 	egress        egressaudit.Repository
 	approvals     *toolapproval.Authority
 	rules         *connectionpolicy.Manager
+	defaults      *egressprofile.DefaultManager
+	profiles      *egressprofile.Manager
 }
 
 type proxyEnvironmentResolver struct {
@@ -1254,8 +1256,20 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	policy connectionpolicy.Snapshot,
 	raw rawevidence.RequestRecorder,
 	assignmentEnvironmentID environment.EnvironmentID,
-	configure ...func(*loopbackproxy.Options),
+	clientOrigins ...string,
 ) *proxyFixture {
+	return newProxyFixtureConfigured(t, clientDialect, adapter, policy, raw, assignmentEnvironmentID, nil, clientOrigins...)
+}
+
+type proxyFixtureComposition struct {
+	defaultRepository func(egressprofile.DefaultRepository) egressprofile.DefaultRepository
+	compiler          environment.Compiler
+	configure         func(*environment.Environment)
+	configureProxy    func(*loopbackproxy.Options)
+	ingressContext    context.Context
+}
+
+func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect, adapter *clientadapter.Evidence, policy connectionpolicy.Snapshot, raw rawevidence.RequestRecorder, assignmentEnvironmentID environment.EnvironmentID, composition *proxyFixtureComposition, clientOrigins ...string) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
 	store, err := runtimepersistence.Open(
@@ -1279,12 +1293,16 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalogRevision := clientadapter.CatalogRevision(1)
+	if adapter != nil {
+		catalogRevision = adapter.CatalogRevision
+	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
 		CWD:                     filepath.Join(directory, "workspace"),
 		CanonicalExecutablePath: filepath.Join(directory, "bin", "claude"),
 		ExecutableLabel:         "claude",
 		Lifetime:                5 * time.Minute,
-		CatalogRevision:         1,
+		CatalogRevision:         catalogRevision,
 		Adapter:                 adapter,
 		Recognition:             fixtureRecognition(adapter),
 		Workspace:               proxyWorkspaceScope(t),
@@ -1317,6 +1335,23 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		1,
 		1,
 	)
+	if len(clientOrigins) != 0 {
+		origin, err := originidentity.ParseClientOrigin(clientOrigins[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		aggregate.ClientEndpoints[0].ClientOrigin = origin
+	}
+	if len(clientOrigins) > 1 {
+		configureLivenessUpstream(t, &aggregate, clientOrigins[1])
+		compiler = testEnvironmentCompiler(t, clientDialect, livenessAccountCatalog{})
+	}
+	if composition != nil {
+		compiler = composition.compiler
+		if composition.configure != nil {
+			composition.configure(&aggregate)
+		}
+	}
 	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
@@ -1330,11 +1365,24 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		t.Fatal(err)
 	}
 	resolver := newProxyEnvironmentResolver(projection, system, snapshot)
+	profiles, err := egressprofile.NewManager(store.EgressProfileRepository(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRepository := store.EgressDefaultRepository()
+	if composition != nil && composition.defaultRepository != nil {
+		defaultRepository = composition.defaultRepository(defaultRepository)
+	}
+	defaults, err := egressprofile.NewDefaultManager(defaultRepository, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository:   store.CaptureAssignmentRepository(),
-		Environments: resolver,
-		Activity:     proxyCaptureActivity{},
-		Clock:        captureassignment.SystemClock{},
+		Repository:     store.CaptureAssignmentRepository(),
+		Environments:   resolver,
+		EgressDefaults: defaults,
+		Activity:       proxyCaptureActivity{},
+		Clock:          captureassignment.SystemClock{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1402,13 +1450,14 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		Policy:           rules.Source(),
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
+		EgressDefaults:   defaults,
 		EgressAudit:      store.EgressAttemptRepository(),
 		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
 	}
-	for _, configure := range configure {
-		configure(&handlerOptions)
+	if composition != nil && composition.configureProxy != nil {
+		composition.configureProxy(&handlerOptions)
 	}
 	handler, err := loopbackproxy.New(handlerOptions)
 	if err != nil {
@@ -1419,6 +1468,9 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: handler}
+	if composition != nil && composition.ingressContext != nil {
+		server.BaseContext = func(net.Listener) context.Context { return composition.ingressContext }
+	}
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -1430,6 +1482,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 		exchanges: exchanges, original: original,
 		connections: connections, egress: store.EgressAttemptRepository(),
 		approvals: approvals, rules: rules,
+		defaults: defaults, profiles: profiles,
 	}
 }
 
@@ -1592,6 +1645,8 @@ type exchangeRecorder struct {
 	blockStarted chan struct{}
 	blockRelease chan struct{}
 	startOnce    sync.Once
+	keepalive    bool
+	delegate     exchange.Executor
 }
 
 func (recorder *exchangeRecorder) Execute(
@@ -1604,7 +1659,12 @@ func (recorder *exchangeRecorder) Execute(
 	failure := recorder.failure
 	blockStarted := recorder.blockStarted
 	blockRelease := recorder.blockRelease
+	keepalive := recorder.keepalive
+	delegate := recorder.delegate
 	recorder.mu.Unlock()
+	if delegate != nil {
+		return delegate.Execute(ctx, request, downstream)
+	}
 	if failure != nil {
 		return exchange.Result{}, failure
 	}
@@ -1615,6 +1675,19 @@ func (recorder *exchangeRecorder) Execute(
 		case <-ctx.Done():
 			return exchange.Result{}, context.Cause(ctx)
 		}
+	}
+	if keepalive {
+		envelope, err := exchange.NewResponseEnvelope(exchange.ResponseModeEventStream, http.StatusOK, http.Header{"Content-Type": {"text/event-stream"}})
+		if err != nil {
+			return exchange.Result{}, err
+		}
+		if err := downstream.Begin(ctx, envelope); err != nil {
+			return exchange.Result{}, err
+		}
+		if err := downstream.Keepalive(ctx); err != nil {
+			return exchange.Result{}, err
+		}
+		return exchange.Result{Outcome: exchange.AttemptSucceeded}, nil
 	}
 	envelope, err := exchange.NewResponseEnvelope(
 		exchange.ResponseModeJSON,
@@ -1698,6 +1771,7 @@ func (recorder *originalRecorder) Count() int {
 func testEnvironmentCompiler(
 	t *testing.T,
 	clientDialect protocolspec.Dialect,
+	accountCatalogs ...environment.AccountCatalog,
 ) environment.Compiler {
 	t.Helper()
 	operations, err := operationcatalog.BuiltIn()
@@ -1738,7 +1812,11 @@ func testEnvironmentCompiler(
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
+	var accounts environment.AccountCatalog
+	if len(accountCatalogs) > 0 {
+		accounts = accountCatalogs[0]
+	}
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1775,7 +1853,7 @@ func testEnvironmentForDialectRevision(
 					ID: "adapter-proxy", Revision: adapterRevision,
 				},
 				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}

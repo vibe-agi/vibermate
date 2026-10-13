@@ -29,14 +29,15 @@ const (
 )
 
 var (
-	ErrInvalidCommand     = errors.New("invalid ManualCapture command")
-	ErrInvalidRecord      = errors.New("invalid ManualCapture record")
-	ErrCredentialRejected = errors.New("ManualCapture credential rejected")
-	ErrNotFound           = errors.New("ManualCapture not found")
-	ErrRevisionConflict   = errors.New("ManualCapture revision conflict")
-	ErrNotActive          = errors.New("ManualCapture is not active")
-	ErrStateConflict      = errors.New("ManualCapture state conflict")
-	ErrRuntimeStopping    = errors.New("ManualCapture runtime is stopping")
+	ErrInvalidCommand       = errors.New("invalid ManualCapture command")
+	ErrCommitOutcomeUnknown = errors.New("authenticated ManualCapture stop commit outcome is unknown")
+	ErrInvalidRecord        = errors.New("invalid ManualCapture record")
+	ErrCredentialRejected   = errors.New("ManualCapture credential rejected")
+	ErrNotFound             = errors.New("ManualCapture not found")
+	ErrRevisionConflict     = errors.New("ManualCapture revision conflict")
+	ErrNotActive            = errors.New("ManualCapture is not active")
+	ErrStateConflict        = errors.New("ManualCapture state conflict")
+	ErrRuntimeStopping      = errors.New("ManualCapture runtime is stopping")
 )
 
 type ID struct {

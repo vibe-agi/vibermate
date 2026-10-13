@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
@@ -24,6 +25,7 @@ const (
 type router struct {
 	scheme        string
 	userSessions  http.Handler
+	clientAuth    runtimeUserAuthenticator
 	runtimeUsers  http.Handler
 	access        http.Handler
 	rootCA        http.Handler
@@ -100,7 +102,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		}
 		handler.ipAllowlist.ServeHTTP(writer, request)
 	case request.URL.Path == servercontrol.RuntimeRootCAPath:
-		if !handler.authorizeAdmin(writer, request, serveradmin.ScopeRead) {
+		if !handler.authorizeRootCA(writer, request) {
 			return
 		}
 		if handler.rootCA == nil {
@@ -138,6 +140,7 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		if !handler.authorizeAdmin(writer, request, scope) {
 			return
 		}
+		request = request.WithContext(desktopcontrol.WithNativeManagementAuthority(request.Context(), handler.application.RequiredScope(request), manualcapture.NewLocalOwnerScope()))
 		handler.application.ServeHTTP(writer, request)
 	case handler.managementUI != nil:
 		handler.managementUI.ServeHTTP(writer, request)
@@ -179,6 +182,23 @@ func applicationScope(scope desktopcontrol.Scope) serveradmin.Scope {
 	default:
 		return ""
 	}
+}
+
+// The CA is public material. A logged-in companion may download this one
+// read-only resource, without gaining access to any management API.
+func (handler router) authorizeRootCA(writer http.ResponseWriter, request *http.Request) bool {
+	if request.Method == http.MethodGet && validAdminTransport(request, handler.scheme) {
+		values := request.Header.Values("Authorization")
+		if len(values) == 1 {
+			if token, ok := strings.CutPrefix(values[0], "Bearer "); ok {
+				if principal, authenticated := handler.clientAuth.Authenticate(request.Context(), token); authenticated && principal.Valid() {
+					request.Header.Del("Authorization")
+					return true
+				}
+			}
+		}
+	}
+	return handler.authorizeAdmin(writer, request, serveradmin.ScopeRead)
 }
 
 func (handler router) authorizeAdmin(writer http.ResponseWriter, request *http.Request, scope serveradmin.Scope) bool {

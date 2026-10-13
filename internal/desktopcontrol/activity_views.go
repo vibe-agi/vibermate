@@ -288,6 +288,7 @@ type ExchangeContentView string
 const (
 	ExchangeContentViewIncremental ExchangeContentView = "incremental"
 	ExchangeContentViewFull        ExchangeContentView = "full"
+	ExchangeContentViewReading     ExchangeContentView = "reading"
 )
 
 type ExchangeProcessingTrace struct {
@@ -682,7 +683,7 @@ func parseExchangeContentView(rawQuery string) (ExchangeContentView, error) {
 	if values.Has("contentView") {
 		view = ExchangeContentView(values.Get("contentView"))
 	}
-	if view != ExchangeContentViewIncremental && view != ExchangeContentViewFull {
+	if view != ExchangeContentViewIncremental && view != ExchangeContentViewFull && view != ExchangeContentViewReading {
 		return "", errInvalidActivityQuery
 	}
 	return view, nil
@@ -696,6 +697,8 @@ func exchangeContentRequestView(
 		return exchangecontent.RequestViewIncremental, nil
 	case ExchangeContentViewFull:
 		return exchangecontent.RequestViewFull, nil
+	case ExchangeContentViewReading:
+		return exchangecontent.RequestViewReading, nil
 	default:
 		return "", errInvalidActivityQuery
 	}

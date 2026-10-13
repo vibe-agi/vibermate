@@ -154,7 +154,7 @@ func TestBackupValidationRejectsTamperingIncompatibilityAndUnknownTargets(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				encoded = []byte(strings.Replace(string(encoded), `"revision":1`, `"revision":2`, 1))
+				encoded = []byte(strings.Replace(string(encoded), `"revision":2`, `"revision":99`, 1))
 				if err := os.WriteFile(name, encoded, 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -168,7 +168,7 @@ func TestBackupValidationRejectsTamperingIncompatibilityAndUnknownTargets(t *tes
 				}
 				if _, err := database.Exec(
 					`PRAGMA ignore_check_constraints = ON;
-					 UPDATE runtime_metadata SET schema_revision = 2`,
+					 UPDATE runtime_metadata SET schema_revision = 99`,
 				); err != nil {
 					t.Fatal(err)
 				}

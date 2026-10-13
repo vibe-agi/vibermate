@@ -1,0 +1,3 @@
+# Byte-locked upstream materials: preserve their exact representation.
+tool/vless-kernel/dependency.patch -text -whitespace
+tool/vless-kernel/upstream.commit -text -whitespace

@@ -190,6 +190,9 @@ func (repository *runtimeUserRepository) SetUserState(
 		return runtimeuser.UserRecord{}, false, nil
 	}
 	if state == runtimeuser.StateDisabled {
+		if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='managed_run' AND capture_id IN(SELECT run_id FROM capture_runs WHERE runtime_user_id=?)`, updatedAt, string(id)); err != nil {
+			return runtimeuser.UserRecord{}, false, err
+		}
 		if _, err := transaction.ExecContext(
 			operation,
 			`UPDATE runtime_user_login_sessions
@@ -326,6 +329,9 @@ func (repository *runtimeUserRepository) ReplacePassword(
 	); err != nil {
 		return runtimeuser.UserRecord{}, false,
 			fmt.Errorf("revoke Runtime User sessions after password replacement: %w", err)
+	}
+	if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='managed_run' AND capture_id IN(SELECT run_id FROM capture_runs WHERE runtime_user_id=?)`, updatedAt, string(id)); err != nil {
+		return runtimeuser.UserRecord{}, false, err
 	}
 	record, err := scanRuntimeUser(transaction.QueryRowContext(
 		operation,
@@ -474,7 +480,12 @@ func (repository *runtimeUserRepository) RevokeSession(
 		return false, err
 	}
 	defer finish()
-	result, err := repository.database.ExecContext(
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return false, err
+	}
+	defer transaction.Rollback()
+	result, err := transaction.ExecContext(
 		operation,
 		`UPDATE runtime_user_login_sessions
 		    SET revoked_at_unix_ms = MAX(created_at_unix_ms, ?)
@@ -487,6 +498,14 @@ func (repository *runtimeUserRepository) RevokeSession(
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("read Runtime User Login Session revoke result: %w", err)
+	}
+	if affected == 1 {
+		if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='managed_run' AND capture_id IN(SELECT run_id FROM capture_runs WHERE login_session_id IN(SELECT session_id FROM runtime_user_login_sessions WHERE token_digest=?))`, revokedAt, digest[:]); err != nil {
+			return false, err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return false, err
 	}
 	return affected == 1, nil
 }

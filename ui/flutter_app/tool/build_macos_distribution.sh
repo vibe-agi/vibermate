@@ -106,6 +106,17 @@ build_slice() {
 
 sidecar_directory="${temporary_directory}/sidecars"
 mkdir -p "${sidecar_directory}"
+kernel_go="$(python3 -c 'import os, shutil; print(os.path.realpath(shutil.which("go") or ""))')"
+for kernel_architecture in arm64 amd64; do
+  python3 "${repository_root}/tool/vless-kernel/build_kernel.py" \
+    --go "${kernel_go}" --target "darwin/${kernel_architecture}" \
+    --output "${temporary_directory}/kernel-${kernel_architecture}"
+done
+kernel_package="${temporary_directory}/kernel-package"
+python3 "${repository_root}/tool/vless-kernel/package_kernel.py" \
+  --go "${kernel_go}" --target darwin/universal \
+  --input "${temporary_directory}/kernel-arm64" --input "${temporary_directory}/kernel-amd64" \
+  --output "${kernel_package}"
 for command_name in vibermate vibermated; do
   arm64_slice="${sidecar_directory}/${command_name}.arm64"
   x86_64_slice="${sidecar_directory}/${command_name}.x86_64"
@@ -140,6 +151,16 @@ for command_name in vibermate vibermated; do
 done
 
 web_source="${flutter_directory}/build/web"
+kernel_executable="${macos_directory}/vibermate-xray"
+if [[ -e "${kernel_executable}" || -L "${kernel_executable}" ||
+  -e "${app_bundle}/Contents/Resources/vless-kernel" ]]; then
+  echo "Flutter bundle unexpectedly contains a kernel package" >&2
+  exit 70
+fi
+/usr/bin/install -m 0755 "${kernel_package}/vibermate-xray" "${kernel_executable}"
+ditto --norsrc --noextattr --noacl --noqtn -X \
+  "${kernel_package}/vless-kernel" "${app_bundle}/Contents/Resources/vless-kernel"
+codesign --force --sign - --identifier io.vibermate.desktop.vibermate-xray "${kernel_executable}"
 web_destination="${app_bundle}/Contents/Resources/vibermate-web"
 if [[ ! -f "${web_source}/index.html" || -e "${web_destination}" ]]; then
   echo "Flutter Web management output is unavailable or already bundled" >&2
@@ -163,6 +184,7 @@ for code_path in \
   "${app_bundle}/Contents/MacOS/vibermate-desktop" \
   "${app_bundle}/Contents/MacOS/vibermate" \
   "${app_bundle}/Contents/MacOS/vibermated" \
+  "${app_bundle}/Contents/MacOS/vibermate-xray" \
   "${app_bundle}/Contents/Frameworks/App.framework/Versions/A/App" \
   "${app_bundle}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS" \
   "${app_bundle}/Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos" \

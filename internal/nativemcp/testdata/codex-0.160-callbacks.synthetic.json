@@ -1,0 +1,7 @@
+[
+  {"kind":"form","request":{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"Synthetic form","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}},"reply":{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"synthetic private input"}}}},
+  {"kind":"url","request":{"jsonrpc":"2.0","id":18,"method":"elicitation/create","params":{"mode":"url","message":"Synthetic out-of-band consent","url":"https://example.invalid/synthetic","elicitationId":"synthetic-elicitation"}},"reply":{"jsonrpc":"2.0","id":18,"result":{"action":"accept"}}},
+  {"kind":"form","request":{"jsonrpc":"2.0","id":19,"method":"openai/form","params":{"message":"Synthetic OpenAI form","requestedSchema":{"type":"object","properties":{}}}},"reply":{"jsonrpc":"2.0","id":19,"result":{"action":"decline"}}},
+  {"kind":"form","request":{"jsonrpc":"2.0","id":20,"method":"openai/elicitation/create","params":{"mode":"form","message":"Synthetic OpenAI elicitation","requestedSchema":{"type":"object","properties":{}}}},"reply":{"jsonrpc":"2.0","id":20,"result":{"action":"cancel"}}},
+  {"kind":"verification","request":{"jsonrpc":"2.0","id":21,"method":"openai/elicitation/create","params":{"mode":"openai/userVerification","title":"Synthetic verification","description":"Synthetic private description","challenge":"c3ludGhldGljLWNoYWxsZW5nZQ"}},"reply":{"jsonrpc":"2.0","id":21,"result":{"action":"accept","content":{"credentialId":"synthetic-private-credential","signature":"c3ludGhldGljLXNpZ25hdHVyZQ"}}}}
+]

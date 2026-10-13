@@ -392,6 +392,9 @@ func (repository *exchangeContentRepository) GetProjection(
 	now time.Time,
 	view exchangecontent.RequestView,
 ) (exchangecontent.Projection, error) {
+	if view == exchangecontent.RequestViewReading {
+		return repository.GetPagedProjection(ctx, exchangeID, now, view)
+	}
 	if view != exchangecontent.RequestViewFull &&
 		view != exchangecontent.RequestViewIncremental {
 		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
@@ -1104,7 +1107,9 @@ func assembleStoredProjection(
 	page *exchangecontent.ProjectionPage,
 ) (exchangecontent.Projection, error) {
 	presentationMode := exchangecontent.RequestPresentationCheckpoint
-	if inherited > 0 {
+	if view == exchangecontent.RequestViewReading {
+		inherited = 0
+	} else if inherited > 0 {
 		presentationMode = exchangecontent.RequestPresentationIncremental
 		if inherited == totalMessageCount {
 			presentationMode = exchangecontent.RequestPresentationSameTranscript

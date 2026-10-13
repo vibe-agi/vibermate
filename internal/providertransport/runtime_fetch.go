@@ -26,6 +26,22 @@ import (
 
 const modelsDevOrigin = "https://models.dev"
 
+// FetchProductRelease is closed: no caller-selected URL or credential.
+func (client *Client) FetchProductRelease(ctx context.Context, resolved egressprofile.Resolved) (*http.Response, error) {
+	if resolved.Validate() != nil || (resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin) {
+		return nil, errors.New("product release frozen exit is invalid")
+	}
+	origin, err := originidentity.ParseProviderOrigin("https://api.github.com")
+	if err != nil {
+		return nil, err
+	}
+	target, err := NewTarget(origin)
+	if err != nil {
+		return nil, err
+	}
+	return client.fetchRuntimeJSON(ctx, runtimeFetchSpec{purpose: egressaudit.PurposeUpdate, targetRef: origin.String(), target: target, relativePath: "/repos/vibe-agi/vibermate/releases/latest", resolved: resolved})
+}
+
 // InstanceIDSource mints opaque, independent identities. Runtime-owned
 // requests need three identities because the logical action, queued egress,
 // and immutable audit attempt are different authorities and lifetimes.
@@ -45,14 +61,12 @@ type runtimeFetchSpec struct {
 	captured     *capturedAccountRead
 	// OAuth carries the same frozen scope without applying its access token to
 	// the token endpoint. Other operations obtain it from credential.
-	account providerauth.AccountRef
+	account  providerauth.AccountRef
+	resolved egressprofile.Resolved
 }
 
 func (spec runtimeFetchSpec) egressProfile() egressprofile.ProfileRevision {
-	if spec.account.EgressProfile.ID != "" {
-		return spec.account.EgressProfile
-	}
-	return egressprofile.Direct()
+	return spec.resolved.Profile()
 }
 
 // clearingRequestBody gives the transport its own copy of a Runtime-owned
@@ -151,6 +165,27 @@ func (client *Client) fetchModelsDev(ctx context.Context, path string) (*http.Re
 // through the runtime's mandatory Hold, strict transport, and body-free audit
 // boundary. The refresh token is never emitted as Raw evidence.
 func (client *Client) DoCodexOAuthTokenRequest(request *http.Request, account providerauth.AccountRef) (*http.Response, error) {
+	if account.Validate() != nil {
+		return nil, errors.New("Codex OAuth refresh account scope is invalid")
+	}
+	return client.exchangeCodexToken(request, account, account.ResolvedEgress)
+}
+
+func (client *Client) FreezeLoginEgress(ctx context.Context) (egressprofile.Resolved, error) {
+	if client == nil || client.egressDefaults == nil {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	return client.egressDefaults.Resolve(ctx, egressprofile.Inherit(), egressprofile.Inherit())
+}
+
+func (client *Client) ExchangeLoginCode(request *http.Request, resolved egressprofile.Resolved) (*http.Response, error) {
+	if resolved.Validate() != nil {
+		return nil, egressprofile.ErrInvalidProfile
+	}
+	return client.exchangeCodexToken(request, providerauth.AccountRef{}, resolved)
+}
+
+func (client *Client) exchangeCodexToken(request *http.Request, account providerauth.AccountRef, resolved egressprofile.Resolved) (*http.Response, error) {
 	if request == nil || request.URL == nil || request.Body == nil ||
 		request.Method != http.MethodPost || request.URL.String() != codexoauth.TokenURL ||
 		(request.Header.Get("Content-Type") != "application/json" &&
@@ -181,6 +216,7 @@ func (client *Client) DoCodexOAuthTokenRequest(request *http.Request, account pr
 		body:         body,
 		contentType:  request.Header.Get("Content-Type"),
 		account:      account,
+		resolved:     resolved,
 	})
 }
 
@@ -206,6 +242,19 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	if spec.account != (providerauth.AccountRef{}) && spec.account.Validate() != nil {
 		return nil, errors.New("runtime account scope is invalid")
+	}
+	if spec.account != (providerauth.AccountRef{}) {
+		spec.resolved = spec.account.ResolvedEgress
+	}
+	if spec.resolved == (egressprofile.Resolved{}) {
+		var err error
+		spec.resolved, err = client.FreezeLoginEgress(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := validateResolvedTarget(spec.resolved, spec.target); err != nil {
+		return nil, err
 	}
 	if spec.method == "" {
 		spec.method = http.MethodGet
@@ -285,6 +334,10 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	request.Host = spec.target.HTTPAuthority()
 	request.Header.Set("Accept", "application/json")
+	if spec.purpose == egressaudit.PurposeUpdate {
+		request.Header.Set("Accept", "application/vnd.github+json")
+		request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	}
 	if spec.contentType != "" {
 		request.Header.Set("Content-Type", spec.contentType)
 	}
@@ -415,6 +468,50 @@ func (client *Client) runtimeProbeTarget(
 	if err != nil {
 		return offlinehold.ProbeTarget{}, err
 	}
+	if spec.purpose == egressaudit.PurposeUpdate {
+		origin := spec.target.Origin().String()
+		if origin != "https://api.github.com" || spec.relativePath != "/repos/vibe-agi/vibermate/releases/latest" {
+			return offlinehold.ProbeTarget{}, errors.New("product update probe target differs from closed operation")
+		}
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressUpdate, Transport: transport, TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(), TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
+	}
+	if spec.purpose == egressaudit.PurposeModelMetadataDirectory {
+		origin := spec.target.Origin().String()
+		if origin != modelsDevOrigin || spec.targetRef != "runtime.models-dev" || spec.method != http.MethodGet ||
+			(spec.relativePath != "/models.json" && spec.relativePath != "/api.json") || spec.credential != nil ||
+			spec.account != (providerauth.AccountRef{}) || spec.captured != nil || len(spec.body) != 0 || spec.contentType != "" {
+			return offlinehold.ProbeTarget{}, errors.New("metadata probe target differs from closed credential-free operation")
+		}
+		// This fixed auxiliary producer has no routed model plan. The probe
+		// proves only TLS reachability of its origin, never HTTP availability.
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: transport,
+			TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(),
+			TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
+	}
+	if spec.purpose == egressaudit.PurposeCredentialRefresh {
+		origin := spec.target.Origin().String()
+		if origin != "https://auth.openai.com" || spec.targetRef != "runtime.codex-oauth" ||
+			spec.method != http.MethodPost || spec.relativePath != "/oauth/token" ||
+			(spec.contentType != "application/json" && spec.contentType != "application/x-www-form-urlencoded") ||
+			len(spec.body) == 0 || len(spec.body) > 64<<10 || spec.credential != nil || spec.captured != nil ||
+			(spec.account != (providerauth.AccountRef{}) && spec.account.Validate() != nil) {
+			return offlinehold.ProbeTarget{}, errors.New("token probe target differs from closed credential exchange")
+		}
+		// The fixed token exchange has no semantic route plan. TLS reachability
+		// carries its frozen exit only; credentials remain on the actual send.
+		target := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: transport,
+			TargetRef: origin, NetworkOrigin: origin, HTTPAuthority: spec.target.HTTPAuthority(),
+			TLSServerName: spec.target.TLSServerName(), EgressPolicy: spec.egressProfile().Policy}
+		return target, target.Validate()
+	}
+	if spec.purpose == egressaudit.PurposeUpstreamAccountRead || spec.purpose == egressaudit.PurposeUpstreamAccountAction {
+		return ownedAccountProbeTarget(spec)
+	}
+	if spec.purpose == egressaudit.PurposeRouteOperation && spec.captured != nil {
+		return capturedAccountProbeTarget(spec)
+	}
 	requested := client.runtimePlan.Requested()
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		string(spec.purpose),
@@ -475,6 +572,17 @@ func (client *Client) beginRuntimeAudit(
 		Decision:     egressaudit.BuiltInDirectDecision(authority),
 		StartedAt:    client.clock(),
 	}
+	if spec.resolved.Validate() == nil {
+		profile := spec.resolved.Profile()
+		input.Decision.SelectionSource = spec.resolved.Source()
+		input.Decision.DefaultRevision = spec.resolved.DefaultRevision()
+		input.Decision.ProxyID, input.Decision.ProxyRevision = profile.ID.String(), uint64(profile.Revision)
+		if spec.account.ID == "" && spec.resolved.Source() == egressprofile.SelectionGlobal {
+			input.Decision.PolicyID = "runtime.egress-default"
+			input.Decision.PolicyRevision = spec.resolved.DefaultRevision()
+			input.Decision.RuleID = "global.default"
+		}
+	}
 	if spec.captured != nil {
 		plan := spec.captured.plan
 		route, _, err := plan.AccountReadTarget()
@@ -484,8 +592,10 @@ func (client *Client) beginRuntimeAudit(
 		input.ConnectionID = spec.captured.connectionID
 		input.PayloadClass = egressaudit.PayloadControl
 		input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: spec.captured.operationID}
+		profile := spec.resolved.Profile()
 		input.Decision = egressaudit.DecisionRef{PolicyID: string(plan.EnvironmentID()), PolicyRevision: uint64(plan.EnvironmentRevision()),
-			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: string(plan.EgressProfile().ID)}
+			Authority: egressaudit.AuthorityEnvironment, RuleID: string(route.ID()), ProxyID: profile.ID.String(), ProxyRevision: uint64(profile.Revision)}
+		input.Decision.SelectionSource, input.Decision.DefaultRevision = spec.resolved.Source(), spec.resolved.DefaultRevision()
 	}
 	if spec.account.EgressProfile.ID != "" {
 		input.Decision.ProxyID = spec.account.EgressProfile.ID.String()

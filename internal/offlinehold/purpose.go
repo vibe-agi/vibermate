@@ -15,7 +15,7 @@ func KindForPurpose(purpose egressaudit.EgressPurpose) (EgressKind, error) {
 		return EgressProvider, nil
 	case egressaudit.PurposeOriginalOrigin:
 		return EgressOpaque, nil
-	case egressaudit.PurposeRouteOperation, egressaudit.PurposeAgentProbe,
+	case egressaudit.PurposeRouteOperation, egressaudit.PurposeAgentProbe, egressaudit.PurposeClientToolService,
 		egressaudit.PurposeUpstreamAccountRead,
 		egressaudit.PurposeUpstreamAccountAction,
 		egressaudit.PurposeModelMetadataDirectory,
@@ -29,6 +29,8 @@ func KindForPurpose(purpose egressaudit.EgressPurpose) (EgressKind, error) {
 		return EgressUpdate, nil
 	case egressaudit.PurposeBlindTunnel:
 		return EgressBlindTunnel, nil
+	case egressaudit.PurposeDatagram:
+		return EgressDatagram, nil
 	default:
 		return "", fmt.Errorf("unknown egress purpose %q", purpose)
 	}

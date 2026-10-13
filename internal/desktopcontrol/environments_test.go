@@ -736,10 +736,10 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 			Transport: egressnetwork.ResolverTransportDirect,
 		},
 	}
-	if got := published.ClientEndpoints[0].ProtocolPlans[0].EgressProfile.Policy; got != wantAnthropicEgress {
+	if got := explicitProfile(t, published.ClientEndpoints[0].ProtocolPlans[0].EgressProfile).Policy; got != wantAnthropicEgress {
 		t.Fatalf("published Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
 	}
-	if got := published.ClientEndpoints[1].ProtocolPlans[0].EgressProfile.Policy; got != wantOpenAIEgress {
+	if got := explicitProfile(t, published.ClientEndpoints[1].ProtocolPlans[0].EgressProfile).Policy; got != wantOpenAIEgress {
 		t.Fatalf("published OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
 	transforms := published.ClientEndpoints[0].ProtocolPlans[0].Transforms
@@ -869,10 +869,10 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 			finalEnvironment.LaunchEnvironment,
 		)
 	}
-	if got := finalEnvironment.ClientEndpoints[0].ProtocolPlans[0].EgressProfile.Policy; got != wantAnthropicEgress {
+	if got := explicitProfile(t, finalEnvironment.ClientEndpoints[0].ProtocolPlans[0].EgressProfile).Policy; got != wantAnthropicEgress {
 		t.Fatalf("reopened Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
 	}
-	if got := finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressProfile.Policy; got != wantOpenAIEgress {
+	if got := explicitProfile(t, finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressProfile).Policy; got != wantOpenAIEgress {
 		t.Fatalf("reopened OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
 

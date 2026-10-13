@@ -45,6 +45,10 @@ type TransportDispatch struct {
 	egressPolicy egressnetwork.Policy
 }
 
+// EgressPolicy returns the already-frozen transport selection unchanged.
+// It grants no request, credential or send authority.
+func (dispatch TransportDispatch) EgressPolicy() egressnetwork.Policy { return dispatch.egressPolicy }
+
 type contextDialer = transportprofile.ContextDialer
 
 type egressDialerBuilder interface {

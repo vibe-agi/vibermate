@@ -577,6 +577,11 @@ func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store, resources 
 	if err != nil {
 		t.Fatal(err)
 	}
+	return startRuntimeAtPaths(t, paths, secrets, resources...)
+}
+
+func startRuntimeAtPaths(t *testing.T, paths productruntime.RuntimePaths, secrets secretstore.Store, resources ...exchange.ResourcePolicy) *productruntime.Runtime {
+	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
 		t.Fatal(err)

@@ -4,12 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -36,6 +43,43 @@ func NewRuntimePaths(dataDirectory string) (RuntimePaths, error) {
 	}
 	if dataDirectory == filepath.VolumeName(dataDirectory)+string(filepath.Separator) {
 		return RuntimePaths{}, fmt.Errorf("%w: data directory must not be a filesystem root", ErrInvalidOptions)
+	}
+	// Resolve only directory ancestors. A final endpoint link is still rejected,
+	// while OS aliases such as /var share one physical data/SQLite/guard authority.
+	if info, err := os.Lstat(dataDirectory); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return RuntimePaths{}, fmt.Errorf("%w: data directory endpoint must be a directory", ErrInvalidOptions)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return RuntimePaths{}, fmt.Errorf("%w: inspect data directory", ErrInvalidOptions)
+	}
+	ancestor := dataDirectory
+	var missing []string
+	for {
+		info, err := os.Stat(ancestor)
+		if err == nil {
+			if !info.IsDir() {
+				return RuntimePaths{}, fmt.Errorf("%w: data path ancestor is not a directory", ErrInvalidOptions)
+			}
+			physical, err := filepath.EvalSymlinks(ancestor)
+			if err != nil {
+				return RuntimePaths{}, fmt.Errorf("%w: resolve data directory", ErrInvalidOptions)
+			}
+			dataDirectory = physical
+			for index := len(missing) - 1; index >= 0; index-- {
+				dataDirectory = filepath.Join(dataDirectory, missing[index])
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return RuntimePaths{}, fmt.Errorf("%w: inspect data path ancestor", ErrInvalidOptions)
+		}
+		missing = append(missing, filepath.Base(ancestor))
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return RuntimePaths{}, ErrInvalidOptions
+		}
+		ancestor = parent
 	}
 	return RuntimePaths{
 		dataDirectory: dataDirectory,
@@ -73,22 +117,44 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
-	// Nil Resources selects fresh finite production defaults. Explicit policies
-	// are validated and copied before constructing any dependent adapter.
-	Resources      *exchange.ResourcePolicy
-	Paths          RuntimePaths
-	Host           hostcontract.Contract
-	OfflineHold    offlinehold.RuntimeCoordinator
-	Secrets        secretstore.Store
-	Approvals      toolapproval.Config
-	ExchangeHold   exchange.HoldPolicy
-	Clock          Clock
-	InstanceIDs    InstanceIDSource
-	SecurityRandom io.Reader
-	Lifecycle      LifecycleOptions
+	// VLESSExecutable is selected by the trusted host, never by an import URI.
+	VLESSExecutable string
+	// NetworkOptions injects trusted dial/resolver dependencies. Runtime owns
+	// the VLESS connector and always replaces any connector in these options.
+	NetworkOptions egressnetwork.BuilderOptions
+	// ContentProfiles supplies trusted retention/preview classification, never
+	// execution authorization. Nil leaves native content unclassified.
+	ContentProfiles nativemcp.ContentProfiles
+	// BlindTunnels is a trusted in-process dial dependency; nil retains the
+	// normal offline-gated dialer. It cannot grant connection policy authority.
+	BlindTunnels loopbackproxy.BlindTunnelDialer
+	// OriginalTransport is a trusted in-process transport dependency. It grants
+	// no request authority. Nil selects the normal strict production transport.
+	OriginalTransport      originaltransport.Transport
+	SchemaUpgradeHostGuard *instanceguard.Guard
+	SchemaUpgradeTimeout   time.Duration
+	SchemaUpgradeProgress  func(runtimedata.SchemaUpgradePhase) error
+	Paths                  RuntimePaths
+	Host                   hostcontract.Contract
+	OfflineHold            offlinehold.RuntimeCoordinator
+	Secrets                secretstore.Store
+	Approvals              toolapproval.Config
+	ExchangeHold           exchange.HoldPolicy
+	Clock                  Clock
+	InstanceIDs            InstanceIDSource
+	SecurityRandom         io.Reader
+	Lifecycle              LifecycleOptions
+	// Nil Resources selects fresh finite production defaults.
+	Resources *exchange.ResourcePolicy
 }
 
 func (o Options) validate() error {
+	if o.VLESSExecutable != "" && (!filepath.IsAbs(o.VLESSExecutable) || filepath.Clean(o.VLESSExecutable) != o.VLESSExecutable) {
+		return fmt.Errorf("%w: VLESS executable must be an absolute clean host path", ErrInvalidOptions)
+	}
+	if o.SchemaUpgradeTimeout < 0 {
+		return fmt.Errorf("%w: negative schema upgrade timeout", ErrInvalidOptions)
+	}
 	if o.Resources != nil {
 		if err := o.Resources.Validate(); err != nil {
 			return err

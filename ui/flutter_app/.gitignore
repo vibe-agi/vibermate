@@ -33,6 +33,10 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Generated only by tool/prepare_chrome_test_assets.dart for the test server.
+/test/assets/shaders/ink_sparkle.frag
+/test/assets/shaders/stretch_effect.frag
+
 # Symbolication related
 app.*.symbols
 

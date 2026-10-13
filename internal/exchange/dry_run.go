@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -163,6 +165,10 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
 		refreshChatGPTRoutingHint(transformedHeaders, providerRequest.Body(), transformedBody)
 	}
+	profile, unresolved, err := previewEgress(request.plan)
+	if err != nil {
+		return DryRunResult{}, err
+	}
 	if pipeline.bodyAdmission != nil {
 		logical, err := decodeBoundedContent(transformedBody, strings.Join(transformedHeaders.Values("Content-Encoding"), ","))
 		if err != nil {
@@ -172,13 +178,15 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 			return DryRunResult{}, err
 		}
 	}
-	profile := request.plan.EgressProfile()
 	unverified := []string{"account_link", "credential", "dns", "tls", "quota", "provider_response", "runtime_time"}
 	if candidate.mode == providerauth.CredentialClientPassthrough {
 		unverified[0], unverified[1] = "client_authentication", "client_headers"
 	}
 	if _, hasAdmission := request.CaptureAdmission(); !hasAdmission {
 		unverified = append(unverified, "runtime_identity")
+	}
+	if unresolved {
+		unverified = append(unverified, "network_exit")
 	}
 	return DryRunResult{
 		EvaluatedAt:   startedAt,
@@ -249,7 +257,13 @@ func (pipeline *Pipeline) dryRunOriginal(
 	if request.operation.RawQuery() != "" {
 		unverified = append(unverified, "raw_query")
 	}
-	profile := request.plan.EgressProfile()
+	profile, unresolved, err := previewEgress(request.plan)
+	if err != nil {
+		return DryRunResult{}, err
+	}
+	if unresolved {
+		unverified = append(unverified, "network_exit")
+	}
 	return DryRunResult{
 		EvaluatedAt:   startedAt,
 		EnvironmentID: selection.environmentID.String(), EnvironmentRevision: uint64(selection.environmentRevision),
@@ -265,6 +279,22 @@ func (pipeline *Pipeline) dryRunOriginal(
 		Unverified:                    unverified,
 		bodyDigest:                    sha256.Sum256(transformedBody),
 	}, nil
+}
+
+// Preview never leases an account or resolves the current default. A configured
+// explicit profile is a preview; only an already bound fact is effective.
+func previewEgress(plan environment.RequestPlan) (egressprofile.ProfileRevision, bool, error) {
+	choice := plan.EgressChoice()
+	if choice.Validate() != nil {
+		return egressprofile.ProfileRevision{}, false, errors.New("Exchange preview egress choice is invalid")
+	}
+	if resolved, err := plan.ResolvedEgress(); err == nil {
+		return resolved.Profile(), false, nil
+	}
+	if profile, explicit := choice.ExplicitProfile(); explicit {
+		return profile, false, nil
+	}
+	return egressprofile.ProfileRevision{}, true, nil
 }
 
 func changedHeaderNames(before, after http.Header) []string {

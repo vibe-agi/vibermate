@@ -5,6 +5,7 @@ package desktopcontrol
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -37,14 +38,17 @@ import (
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/vlessprofile"
 )
 
 const (
@@ -62,6 +66,7 @@ const (
 	ReasonRevisionConflict                   ReasonCode = "revision_conflict"
 	ReasonEnvironmentNotFound                ReasonCode = "environment_not_found"
 	ReasonEnvironmentDraftNotFound           ReasonCode = "environment_draft_not_found"
+	ReasonClientToolAccessUnsupported        ReasonCode = "environment_client_tool_access_unsupported"
 	ReasonProjectionUnavailable              ReasonCode = "environment_projection_unavailable"
 	ReasonRuntimeUnavailable                 ReasonCode = "runtime_unavailable"
 	ReasonApprovalNotFound                   ReasonCode = "approval_not_found"
@@ -152,6 +157,11 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	NetworkAccess       *NetworkAccess
+	ProductUpdates      ProductUpdateReader
+	NativeContentKey    [32]byte
+	NativeTools         nativetool.Repository
+	NativePreviews      PendingPreviewReader
 	ContentLimits       *exchangecontent.SourceLimits
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
@@ -159,6 +169,7 @@ type Options struct {
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
+	ClientToolAccess    ClientToolAccessBuilder
 	DryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	Assignments         captureassignment.Controller
 	Activities          activity.Runtime
@@ -174,6 +185,8 @@ type Options struct {
 	CodexLogins         codexoauth.LoginController
 	CodeLibrary         codelibrary.Controller
 	EgressProfiles      egressprofile.Controller
+	VLESSProfiles       vlessprofile.Importer
+	EgressDefaults      egressprofile.Defaults
 	Models              modelcatalog.Reader
 	ClientModels        modelcatalog.ProviderMetadataReader
 	RawEvidence         rawevidence.Reader
@@ -191,7 +204,17 @@ type Options struct {
 	Clock          Clock
 }
 
+type NetworkAccess struct {
+	SOCKSAddress   string `json:"socksAddress,omitempty"`
+	VLESSAvailable bool   `json:"vlessAvailable"`
+}
+
 type Handler struct {
+	networkAccess       *NetworkAccess
+	productUpdates      ProductUpdateReader
+	nativeContentKey    [32]byte
+	nativeTools         nativetool.Repository
+	nativePreviews      PendingPreviewReader
 	contentLimits       *exchangecontent.SourceLimits
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
@@ -199,6 +222,7 @@ type Handler struct {
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
+	clientToolAccess    ClientToolAccessBuilder
 	dryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
 	assignments         captureassignment.Controller
 	activities          activity.Runtime
@@ -214,6 +238,8 @@ type Handler struct {
 	codexLogins         codexoauth.LoginController
 	codeLibrary         codelibrary.Controller
 	egressProfiles      egressprofile.Controller
+	vlessProfiles       vlessprofile.Importer
+	egressDefaults      egressprofile.Defaults
 	models              modelcatalog.Reader
 	clientModels        modelcatalog.ProviderMetadataReader
 	rawEvidence         rawevidence.Reader
@@ -236,12 +262,13 @@ type Handler struct {
 }
 
 type StatusResponse struct {
-	Generation   string                       `json:"generation"`
-	Ready        bool                         `json:"ready"`
-	APIVersion   string                       `json:"apiVersion"`
-	ProductBuild string                       `json:"productBuild"`
-	StatusKey    string                       `json:"statusKey"`
-	Runtime      productruntime.RuntimeStatus `json:"runtime"`
+	NetworkAccess *NetworkAccess               `json:"networkAccess,omitempty"`
+	Generation    string                       `json:"generation"`
+	Ready         bool                         `json:"ready"`
+	APIVersion    string                       `json:"apiVersion"`
+	ProductBuild  string                       `json:"productBuild"`
+	StatusKey     string                       `json:"statusKey"`
+	Runtime       productruntime.RuntimeStatus `json:"runtime"`
 }
 
 type ApprovalDecisionInput struct {
@@ -251,6 +278,22 @@ type ApprovalDecisionInput struct {
 }
 
 func New(options Options) (*Handler, error) {
+	var networkAccess *NetworkAccess
+	if options.NetworkAccess != nil {
+		value := *options.NetworkAccess
+		if value.SOCKSAddress != "" {
+			address, err := serverconnection.ParseAddress(value.SOCKSAddress)
+			if err != nil || address.String() != value.SOCKSAddress {
+				return nil, errors.New("Host SOCKS access address is not canonical")
+			}
+		}
+		networkAccess = &value
+	}
+	if options.NativeContentKey == ([32]byte{}) {
+		if _, err := rand.Read(options.NativeContentKey[:]); err != nil {
+			return nil, err
+		}
+	}
 	if options.ContentLimits == nil {
 		limits, err := exchangecontent.DefaultSourceLimits()
 		if err != nil {
@@ -284,6 +327,9 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
+		networkAccess:       networkAccess,
+		productUpdates:      options.ProductUpdates,
+		nativeContentKey:    options.NativeContentKey,
 		contentLimits:       options.ContentLimits,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
@@ -293,12 +339,15 @@ func New(options Options) (*Handler, error) {
 		environments:        options.Environments,
 		dryRun:              options.DryRun,
 		assignments:         options.Assignments,
+		clientToolAccess:    options.ClientToolAccess,
 		activities:          options.Activities,
 		conversationIndexer: options.ConversationIndexer,
 		contents:            options.Contents,
 		connections:         options.Connections,
 		egress:              options.Egress,
 		approvals:           options.Approvals,
+		nativeTools:         options.NativeTools,
+		nativePreviews:      options.NativePreviews,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
 		accountReads:        options.AccountReads,
@@ -306,6 +355,8 @@ func New(options Options) (*Handler, error) {
 		codexLogins:         options.CodexLogins,
 		codeLibrary:         options.CodeLibrary,
 		egressProfiles:      options.EgressProfiles,
+		vlessProfiles:       options.VLESSProfiles,
+		egressDefaults:      options.EgressDefaults,
 		models:              options.Models,
 		clientModels:        options.ClientModels,
 		rawEvidence:         options.RawEvidence,
@@ -321,6 +372,7 @@ func New(options Options) (*Handler, error) {
 		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
+	handler.mux.HandleFunc("POST /api/v1/product-update/check", handler.checkProductUpdate)
 	handler.mux.HandleFunc("GET /api/v1/storage", handler.getStorageLocation)
 	handler.mux.HandleFunc(
 		"POST /api/v1/storage/actions/cleanup-expired",
@@ -397,6 +449,8 @@ func New(options Options) (*Handler, error) {
 			handler.getCodeLibraryAccountSelectorRevision,
 		)
 	}
+	handler.mux.HandleFunc("GET /api/v1/egress-default", handler.getEgressDefault)
+	handler.mux.HandleFunc("PUT /api/v1/egress-default", handler.setEgressDefault)
 	if handler.egressProfiles != nil {
 		handler.mux.HandleFunc("GET /api/v1/egress-profiles", handler.listEgressProfiles)
 		handler.mux.HandleFunc("PUT /api/v1/egress-profiles/{egressId}", handler.publishEgressProfile)
@@ -404,6 +458,10 @@ func New(options Options) (*Handler, error) {
 			"GET /api/v1/egress-profiles/{egressId}/revisions/{egressRevision}",
 			handler.getEgressProfileRevision,
 		)
+	}
+	if handler.vlessProfiles != nil {
+		handler.mux.HandleFunc("POST /api/v1/egress-profiles/import-vless", handler.importVLESSProfile)
+		handler.mux.HandleFunc("GET /api/v1/egress-profiles/{egressId}/revisions/{egressRevision}/vless-settings", handler.getVLESSSettings)
 	}
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
 	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
@@ -454,6 +512,7 @@ func New(options Options) (*Handler, error) {
 		"GET /api/v1/exchanges/{exchangeId}",
 		handler.getExchange,
 	)
+	handler.mux.HandleFunc("GET /api/v1/exchanges/{exchangeId}/tool-results", handler.getToolResults)
 	if handler.rawEvidence != nil {
 		handler.mux.HandleFunc(
 			"GET /api/v1/exchanges/{exchangeId}/raw-evidence",
@@ -485,6 +544,12 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals", handler.listNativeApprovals)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations", handler.listNativeOperations)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations/{operationId}", handler.getNativeOperation)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations/{operationId}/content", handler.getNativeContent)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}", handler.getNativeApproval)
+	handler.mux.HandleFunc("POST /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}/actions/decide", handler.decideNativeApproval)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
 	handler.mux.HandleFunc(
 		"POST /api/v1/captures/{captureKey}/environment-assignment/actions/apply-latest",
@@ -582,12 +647,13 @@ func (handler *Handler) getStatus(
 ) {
 	status := handler.status.Status()
 	writeJSON(writer, http.StatusOK, StatusResponse{
-		Generation:   status.InstanceID,
-		Ready:        handler.readiness.Ready(),
-		APIVersion:   "v1",
-		ProductBuild: productbuild.Label(),
-		StatusKey:    "runtime.state." + string(status.State),
-		Runtime:      status,
+		NetworkAccess: handler.networkAccess,
+		Generation:    status.InstanceID,
+		Ready:         handler.readiness.Ready(),
+		APIVersion:    "v1",
+		ProductBuild:  productbuild.Label(),
+		StatusKey:     "runtime.state." + string(status.State),
+		Runtime:       status,
 	})
 }
 

@@ -140,6 +140,9 @@ func writeBackupManifest(
 }
 
 func validateBackupLocked(ctx context.Context, directory string) error {
+	if _, err := os.Lstat(filepath.Join(directory, schemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
+		return ErrBackupInvalid
+	}
 	manifest, err := readBackupManifest(directory)
 	if err != nil {
 		return err
@@ -243,6 +246,7 @@ func validBackupFile(file backupFile) bool {
 	return file.Path != "" && clean == file.Path && clean != "." &&
 		!path.IsAbs(clean) && clean != ".." && !strings.HasPrefix(clean, "../") &&
 		file.Path != backupManifestName &&
+		file.Path != schemaUpgradeReceiptName &&
 		!manifestSecretPath(file.Path, serverSecretDirectory) &&
 		!manifestSecretPath(file.Path, developmentSecretDirectory) && file.Bytes >= 0 &&
 		len(file.SHA256) == sha256.Size*2 && strings.ToLower(file.SHA256) == file.SHA256
@@ -264,6 +268,9 @@ func backupFiles(ctx context.Context, directory string) ([]backupFile, error) {
 		rel, err := filepath.Rel(directory, name)
 		if err != nil || rel == "." {
 			return err
+		}
+		if rel == schemaUpgradeReceiptName {
+			return ErrBackupInvalid
 		}
 		if rel == backupManifestName || rel == lockName || rel == "server.lock" ||
 			rel == "runtime.db-shm" {

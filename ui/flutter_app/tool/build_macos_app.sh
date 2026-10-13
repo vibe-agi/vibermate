@@ -53,6 +53,22 @@ if [[ "${mode}" == "preview" ]]; then
   /usr/libexec/PlistBuddy -c 'Set :CFBundleName ViberMate Preview' "${preview_app}/Contents/Info.plist"
   codesign --force --sign - "${preview_app}"
 else
+  kernel_go="$(python3 -c 'import os, shutil; print(os.path.realpath(shutil.which("go") or ""))')"
+  case "$(uname -m)" in
+    arm64) kernel_target="darwin/arm64"; export FLUTTER_XCODE_ARCHS=arm64 ;;
+    x86_64) kernel_target="darwin/amd64"; export FLUTTER_XCODE_ARCHS=x86_64 ;;
+    *) echo "unsupported macOS kernel architecture" >&2; exit 70 ;;
+  esac
+  # Local live/candidate products match their thin Host sidecars and manifest.
+  # The protected distribution builder separately requires both architectures.
+  mkdir -p "${flutter_directory}/build"
+  kernel_root="$(mktemp -d "${flutter_directory}/build/vless-kernel-XXXXXXXX")"
+  kernel_build="${kernel_root}/producer"
+  kernel_package="${kernel_root}/package"
+  python3 "${repository_root}/tool/vless-kernel/build_kernel.py" \
+    --go "${kernel_go}" --target "${kernel_target}" --output "${kernel_build}"
+  python3 "${repository_root}/tool/vless-kernel/package_kernel.py" \
+    --go "${kernel_go}" --target "${kernel_target}" --input "${kernel_build}" --output "${kernel_package}"
   (
     cd "${repository_root}"
     export CGO_ENABLED=1
@@ -78,6 +94,7 @@ else
   app_executable="${macos_directory}/${app_executable_name}"
   cli_executable="${macos_directory}/vibermate"
   daemon_executable="${macos_directory}/vibermated"
+  kernel_executable="${macos_directory}/vibermate-xray"
   if [[ ! -x "${app_executable}" || -e "${cli_executable}" ]]; then
     echo "App executable and packaged CLI do not have distinct bundle paths" >&2
     exit 70
@@ -89,6 +106,9 @@ else
     "${flutter_directory}/build/vibermated" \
     "${daemon_executable}"
   chmod 755 "${cli_executable}" "${daemon_executable}"
+  /usr/bin/install -m 0755 "${kernel_package}/vibermate-xray" "${kernel_executable}"
+  ditto --norsrc --noextattr --noacl --noqtn -X \
+    "${kernel_package}/vless-kernel" "${app_bundle}/Contents/Resources/vless-kernel"
   web_source="${flutter_directory}/build/web"
   web_destination="${app_bundle}/Contents/Resources/vibermate-web"
   if [[ ! -f "${web_source}/index.html" || -e "${web_destination}" ]]; then
@@ -107,6 +127,7 @@ else
   fi
   codesign --force --sign - "${cli_executable}"
   codesign --force --sign - "${daemon_executable}"
+  codesign --force --sign - --identifier io.vibermate.desktop.vibermate-xray "${kernel_executable}"
   case "$(uname -m)" in
     arm64)
       desktop_target="aarch64-apple-darwin"

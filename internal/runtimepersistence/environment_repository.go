@@ -230,6 +230,11 @@ func (repository *environmentRepository) PublishDraft(ctx context.Context, mutat
 	if deleted != 1 {
 		return environment.CommitResult{Outcome: environment.CommitOutcomeNotCommitted}, environment.ErrPreviewStale
 	}
+	if mutation.Candidate.State != environment.StateActive || mutation.Candidate.ClientToolAccess == nil || !mutation.Candidate.ClientToolAccess.Enabled {
+		if err := revokeNativeScopesWhere(permit.context, transaction, `(capture_kind,capture_id) IN(SELECT capture_kind,capture_id FROM capture_environment_assignments WHERE environment_id=?)`, time.Now().UTC(), mutation.EnvironmentID.String()); err != nil {
+			return environment.CommitResult{Outcome: environment.CommitOutcomeNotCommitted}, err
+		}
+	}
 	commitErr := repository.committer.Commit(transaction)
 	if commitErr == nil {
 		return committedEnvironment(mutation.Candidate), nil

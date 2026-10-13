@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientpath"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -30,6 +31,45 @@ import (
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/locales"
 )
+
+func TestProfilesPermissionOutputLocalized(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Now().UTC()
+	credential := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != capturecontrol.EnvironmentsPath || r.Header.Get("Authorization") != "Bearer "+credential {
+			t.Errorf("wrong scoped catalog request")
+			w.WriteHeader(403)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"schema":"vibermate-capture-environments/v1","items":[{"id":"work","name":"Work","clientToolAccessEnabled":true},{"id":"personal","name":"Personal","clientToolAccessEnabled":false}]}`)
+	}))
+	defer server.Close()
+	layout, err := runtimepath.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(layout.RuntimeDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(localdiscovery.Session{Schema: localdiscovery.Schema, InstanceID: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x49}, 16)), ProcessID: os.Getpid(), BaseURL: server.URL, ControlCredential: credential, ExpiresAt: now.Add(time.Hour)})
+	if err = os.WriteFile(layout.CLIControlRecord, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ language, on, off string }{{"en_US.UTF-8", "Work · Tool services: On", "Personal · Tool services: Off"}, {"zh_CN.UTF-8", "Work · \u5de5\u5177\u670d\u52a1\uff1a\u5f00\u542f", "Personal · \u5de5\u5177\u670d\u52a1\uff1a\u5173\u95ed"}} {
+		var stdout, stderr strings.Builder
+		code, key := execute([]string{"profiles"}, []string{"LANG=" + test.language}, strings.NewReader(""), &stdout, &stderr)
+		if code != 0 || key != "" || !strings.Contains(stdout.String(), test.on) || !strings.Contains(stdout.String(), test.off) {
+			t.Fatalf("localized profiles: code=%d key=%s stdout=%s", code, key, stdout.String())
+		}
+	}
+	var stdout, stderr strings.Builder
+	code, key := execute([]string{"profiles", "--json"}, []string{"LANG=zh_CN.UTF-8"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 || key != "" || !strings.Contains(stdout.String(), `"clientToolAccessEnabled":true`) || !strings.Contains(stdout.String(), `"clientToolAccessEnabled":false`) {
+		t.Fatalf("machine profiles: code=%d key=%s stdout=%s", code, key, stdout.String())
+	}
+}
 
 func TestHelpExplainsTheFirstCapturedRun(t *testing.T) {
 	t.Parallel()
@@ -308,6 +348,7 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 		{err: runlauncher.ErrRemoteLoginRequired, want: keyRemoteLoginRequired},
 		{err: runlauncher.ErrRemoteRuntimeUnavailable, want: keyRemoteRuntimeUnavailable},
 		{err: runlauncher.ErrCapturePreparationTimedOut, want: keyCapturePreparationTimedOut},
+		{err: runlauncher.ErrCodexIsolationUnsupported, want: "cli.error.codexIsolationUnsupported"},
 		{err: errors.New("other launch failure"), want: keyLaunchFailed},
 		{err: errors.Join(runlauncher.ErrCaptureSupervisionFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureSupervisionFailed"},
 		{err: errors.Join(runlauncher.ErrCaptureFinalizationFailed, runlauncher.ErrRuntimeUnavailable), want: "cli.error.captureFinalizationFailed"},

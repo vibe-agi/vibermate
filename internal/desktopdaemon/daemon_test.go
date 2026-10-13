@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -25,6 +26,7 @@ func TestStartupFailureClassificationIsClosed(t *testing.T) {
 		err    error
 		reason desktopbootstrap.FailureReason
 	}{
+		{name: "upgrade incomplete", err: errors.Join(runtimepersistence.ErrUnsupportedSchema, runtimedata.ErrSchemaUpgradeIncomplete), reason: desktopbootstrap.FailureStorageUpgradeIncomplete},
 		{
 			name:   "generation already active",
 			err:    errors.Join(errors.New("wrapped"), instanceguard.ErrAlreadyOwned),

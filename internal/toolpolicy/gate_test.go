@@ -172,6 +172,71 @@ func TestStrictRejectsShellWithoutCreatingApproval(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAuthorityPolicyMatrix(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(file, []byte("server notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "notes.txt"), []byte("outside notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "outside")
+	linkErr := os.Symlink(outside, link)
+	for _, mode := range []environment.ToolPolicyMode{environment.ToolPolicyObserve, environment.ToolPolicyReview, environment.ToolPolicyStrict} {
+		for _, test := range []struct {
+			name       string
+			root       string
+			structured bool
+			tool       string
+			arguments  string
+			field      string
+			namespace  string
+			proven     bool
+		}{
+			{"remote-existing-server-file", "", false, "Read", `{"file_path":` + quotedJSON(file) + `}`, "file_path", "", false},
+			{"remote-symlink", "", false, "Read", `{"file_path":` + quotedJSON(filepath.Join(link, "notes.txt")) + `}`, "file_path", "", false},
+			{"remote-missing-directory", "", false, "Read", `{"file_path":` + quotedJSON(filepath.Join(root, "missing", "notes.txt")) + `}`, "file_path", "", false},
+			{"local-safe-file", root, true, "Read", `{"file_path":"notes.txt"}`, "file_path", "", true},
+			{"local-symlink-escape", root, true, "Read", `{"file_path":"outside/notes.txt"}`, "file_path", "", false},
+			{"local-missing-directory", filepath.Join(root, "missing"), true, "Read", `{"file_path":"notes.txt"}`, "file_path", "", false},
+			{"local-unverified-client", root, false, "Read", `{"file_path":"notes.txt"}`, "file_path", "", false},
+			{"shell", root, true, "Bash", `{"command":"cat notes.txt"}`, "command", "", false},
+			{"MCP-read", root, true, "Read", `{"file_path":"notes.txt"}`, "file_path", "mcp", false},
+		} {
+			t.Run(string(mode)+"/"+test.name, func(t *testing.T) {
+				if (test.name == "remote-symlink" || test.name == "local-symlink-escape") && linkErr != nil {
+					t.Skipf("symlinks unavailable: %v", linkErr)
+				}
+				review := &reviewDouble{}
+				gate, err := New(review)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := decisionRequestWithNamespace(t, mode, test.root, test.structured, test.tool, test.arguments, test.field, test.namespace)
+				decision, err := gate.Decide(context.Background(), request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := exchange.ToolDecisionApproved
+				wantReview := 0
+				wantReason := ""
+				if !test.proven && mode == environment.ToolPolicyReview {
+					wantReview = 1
+				}
+				if !test.proven && mode == environment.ToolPolicyStrict {
+					want = exchange.ToolDecisionRejected
+					wantReason = ReasonStrictPolicy
+				}
+				if decision.Outcome != want || decision.ReasonCode != wantReason || review.calls != wantReview {
+					t.Fatalf("decision=%+v reviewCalls=%d; want outcome=%s reason=%q reviewCalls=%d", decision, review.calls, want, wantReason, wantReview)
+				}
+			})
+		}
+	}
+}
+
 func decisionRequest(
 	t *testing.T,
 	mode environment.ToolPolicyMode,
@@ -180,6 +245,20 @@ func decisionRequest(
 	name string,
 	argumentsJSON string,
 	pathField string,
+) exchange.ToolDecisionRequest {
+	t.Helper()
+	return decisionRequestWithNamespace(t, mode, root, structured, name, argumentsJSON, pathField, "")
+}
+
+func decisionRequestWithNamespace(
+	t *testing.T,
+	mode environment.ToolPolicyMode,
+	root string,
+	structured bool,
+	name string,
+	argumentsJSON string,
+	pathField string,
+	namespace string,
 ) exchange.ToolDecisionRequest {
 	t.Helper()
 	schema, err := protocolcore.NewJSONObject([]byte(`{"type":"object","properties":{"`+pathField+`":{"type":"string"}},"required":["`+pathField+`"]}`), protocolcore.MaxToolJSONBytes)
@@ -214,7 +293,7 @@ func decisionRequest(
 		routeID, 1, decisionContext,
 		[]protocolcore.ToolIntent{{
 			ResponseID: "response-tools", Call: protocolcore.ToolCall{
-				Key: key, Name: name, Arguments: arguments,
+				Key: key, Name: name, Arguments: arguments, Namespace: namespace,
 			},
 		}},
 	)

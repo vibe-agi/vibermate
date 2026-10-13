@@ -603,6 +603,20 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "acceptance synthetic classification tag",
+			mutate: func(report *Report, _ *Expectations) {
+				report.Provenance.Build.GoBuildTags["acceptance"] = "vibermate_acceptance_synthetic"
+			},
+		},
+		{
+			name: "release synthetic classification tag",
+			mutate: func(report *Report, _ *Expectations) {
+				report.Provenance.Build.SidecarProfile = "release"
+				report.Provenance.Build.GoBuildTags["daemon"] = "vibermate_acceptance_synthetic,vibermate_native_secrets"
+				report.Provenance.Build.GoBuildTags["launcher"] = "vibermate_acceptance_synthetic,vibermate_native_secrets"
+			},
+		},
+		{
 			name: "release sidecar lacks release tags",
 			mutate: func(report *Report, _ *Expectations) {
 				report.Provenance.Build.SidecarProfile = "release"

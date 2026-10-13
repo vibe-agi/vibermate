@@ -136,6 +136,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               return Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Tooltip(
                     message: copy('provider_accounts.refresh_all.hint'),
@@ -573,16 +574,22 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   }
 
   Future<void> _selectAccountEgress(ProviderAccount account) async {
+    final controller = widget.controller;
     final selection = await showEgressProfileSelection(
       context: context,
       selectionId: account.id,
       initial: account.egressProfile,
       copy: widget.copy,
-      loadProfiles: widget.controller.egressProfiles,
+      loadProfiles: controller.egressProfiles,
+      loadDefault: controller.egressDefault,
       allowInheritance: true,
     );
-    if (!mounted || selection == null) return;
-    await widget.controller.setProviderAccountSettings(
+    if (!mounted ||
+        selection == null ||
+        !identical(controller, widget.controller)) {
+      return;
+    }
+    await controller.setProviderAccountSettings(
       account,
       egressProfile: selection.profile,
       automaticRefresh: account.automaticRefresh,
@@ -866,6 +873,7 @@ final class _ProviderAccountQuotaSummary extends StatelessWidget {
                         Wrap(
                           spacing: 12,
                           runSpacing: 3,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: compactFacts,
                         ),
                       ],

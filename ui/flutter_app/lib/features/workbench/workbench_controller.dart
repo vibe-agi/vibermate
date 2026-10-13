@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -10,7 +11,9 @@ import '../../core/api/acp_models.dart';
 import '../../core/api/launch_environment_snapshot.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
+import '../../core/api/provider_origin.dart';
 import '../../core/api/control_models.dart';
+import '../../core/api/native_tool_models.dart';
 import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/public_certificate_exporter.dart';
@@ -39,9 +42,52 @@ final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
   final Map<String, ({AccountFacts facts, int settings})>
   _providerAccountQuotas = {};
-  final Map<String, ({_AccountReadScope scope, Object request})>
+  final Map<
+    String,
+    ({_AccountReadScope scope, Object request, Completer<AccountFacts?> result})
+  >
   _providerAccountQuotaLoads = {};
   final Map<String, _AccountReadScope> _providerAccountQuotaFailures = {};
+  final Map<String, ({_AccountReadScope scope, DateTime checkedAt})>
+  _providerAccountQuotaChecks = {};
+  static const _accountQuotaRefreshInterval = Duration(minutes: 5);
+
+  bool get _quotaReadsAllowed => webPrincipal == null || webPrincipal!.owner;
+
+  bool _supportsProviderAccountQuota(ProviderAccount account) {
+    final origin = Uri.tryParse(account.credentialOrigin);
+    return account.usable && origin != null && isChatGPTCodexOrigin(origin);
+  }
+
+  bool _providerAccountQuotaDue(ProviderAccount account) {
+    final check = _providerAccountQuotaChecks[account.id];
+    return providerAccountQuota(account) == null ||
+        providerAccountQuotaFailed(account) ||
+        check?.scope != _accountReadScope(account) ||
+        _clock().difference(check!.checkedAt) >= _accountQuotaRefreshInterval;
+  }
+
+  Future<void> _refreshDueProviderAccountQuotas() =>
+      _ensureProviderAccountQuotas(
+        data?.accounts ?? const [],
+        refresh: true,
+        dueOnly: true,
+      );
+
+  void _startProviderAccountQuotaPolling() {
+    if (_disposed ||
+        !_observingLifecycle ||
+        data == null ||
+        !_quotaReadsAllowed ||
+        _accountQuotaPoller != null) {
+      return;
+    }
+    _accountQuotaPoller = Timer.periodic(
+      _accountQuotaRefreshInterval,
+      (_) => unawaited(_refreshDueProviderAccountQuotas()),
+    );
+    unawaited(_refreshDueProviderAccountQuotas());
+  }
 
   AccountFacts? providerAccountQuota(ProviderAccount account) {
     final cached = _providerAccountQuotas[account.id];
@@ -67,46 +113,73 @@ final class WorkbenchController extends ChangeNotifier
 
   void invalidateProviderAccountQuota(ProviderAccount account) {
     _providerAccountQuotas.remove(account.id);
-    _providerAccountQuotaLoads.remove(account.id);
+    final load = _providerAccountQuotaLoads.remove(account.id);
+    if (load != null && !load.result.isCompleted) load.result.complete(null);
     _providerAccountQuotaFailures.remove(account.id);
+    _providerAccountQuotaChecks.remove(account.id);
     notifyListeners();
   }
 
-  Future<AccountFacts?> refreshProviderAccountQuota(
-    ProviderAccount account,
-  ) async {
-    if (!account.usable || providerAccountQuotaLoading(account)) {
-      return providerAccountQuota(account);
+  Future<AccountFacts?> refreshProviderAccountQuota(ProviderAccount account) {
+    if (_disposed || !_quotaReadsAllowed || !account.usable) {
+      return Future.value(null);
+    }
+    final existing = _providerAccountQuotaLoads[account.id];
+    if (existing?.scope == _accountReadScope(account)) {
+      return existing!.result.future;
+    }
+    if (existing != null && !existing.result.isCompleted) {
+      existing.result.complete(null);
     }
     // A distinct request also prevents a pre-redemption read from repopulating
     // the cache after invalidation, even when the account scope is unchanged.
-    final load = (scope: _accountReadScope(account), request: Object());
+    final load = (
+      scope: _accountReadScope(account),
+      request: Object(),
+      result: Completer<AccountFacts?>(),
+    );
     _providerAccountQuotaLoads[account.id] = load;
     _providerAccountQuotaFailures.remove(account.id);
     notifyListeners();
+    unawaited(_readProviderAccountQuota(account, load));
+    return load.result.future;
+  }
+
+  Future<void> _readProviderAccountQuota(
+    ProviderAccount account,
+    ({_AccountReadScope scope, Object request, Completer<AccountFacts?> result})
+    load,
+  ) async {
+    AccountFacts? result;
     try {
+      if (_disposed || _providerAccountQuotaLoads[account.id] != load) return;
       final facts = await accountFacts(account);
       if (_disposed || _providerAccountQuotaLoads[account.id] != load) {
-        return null;
+        return;
       }
       final current = data?.accounts
           .where((value) => value.id == account.id)
           .firstOrNull;
       if (data != null &&
           (current == null || _accountReadScope(current) != load.scope)) {
-        return null;
+        return;
       }
       _providerAccountQuotas[account.id] = (
         facts: facts,
         settings: load.scope.settings,
       );
-      return facts;
+      _providerAccountQuotaChecks[account.id] = (
+        scope: load.scope,
+        checkedAt: _clock(),
+      );
+      result = facts;
     } catch (_) {
       if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
         _providerAccountQuotaFailures[account.id] = load.scope;
+        result = providerAccountQuota(account);
       }
-      return providerAccountQuota(account);
     } finally {
+      if (!load.result.isCompleted) load.result.complete(result);
       if (!_disposed && _providerAccountQuotaLoads[account.id] == load) {
         _providerAccountQuotaLoads.remove(account.id);
         notifyListeners();
@@ -117,19 +190,41 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> ensureProviderAccountQuotas(
     Iterable<ProviderAccount> accounts, {
     bool refresh = false,
+  }) => _ensureProviderAccountQuotas(accounts, refresh: refresh);
+
+  Future<void> _ensureProviderAccountQuotas(
+    Iterable<ProviderAccount> accounts, {
+    required bool refresh,
+    bool dueOnly = false,
   }) async {
+    if (_disposed || !_quotaReadsAllowed) return;
     final pending = accounts
         .where(
           (account) =>
-              account.usable &&
+              _supportsProviderAccountQuota(account) &&
+              (!dueOnly || _providerAccountQuotaDue(account)) &&
               (refresh || providerAccountQuota(account) == null) &&
-              !providerAccountQuotaLoading(account) &&
               (refresh || !providerAccountQuotaFailed(account)),
         )
         .toList(growable: false);
     for (var index = 0; index < pending.length; index += 4) {
+      if (_disposed) return;
       await Future.wait(
-        pending.skip(index).take(4).map(refreshProviderAccountQuota),
+        pending
+            .skip(index)
+            .take(4)
+            .where((account) {
+              final current = data?.accounts
+                  .where((value) => value.id == account.id)
+                  .firstOrNull;
+              return (data == null ||
+                      (current != null &&
+                          current.usable &&
+                          _accountReadScope(current) ==
+                              _accountReadScope(account))) &&
+                  (!dueOnly || _providerAccountQuotaDue(account));
+            })
+            .map(refreshProviderAccountQuota),
       );
     }
   }
@@ -203,7 +298,8 @@ final class WorkbenchController extends ChangeNotifier
        _restartRuntime = restartRuntime,
        _clock = clock ?? DateTime.now,
        _productUpdateService =
-           productUpdateService ?? GitHubProductUpdateService(clock: clock),
+           productUpdateService ??
+           ControlProductUpdateService(api: api, clock: clock),
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,
@@ -289,6 +385,468 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStatus? get runtimeStatus => _inventoryFailureStatus ?? data?.status;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
+  List<NativeApproval> nativeApprovals = const [];
+  List<NativeToolOperation> nativeOperations = const [];
+  bool nativeOperationsLoading = false, nativeOperationsComplete = false;
+  String? nativeOperationsError;
+  bool _nativeReaderVisible = false;
+  int _nativeReaderEpoch = 0, _nativeOperationSequence = 0;
+  final _nativeOperationGenerations = <String, int>{};
+  final _nativeContentLoads = <String, Future<List<NativeRecordedBlock>>>{};
+  final _nativeContentCache = <String, List<NativeRecordedBlock>>{};
+  int _nativeCacheBytes = 0;
+  int get nativeReaderGeneration => _nativeReaderEpoch;
+  final _nativeContentInvalidations = ChangeNotifier();
+  Listenable get nativeContentInvalidations => _nativeContentInvalidations;
+  int nativeOperationGeneration(String id) =>
+      _nativeOperationGenerations[id] ?? 0;
+  bool nativeContentScopeCurrent(
+    NativeToolOperation operation,
+    String part,
+    int epoch,
+    int generation,
+  ) {
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        epoch != _nativeReaderEpoch ||
+        operation.captureKey != selectedCaptureKey ||
+        generation != nativeOperationGeneration(operation.operationId)) {
+      return false;
+    }
+    final current = nativeOperations
+        .where(
+          (op) =>
+              op.operationId == operation.operationId &&
+              op.captureKey == operation.captureKey,
+        )
+        .firstOrNull;
+    final descriptor = current?.part(part);
+    return current?.revision == operation.revision &&
+        descriptor?.state == 'available' &&
+        descriptor?.digest == operation.part(part).digest &&
+        descriptor?.expiresAt?.isAfter(DateTime.now().toUtc()) == true;
+  }
+
+  void setNativeReaderVisible(bool visible) {
+    if (_disposed || _nativeReaderVisible == visible) {
+      return;
+    }
+    _nativeReaderVisible = visible;
+    if (visible) {
+      unawaited(refreshNativeTools());
+    } else {
+      _discardNativeReader();
+    }
+  }
+
+  void _discardNativeReader() {
+    _nativeReaderEpoch++;
+    _nativeOperationSequence = 0;
+    nativeOperations = const [];
+    nativeOperationsLoading = false;
+    nativeOperationsComplete = false;
+    nativeOperationsError = null;
+    _nativeOperationGenerations.clear();
+    _nativeContentLoads.clear();
+    _nativeContentCache.clear();
+    _nativeCacheBytes = 0;
+    _nativeContentInvalidations.notifyListeners();
+  }
+
+  void invalidateNativeInspector(String operation) {
+    if (_disposed) {
+      return;
+    }
+    _nativeOperationGenerations[operation] =
+        (_nativeOperationGenerations[operation] ?? 0) + 1;
+    final marker = '/$operation/';
+    _nativeContentLoads.removeWhere((key, _) => key.contains(marker));
+    for (final key
+        in _nativeContentCache.keys
+            .where((key) => key.contains(marker))
+            .toList()) {
+      final removed = _nativeContentCache.remove(key)!;
+      _nativeCacheBytes -= removed.fold<int>(0, (n, b) => n + b.byteSize);
+    }
+    _nativeContentInvalidations.notifyListeners();
+  }
+
+  Future<void> refreshNativeTools() async {
+    final capture = selectedCaptureKey;
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        capture == null ||
+        nativeOperationsLoading) {
+      return;
+    }
+    final epoch = _nativeReaderEpoch;
+    nativeOperationsLoading = true;
+    bool current() =>
+        !_disposed &&
+        _nativeReaderVisible &&
+        epoch == _nativeReaderEpoch &&
+        capture == selectedCaptureKey;
+    try {
+      final previousComplete = nativeOperationsComplete;
+      final page = await _api.nativeToolOperations(
+        capture,
+        afterSequence: _nativeOperationSequence,
+      );
+      if (!current()) {
+        return;
+      }
+      final operations = {
+        for (final op in nativeOperations) op.operationId: op,
+      };
+      var changed = false;
+      Object? readError;
+      for (final op in page.items) {
+        final old = operations[op.operationId];
+        if (old == null ||
+            old.revision != op.revision ||
+            old.arguments.digest != op.arguments.digest ||
+            old.result.digest != op.result.digest ||
+            old.arguments.state != op.arguments.state ||
+            old.result.state != op.result.state) {
+          invalidateNativeInspector(op.operationId);
+          operations[op.operationId] = op;
+          changed = true;
+        }
+      }
+      // Revalidate known IDs even at the terminal event cursor: retention and
+      // deletion are not new execution events and must still remove bodies.
+      for (final id in operations.keys.toList()) {
+        try {
+          final op = await _api.nativeToolOperation(capture, id);
+          if (!current()) {
+            return;
+          }
+          final old = operations[id]!;
+          if (old.revision != op.revision ||
+              old.arguments.digest != op.arguments.digest ||
+              old.result.digest != op.result.digest ||
+              old.arguments.state != op.arguments.state ||
+              old.result.state != op.result.state) {
+            invalidateNativeInspector(id);
+            operations[id] = op;
+            changed = true;
+          }
+        } on Object catch (error) {
+          if (!current()) {
+            return;
+          }
+          if (error is ControlProblem && error.status == 404) {
+            invalidateNativeInspector(id);
+            operations.remove(id);
+            changed = true;
+          } else {
+            readError ??= error;
+          }
+        }
+      }
+      if (!current()) {
+        return;
+      }
+      nativeOperationsComplete =
+          readError == null && page.nextSequence == _nativeOperationSequence;
+      _nativeOperationSequence = page.nextSequence;
+      nativeOperations = List.unmodifiable(
+        operations.values.toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
+      );
+      final previousError = nativeOperationsError;
+      nativeOperationsError = readError == null
+          ? null
+          : _describeError(readError);
+      if (changed ||
+          previousError != nativeOperationsError ||
+          previousComplete != nativeOperationsComplete) {
+        notifyListeners();
+      }
+    } on Object catch (error) {
+      if (current()) {
+        nativeOperationsError = _describeError(error);
+        notifyListeners();
+      }
+    } finally {
+      if (current()) {
+        nativeOperationsLoading = false;
+      }
+    }
+  }
+
+  Future<List<NativeRecordedBlock>> loadNativeToolContent(
+    NativeToolOperation op,
+    String part,
+  ) {
+    final descriptor = op.part(part);
+    if (_disposed ||
+        !_nativeReaderVisible ||
+        op.captureKey != selectedCaptureKey ||
+        descriptor.state != 'available' ||
+        descriptor.digest == null) {
+      return Future.error(
+        const ControlContractException('Native content unavailable'),
+      );
+    }
+    final epoch = _nativeReaderEpoch,
+        generation = _nativeOperationGenerations[op.operationId] ?? 0;
+    final key =
+        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation';
+    final cached = _nativeContentCache.remove(key);
+    if (cached != null) {
+      _nativeContentCache[key] = cached;
+      return Future.value(cached);
+    }
+    final active = _nativeContentLoads[key];
+    if (active != null) {
+      return active;
+    }
+    bool current() =>
+        !_disposed &&
+        _nativeReaderVisible &&
+        epoch == _nativeReaderEpoch &&
+        op.captureKey == selectedCaptureKey &&
+        generation == (_nativeOperationGenerations[op.operationId] ?? 0);
+    final future = () async {
+      final blocks = <NativeRecordedBlock>[];
+      final seen = <String>{};
+      String? cursor;
+      String? kind, mime;
+      int total = 0, offset = 0, budget = 0;
+      var chunks = <String>[];
+      do {
+        final page = await _api.nativeToolContent(
+          op.captureKey,
+          op.operationId,
+          part,
+          cursor: cursor,
+        );
+        if (!current() || page.bodyDigest != descriptor.digest) {
+          throw const ControlContractException('Native content changed');
+        }
+        for (final block in page.blocks) {
+          if (kind == null) {
+            if (block.offset != 0) {
+              throw const ControlContractException('Missing native fragment');
+            }
+            kind = block.kind;
+            mime = block.mimeType;
+            total = block.total;
+            offset = 0;
+          }
+          if (kind != block.kind ||
+              mime != block.mimeType ||
+              total != block.total ||
+              offset != block.offset) {
+            throw const ControlContractException('Native fragment changed');
+          }
+          final length = utf8.encode(block.value).length;
+          budget += length;
+          if (budget > 16 << 20) {
+            throw const ControlContractException('Native reassembly limit');
+          }
+          offset += length;
+          chunks.add(block.value);
+          if (block.complete) {
+            blocks.add(NativeRecordedBlock(kind, chunks.join(), mime));
+            kind = null;
+            chunks = [];
+          }
+        }
+        cursor = page.nextCursor;
+        if (cursor != null && !seen.add(cursor)) {
+          throw const ControlContractException('Repeated native cursor');
+        }
+      } while (cursor != null);
+      if (kind != null || !current()) {
+        throw const ControlContractException('Incomplete native content');
+      }
+      final result = List<NativeRecordedBlock>.unmodifiable(blocks);
+      final size = result.fold<int>(0, (n, b) => n + b.byteSize);
+      if (result.isNotEmpty && size > 0 && size <= 4 << 20) {
+        while (_nativeContentCache.length >= 32 ||
+            _nativeCacheBytes + size > 4 << 20) {
+          final oldest = _nativeContentCache.remove(
+            _nativeContentCache.keys.first,
+          )!;
+          _nativeCacheBytes -= oldest.fold<int>(0, (n, b) => n + b.byteSize);
+        }
+        _nativeContentCache[key] = result;
+        _nativeCacheBytes += size;
+      }
+      return result;
+    }();
+    _nativeContentLoads[key] = future;
+    unawaited(
+      future.then<void>(
+        (_) {
+          if (identical(_nativeContentLoads[key], future)) {
+            _nativeContentLoads.remove(key);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_nativeContentLoads[key], future)) {
+            _nativeContentLoads.remove(key);
+          }
+        },
+      ),
+    );
+    return future;
+  }
+
+  bool nativeApprovalScanComplete = false;
+  bool nativeApprovalsLoading = false;
+  String? nativeApprovalError;
+  bool _nativeApprovalVisible = false;
+  int _nativeApprovalEpoch = 0;
+  int _nativeApprovalSequence = 0;
+  int _nativeDecisions = 0;
+  Set<String> _nativePendingIDs = {};
+  bool get nativeApprovalAttention => _nativePendingIDs.isNotEmpty;
+  int? get nativePendingCount =>
+      nativeApprovalScanComplete ? _nativePendingIDs.length : null;
+
+  void setNativeApprovalsVisible(bool visible) {
+    _nativeApprovalVisible = visible;
+    if (visible) {
+      unawaited(refreshNativeApprovals());
+    } else {
+      _nativeApprovalEpoch++;
+      nativeApprovals = const [];
+      nativeApprovalsLoading = false;
+    }
+  }
+
+  void _discardNativeApprovals() {
+    _nativeApprovalEpoch++;
+    _nativeApprovalSequence = 0;
+    nativeApprovals = const [];
+    nativeApprovalScanComplete = false;
+    nativeApprovalsLoading = false;
+    nativeApprovalError = null;
+    _nativePendingIDs = {};
+  }
+
+  Future<void> refreshNativeApprovals() async {
+    final capture = selectedCaptureKey;
+    if (_disposed ||
+        capture == null ||
+        nativeApprovalsLoading ||
+        _nativeDecisions != 0) {
+      return;
+    }
+    final epoch = _nativeApprovalEpoch;
+    final previousIDs = _nativePendingIDs;
+    final previousComplete = nativeApprovalScanComplete;
+    final previousError = nativeApprovalError;
+    bool current() =>
+        !_disposed &&
+        epoch == _nativeApprovalEpoch &&
+        capture == selectedCaptureKey;
+    nativeApprovalsLoading = true;
+    try {
+      final updated = <String, NativeApproval>{};
+      final pendingIDs = <String>{};
+      // Event pages alone cannot remove a pending question when a terminal
+      // event has fallen outside this page. Revalidate every visible ID.
+      for (final id in _nativePendingIDs) {
+        try {
+          final approval = await _api.nativeApproval(capture, id);
+          if (!current()) return;
+          final previous = nativeApprovals
+              .where((item) => item.id == id)
+              .firstOrNull;
+          if (previous != null && !previous.sameIntent(approval)) {
+            throw const ControlContractException(
+              'Native approval intent changed',
+            );
+          }
+          if (approval.pending) {
+            pendingIDs.add(approval.id);
+            if (_nativeApprovalVisible) updated[approval.id] = approval;
+          }
+        } on ControlProblem catch (error) {
+          if (error.status != 404) rethrow;
+        }
+      }
+      final page = await _api.nativeApprovals(
+        capture,
+        afterSequence: _nativeApprovalSequence,
+      );
+      if (!current()) return;
+      for (final approval in page.items) {
+        if (approval.pending) {
+          pendingIDs.add(approval.id);
+          if (_nativeApprovalVisible) updated[approval.id] = approval;
+        }
+      }
+      nativeApprovalScanComplete = page.nextSequence == _nativeApprovalSequence;
+      _nativeApprovalSequence = page.nextSequence;
+      _nativePendingIDs = pendingIDs;
+      nativeApprovals = _nativeApprovalVisible
+          ? List.unmodifiable(updated.values)
+          : const [];
+      nativeApprovalError = null;
+    } catch (error) {
+      if (!current()) return;
+      nativeApprovals = const [];
+      nativeApprovalScanComplete = false;
+      _nativeApprovalSequence = 0;
+      _nativePendingIDs = {};
+      nativeApprovalError = _describeError(error);
+    } finally {
+      if (current()) {
+        nativeApprovalsLoading = false;
+        if (_nativeApprovalVisible ||
+            previousComplete != nativeApprovalScanComplete ||
+            previousError != nativeApprovalError ||
+            previousIDs.length != _nativePendingIDs.length ||
+            previousIDs.any((id) => !_nativePendingIDs.contains(id))) {
+          notifyListeners();
+        }
+      }
+    }
+  }
+
+  Future<void> decideNativeApproval(
+    NativeApproval approval,
+    NativeDecision decision,
+  ) async {
+    if (_disposed ||
+        !_nativeApprovalVisible ||
+        approval.captureKey != selectedCaptureKey ||
+        !nativeApprovals.any((item) => identical(item, approval)) ||
+        !approval.pending ||
+        decision == NativeDecision.allowOnce && !approval.canAllow) {
+      return;
+    }
+    // Invalidate reads started before this decision, and drop its preview
+    // immediately. A network error requires a fresh scoped read.
+    final epoch = ++_nativeApprovalEpoch;
+    nativeApprovalsLoading = false;
+    nativeApprovals = List.unmodifiable(
+      nativeApprovals.where((item) => item.id != approval.id),
+    );
+    // Keep the body-free ID until the decision is confirmed. If its response
+    // is lost, the next scoped GET must reconcile it even with no new events.
+    _nativeDecisions++;
+    notifyListeners();
+    try {
+      await _api.decideNativeApproval(approval.captureKey, approval, decision);
+      if (!_disposed && epoch == _nativeApprovalEpoch) {
+        _nativePendingIDs.remove(approval.id);
+      }
+    } catch (error) {
+      if (!_disposed && epoch == _nativeApprovalEpoch) {
+        nativeApprovalError = _describeError(error);
+      }
+    } finally {
+      _nativeDecisions--;
+    }
+    if (!_disposed && epoch == _nativeApprovalEpoch) notifyListeners();
+  }
+
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   bool showCaptureRequestRecords = false;
@@ -440,6 +998,7 @@ final class WorkbenchController extends ChangeNotifier
   int settingsTab = 0;
   Timer? _poller;
   Timer? _evidencePoller;
+  Timer? _accountQuotaPoller;
   bool _pollInFlight = false;
   bool _evidencePollInFlight = false;
   bool _pollingVisible = true;
@@ -659,6 +1218,13 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<EgressProfileCatalog> egressProfiles() => _api.egressProfiles();
 
+  Future<EgressDefaultSetting> egressDefault() => _api.egressDefault();
+
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) => _api.setEgressDefault(current, profile);
+
   Future<EgressProfileRevision> createEgressProfile({
     required String displayName,
     required TrafficEgressPolicy policy,
@@ -681,7 +1247,49 @@ final class WorkbenchController extends ChangeNotifier
     policy: policy,
   );
 
-  int? get pendingApprovalCount => pendingApprovals?.length;
+  Future<EgressProfileRevision> createVlessEgressProfile({
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) => importVlessEgressProfile(
+    id: 'profile.custom.${_newUuid()}',
+    expectedRevision: 0,
+    displayName: displayName,
+    uri: uri,
+    resolver: resolver,
+    directDomains: directDomains,
+    tls: tls,
+  );
+
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) => _api.importVlessEgressProfile(
+    id: id,
+    expectedRevision: expectedRevision,
+    displayName: displayName,
+    uri: uri,
+    resolver: resolver,
+    directDomains: directDomains,
+    tls: tls,
+  );
+
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) => _api.vlessProfileDescription(id, revision);
+
+  int? get pendingApprovalCount =>
+      pendingApprovals == null && !nativeApprovalAttention
+      ? null
+      : (pendingApprovals?.length ?? 0) + (nativePendingCount ?? 0);
 
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
@@ -810,6 +1418,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> initialize() async {
+    if (_disposed) return;
     if (!_observingLifecycle) {
       WidgetsFlutterBinding.ensureInitialized().addObserver(this);
       _observingLifecycle = true;
@@ -828,13 +1437,13 @@ final class WorkbenchController extends ChangeNotifier
       );
     }
     if (_disposed) return;
-    _poller = Timer.periodic(
+    _poller ??= Timer.periodic(
       const Duration(seconds: 5),
       (_) => unawaited(_poll()),
     );
     // Follow the visible live conversation independently of slow inventory
     // reads. This bounded point query never reloads accounts or credentials.
-    _evidencePoller = Timer.periodic(
+    _evidencePoller ??= Timer.periodic(
       const Duration(seconds: 1),
       (_) => unawaited(_pollSelectedEvidence()),
     );
@@ -1022,6 +1631,7 @@ final class WorkbenchController extends ChangeNotifier
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
       loading = false;
+      _startProviderAccountQuotaPolling();
       notifyListeners();
       if (selectedCapture != null) await _loadCaptureDetail(selectedCapture!);
       if (section == WorkbenchSection.network) {
@@ -1076,6 +1686,7 @@ final class WorkbenchController extends ChangeNotifier
       _inventoryFailureStatus = null;
       data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
+      _startProviderAccountQuotaPolling();
       if (hadInventoryFailure || !_sameDashboard(previous, data!)) {
         notifyListeners();
       }
@@ -1083,6 +1694,7 @@ final class WorkbenchController extends ChangeNotifier
         await refreshPendingApprovals(quiet: true);
       }
       final capture = selectedCapture;
+      await refreshNativeTools();
       if (section == WorkbenchSection.captures &&
           capture != null &&
           !_evidencePollInFlight &&
@@ -1340,6 +1952,9 @@ final class WorkbenchController extends ChangeNotifier
         throw const ControlContractException('storage cleanup is unavailable');
       }
       storageCleanupNotice = 'settings.storage.cleanup_complete';
+      if (outcome.deleted) {
+        _discardNativeReader();
+      }
       await refreshStorageLocation();
       return outcome;
     } catch (error) {
@@ -1857,6 +2472,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refreshPendingApprovals({bool quiet = false}) async {
+    await refreshNativeApprovals();
     if (_disposed || pendingApprovalsLoading || networkMutating) return;
     if (!quiet) {
       pendingApprovalsLoading = true;
@@ -1967,6 +2583,12 @@ final class WorkbenchController extends ChangeNotifier
     String exchangeId,
     String cursor,
   ) => _api.exchangeContentPage(exchangeId, cursor);
+
+  Future<ToolResultPage> loadToolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) => _api.toolResults(exchangeId, callId, cursor: cursor);
 
   Future<ExchangeDetail?> _fetchExchangeDetail(
     String key,
@@ -2100,6 +2722,38 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<RetainedImagePreview> loadImagePreview(
+    String exchangeId,
+    String fingerprint,
+  ) async {
+    // Keep pixels with the visible widget, never in the shared metadata cache.
+    final page = await _api.rawEvidence(exchangeId);
+    for (final layer in const ['client_ingress', 'provider_egress']) {
+      for (final item in page.items.where(
+        (e) => e.layer == layer && e.revealAvailable,
+      )) {
+        try {
+          final preview = await _api.previewRawImage(
+            envelopeId: item.envelopeId,
+            fingerprint: fingerprint,
+          );
+          if (_disposed) {
+            preview.bytes.fillRange(0, preview.bytes.length, 0);
+            throw StateError('closed');
+          }
+          return preview;
+        } on ControlProblem catch (problem) {
+          if (problem.status != 410 && problem.status != 404) rethrow;
+        }
+      }
+    }
+    throw const ControlProblem(
+      status: 410,
+      reasonCode: 'image_unavailable',
+      messageKey: 'reader.image_unavailable',
+    );
+  }
+
   Future<String> revealRawHeader({
     required String envelopeId,
     required String name,
@@ -2204,6 +2858,7 @@ final class WorkbenchController extends ChangeNotifier
   Future<void> refreshNetwork() => _refreshNetwork();
 
   Future<void> _refreshNetwork({bool quiet = false}) async {
+    await refreshNativeApprovals();
     if (_disposed || networkLoading || networkMutating) return;
     if (!quiet) {
       networkLoading = true;
@@ -2923,6 +3578,8 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _resetCaptureDetail() {
+    _discardNativeReader();
+    _discardNativeApprovals();
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;
@@ -2940,6 +3597,8 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   void _invalidateEvidenceCaches() {
+    _discardNativeReader();
+    _discardNativeApprovals();
     _exchangeLoadGeneration += 1;
     _exchangeDetails.clear();
     _exchangeLoads.clear();
@@ -4152,7 +4811,13 @@ final class WorkbenchController extends ChangeNotifier
     }
     _poller?.cancel();
     _evidencePoller?.cancel();
+    _accountQuotaPoller?.cancel();
+    for (final load in _providerAccountQuotaLoads.values) {
+      if (!load.result.isCompleted) load.result.complete(null);
+    }
+    _providerAccountQuotaLoads.clear();
     _invalidateEvidenceCaches();
+    _nativeContentInvalidations.dispose();
     unawaited(_flushPreferencesAndCloseRuntime());
     super.dispose();
   }
@@ -4166,6 +4831,7 @@ final class WorkbenchController extends ChangeNotifier
       _pollingVisible = false;
     } else if (state == AppLifecycleState.resumed && !_pollingVisible) {
       _pollingVisible = true;
+      unawaited(_refreshDueProviderAccountQuotas());
       unawaited(refresh());
     }
   }

@@ -7,6 +7,118 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
+/// Safe description of one immutable VLESS revision. No private material.
+final class VlessProfileDescription {
+  const VlessProfileDescription._(this.security, this.trustMode);
+  final String security;
+  final String? trustMode;
+
+  factory VlessProfileDescription.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'security'},
+      optional: const {'trustMode'},
+    );
+    final security = requireString(value, 'security', path);
+    final mode = value['trustMode'];
+    if ((security == 'reality' && !value.containsKey('trustMode')) ||
+        (security == 'tls' && (mode == 'system' || mode == 'custom_ca'))) {
+      return VlessProfileDescription._(security, mode as String?);
+    }
+    throw const ControlContractException('VLESS settings are invalid');
+  }
+}
+
+/// Private dialog input; only HttpControlApi serializes it.
+final class VlessTLSImportOptions {
+  const VlessTLSImportOptions.system() : mode = 'system', caPem = null;
+  const VlessTLSImportOptions.customCA(String pem)
+    : mode = 'custom_ca',
+      caPem = pem;
+  final String mode;
+  final String? caPem;
+  @override
+  String toString() => 'VlessTLSImportOptions(redacted)';
+}
+
+final class ProductUpdateMetadata {
+  const ProductUpdateMetadata({
+    required this.checkedAt,
+    required this.tag,
+    required this.name,
+    required this.url,
+    required this.publishedAt,
+  });
+  final DateTime checkedAt;
+  final String tag;
+  final String name;
+  final Uri url;
+  final DateTime publishedAt;
+  factory ProductUpdateMetadata.fromJson(Object? json) {
+    const path = 'productUpdate';
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'checkedAt', 'release'});
+    final release = requireObject(value['release'], '$path.release');
+    requireFields(
+      release,
+      '$path.release',
+      required: const {'tag', 'name', 'url', 'publishedAt'},
+    );
+    final tag = requireString(release, 'tag', '$path.release');
+    final match = RegExp(r'^v?([0-9]+)\.([0-9]+)\.([0-9]+)$').firstMatch(tag);
+    if (match == null ||
+        [
+          for (var i = 1; i <= 3; i++) int.tryParse(match.group(i)!),
+        ].any((v) => v == null || v > 2147483647)) {
+      throw const ControlContractException('Product release version invalid');
+    }
+    final rawUrl = requireString(release, 'url', '$path.release');
+    if (rawUrl != 'https://github.com/vibe-agi/vibermate/releases/tag/$tag') {
+      throw const ControlContractException(
+        'Product release destination invalid',
+      );
+    }
+    final name = release['name'];
+    if (name is! String ||
+        name.runes.length > 256 ||
+        name.contains(RegExp(r'[\x00-\x1f\x7f-\x9f]'))) {
+      throw const ControlContractException('Product release name invalid');
+    }
+    DateTime timestamp(JsonObject object, String key) {
+      final raw = requireString(object, key, path);
+      final pattern = RegExp(
+        r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$',
+      );
+      final m = pattern.firstMatch(raw);
+      final parsed = DateTime.tryParse(raw);
+      if (m == null ||
+          parsed == null ||
+          !parsed.isUtc ||
+          parsed.year != int.parse(m[1]!) ||
+          parsed.month != int.parse(m[2]!) ||
+          parsed.day != int.parse(m[3]!) ||
+          parsed.hour != int.parse(m[4]!) ||
+          parsed.minute != int.parse(m[5]!) ||
+          parsed.second != int.parse(m[6]!)) {
+        throw const ControlContractException(
+          'Product update timestamp invalid',
+        );
+      }
+      return parsed;
+    }
+
+    return ProductUpdateMetadata(
+      checkedAt: timestamp(value, 'checkedAt'),
+      tag: tag,
+      name: name,
+      url: Uri.parse(rawUrl),
+      publishedAt: timestamp(release, 'publishedAt'),
+    );
+  }
+}
+
 final class RuntimeRootCertificate {
   const RuntimeRootCertificate({
     required this.certificatePem,
@@ -1689,6 +1801,30 @@ final class RuntimePersistenceFailure {
   int get hashCode => Object.hash(operation, reason, at);
 }
 
+final class HostNetworkAccess {
+  const HostNetworkAccess({
+    required this.socksAddress,
+    required this.vlessAvailable,
+  });
+
+  factory HostNetworkAccess.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'vlessAvailable'},
+      optional: const {'socksAddress'},
+    );
+    return HostNetworkAccess(
+      socksAddress: _optionalSocksAddress(value, path),
+      vlessAvailable: requireBoolean(value, 'vlessAvailable', path),
+    );
+  }
+
+  final String? socksAddress;
+  final bool vlessAvailable;
+}
+
 final class RuntimeStatus {
   const RuntimeStatus({
     required this.ready,
@@ -1706,6 +1842,7 @@ final class RuntimeStatus {
     required this.stopReasonCode,
     this.storageFailure,
     this.recordingFailure,
+    this.networkAccess,
   });
 
   factory RuntimeStatus.fromJson(
@@ -1724,6 +1861,7 @@ final class RuntimeStatus {
         'statusKey',
         'runtime',
       },
+      optional: const {'networkAccess'},
     );
     if (requireString(value, 'apiVersion', 'status') != 'v1') {
       throw const ControlContractException('status.apiVersion is unsupported');
@@ -1865,6 +2003,12 @@ final class RuntimeStatus {
       storage: storage,
       storageFailure: storageFailure,
       recordingFailure: recordingFailure,
+      networkAccess: value.containsKey('networkAccess')
+          ? HostNetworkAccess.fromJson(
+              value['networkAccess'],
+              'status.networkAccess',
+            )
+          : null,
       environmentProjection: projectionState,
       unavailableEnvironments: unavailableEnvironments == null
           ? null
@@ -1881,6 +2025,7 @@ final class RuntimeStatus {
   }
 
   final bool ready;
+  final HostNetworkAccess? networkAccess;
   final String productBuild;
   final String state;
   final String host;
@@ -3241,9 +3386,18 @@ final class EnvironmentBudgetPolicy {
 }
 
 final class TrafficProxyPolicy {
-  const TrafficProxyPolicy({required this.kind, this.endpoint});
+  const TrafficProxyPolicy({
+    required this.kind,
+    this.endpoint,
+    this.credentialRef,
+    this.credentialRevision,
+  });
 
-  const TrafficProxyPolicy.direct() : kind = 'direct', endpoint = null;
+  const TrafficProxyPolicy.direct()
+    : kind = 'direct',
+      endpoint = null,
+      credentialRef = null,
+      credentialRevision = null;
 
   factory TrafficProxyPolicy.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -3251,34 +3405,82 @@ final class TrafficProxyPolicy {
       value,
       path,
       required: const {'kind'},
-      optional: const {'endpoint'},
+      optional: const {'endpoint', 'credentialRef', 'credentialRevision'},
     );
     final kind = requireString(value, 'kind', path);
     final endpoint = optionalString(value, 'endpoint', path);
-    if (!const {'direct', 'socks5'}.contains(kind) ||
+    final credentialRef = optionalString(value, 'credentialRef', path);
+    final credentialRevision = optionalInteger(
+      value,
+      'credentialRevision',
+      path,
+      minimum: 1,
+    );
+    if (!const {'direct', 'socks5', 'vless'}.contains(kind) ||
         (kind == 'direct' && endpoint != null) ||
-        (kind != 'direct' && !_validEgressEndpoint(endpoint))) {
+        (kind == 'socks5' && !_validEgressEndpoint(endpoint)) ||
+        (kind != 'vless' &&
+            (value.containsKey('credentialRef') ||
+                value.containsKey('credentialRevision'))) ||
+        (kind == 'vless' &&
+            (endpoint != null ||
+                credentialRevision == null ||
+                BigInt.from(credentialRevision) >
+                    BigInt.parse('9223372036854775807') ||
+                !_validVlessReference(credentialRef)))) {
       throw ControlContractException('$path proxy policy is invalid');
     }
-    return TrafficProxyPolicy(kind: kind, endpoint: endpoint);
+    return TrafficProxyPolicy(
+      kind: kind,
+      endpoint: endpoint,
+      credentialRef: credentialRef,
+      credentialRevision: credentialRevision,
+    );
   }
 
   final String kind;
   final String? endpoint;
+  final String? credentialRef;
+  final int? credentialRevision;
 
   bool get isDirect => kind == 'direct';
   bool get isSocks5 => kind == 'socks5';
+  bool get isVless => kind == 'vless';
 
-  JsonObject toJson() => {'kind': kind, 'endpoint': ?endpoint};
+  JsonObject toJson() => {
+    'kind': kind,
+    'endpoint': ?endpoint,
+    'credentialRef': ?credentialRef,
+    'credentialRevision': ?credentialRevision,
+  };
 
   @override
   bool operator ==(Object other) =>
       other is TrafficProxyPolicy &&
       other.kind == kind &&
-      other.endpoint == endpoint;
+      other.endpoint == endpoint &&
+      other.credentialRef == credentialRef &&
+      other.credentialRevision == credentialRevision;
 
   @override
-  int get hashCode => Object.hash(kind, endpoint);
+  int get hashCode =>
+      Object.hash(kind, endpoint, credentialRef, credentialRevision);
+}
+
+bool _validVlessReference(String? value) {
+  const prefix = 'secret://egress-vless/';
+  if (value == null || value.length > 1024 || !value.startsWith(prefix)) {
+    return false;
+  }
+  return value
+      .substring(prefix.length)
+      .split('/')
+      .every(
+        (segment) =>
+            segment != '.' &&
+            segment != '..' &&
+            RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(segment),
+      );
 }
 
 final class TrafficResolverPolicy {
@@ -3346,15 +3548,29 @@ final class TrafficResolverPolicy {
 }
 
 final class TrafficEgressPolicy {
-  const TrafficEgressPolicy({required this.proxy, required this.resolver});
+  const TrafficEgressPolicy({
+    required this.proxy,
+    required this.resolver,
+    this.directDomains = '',
+  });
 
   const TrafficEgressPolicy.direct()
     : proxy = const TrafficProxyPolicy.direct(),
-      resolver = const TrafficResolverPolicy.system();
+      resolver = const TrafficResolverPolicy.system(),
+      directDomains = '';
 
   factory TrafficEgressPolicy.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'proxy', 'resolver'});
+    requireFields(
+      value,
+      path,
+      required: const {'proxy', 'resolver'},
+      optional: const {'directDomains'},
+    );
+    final directDomains = value['directDomains'] ?? '';
+    if (directDomains is! String) {
+      throw ControlContractException('$path.directDomains must be a string');
+    }
     final proxy = TrafficProxyPolicy.fromJson(value['proxy'], '$path.proxy');
     final resolver = TrafficResolverPolicy.fromJson(
       value['resolver'],
@@ -3362,34 +3578,75 @@ final class TrafficEgressPolicy {
     );
     final valid = switch (proxy.kind) {
       'direct' => resolver.transport != 'proxy',
-      'socks5' => true,
+      'socks5' || 'vless' => true,
       _ => false,
     };
     if (!valid) {
       throw ControlContractException('$path egress policy is inconsistent');
     }
-    return TrafficEgressPolicy(proxy: proxy, resolver: resolver);
+    return TrafficEgressPolicy(
+      proxy: proxy,
+      resolver: resolver,
+      directDomains: directDomains,
+    );
   }
 
   final TrafficProxyPolicy proxy;
   final TrafficResolverPolicy resolver;
+  final String directDomains;
 
   JsonObject toJson() => {
     'proxy': proxy.toJson(),
     'resolver': resolver.toJson(),
+    if (directDomains.isNotEmpty) 'directDomains': directDomains,
   };
 
   @override
   bool operator ==(Object other) =>
       other is TrafficEgressPolicy &&
       other.proxy == proxy &&
-      other.resolver == resolver;
+      other.resolver == resolver &&
+      other.directDomains == directDomains;
 
   @override
-  int get hashCode => Object.hash(proxy, resolver);
+  int get hashCode => Object.hash(proxy, resolver, directDomains);
 }
 
-final class EgressProfileRevision {
+sealed class EgressChoice {
+  const EgressChoice();
+  static const inherit = EgressInheritance();
+
+  factory EgressChoice.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    if (value.containsKey('mode')) {
+      requireFields(value, path, required: const {'mode'});
+      if (value['mode'] != 'inherit') {
+        throw ControlContractException('$path inheritance mode is invalid');
+      }
+      return inherit;
+    }
+    final profile = EgressProfileRevision.fromJson(value, path);
+    if (profile.id == EgressProfileRevision.direct.id &&
+        profile != EgressProfileRevision.direct) {
+      throw ControlContractException('$path builtin Direct was substituted');
+    }
+    return profile;
+  }
+
+  JsonObject toJson();
+}
+
+final class EgressInheritance extends EgressChoice {
+  const EgressInheritance();
+  @override
+  JsonObject toJson() => {'mode': 'inherit'};
+  @override
+  bool operator ==(Object other) => other is EgressInheritance;
+  @override
+  int get hashCode => 'egress:inherit'.hashCode;
+}
+
+final class EgressProfileRevision extends EgressChoice {
   const EgressProfileRevision({
     required this.id,
     required this.revision,
@@ -3438,6 +3695,7 @@ final class EgressProfileRevision {
   final TrafficEgressPolicy policy;
   final DateTime publishedAt;
 
+  @override
   JsonObject toJson() => {
     'id': id,
     'revision': revision,
@@ -3458,6 +3716,67 @@ final class EgressProfileRevision {
   @override
   int get hashCode =>
       Object.hash(id, revision, displayName, policy, publishedAt);
+}
+
+final class EgressDefaultSetting {
+  const EgressDefaultSetting._({
+    required this.revision,
+    required this.profile,
+    required this.effectiveProfile,
+    required this.source,
+  });
+
+  factory EgressDefaultSetting.fromJson(
+    Object? json, [
+    String path = 'egressDefault',
+  ]) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'revision', 'profile', 'effective'},
+    );
+    final revision = requireInteger(value, 'revision', path, minimum: 1);
+    final profile = value['profile'] == null
+        ? null
+        : EgressProfileRevision.fromJson(value['profile'], '$path.profile');
+    final effective = requireObject(value['effective'], '$path.effective');
+    requireFields(
+      effective,
+      '$path.effective',
+      required: const {'profile', 'source', 'defaultRevision'},
+    );
+    final resolved = EgressProfileRevision.fromJson(
+      effective['profile'],
+      '$path.effective.profile',
+    );
+    final source = requireString(effective, 'source', '$path.effective');
+    if (requireInteger(
+              effective,
+              'defaultRevision',
+              '$path.effective',
+              minimum: 1,
+            ) !=
+            revision ||
+        (profile == null
+            ? source != 'builtin' || resolved != EgressProfileRevision.direct
+            : source != 'global' || resolved != profile) ||
+        (resolved.id == EgressProfileRevision.direct.id &&
+            resolved != EgressProfileRevision.direct)) {
+      throw ControlContractException('$path default selection is inconsistent');
+    }
+    return EgressDefaultSetting._(
+      revision: revision,
+      profile: profile,
+      effectiveProfile: resolved,
+      source: source,
+    );
+  }
+
+  final int revision;
+  final EgressProfileRevision? profile;
+  final EgressProfileRevision effectiveProfile;
+  final String source;
 }
 
 final class EgressProfileCatalog {
@@ -5092,7 +5411,7 @@ final class EnvironmentProtocolPlan {
         value['destination'],
         '$path.destination',
       ),
-      egressProfile: EgressProfileRevision.fromJson(
+      egressProfile: EgressChoice.fromJson(
         value['egressProfile'],
         '$path.egressProfile',
       ),
@@ -5106,7 +5425,7 @@ final class EnvironmentProtocolPlan {
   final String clientProtocol;
   final EnvironmentClientAdapterPolicy clientAdapterPolicy;
   final EnvironmentDestination destination;
-  final EgressProfileRevision egressProfile;
+  final EgressChoice egressProfile;
   final List<CodeLibraryTransformRevision> transforms;
   final List<EnvironmentPluginBinding> pluginBindings;
 
@@ -5115,7 +5434,7 @@ final class EnvironmentProtocolPlan {
 
   EnvironmentProtocolPlan copyWith({
     EnvironmentDestination? destination,
-    EgressProfileRevision? egressProfile,
+    EgressChoice? egressProfile,
     List<CodeLibraryTransformRevision>? transforms,
   }) => EnvironmentProtocolPlan(
     id: id,
@@ -5361,6 +5680,106 @@ bool _stringListsEqual(List<String> left, List<String> right) {
   return true;
 }
 
+final class EnvironmentClientToolRoute {
+  const EnvironmentClientToolRoute({
+    required this.id,
+    required this.revision,
+    required this.targetOrigin,
+    required this.path,
+    required this.credentialOwner,
+    required this.egressProfile,
+    required this.contract,
+  });
+  final String id;
+  final int revision;
+  final Uri targetOrigin;
+  final String path;
+  final String credentialOwner;
+  final EgressChoice egressProfile;
+  final String contract;
+  factory EnvironmentClientToolRoute.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'targetOrigin',
+        'path',
+        'credentialOwner',
+        'egressProfile',
+        'contract',
+      },
+    );
+    final originText = requireString(value, 'targetOrigin', path);
+    final origin = Uri.tryParse(originText);
+    final servicePath = requireString(value, 'path', path);
+    final owner = requireString(value, 'credentialOwner', path);
+    final contract = requireString(value, 'contract', path);
+    if (origin == null ||
+        !isCanonicalProviderOrigin(originText) ||
+        originText.length > 1024 ||
+        origin.scheme != 'https' ||
+        origin.path.isNotEmpty ||
+        servicePath != '/backend-api/ps/mcp' ||
+        owner != 'original_client' ||
+        contract != 'codex_legacy_2025_06_18') {
+      throw ControlContractException('$path client tool route is invalid');
+    }
+    return EnvironmentClientToolRoute(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      targetOrigin: origin,
+      path: servicePath,
+      credentialOwner: owner,
+      egressProfile: EgressChoice.fromJson(
+        value['egressProfile'],
+        '$path.egressProfile',
+      ),
+      contract: contract,
+    );
+  }
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'targetOrigin': targetOrigin.toString(),
+    'path': path,
+    'credentialOwner': credentialOwner,
+    'egressProfile': egressProfile.toJson(),
+    'contract': contract,
+  };
+}
+
+final class EnvironmentClientToolAccess {
+  const EnvironmentClientToolAccess({required this.enabled, this.route});
+  final bool enabled;
+  final EnvironmentClientToolRoute? route;
+  factory EnvironmentClientToolAccess.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'enabled'},
+      optional: const {'route'},
+    );
+    final enabled = requireBoolean(value, 'enabled', path);
+    if (enabled != value.containsKey('route')) {
+      throw ControlContractException('$path client tool permission is invalid');
+    }
+    return EnvironmentClientToolAccess(
+      enabled: enabled,
+      route: enabled
+          ? EnvironmentClientToolRoute.fromJson(value['route'], '$path.route')
+          : null,
+    );
+  }
+  JsonObject toJson() => {
+    'enabled': enabled,
+    if (route != null) 'route': route!.toJson(),
+  };
+}
+
 final class EnvironmentRecord {
   const EnvironmentRecord({
     required this.id,
@@ -5375,6 +5794,7 @@ final class EnvironmentRecord {
     required this.contentRecording,
     required this.launchEnvironment,
     required this.policySet,
+    this.clientToolAccess,
   });
 
   factory EnvironmentRecord.fromJson(
@@ -5400,6 +5820,7 @@ final class EnvironmentRecord {
         'launchEnvironment',
         'policySet',
       },
+      optional: const {'clientToolAccess'},
     );
     final endpoints =
         requireList(value['clientEndpoints'], '$path.clientEndpoints').indexed
@@ -5429,6 +5850,12 @@ final class EnvironmentRecord {
     );
     final id = _requireResourceId(value, 'id', path);
     final systemOwned = requireBoolean(value, 'systemOwned', path);
+    final clientToolAccess = value.containsKey('clientToolAccess')
+        ? EnvironmentClientToolAccess.fromJson(
+            value['clientToolAccess'],
+            '$path.clientToolAccess',
+          )
+        : null;
     final origins = <String>{};
     final planIds = <String>{};
     final routeIds = <String>{};
@@ -5452,6 +5879,7 @@ final class EnvironmentRecord {
         _containsControlCharacter(name) ||
         !const {'active', 'disabled'}.contains(state) ||
         systemOwned != (id == 'system_transparent') ||
+        (systemOwned && clientToolAccess?.enabled == true) ||
         nestedIdentityInvalid ||
         endpoints.map((endpoint) => endpoint.id).toSet().length !=
             endpoints.length ||
@@ -5466,6 +5894,9 @@ final class EnvironmentRecord {
       revision: revision,
       digest: _requireDigest(value, 'digest', path),
       systemOwned: systemOwned,
+      clientToolAccess: clientToolAccess?.enabled == true
+          ? clientToolAccess
+          : null,
       clientEndpoints: List.unmodifiable(endpoints),
       pluginBindings: List.unmodifiable(bindings),
       budgetPolicy: EnvironmentBudgetPolicy.fromJson(
@@ -5499,6 +5930,8 @@ final class EnvironmentRecord {
   final EnvironmentContentRecordingPolicy contentRecording;
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
+  final EnvironmentClientToolAccess? clientToolAccess;
+  bool get clientToolAccessEnabled => clientToolAccess?.enabled == true;
 
   Iterable<EnvironmentRoute> get routes sync* {
     for (final endpoint in clientEndpoints) {
@@ -5517,6 +5950,7 @@ final class EnvironmentRecord {
     EnvironmentContentRecordingPolicy? contentRecording,
     EnvironmentLaunchPolicy? launchEnvironment,
     EnvironmentPolicySet? policySet,
+    EnvironmentClientToolAccess? clientToolAccess,
   }) => EnvironmentRecord(
     id: id,
     name: name ?? this.name,
@@ -5530,6 +5964,7 @@ final class EnvironmentRecord {
     contentRecording: contentRecording ?? this.contentRecording,
     launchEnvironment: launchEnvironment ?? this.launchEnvironment,
     policySet: policySet ?? this.policySet,
+    clientToolAccess: clientToolAccess ?? this.clientToolAccess,
   );
 
   JsonObject toJson() => {
@@ -5549,6 +5984,7 @@ final class EnvironmentRecord {
     'contentRecording': contentRecording.toJson(),
     'launchEnvironment': launchEnvironment.toJson(),
     'policySet': policySet.toJson(),
+    if (clientToolAccessEnabled) 'clientToolAccess': clientToolAccess!.toJson(),
   };
 }
 
@@ -5563,6 +5999,7 @@ final class EnvironmentDraftInput {
     required this.contentRecording,
     required this.launchEnvironment,
     required this.policySet,
+    this.clientToolAccessEnabled = false,
   });
 
   factory EnvironmentDraftInput.fromEnvironment(
@@ -5574,6 +6011,7 @@ final class EnvironmentDraftInput {
     EnvironmentContentRecordingPolicy? contentRecording,
     EnvironmentLaunchPolicy? launchEnvironment,
     EnvironmentPolicySet? policySet,
+    bool? clientToolAccessEnabled,
   }) => EnvironmentDraftInput(
     expectedDraftRevision: expectedDraftRevision,
     name: name ?? environment.name,
@@ -5584,6 +6022,8 @@ final class EnvironmentDraftInput {
     contentRecording: contentRecording ?? environment.contentRecording,
     launchEnvironment: launchEnvironment ?? environment.launchEnvironment,
     policySet: policySet ?? environment.policySet,
+    clientToolAccessEnabled:
+        clientToolAccessEnabled ?? environment.clientToolAccessEnabled,
   );
 
   final int expectedDraftRevision;
@@ -5595,6 +6035,7 @@ final class EnvironmentDraftInput {
   final EnvironmentContentRecordingPolicy contentRecording;
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
+  final bool clientToolAccessEnabled;
 
   EnvironmentDraftInput copyWith({
     int? expectedDraftRevision,
@@ -5609,6 +6050,7 @@ final class EnvironmentDraftInput {
     contentRecording: contentRecording,
     launchEnvironment: launchEnvironment,
     policySet: policySet,
+    clientToolAccessEnabled: clientToolAccessEnabled,
   );
 
   void validateFor(String environmentId, int expectedBaseRevision) {
@@ -5645,6 +6087,7 @@ final class EnvironmentDraftInput {
 
   JsonObject toJson() => {
     'expectedDraftRevision': expectedDraftRevision,
+    if (clientToolAccessEnabled) 'clientToolAccess': {'enabled': true},
     'name': name,
     'state': state,
     'clientEndpoints': clientEndpoints
@@ -5872,7 +6315,21 @@ final class EnvironmentDryRunDecision {
     _requireDigest(value, 'environmentDigest', path);
     requireInteger(value, 'routeRevision', path);
     requireInteger(value, 'accountRevision', path);
-    requireInteger(value, 'networkExitRevision', path);
+    final networkExitRevision = requireInteger(
+      value,
+      'networkExitRevision',
+      path,
+    );
+    final networkExitId = requireStringValue(value, 'networkExitId', path);
+    final unverified = requireStringList(value, 'unverified', path);
+    final unresolvedExit = unverified.contains('network_exit');
+    if (unresolvedExit
+        ? networkExitId.isNotEmpty || networkExitRevision != 0
+        : networkExitId.isEmpty || networkExitRevision < 1) {
+      throw const ControlContractException(
+        'Dry run network exit is inconsistent',
+      );
+    }
     requireString(value, 'providerMethod', path);
     requireString(value, 'providerPath', path);
     final kind = requireString(value, 'destinationKind', path);
@@ -5896,7 +6353,7 @@ final class EnvironmentDryRunDecision {
       requestedModel: requireStringValue(value, 'requestedModel', path),
       effectiveModel: requireStringValue(value, 'effectiveModel', path),
       modelMapped: requireBoolean(value, 'modelMapped', path),
-      networkExitId: requireString(value, 'networkExitId', path),
+      networkExitId: networkExitId,
       bodyChanged: requireBoolean(value, 'bodyChanged', path),
       protocolChangedTopLevelFields:
           value['protocolChangedTopLevelFields'] == null
@@ -8239,6 +8696,115 @@ final class RawEvidenceEnvelope {
   final bool revealAvailable;
 }
 
+final class ToolResultMatch {
+  const ToolResultMatch({required this.exchangeId, required this.block});
+  final String exchangeId;
+  final ExchangeContentBlock block;
+}
+
+final class ToolResultPage {
+  const ToolResultPage({required this.items, this.nextCursor});
+  factory ToolResultPage.fromJson(Object? json, String origin, String callId) {
+    final value = requireObject(json, 'toolResults');
+    requireFields(
+      value,
+      'toolResults',
+      required: const {'schema', 'originExchangeId', 'callId', 'items'},
+      optional: const {'nextCursor'},
+    );
+    if (value['schema'] != 'vibermate-tool-results/v1' ||
+        value['originExchangeId'] != origin ||
+        value['callId'] != callId) {
+      throw const ControlContractException(
+        'Tool result lookup scope is inconsistent',
+      );
+    }
+    final items = <ToolResultMatch>[];
+    for (final raw in requireList(value['items'], 'toolResults.items')) {
+      final entry = requireObject(raw, 'toolResult');
+      requireFields(
+        entry,
+        'toolResult',
+        required: const {'exchangeId', 'block'},
+      );
+      final block = ExchangeContentBlock.fromJson(
+        entry['block'],
+        'toolResult.block',
+      );
+      final exchangeId = requireString(entry, 'exchangeId', 'toolResult');
+      final deferredResult =
+          block.kind == 'deferred' && block.deferred?.exchangeId == exchangeId;
+      if ((!deferredResult &&
+              (block.kind != 'tool_result' || block.callId != callId)) ||
+          items.length >= 24) {
+        throw const ControlContractException(
+          'Tool result lookup contains unrelated content',
+        );
+      }
+      items.add(ToolResultMatch(exchangeId: exchangeId, block: block));
+    }
+    final cursor = optionalString(value, 'nextCursor', 'toolResults');
+    if (cursor != null &&
+        (cursor.length > 128 * 1024 ||
+            !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor))) {
+      throw const ControlContractException('Invalid tool result cursor');
+    }
+    return ToolResultPage(items: List.unmodifiable(items), nextCursor: cursor);
+  }
+  final List<ToolResultMatch> items;
+  final String? nextCursor;
+}
+
+final class RetainedImagePreview {
+  const RetainedImagePreview({
+    required this.fingerprint,
+    required this.mimeType,
+    required this.width,
+    required this.height,
+    required this.bytes,
+  });
+  factory RetainedImagePreview.fromJson(Object? json, String fingerprint) {
+    final value = requireObject(json, 'imagePreview');
+    requireFields(
+      value,
+      'imagePreview',
+      required: const {
+        'schema',
+        'fingerprint',
+        'mimeType',
+        'width',
+        'height',
+        'dataBase64',
+      },
+    );
+    final mime = requireString(value, 'mimeType', 'imagePreview');
+    final width = requireInteger(value, 'width', 'imagePreview', minimum: 1);
+    final height = requireInteger(value, 'height', 'imagePreview', minimum: 1);
+    final encoded = requireString(value, 'dataBase64', 'imagePreview');
+    if (value['schema'] != 'vibermate-image-preview/v1' ||
+        value['fingerprint'] != fingerprint ||
+        !const {'image/png', 'image/jpeg'}.contains(mime) ||
+        width > (16 << 20) ~/ height ||
+        encoded.length > 6 << 20) {
+      throw const ControlContractException('Image preview is invalid');
+    }
+    final data = base64Decode(encoded);
+    if (data.isEmpty || data.length > 4 << 20) {
+      throw const ControlContractException('Image preview exceeds its bound');
+    }
+    return RetainedImagePreview(
+      fingerprint: fingerprint,
+      mimeType: mime,
+      width: width,
+      height: height,
+      bytes: data,
+    );
+  }
+  final String fingerprint, mimeType;
+  final int width, height;
+  final Uint8List bytes;
+}
+
 final class RawEvidencePage {
   const RawEvidencePage({
     required this.items,
@@ -8784,6 +9350,7 @@ final class ExchangeContentPaging {
     this.requestNextCursor,
     this.requestEvidenceNextCursor,
     this.responseEvidenceNextCursor,
+    this.inputAnchor,
   });
   factory ExchangeContentPaging.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
@@ -8795,9 +9362,11 @@ final class ExchangeContentPaging {
         'requestNextCursor',
         'requestEvidenceNextCursor',
         'responseEvidenceNextCursor',
+        'inputAnchor',
       },
     );
     return ExchangeContentPaging(
+      inputAnchor: _readingInputAnchor(value, path),
       requestOffset: requireInteger(value, 'requestOffset', path),
       requestNextCursor: _contentPageCursor(value, 'requestNextCursor', path),
       requestEvidenceNextCursor: _contentPageCursor(
@@ -8815,6 +9384,15 @@ final class ExchangeContentPaging {
   final int requestOffset;
   final String? requestNextCursor;
   final String? requestEvidenceNextCursor, responseEvidenceNextCursor;
+  final String? inputAnchor;
+}
+
+String? _readingInputAnchor(JsonObject value, String path) {
+  final anchor = optionalString(value, 'inputAnchor', path);
+  if (anchor != null && !RegExp(r'^[0-9a-f]{64}$').hasMatch(anchor)) {
+    throw ControlContractException('$path input identity is invalid');
+  }
+  return anchor;
 }
 
 const maxCanonicalBlockBytes = 549754896384;
@@ -9562,7 +10140,7 @@ final class ExchangeRequestProjection {
       'same_transcript' => inherited == total,
       _ => false,
     };
-    if (!const {'incremental', 'full'}.contains(view) ||
+    if (!const {'incremental', 'full', 'reading'}.contains(view) ||
         !relationshipValid ||
         full != (inherited > 0)) {
       throw ControlContractException('$path request projection is invalid');
@@ -9789,7 +10367,7 @@ final class ExchangeContentDetail {
     final page = value['page'] == null
         ? null
         : ExchangeContentPaging.fromJson(value['page'], '$path.page');
-    final expectedMessages = projection.view == 'full'
+    final expectedMessages = projection.view != 'incremental'
         ? projection.totalMessageCount
         : projection.totalMessageCount - projection.inheritedMessageCount;
     if (!const {'full', 'metadata_only'}.contains(mode) ||
@@ -10390,6 +10968,7 @@ List<String> _requireApprovalIdentityList(
 
 final class ConnectionRecord {
   const ConnectionRecord({
+    this.inspectionPurpose,
     required this.sequence,
     required this.connectionId,
     required this.sourceLabel,
@@ -10417,11 +10996,26 @@ final class ConnectionRecord {
 
   factory ConnectionRecord.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
+    final inspectionPurpose = optionalString(value, 'inspectionPurpose', path);
+    if (inspectionPurpose != null &&
+        (inspectionPurpose != 'client_tools' ||
+            value['decryption'] != 'mitm' ||
+            value['decision'] != 'allow' ||
+            value.containsKey('clientEndpointId') ||
+            value.containsKey('clientEndpointRevision'))) {
+      throw ControlContractException('$path.inspectionPurpose is invalid');
+    }
+    if (inspectionPurpose != null) {
+      requireString(value, 'environmentId', path);
+      requireString(value, 'environmentName', path);
+      requireInteger(value, 'environmentRevision', path, minimum: 1);
+    }
     final port = requireInteger(value, 'port', path, minimum: 1);
     if (port > 65535) {
       throw ControlContractException('$path.port exceeds 65535');
     }
     return ConnectionRecord(
+      inspectionPurpose: inspectionPurpose,
       sequence: requireInteger(value, 'sequence', path, minimum: 1),
       connectionId: requireString(value, 'connectionId', path),
       sourceLabel: optionalString(value, 'sourceLabel', path),
@@ -10450,6 +11044,7 @@ final class ConnectionRecord {
 
   final int sequence;
   final String connectionId;
+  final String? inspectionPurpose;
   final String? sourceLabel;
   final String sourceConfidence;
   final String? environmentId;
@@ -10760,6 +11355,7 @@ final class ManualCaptureContext {
     required this.defaultTemporarySeconds,
     required this.maxTemporarySeconds,
     required this.root,
+    this.socksAddress,
   });
 
   factory ManualCaptureContext.fromJson(
@@ -10783,7 +11379,7 @@ final class ManualCaptureContext {
         'defaultTemporarySeconds',
         'maxTemporarySeconds',
       },
-      optional: const {'root'},
+      optional: const {'root', 'socksAddress'},
     );
     final confirmationToken = requireString(value, 'confirmationToken', path);
     final proxyAddress = requireString(value, 'proxyAddress', path);
@@ -10816,6 +11412,7 @@ final class ManualCaptureContext {
     return ManualCaptureContext(
       confirmationToken: confirmationToken,
       proxyAddress: proxyAddress,
+      socksAddress: _optionalSocksAddress(value, path),
       environmentId: expectedEnvironmentId,
       environmentRevision: requireInteger(
         value,
@@ -10844,6 +11441,7 @@ final class ManualCaptureContext {
   }
 
   final String confirmationToken;
+  final String? socksAddress;
   final String proxyAddress;
   final String environmentId;
   final int environmentRevision;
@@ -10937,6 +11535,7 @@ final class ManualCaptureGrant {
     required this.protectedAuthorities,
     required this.managedCredentialAuthorities,
     required this.root,
+    this.socksAddress,
   });
 
   factory ManualCaptureGrant.fromJson(
@@ -10959,7 +11558,7 @@ final class ManualCaptureGrant {
         'protectedAuthorities',
         'managedCredentialAuthorities',
       },
-      optional: const {'root'},
+      optional: const {'root', 'socksAddress'},
     );
     final capture = ManualCaptureRecord.fromJson(
       value['capture'],
@@ -10976,6 +11575,7 @@ final class ManualCaptureGrant {
     return ManualCaptureGrant(
       capture: capture,
       proxyAddress: requireString(value, 'proxyAddress', path),
+      socksAddress: _optionalSocksAddress(value, path),
       proxyUsername: requireString(value, 'proxyUsername', path),
       proxyPassword: password,
       environmentId: requireString(value, 'environmentId', path),
@@ -11003,6 +11603,7 @@ final class ManualCaptureGrant {
   }
 
   final ManualCaptureRecord capture;
+  final String? socksAddress;
   final String proxyAddress;
   final String proxyUsername;
   final String proxyPassword;
@@ -11038,6 +11639,98 @@ final class ManualCaptureGrantStateTag {
   final ManualCaptureGrant grant;
   final String stateTag;
 }
+
+String? _optionalSocksAddress(JsonObject value, String path) {
+  if (!value.containsKey('socksAddress')) return null;
+  final address = requireString(value, 'socksAddress', path);
+  SocksProxyAddress.parse(address, path: '$path.socksAddress');
+  return address;
+}
+
+/// A raw host:port destination, not a URL. IPv6 zones belong to the copied host.
+final class SocksProxyAddress {
+  const SocksProxyAddress._(this.host, this.port);
+  final String host;
+  final int port;
+
+  factory SocksProxyAddress.parse(
+    String value, {
+    String path = 'socksAddress',
+  }) {
+    final bracketed = value.startsWith('[');
+    final separator = bracketed ? value.indexOf(']:') : value.indexOf(':');
+    if (separator < 1 ||
+        utf8.encode(value).length > 512 ||
+        value.trim() != value ||
+        value.contains('://')) {
+      throw ControlContractException('$path is invalid');
+    }
+    final host = value.substring(bracketed ? 1 : 0, separator);
+    final portText = value.substring(separator + (bracketed ? 2 : 1));
+    final port = int.tryParse(portText);
+    final zoneStart = host.indexOf('%');
+    final ip = zoneStart < 0 ? host : host.substring(0, zoneStart);
+    final validHost = bracketed
+        ? !host.contains('[') &&
+              !host.contains(']') &&
+              _validIPv6Host(ip) &&
+              (zoneStart < 0 || zoneStart < host.length - 1)
+        : host != '0.0.0.0' && _validSocksDNSHost(host);
+    if (host.trim() != host ||
+        !validHost ||
+        port == null ||
+        port < 1 ||
+        port > 65535 ||
+        value != '${bracketed ? '[$host]' : host}:$port') {
+      throw ControlContractException('$path is invalid');
+    }
+    return SocksProxyAddress._(host, port);
+  }
+}
+
+bool _validIPv6Host(String host) {
+  try {
+    final bytes = Uri.parseIPv6Address(host);
+    final words = [
+      for (var i = 0; i < 16; i += 2) (bytes[i] << 8) | bytes[i + 1],
+    ];
+    if (words.every((word) => word == 0)) return false;
+    if (words.take(5).every((word) => word == 0) && words[5] == 0xffff) {
+      return host == '::ffff:${bytes.skip(12).join('.')}';
+    }
+    var start = -1, length = 1;
+    for (var i = 0; i < words.length; i++) {
+      if (words[i] != 0) continue;
+      var end = i;
+      while (end < words.length && words[end] == 0) {
+        end++;
+      }
+      if (end - i > length) {
+        start = i;
+        length = end - i;
+      }
+      i = end - 1;
+    }
+    final hex = words.map((word) => word.toRadixString(16)).toList();
+    final canonical = start < 0
+        ? hex.join(':')
+        : '${hex.take(start).join(':')}::${hex.skip(start + length).join(':')}';
+    return host == canonical;
+  } on FormatException {
+    return false;
+  }
+}
+
+bool _validSocksDNSHost(String host) =>
+    host.length <= 253 &&
+    host
+        .split('.')
+        .every(
+          (label) =>
+              label.isNotEmpty &&
+              label.length <= 63 &&
+              RegExp(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$').hasMatch(label),
+        );
 
 bool _validManualProxyAddress(String value) {
   final parsed = Uri.tryParse(value);

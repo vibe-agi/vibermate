@@ -149,7 +149,7 @@ func buildEnvironment(
 			grant.ProxyDelivery != capturecontrol.ProxyDeliveryLocalListener {
 			preserved["CODEX_CA_CERTIFICATE"] = grant.RootPEMPath
 		}
-		if managedClientCredential {
+		if managedClientCredential && grant.NativeToolLogin == nil {
 			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
 		}
 	default:

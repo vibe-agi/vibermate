@@ -105,7 +105,12 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
               if (compact) {
                 return Column(
                   children: [
-                    SizedBox(height: 116, child: directory),
+                    SizedBox(
+                      height:
+                          36 +
+                          80 * MediaQuery.textScalerOf(context).scale(13) / 13,
+                      child: directory,
+                    ),
                     const Divider(height: 1),
                     Expanded(child: detail),
                   ],
@@ -217,7 +222,15 @@ final class _EnvironmentDirectory extends StatelessWidget {
                 onTap: () => onSelected(environment.id),
                 child: Container(
                   width: horizontal ? 188 : null,
-                  height: horizontal ? null : 55,
+                  constraints: horizontal
+                      ? null
+                      : BoxConstraints(
+                          minHeight:
+                              16 +
+                              39 *
+                                  MediaQuery.textScalerOf(context).scale(13) /
+                                  13,
+                        ),
                   margin: horizontal
                       ? const EdgeInsets.only(right: 7)
                       : EdgeInsets.zero,
@@ -239,6 +252,9 @@ final class _EnvironmentDirectory extends StatelessWidget {
                     ),
                   ),
                   child: Column(
+                    mainAxisSize: horizontal
+                        ? MainAxisSize.max
+                        : MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -645,9 +661,11 @@ final class _ClientEndpointPlan extends StatelessWidget {
                     ],
                   ),
                 ),
-                Text(
-                  copy('environment.client_target'),
-                  style: Theme.of(context).textTheme.labelMedium,
+                Flexible(
+                  child: Text(
+                    copy('environment.client_target'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
                 ),
               ],
             ),
@@ -1285,6 +1303,61 @@ final class _RouteAccountActivationRow extends StatelessWidget {
     final identity = account.note.isNotEmpty
         ? account.note
         : account.codexOAuth?.email ?? account.tokenInfo?.email;
+    final scaler = MediaQuery.textScalerOf(context);
+    final stackAction = scaler.scale(12) > 18;
+    final actionStyle =
+        Theme.of(
+          context,
+        ).outlinedButtonTheme.style?.textStyle?.resolve(const {}) ??
+        Theme.of(context).textTheme.labelLarge;
+    var actionWidth = 96.0;
+    var actionHeight = ViberMetrics.controlHeight;
+    for (final key in [
+      'environment.account.active',
+      'environment.account.activate',
+    ]) {
+      final painter = TextPainter(
+        text: TextSpan(text: copy(key), style: actionStyle),
+        textDirection: Directionality.of(context),
+        textScaler: scaler,
+      )..layout();
+      actionWidth = math.max(actionWidth, painter.width + 36);
+      actionHeight = math.max(actionHeight, painter.height + 12);
+      painter.dispose();
+    }
+    final action = Semantics(
+      selected: active,
+      child: SizedBox(
+        width: actionWidth,
+        height: actionHeight,
+        child: OutlinedButton.icon(
+          key: Key('environment-account-activate-${account.id}'),
+          onPressed: enabled && !active ? onActivate : null,
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            disabledForegroundColor: active
+                ? context.viberColors.verified
+                : null,
+            side: active
+                ? BorderSide(
+                    color: context.viberColors.verified.withValues(alpha: .5),
+                  )
+                : null,
+          ),
+          icon: Icon(
+            active ? Icons.check : Icons.radio_button_unchecked,
+            size: 14,
+          ),
+          label: Text(
+            copy(
+              active
+                  ? 'environment.account.active'
+                  : 'environment.account.activate',
+            ),
+          ),
+        ),
+      ),
+    );
     return Container(
       key: Key('environment-account-option-${account.id}'),
       padding: const EdgeInsets.fromLTRB(7, 6, 6, 6),
@@ -1322,45 +1395,18 @@ final class _RouteAccountActivationRow extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ?quota,
+                if (stackAction)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: action,
+                    ),
+                  ),
               ],
             ),
           ),
-          const SizedBox(width: 6),
-          Semantics(
-            selected: active,
-            child: SizedBox(
-              width: 96,
-              height: ViberMetrics.controlHeight,
-              child: OutlinedButton.icon(
-                key: Key('environment-account-activate-${account.id}'),
-                onPressed: enabled && !active ? onActivate : null,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  disabledForegroundColor: active
-                      ? context.viberColors.verified
-                      : null,
-                  side: active
-                      ? BorderSide(
-                          color: context.viberColors.verified.withValues(
-                            alpha: .5,
-                          ),
-                        )
-                      : null,
-                ),
-                icon: Icon(
-                  active ? Icons.check : Icons.radio_button_unchecked,
-                  size: 14,
-                ),
-                label: Text(
-                  copy(
-                    active
-                        ? 'environment.account.active'
-                        : 'environment.account.activate',
-                  ),
-                ),
-              ),
-            ),
-          ),
+          if (!stackAction) ...[const SizedBox(width: 6), action],
         ],
       ),
     );
@@ -1474,6 +1520,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
   List<EnvironmentClientEndpoint> _clientEndpoints = const [];
   String _recordingMode = 'full';
   String _toolMode = 'observe';
+  bool _clientToolAccessEnabled = false;
   EnvironmentLaunchPolicy _launchEnvironment =
       const EnvironmentLaunchPolicy.empty();
   String? _draftEnvironmentId;
@@ -1919,6 +1966,21 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                     ],
                                   ),
                                   const SizedBox(height: 8),
+                                  ClientToolPermissionControl(
+                                    controlKey: const Key(
+                                      'environment-create-client-tool-access',
+                                    ),
+                                    copy: copy,
+                                    enabled: _clientToolAccessEnabled,
+                                    onChanged:
+                                        widget.controller.environmentMutating
+                                        ? null
+                                        : (value) => setState(
+                                            () => _clientToolAccessEnabled =
+                                                value,
+                                          ),
+                                  ),
+                                  const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
                                     policy: _launchEnvironment,
                                     loadSnapshots: widget
@@ -2032,6 +2094,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
         ),
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
+        clientToolAccessEnabled: _clientToolAccessEnabled,
       ),
     );
     if (!mounted) return;
@@ -2084,6 +2147,7 @@ final class _EnvironmentEditorDialogState
   late String _state;
   late String _recordingMode;
   late String _toolMode;
+  late bool _clientToolAccessEnabled;
   late EnvironmentLaunchPolicy _launchEnvironment;
   late List<EnvironmentClientEndpoint> _clientEndpoints;
   bool _submitted = false;
@@ -2101,6 +2165,7 @@ final class _EnvironmentEditorDialogState
           '${environment.contentRecording.retentionDays == 0 ? 30 : environment.contentRecording.retentionDays}',
     );
     _toolMode = environment.policySet.toolMode;
+    _clientToolAccessEnabled = environment.clientToolAccessEnabled;
     _launchEnvironment = environment.launchEnvironment;
     _clientEndpoints = environment.clientEndpoints;
   }
@@ -2351,6 +2416,21 @@ final class _EnvironmentEditorDialogState
                                           ),
                                         ),
                                     ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ClientToolPermissionControl(
+                                    controlKey: const Key(
+                                      'environment-editor-client-tool-access',
+                                    ),
+                                    copy: copy,
+                                    enabled: _clientToolAccessEnabled,
+                                    onChanged:
+                                        widget.controller.environmentMutating
+                                        ? null
+                                        : (value) => setState(
+                                            () => _clientToolAccessEnabled =
+                                                value,
+                                          ),
                                   ),
                                   const SizedBox(height: 8),
                                   LaunchEnvironmentEditorButton(
@@ -2660,6 +2740,7 @@ final class _EnvironmentEditorDialogState
         ),
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
+        clientToolAccessEnabled: _clientToolAccessEnabled,
       ),
       baseEnvironment: widget.environment,
     );
@@ -2676,6 +2757,79 @@ final class _EnvironmentEditorDialogState
     widget.controller.clearEnvironmentReview();
     Navigator.pop(context);
   }
+}
+
+final class ClientToolPermissionControl extends StatelessWidget {
+  const ClientToolPermissionControl({
+    super.key,
+    required this.controlKey,
+    required this.copy,
+    required this.enabled,
+    required this.onChanged,
+  });
+  final Key controlKey;
+  final AppCopy copy;
+  final bool enabled;
+  final ValueChanged<bool>? onChanged;
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Icon(Icons.build_outlined, size: 16),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(copy('environment.client_tools.label')),
+            const SizedBox(height: 4),
+            Text(
+              copy('environment.client_tools.detail'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      Switch(
+        key: controlKey,
+        value: enabled,
+        onChanged: onChanged == null
+            ? null
+            : (value) async {
+                if (!value) {
+                  onChanged!(false);
+                  return;
+                }
+                final allowed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text(copy('environment.client_tools.label')),
+                    content: SizedBox(
+                      width: ViberMetrics.dialogStandardWidth,
+                      child: Text(copy('environment.client_tools.consent')),
+                    ),
+                    actions: [
+                      TextButton(
+                        key: const Key('client-tool-consent-cancel'),
+                        onPressed: () => Navigator.pop(context, false),
+                        child: Text(copy('common.cancel')),
+                      ),
+                      FilledButton(
+                        key: const Key('client-tool-consent-allow'),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: Text(copy('environment.client_tools.allow')),
+                      ),
+                    ],
+                  ),
+                );
+                if (allowed == true && context.mounted) onChanged!(true);
+              },
+      ),
+    ],
+  );
 }
 
 final class _EditorSectionLabel extends StatelessWidget {
@@ -2841,7 +2995,7 @@ typedef _RouteModelChanged =
     );
 
 typedef _ProtocolEgressChanged =
-    void Function(EnvironmentProtocolPlan plan, EgressProfileRevision profile);
+    void Function(EnvironmentProtocolPlan plan, EgressChoice profile);
 
 typedef _ProtocolTransformChanged =
     void Function(
@@ -3574,10 +3728,12 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   EgressProfileButton(
+                    selectionScope: controller,
                     plan: plan,
                     copy: copy,
                     enabled: enabled,
                     loadProfiles: controller.egressProfiles,
+                    loadDefault: controller.egressDefault,
                     onChanged: (profile) => onEgressChanged(plan, profile),
                   ),
                   MessageTransformPipelineButton(
@@ -4872,6 +5028,15 @@ final class _EnvironmentImpactReview extends StatelessWidget {
             '${copy('environment.recording.mode')}: ${copy('environment.recording.${candidate.contentRecording.mode}')}'
             '${candidate.contentRecording.mode == 'off' ? '' : ' · ${candidate.contentRecording.retentionDays} ${copy('environment.recording.days')}'}'
             '  ·  ${copy('environment.policy.tool_mode')}: ${copy('environment.policy.${candidate.policySet.toolMode}')}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            copy(
+              candidate.clientToolAccessEnabled
+                  ? 'environment.client_tools.on'
+                  : 'environment.client_tools.off',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 9),

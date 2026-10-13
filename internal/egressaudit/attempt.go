@@ -9,10 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 // RecoveryErrorClass marks an attempt whose process disappeared before it
@@ -37,11 +45,13 @@ const (
 	PurposeOriginalOrigin         EgressPurpose = "original_origin"
 	PurposeAgentProbe             EgressPurpose = "agent_probe"
 	PurposeBlindTunnel            EgressPurpose = "blind_tunnel"
+	PurposeDatagram               EgressPurpose = "datagram"
 	PurposeAuxiliaryLLM           EgressPurpose = "auxiliary_llm"
 	PurposeLanguageTransform      EgressPurpose = "language_transform"
 	PurposePluginCatalogSync      EgressPurpose = "plugin_catalog_sync"
 	PurposePluginArtifactFetch    EgressPurpose = "plugin_artifact_fetch"
 	PurposeUpdate                 EgressPurpose = "update"
+	PurposeClientToolService      EgressPurpose = "client_tool_service"
 )
 
 // Purposes returns the complete set of supported logical egress purposes.
@@ -59,11 +69,13 @@ func Purposes() []EgressPurpose {
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
 		PurposeBlindTunnel,
+		PurposeDatagram,
 		PurposeAuxiliaryLLM,
 		PurposeLanguageTransform,
 		PurposePluginCatalogSync,
 		PurposePluginArtifactFetch,
 		PurposeUpdate,
+		PurposeClientToolService,
 	}
 }
 
@@ -83,9 +95,9 @@ func AuthorityForPurpose(
 	purpose EgressPurpose,
 ) (PolicyAuthorityKind, error) {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeRouteOperation:
+	case PurposeProviderAttempt, PurposeRouteOperation, PurposeClientToolService:
 		return AuthorityEnvironment, nil
-	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
+	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel, PurposeDatagram:
 		return AuthorityNetwork, nil
 	case PurposeUpstreamModelDiscovery, PurposeUpstreamAccountRead, PurposeUpstreamAccountAction, PurposeModelMetadataDirectory,
 		PurposeCredentialRefresh,
@@ -109,6 +121,7 @@ const (
 	PayloadClientData     PayloadClass = "client_data"
 	PayloadClientSemantic PayloadClass = "client_semantic"
 	PayloadOpaqueTunnel   PayloadClass = "opaque_tunnel"
+	PayloadOpaqueDatagram PayloadClass = "opaque_datagram"
 	PayloadRuntime        PayloadClass = "runtime"
 )
 
@@ -119,6 +132,7 @@ func (class PayloadClass) valid() bool {
 		PayloadClientData,
 		PayloadClientSemantic,
 		PayloadOpaqueTunnel,
+		PayloadOpaqueDatagram,
 		PayloadRuntime:
 		return true
 	default:
@@ -133,11 +147,12 @@ func (class PayloadClass) carriesClientPayload() bool {
 type ParentKind string
 
 const (
-	ParentUpstreamAttempt ParentKind = "upstream_attempt"
-	ParentClientOperation ParentKind = "client_operation"
-	ParentOriginalRequest ParentKind = "original_request"
-	ParentBlindConnection ParentKind = "blind_connection"
-	ParentRuntimeAction   ParentKind = "runtime_action"
+	ParentUpstreamAttempt    ParentKind = "upstream_attempt"
+	ParentClientOperation    ParentKind = "client_operation"
+	ParentOriginalRequest    ParentKind = "original_request"
+	ParentBlindConnection    ParentKind = "blind_connection"
+	ParentDatagramConnection ParentKind = "datagram_connection"
+	ParentRuntimeAction      ParentKind = "runtime_action"
 )
 
 type CallerKind string
@@ -176,6 +191,8 @@ type ParentRef struct {
 // DecisionRef records which policy produced the route, without the candidate
 // set or any credential.
 type DecisionRef struct {
+	SelectionSource         egressprofile.SelectionSource
+	DefaultRevision         uint64
 	PolicyID                string
 	PolicyRevision          uint64
 	Authority               PolicyAuthorityKind
@@ -201,11 +218,12 @@ type NewInput struct {
 }
 
 type TerminalInput struct {
-	Outcome     Outcome
-	ErrorClass  string
-	BytesOut    int64
-	BytesIn     int64
-	CompletedAt time.Time
+	UnobservedByteCounts bool
+	Outcome              Outcome
+	ErrorClass           string
+	BytesOut             int64
+	BytesIn              int64
+	CompletedAt          time.Time
 }
 
 // Attempt is immutable. Finish returns a new terminal value rather than
@@ -223,15 +241,25 @@ type Attempt struct {
 	reusedTransport bool
 	startedAt       time.Time
 
-	terminal    bool
-	outcome     Outcome
-	errorClass  string
-	bytesOut    int64
-	bytesIn     int64
-	completedAt time.Time
+	terminal        bool
+	outcome         Outcome
+	errorClass      string
+	bytesOut        int64
+	bytesIn         int64
+	completedAt     time.Time
+	byteCountsKnown bool
 }
 
 func New(input NewInput) (Attempt, error) {
+	if input.Purpose == PurposeDatagram && (input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0) {
+		return Attempt{}, errors.New("opaque datagram cannot carry a model account")
+	}
+	if input.Purpose == PurposeDatagram && (input.Caller != CallerCore || input.CallerID != "") {
+		return Attempt{}, errors.New("datagram audit requires core capture authority")
+	}
+	if input.Purpose == PurposeClientToolService && (input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0) {
+		return Attempt{}, errors.New("native tool egress cannot carry a model account")
+	}
 	if err := validateIdentity("EgressAttempt ID", input.ID); err != nil {
 		return Attempt{}, err
 	}
@@ -277,7 +305,17 @@ func New(input NewInput) (Attempt, error) {
 	if err := validateDecision(input.Decision); err != nil {
 		return Attempt{}, err
 	}
-	if input.TargetOrigin == "" ||
+	if input.Decision.SelectionSource == egressprofile.SelectionTransport {
+		origin, err := originidentity.ParseProviderOrigin(input.TargetOrigin)
+		if err != nil || (origin.Transport() != originidentity.ProviderTransportLoopbackCleartext && origin.Transport() != originidentity.ProviderTransportPrivateCleartext) {
+			return Attempt{}, errors.New("transport selection requires a direct-only provider origin")
+		}
+	}
+	if input.Purpose == PurposeDatagram {
+		if !validDatagramOrigin(input.TargetOrigin) {
+			return Attempt{}, errors.New("datagram target origin is invalid")
+		}
+	} else if input.TargetOrigin == "" ||
 		!strings.HasPrefix(input.TargetOrigin, "https://") &&
 			!strings.HasPrefix(input.TargetOrigin, "http://") {
 		return Attempt{}, errors.New("egress target origin is invalid")
@@ -297,7 +335,25 @@ func New(input NewInput) (Attempt, error) {
 		decision:        input.Decision,
 		reusedTransport: input.ReusedTransport,
 		startedAt:       input.StartedAt.UTC(),
+		byteCountsKnown: true,
 	}, nil
+}
+
+func validDatagramOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "udp" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return false
+	}
+	canonical, err := egressnetwork.CanonicalHost(host)
+	if err != nil {
+		return false
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && p != 0 && raw == "udp://"+net.JoinHostPort(canonical, strconv.Itoa(int(p)))
 }
 
 // Finish returns the terminal value for this attempt. A terminal attempt
@@ -330,8 +386,33 @@ func (attempt Attempt) Finish(input TerminalInput) (Attempt, error) {
 	attempt.bytesOut = input.BytesOut
 	attempt.bytesIn = input.BytesIn
 	attempt.completedAt = input.CompletedAt.UTC()
+	attempt.byteCountsKnown = !input.UnobservedByteCounts
 	return attempt, nil
 }
+
+// NewClientToolAttempt proves the exact frozen non-model route. The ordinary
+// constructor remains the stored-row decoder, not native routing authority.
+func NewClientToolAttempt(plan environment.ClientToolPlan, input NewInput) (Attempt, error) {
+	if err := plan.Validate(); err != nil {
+		return Attempt{}, err
+	}
+	route := plan.Route()
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		return Attempt{}, err
+	}
+	profile := resolved.Profile()
+	if input.Purpose != PurposeClientToolService || input.TargetOrigin != route.TargetOrigin.String() ||
+		input.Decision.PolicyID != plan.EnvironmentID().String() || input.Decision.PolicyRevision != uint64(plan.EnvironmentRevision()) ||
+		input.Decision.RuleID != route.ID.String() || input.Decision.ProxyID != profile.ID.String() ||
+		input.Decision.ProxyRevision != uint64(profile.Revision) || input.Decision.SelectionSource != resolved.Source() ||
+		input.Decision.DefaultRevision != resolved.DefaultRevision() || input.Decision.AccountID != "" || input.Decision.AccountSettingsRevision != 0 {
+		return Attempt{}, errors.New("native tool egress differs from frozen route")
+	}
+	return New(input)
+}
+
+func (attempt Attempt) ByteCountsKnown() bool { return attempt.byteCountsKnown }
 
 func (attempt Attempt) ID() string                 { return attempt.id }
 func (attempt Attempt) ConnectionID() string       { return attempt.connectionID }
@@ -359,6 +440,14 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
+	case PurposeDatagram:
+		if class != PayloadOpaqueDatagram {
+			return errors.New("datagram requires opaque packet payload class")
+		}
+	case PurposeClientToolService:
+		if class != PayloadClientData && class != PayloadNone {
+			return errors.New("native tool payload must be client data or none")
+		}
 	case PurposeProviderAttempt, PurposeRouteOperation:
 		return nil
 	case PurposeOriginalOrigin, PurposeAgentProbe:
@@ -419,6 +508,11 @@ func validateParent(
 		return nil
 	}
 	switch purpose {
+	case PurposeDatagram:
+		if parent.Kind != ParentDatagramConnection || parent.ExchangeID != "" {
+			return errors.New("datagram requires a datagram connection parent")
+		}
+		return requireConnection()
 	case PurposeProviderAttempt:
 		if parent.Kind != ParentUpstreamAttempt {
 			return errors.New("provider attempt requires an UpstreamAttempt parent")
@@ -436,7 +530,7 @@ func validateParent(
 			return nil
 		}
 		return requireConnection()
-	case PurposeRouteOperation:
+	case PurposeRouteOperation, PurposeClientToolService:
 		if parent.Kind != ParentClientOperation || parent.ExchangeID != "" {
 			return errors.New(
 				"route operation requires a client-operation parent with no Exchange",
@@ -481,7 +575,7 @@ func validateCaller(
 	callerID string,
 ) error {
 	if (purpose == PurposePluginCatalogSync ||
-		purpose == PurposePluginArtifactFetch) &&
+		purpose == PurposePluginArtifactFetch || purpose == PurposeClientToolService) &&
 		caller != CallerCore {
 		return errors.New("plugin distribution egress must be created by core")
 	}
@@ -499,6 +593,27 @@ func validateCaller(
 }
 
 func validateDecision(decision DecisionRef) error {
+	if decision.DefaultRevision > math.MaxInt64 {
+		return errors.New("egress default revision is invalid")
+	}
+	switch decision.SelectionSource {
+	case "", egressprofile.SelectionAccount, egressprofile.SelectionFlow, egressprofile.SelectionTransport:
+		if decision.DefaultRevision != 0 {
+			return errors.New("explicit or legacy egress cannot claim a default revision")
+		}
+	case egressprofile.SelectionGlobal, egressprofile.SelectionBuiltin:
+		if decision.DefaultRevision == 0 {
+			return errors.New("inherited egress default revision is required")
+		}
+	default:
+		return errors.New("egress selection source is invalid")
+	}
+	if decision.SelectionSource != "" && decision.ProxyRevision == 0 {
+		return errors.New("effective egress profile revision is required")
+	}
+	if (decision.SelectionSource == egressprofile.SelectionBuiltin || decision.SelectionSource == egressprofile.SelectionTransport) && (decision.ProxyID != egressprofile.DirectID.String() || decision.ProxyRevision != 1) {
+		return errors.New("builtin egress must be exact direct")
+	}
 	if err := validateIdentity(
 		"egress policy ID",
 		decision.PolicyID,
@@ -581,6 +696,8 @@ func PurposeForEgressKind(kind string) (EgressPurpose, error) {
 		return PurposeAgentProbe, nil
 	case "blind_tunnel":
 		return PurposeBlindTunnel, nil
+	case "datagram":
+		return PurposeDatagram, nil
 	case "update":
 		return PurposeUpdate, nil
 	default:

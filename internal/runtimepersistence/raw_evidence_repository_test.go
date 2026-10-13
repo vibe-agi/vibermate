@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,117 @@ func TestRawEvidenceRepositoryCommitsOneBatchAndKeepsCredentialsOutOfEveryColumn
 	}
 	if !bytes.Contains(databaseBytes, []byte("Authorization")) {
 		t.Fatal("database lost the evidence that a credential field was redacted")
+	}
+}
+
+func TestRawEvidenceManagerDurableFencesPreserveSQLiteReadsAndTerminalDeletion(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := store.database.ExecContext(ctx, `
+		INSERT INTO capture_runs(
+		  run_id, proxy_capability_hash, control_capability_hash, cwd,
+		  canonical_executable_path, executable_label,
+		  client_catalog_revision, state, created_at_unix_ms,
+		  expires_at_unix_ms, updated_at_unix_ms
+		) VALUES('capture-writer-fences', randomblob(32), randomblob(32),
+		  '/tmp', '/bin/echo', 'Synthetic client', 1, 'finished', 1, 2, 2)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := rawevidence.Open(ctx, rawevidence.Options{
+		Repository: store.RawEvidenceRepository(),
+		Random:     bytes.NewReader(bytes.Repeat([]byte{0x73}, 64)),
+		Clock:      rawevidence.SystemClock{},
+		Config: rawevidence.Config{
+			MaximumQueueRecords: 8, MaximumQueueBytes: 1 << 20,
+			MaximumBatchRecords: 8, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := manager.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	observation := rawevidence.Observation{
+		Context: rawevidence.Context{
+			ScopeKind: rawevidence.ScopeManagedRun, ScopeID: "capture-writer-fences",
+			ExchangeID: "exchange-writer-fences", ConnectionID: "connection-writer-fences",
+			EnvironmentID: "environment-writer-fences", EnvironmentRevision: 1,
+			ClientEndpointID: "endpoint-writer-fences", ClientEndpointRevision: 1,
+			ProtocolPlanID: "protocol-writer-fences", ProtocolPlanRevision: 1,
+			RouteID: "route-writer-fences", RouteRevision: 1,
+			Recording: rawevidence.RecordingFull, RetentionDays: 30,
+		},
+		Layer: rawevidence.LayerClientIngress, Method: "POST", Scheme: "https",
+		Authority: "api.example.test", Path: "/v1/messages", Complete: true,
+		Representation: "http_message", Body: []byte("synthetic request"),
+	}
+	lease, err := manager.BeginScope(ctx, observation.ScopeKind, observation.ScopeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if _, err := manager.Observe(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := manager.ListExchange(ctx, observation.ExchangeID)
+	if err != nil || len(metadata) != 1 {
+		t.Fatalf("first SQLite read=%+v err=%v", metadata, err)
+	}
+	commits := manager.Statistics().BatchCommits
+	if _, err := manager.ListExchange(ctx, observation.ExchangeID); err != nil {
+		t.Fatal(err)
+	}
+	if manager.Statistics().BatchCommits != commits {
+		t.Fatal("durable SQLite read triggered another batch commit")
+	}
+	observation.Layer = rawevidence.LayerClientDownstream
+	observation.Body = []byte("synthetic response")
+	if _, err := manager.Observe(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	terminal, err := manager.PrepareTerminalScope(ctx, observation.ScopeKind, observation.ScopeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal.Commit()
+	metadata, err = manager.ListExchange(ctx, observation.ExchangeID)
+	if err != nil || len(metadata) != 2 {
+		t.Fatalf("terminal SQLite read=%+v err=%v", metadata, err)
+	}
+	records, err := store.RawEvidenceRepository().ListExchange(ctx, observation.ExchangeID)
+	if err != nil || len(records) != 2 {
+		t.Fatalf("durable SQLite envelopes=%d err=%v", len(records), err)
+	}
+	for index, wantBody := range []string{"synthetic request", "synthetic response"} {
+		payload, err := manager.ReadPayload(records[index])
+		if err != nil || string(payload.Body) != wantBody {
+			t.Fatalf("SQLite payload %d=%q err=%v", index, payload.Body, err)
+		}
+	}
+	beforeLate := manager.Statistics().AdmittedRecords
+	if lateLease, err := manager.BeginScope(ctx, observation.ScopeKind, observation.ScopeID); !errors.Is(err, rawevidence.ErrScopeTerminal) {
+		if lateLease != nil {
+			lateLease.Release()
+		}
+		t.Fatalf("late SQLite request admission=%v", err)
+	}
+	if manager.Statistics().AdmittedRecords != beforeLate {
+		t.Fatal("denied late request created a watermark")
+	}
+	deletion, err := store.DeleteCapture(ctx, string(observation.ScopeKind), observation.ScopeID)
+	if err != nil || deletion.Envelopes != 2 || deletion.Captures != 1 {
+		t.Fatalf("terminal deletion=%+v err=%v", deletion, err)
+	}
+	metadata, err = manager.ListExchange(ctx, observation.ExchangeID)
+	if err != nil || len(metadata) != 0 {
+		t.Fatalf("deleted SQLite read=%+v err=%v", metadata, err)
 	}
 }
 

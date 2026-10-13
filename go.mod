@@ -14,6 +14,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.57.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0

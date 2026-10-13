@@ -34,14 +34,19 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -183,11 +188,15 @@ type Options struct {
 	// person, so it denies rather than degrading into an allow.
 	Approvals             NetworkApprovals
 	BlindTunnels          BlindTunnelDialer
+	EgressDefaults        egressprofile.Resolver
 	EgressAudit           egressaudit.Writer
 	RawEvidence           rawevidence.RequestRecorder
 	RawObservationTimeout time.Duration
 	RawResponseBodyBytes  int
 	ExchangeIDs           ExchangeIDSource
+	NativeTools           nativemcp.Executor
+	NativeOperationIDs    nativemcp.IDSource
+	TargetObserver        TargetObserver
 	HandshakeTimeout      time.Duration
 }
 
@@ -207,26 +216,30 @@ type operation struct {
 }
 
 type Handler struct {
-	bodyAdmission *exchange.BodyAdmission
-	admissions    captureadmission.Authorizer
-	assignments   CaptureAssignmentAuthority
-	exchanges     exchange.Executor
-	original      OriginalClient
-	accountReads  CapturedAccountReader
-	certificates  CertificateAuthority
-	connections   ConnectionJournal
-	policy        connectionpolicy.Source
-	approvals     NetworkApprovals
-	blindTunnels  BlindTunnelDialer
-	egressAudit   egressaudit.Writer
-	rawEvidence   rawevidence.RequestRecorder
-	rawTimeout    time.Duration
-	rawBodyBytes  int
-	exchangeIDs   ExchangeIDSource
-	handshake     time.Duration
-	clock         func() time.Time
-	auditTimeout  time.Duration
-	ownerContext  context.Context
+	admissions     captureadmission.Authorizer
+	assignments    CaptureAssignmentAuthority
+	exchanges      exchange.Executor
+	original       OriginalClient
+	accountReads   CapturedAccountReader
+	certificates   CertificateAuthority
+	connections    ConnectionJournal
+	policy         connectionpolicy.Source
+	approvals      NetworkApprovals
+	blindTunnels   BlindTunnelDialer
+	egressDefaults egressprofile.Resolver
+	egressAudit    egressaudit.Writer
+	rawEvidence    rawevidence.RequestRecorder
+	rawTimeout     time.Duration
+	rawBodyBytes   int
+	exchangeIDs    ExchangeIDSource
+	nativeTools    nativemcp.Executor
+	nativeIDs      nativemcp.IDSource
+	targetObserver TargetObserver
+	handshake      time.Duration
+	clock          func() time.Time
+	auditTimeout   time.Duration
+	ownerContext   context.Context
+	bodyAdmission  *exchange.BodyAdmission
 
 	mu        sync.Mutex
 	accepting bool
@@ -251,6 +264,9 @@ func New(options Options) (*Handler, error) {
 		options.ExchangeIDs == nil {
 		return nil, errors.New("loopback proxy dependencies are incomplete")
 	}
+	if options.BlindTunnels != nil && options.EgressDefaults == nil {
+		return nil, errors.New("blind tunnel forwarding requires egress defaults")
+	}
 	if options.HandshakeTimeout == 0 {
 		options.HandshakeTimeout = defaultHandshakeLimit
 	}
@@ -272,29 +288,33 @@ func New(options Options) (*Handler, error) {
 		}
 	}
 	handler := &Handler{
-		bodyAdmission: options.BodyAdmission,
-		admissions:    options.Admissions,
-		assignments:   options.Assignments,
-		exchanges:     options.Exchanges,
-		original:      options.Original,
-		accountReads:  options.AccountReads,
-		certificates:  options.Certificates,
-		connections:   options.Connections,
-		policy:        options.Policy,
-		approvals:     options.Approvals,
-		blindTunnels:  options.BlindTunnels,
-		egressAudit:   options.EgressAudit,
-		rawEvidence:   options.RawEvidence,
-		rawTimeout:    rawTimeout,
-		rawBodyBytes:  rawBodyBytes,
-		exchangeIDs:   options.ExchangeIDs,
-		handshake:     options.HandshakeTimeout,
-		clock:         time.Now,
-		auditTimeout:  defaultAuditCompletionLimit,
-		ownerContext:  options.OwnerContext,
-		accepting:     true,
-		active:        make(map[*operation]struct{}),
-		changed:       make(chan struct{}),
+		bodyAdmission:  options.BodyAdmission,
+		admissions:     options.Admissions,
+		assignments:    options.Assignments,
+		exchanges:      options.Exchanges,
+		original:       options.Original,
+		accountReads:   options.AccountReads,
+		certificates:   options.Certificates,
+		connections:    options.Connections,
+		policy:         options.Policy,
+		approvals:      options.Approvals,
+		blindTunnels:   options.BlindTunnels,
+		egressDefaults: options.EgressDefaults,
+		egressAudit:    options.EgressAudit,
+		rawEvidence:    options.RawEvidence,
+		rawTimeout:     rawTimeout,
+		rawBodyBytes:   rawBodyBytes,
+		exchangeIDs:    options.ExchangeIDs,
+		nativeTools:    options.NativeTools,
+		nativeIDs:      options.NativeOperationIDs,
+		targetObserver: options.TargetObserver,
+		handshake:      options.HandshakeTimeout,
+		clock:          time.Now,
+		auditTimeout:   defaultAuditCompletionLimit,
+		ownerContext:   options.OwnerContext,
+		accepting:      true,
+		active:         make(map[*operation]struct{}),
+		changed:        make(chan struct{}),
 	}
 	handler.stopOwner = context.AfterFunc(options.OwnerContext, handler.BeginShutdown)
 	return handler, nil
@@ -328,6 +348,11 @@ func (handler *Handler) ServeHTTP(
 		requestedHost = splitHost
 		if parsedPort, parseErr := strconv.ParseUint(splitPort, 10, 16); parseErr == nil {
 			port = uint16(parsedPort)
+		}
+	}
+	if request.Method != http.MethodConnect && request.URL != nil && request.URL.IsAbs() && request.URL.Scheme == "http" {
+		if targetHost, targetPort, err := cleartextAuthority(request.URL.Host); err == nil {
+			requestedHost, port = targetHost, targetPort
 		}
 	}
 	// The journal opens before the method check so a rejection is recorded
@@ -623,7 +648,7 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
-	if !exists || endpoint.ID() != binding.ClientEndpointID {
+	if binding.Mode != environment.ConnectionModeClientTools && (!exists || endpoint.ID() != binding.ClientEndpointID) {
 		if handler.denyConnection(request.Context(), audit, source, ReasonEnvironmentChanged) == nil {
 			terminal = true
 			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
@@ -632,9 +657,14 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
+	purpose := connectionevent.InspectionPurpose("")
+	if binding.Mode == environment.ConnectionModeClientTools {
+		purpose = connectionevent.InspectionPurposeClientTools
+	}
 	if err := audit.Decide(
 		request.Context(),
 		connectionevent.DecisionEvidence{
+			InspectionPurpose:      purpose,
 			Source:                 source,
 			Decision:               connectionevent.DecisionAllow,
 			RuleID:                 outcome.RuleID,
@@ -859,8 +889,20 @@ func (handler *Handler) serveInner(
 		!request.URL.IsAbs() && request.TLS != nil
 	cleartextRequest := request != nil && request.URL != nil &&
 		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+	observed := &observedResponseWriter{ResponseWriter: writer}
+	reason := "rejected"
+	if handler.targetObserver != nil {
+		writer = observed
+		defer func() {
+			if reason == "rejected" && observed.status >= 200 && observed.status < 400 {
+				reason = "completed"
+			}
+			handler.targetObserver.Observe(observationOf(request, binding.ProviderOrigin, observed.status, reason))
+		}()
+	}
 	if (!secureRequest && !cleartextRequest) ||
 		!authorityMatches(request.Host, binding.ProviderOrigin) {
+		reason = "request_authority_mismatch"
 		writeReason(
 			writer,
 			http.StatusMisdirectedRequest,
@@ -871,6 +913,14 @@ func (handler *Handler) serveInner(
 	}
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
+	if request.URL.Path == environment.ClientToolMCPPath {
+		access := connectionLease.Environment().Aggregate().ClientToolAccess
+		if access == nil || !access.Enabled {
+			reason = "permission_off"
+			writeReason(writer, http.StatusForbidden, ReasonEnvironmentOperationUnsupported, "")
+			return
+		}
+	}
 	beginRawScope := func() func() {
 		if handler.rawEvidence != nil {
 			scopeKind, scopeID, err := rawEvidenceScope(capture)
@@ -917,6 +967,7 @@ func (handler *Handler) serveInner(
 			errors.Is(err, captureassignment.ErrOperationInProgress) ||
 			errors.Is(err, environment.ErrInvalidEnvironment) {
 			writer.Header().Set("Connection", "close")
+			reason = "environment_changed"
 			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
 			return
 		}
@@ -926,10 +977,50 @@ func (handler *Handler) serveInner(
 			ReasonPathUnsupported,
 			protocolReasonCode(err),
 		)
+		reason = "target_unproven"
 		return
 	}
 	defer requestLease.Release()
 	plan := requestLease.Plan()
+	if native, ok := plan.ClientToolPlan(); ok {
+		if handler.nativeTools == nil || handler.nativeIDs == nil {
+			reason = "native_executor_unavailable"
+			writeReason(writer, http.StatusForbidden, ReasonEnvironmentOperationUnsupported, "")
+			return
+		}
+		auth := strings.TrimSpace(request.Header.Get("Authorization"))
+		authParts := strings.Fields(auth)
+		placeholder := auth == "vibermate-local-proxy" ||
+			(len(authParts) == 2 && strings.EqualFold(authParts[0], "Bearer") && authParts[1] == "vibermate-local-proxy")
+		if (auth == "" && strings.TrimSpace(request.Header.Get("Cookie")) == "") || placeholder {
+			reason = "original_login_unavailable"
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
+		id, err := handler.nativeIDs.NewNativeOperationID(request.Context())
+		if err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+			return
+		}
+		// The absolute target comes only from the frozen exact native route.
+		nativeRequest := request.Clone(request.Context())
+		nativeRequest.URL.Scheme = "https"
+		nativeRequest.URL.Host = native.Route().TargetOrigin.HTTPAuthority()
+		nativeRequest.Host = nativeRequest.URL.Host
+		captured, err := nativemcp.NewCapturedRequest(requestLease, admission, nativeRequest, id)
+		if err != nil {
+			reason = "target_unproven"
+			writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
+			return
+		}
+		terminal := handler.nativeTools.Serve(request.Context(), captured, writer)
+		if terminal.Reason != "" {
+			reason = string(terminal.Reason)
+		} else if terminal.Outcome == nativemcp.OutcomeCompleted {
+			reason = "completed"
+		}
+		return
+	}
 	operation := plan.Operation()
 	if operation.Kind() != protocolspec.ClientOperationSemantic {
 		defer beginRawScope()()
@@ -1242,15 +1333,16 @@ func (handler *Handler) serveSemantic(
 		}
 	}
 	downstream := newHTTPDownstream(writer, httpDownstreamOptions{
-		ClientDialect:    plan.ProtocolPlan().ClientDialect(),
-		Observer:         handler.rawEvidence,
-		ObservationLimit: handler.rawTimeout,
-		MaximumBodyBytes: handler.rawBodyBytes,
-		Context:          rawContext,
-		Scheme:           requestScheme(request),
-		Authority:        request.Host,
-		Path:             request.URL.EscapedPath(),
-		RawQuery:         request.URL.RawQuery,
+		responsesDataKeepalive: responsesDataKeepaliveFor(plan, admission),
+		ClientDialect:          plan.ProtocolPlan().ClientDialect(),
+		Observer:               handler.rawEvidence,
+		ObservationLimit:       handler.rawTimeout,
+		MaximumBodyBytes:       handler.rawBodyBytes,
+		Context:                rawContext,
+		Scheme:                 requestScheme(request),
+		Authority:              request.Host,
+		Path:                   request.URL.EscapedPath(),
+		RawQuery:               request.URL.RawQuery,
 	})
 	_, err = handler.exchanges.Execute(
 		request.Context(),
@@ -1676,19 +1768,25 @@ func (handler *Handler) forwardToOriginalOrigin(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 		return
 	}
+	resolved, err := plan.ResolvedEgress()
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonOriginalEgressFailed, "")
+		return
+	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID:    egressID,
-		ConnectionID: connectionID,
-		ParentID:     requestID,
-		Kind:         kind,
-		Origin:       plan.Endpoint().ClientOrigin(),
-		Method:       request.Method,
-		Path:         request.URL.Path,
-		RawQuery:     request.URL.RawQuery,
-		Headers:      request.Header,
-		Body:         body,
-		PayloadClass: payloadClass,
-		EgressPolicy: plan.EgressPolicy(),
+		ResolvedEgress: resolved,
+		RequestID:      egressID,
+		ConnectionID:   connectionID,
+		ParentID:       requestID,
+		Kind:           kind,
+		Origin:         plan.Endpoint().ClientOrigin(),
+		Method:         request.Method,
+		Path:           request.URL.Path,
+		RawQuery:       request.URL.RawQuery,
+		Headers:        request.Header,
+		Body:           body,
+		PayloadClass:   payloadClass,
+		EgressPolicy:   resolved.Profile().Policy,
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -2061,30 +2159,34 @@ func copyResponseHeaders(destination, source http.Header) {
 }
 
 type httpDownstreamOptions struct {
-	ClientDialect    protocolspec.Dialect
-	Observer         rawevidence.Observer
-	ObservationLimit time.Duration
-	MaximumBodyBytes int
-	Context          rawevidence.Context
-	Scheme           string
-	Authority        string
-	Path             string
-	RawQuery         string
+	responsesDataKeepalive bool
+	ClientDialect          protocolspec.Dialect
+	Observer               rawevidence.Observer
+	ObservationLimit       time.Duration
+	MaximumBodyBytes       int
+	Context                rawevidence.Context
+	Scheme                 string
+	Authority              string
+	Path                   string
+	RawQuery               string
 }
 
 type httpDownstream struct {
-	writer  http.ResponseWriter
-	options httpDownstreamOptions
-	mode    exchange.ResponseMode
-	begun   bool
-	status  int
-	headers http.Header
-	hash    hash.Hash
-	body    []byte
-	total   int64
-	frames  []rawevidence.Frame
-	once    sync.Once
-	rawErr  error
+	writer           http.ResponseWriter
+	options          httpDownstreamOptions
+	mode             exchange.ResponseMode
+	begun            bool
+	status           int
+	headers          http.Header
+	hash             hash.Hash
+	body             []byte
+	total            int64
+	frames           []rawevidence.Frame
+	once             sync.Once
+	rawErr           error
+	keepaliveWire    []byte
+	keepaliveErr     error
+	keepaliveStopped bool
 }
 
 func newHTTPDownstream(
@@ -2095,12 +2197,38 @@ func newHTTPDownstream(
 	if options.Context.Recording != rawevidence.RecordingFull {
 		maximum = 0
 	}
-	return &httpDownstream{
-		writer:  writer,
-		options: options,
-		hash:    sha256.New(),
-		body:    make([]byte, 0, min(maximum, 32<<10)),
+	downstream := &httpDownstream{
+		writer:        writer,
+		options:       options,
+		hash:          sha256.New(),
+		body:          make([]byte, 0, min(maximum, 32<<10)),
+		keepaliveWire: []byte(": keepalive\n\n"),
 	}
+	if options.responsesDataKeepalive {
+		downstream.keepaliveWire, downstream.keepaliveErr = openairesponses.EncodeKeepalive()
+	}
+	return downstream
+}
+
+// Compatibility is selected from the frozen CLIENT contract, never the
+// selected provider origin or untrusted client-identifying headers.
+func responsesDataKeepaliveFor(plan environment.RequestPlan, admission captureadmission.Admission) bool {
+	if admission.Validate() != nil || plan.ProtocolPlan().ClientDialect() != protocolspec.DialectOpenAIResponses {
+		return false
+	}
+	op := plan.Operation()
+	methods := op.Methods()
+	if op.ClientDialect() != protocolspec.DialectOpenAIResponses || op.Kind() != protocolspec.ClientOperationSemantic || op.Transport() != protocolspec.ClientOperationTransportHTTP || op.PathMatch() != protocolspec.ClientOperationPathExact || len(methods) != 1 || methods[0] != http.MethodPost {
+		return false
+	}
+	origin := plan.Endpoint().ClientOrigin()
+	if origin.Validate() != nil {
+		return false
+	}
+	if op.ID().String() == operationcatalog.OpenAICodexResponsesCreateID && op.PathPattern() == "/backend-api/codex/responses" {
+		return origin.Host() == "chatgpt.com" && origin.Port() == 443
+	}
+	return op.ID().String() == operationcatalog.OpenAIResponsesCreateID && op.PathPattern() == "/v1/responses" && admission.Supports(clientadapter.FeatureResponsesDataKeepalive)
 }
 
 func (downstream *httpDownstream) Begin(
@@ -2180,22 +2308,51 @@ func (downstream *httpDownstream) write(
 		}
 	}
 	if downstream.mode == exchange.ResponseModeEventStream {
-		if flusher, ok := downstream.writer.(http.Flusher); ok {
+		if kind == rawevidence.FrameKeepalive {
+			if flushErr := flushKeepalive(downstream.writer); flushErr != nil {
+				err = errors.Join(err, flushErr)
+			}
+		} else if flusher, ok := downstream.writer.(http.Flusher); ok {
 			flusher.Flush()
 		}
 	}
 	return count, err
 }
 
+// Absence of flushing is a supported no-op. An implemented FlushError may
+// itself return ErrNotSupported (or join it with a connection failure), so its
+// result cannot be used to infer that the capability was absent.
+func flushKeepalive(writer http.ResponseWriter) error {
+	for {
+		switch current := writer.(type) {
+		case interface{ FlushError() error }:
+			return current.FlushError()
+		case http.Flusher:
+			current.Flush()
+			return nil
+		case interface{ Unwrap() http.ResponseWriter }:
+			writer = current.Unwrap()
+		default:
+			return nil
+		}
+	}
+}
+
 func (downstream *httpDownstream) Keepalive(ctx context.Context) error {
+	if downstream.keepaliveStopped {
+		return errors.New("terminal downstream cannot accept a keepalive")
+	}
 	if !downstream.begun ||
 		downstream.mode != exchange.ResponseModeEventStream {
 		return errors.New("only a begun event stream accepts a keepalive")
 	}
-	const wire = ": keepalive\n\n"
+	if downstream.keepaliveErr != nil {
+		return downstream.keepaliveErr
+	}
+	wire := downstream.keepaliveWire
 	count, err := downstream.write(
 		ctx,
-		[]byte(wire),
+		wire,
 		rawevidence.FrameKeepalive,
 	)
 	if err != nil {
@@ -2234,6 +2391,7 @@ func (downstream *httpDownstream) Begun() bool {
 
 func (downstream *httpDownstream) Finalize() error {
 	downstream.once.Do(func() {
+		downstream.keepaliveStopped = true
 		if downstream.options.Observer == nil ||
 			downstream.options.Context.Recording == rawevidence.RecordingOff ||
 			!downstream.begun {
@@ -2353,6 +2511,11 @@ func (handler *Handler) serveBlindTunnel(
 		handler.finishConnectionAudit(audit, connectionTerminal)
 	}()
 
+	resolved, err := handler.resolveBlindEgress(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
 		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass =
@@ -2380,6 +2543,7 @@ func (handler *Handler) serveBlindTunnel(
 		egressID,
 		audit.ID(),
 		"https://"+authority,
+		resolved,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2405,6 +2569,7 @@ func (handler *Handler) serveBlindTunnel(
 			Authority: authority,
 			Host:      host,
 			Port:      port,
+			Egress:    resolved,
 		},
 	)
 	if err != nil {
@@ -2479,15 +2644,45 @@ func blindTunnelTerminal(
 	}
 }
 
+func (handler *Handler) resolveBlindEgress(ctx context.Context) (egressprofile.Resolved, error) {
+	if handler.egressDefaults == nil {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	resolved, err := handler.egressDefaults.Resolve(ctx, egressprofile.Inherit(), egressprofile.Inherit())
+	if err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	if err = resolved.Validate(); err != nil {
+		return egressprofile.Resolved{}, err
+	}
+	if resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin {
+		return egressprofile.Resolved{}, egressprofile.ErrDefaultUnavailable
+	}
+	return resolved, nil
+}
+
 func (handler *Handler) beginBlindAudit(
 	ctx context.Context,
 	egressID string,
 	connectionID string,
 	targetOrigin string,
+	resolved egressprofile.Resolved,
 ) (egressaudit.Attempt, error) {
+	if err := resolved.Validate(); err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	if resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin {
+		return egressaudit.Attempt{}, errors.New("blind egress requires global or builtin selection")
+	}
 	if handler.egressAudit == nil {
 		return egressaudit.Attempt{}, nil
 	}
+	decision := egressaudit.BuiltInDirectDecision(egressaudit.AuthorityNetwork)
+	decision.SelectionSource, decision.DefaultRevision = resolved.Source(), resolved.DefaultRevision()
+	if resolved.Source() == egressprofile.SelectionGlobal {
+		decision.PolicyID, decision.PolicyRevision, decision.RuleID = "runtime.egress-default", resolved.DefaultRevision(), "global.default"
+	}
+	decision.ProxyID, decision.ProxyRevision = resolved.Profile().ID.String(), uint64(resolved.Profile().Revision)
 	attempt, err := egressaudit.New(egressaudit.NewInput{
 		ID:           egressID,
 		ConnectionID: connectionID,
@@ -2499,10 +2694,8 @@ func (handler *Handler) beginBlindAudit(
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: targetOrigin,
-		Decision: egressaudit.BuiltInDirectDecision(
-			egressaudit.AuthorityNetwork,
-		),
-		StartedAt: handler.clock(),
+		Decision:     decision,
+		StartedAt:    handler.clock(),
 	})
 	if err != nil {
 		return egressaudit.Attempt{}, err
@@ -2626,6 +2819,11 @@ func (handler *Handler) serveCleartextForward(
 	}
 	defer func() { handler.finishConnectionAudit(audit, connectionTerminal) }()
 
+	resolved, err := handler.resolveBlindEgress(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
@@ -2642,6 +2840,7 @@ func (handler *Handler) serveCleartextForward(
 	defer actionLease.Release()
 	record, err := handler.beginBlindAudit(
 		request.Context(), egressID, audit.ID(), "http://"+authority,
+		resolved,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2668,6 +2867,7 @@ func (handler *Handler) serveCleartextForward(
 			Authority: authority,
 			Host:      host,
 			Port:      port,
+			Egress:    resolved,
 		},
 	)
 	if err != nil {

@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createReadStream } from "node:fs";
 import {
+  verifyMacOSKernelPackage,
+} from "../vless-kernel/verify_package.mjs";
+import {
   lstat,
   mkdtemp,
   open,
@@ -17,6 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { verifyMacOSBuildVersions } from "../../ui/flutter_app/tool/verify_macos_build_versions.mjs";
+import { flutterDesktopNestedCode } from "../../ui/flutter_app/tool/desktop_build_manifest.mjs";
 import {
   macOSDistributionPolicy,
   parseClosedJSONObject,
@@ -464,6 +468,7 @@ async function inspectBuildManifest(appPath, expectedRevision) {
     parseClosedJSONObject(source.toString("utf8"), "Embedded Desktop build manifest"),
     { expectedRevision },
   );
+  await verifyMacOSKernelPackage(appPath, "darwin/universal");
   return Object.freeze({
     manifestSHA256: createHash("sha256").update(source).digest("hex"),
     nestedCodeSHA256: provenance.nestedCodeSHA256,
@@ -658,6 +663,14 @@ export async function inspectSignedMacOSDiskImageAtPath(
   });
 }
 
+export function requireUnsignedNestedCodeMatchesBuildManifest(executableSHA256, nestedCodeSHA256) {
+  for (const name of Object.keys(flutterDesktopNestedCode)) {
+    if (executableSHA256[name] !== nestedCodeSHA256[name]) {
+      throw new Error(`${name} does not match its embedded build-manifest digest`);
+    }
+  }
+}
+
 export async function inspectUnsignedMacOSDistributionCandidate() {
   if (process.platform !== "darwin") {
     throw new Error("macOS distribution preflight requires macOS");
@@ -684,18 +697,7 @@ export async function inspectUnsignedMacOSDistributionCandidate() {
     inspectUnsignedCodeObject(path, name);
   }
   const executableSHA256 = await digestMap(executablePaths);
-  for (const name of [
-    "app-framework",
-    "file-selector-framework",
-    "flutter-macos-framework",
-    "url-launcher-framework",
-    "vibermate",
-    "vibermated",
-  ]) {
-    if (executableSHA256[name] !== buildProvenance.nestedCodeSHA256[name]) {
-      throw new Error(`${name} does not match its embedded build-manifest digest`);
-    }
-  }
+  requireUnsignedNestedCodeMatchesBuildManifest(executableSHA256, buildProvenance.nestedCodeSHA256);
   return Object.freeze({
     appPath,
     applicationLedger: ledger,

@@ -15,6 +15,7 @@ import (
 )
 
 type Options struct {
+	NetworkAccess          *desktopcontrol.NetworkAccess
 	Runtime                *productruntime.Runtime
 	Readiness              desktopcontrol.ReadinessReader
 	Clock                  desktopcontrol.Clock
@@ -60,21 +61,28 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		return nil, err
 	}
 	controlOptions := desktopcontrol.Options{
+		NetworkAccess:   options.NetworkAccess,
+		ProductUpdates:  options.Runtime.ProductUpdates(),
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
 		ACP:             options.Runtime.ACPObservations(),
 		Readiness:       options.Readiness, Status: options.Runtime,
 		Environments: options.Runtime.Environments(), Assignments: options.Runtime.CaptureAssignments(),
-		DryRun:     options.Runtime.DryRun,
-		Activities: options.Runtime.Activities(), ConversationIndexer: indexer,
+		ClientToolAccess: options.Runtime,
+		DryRun:           options.Runtime.DryRun,
+		Activities:       options.Runtime.Activities(), ConversationIndexer: indexer,
 		Contents: options.Runtime.ExchangeContents(), Connections: options.Runtime.ConnectionEvents(),
 		Egress: options.Runtime.EgressAttempts(), Approvals: options.Runtime.ToolApprovals(),
-		Endpoints: options.Runtime.UpstreamEndpoints(), Models: models, ClientModels: metadata,
+		NativeTools: options.Runtime.NativeToolRepository(), NativePreviews: options.Runtime.NativeToolPreviews(),
+		NativeContentKey: options.Runtime.NativeToolContentKey(),
+		Endpoints:        options.Runtime.UpstreamEndpoints(), Models: models, ClientModels: metadata,
 		Accounts: options.Runtime.ProviderAccounts(), CodexOAuth: options.Runtime.CodexOAuthAccounts(),
 		AccountReads:   options.Runtime.AccountReads(),
 		CodexLogins:    options.Runtime.CodexOAuthLogins(),
 		CodeLibrary:    options.Runtime.CodeLibrary(),
 		EgressProfiles: options.Runtime.EgressProfiles(),
+		VLESSProfiles:  options.Runtime.VLESSProfiles(),
+		EgressDefaults: options.Runtime.EgressDefaults(),
 		RawEvidence:    options.Runtime.RawEvidence(),
 		Offline:        options.Runtime, ConnectionRules: options.Runtime.ConnectionRules(),
 		CaptureRuns: options.Runtime.CaptureRunReader(), ManualCaptures: options.Runtime.ManualCaptures(),

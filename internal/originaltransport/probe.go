@@ -31,7 +31,22 @@ var _ offlinehold.Prober = (*TLSProber)(nil)
 const DefaultTLSProbeTargetTimeout = 10 * time.Second
 
 func NewTLSProber() (*TLSProber, error) {
-	return newTLSProber(&net.Dialer{}, nil)
+	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: &net.Dialer{}})
+	if err != nil {
+		return nil, err
+	}
+	return NewTLSProberWithBuilder(builder, nil)
+}
+
+// Trusted in-process composition only; it grants no target or send authority.
+func NewTLSProberWithBuilder(builder *egressnetwork.Builder, roots *x509.CertPool) (*TLSProber, error) {
+	if builder == nil {
+		return nil, errors.New("trusted TLS probe builder is missing")
+	}
+	if roots != nil {
+		roots = roots.Clone()
+	}
+	return &TLSProber{dialers: builder, roots: roots, timeout: DefaultTLSProbeTargetTimeout}, nil
 }
 
 func newTLSProber(
@@ -83,6 +98,10 @@ func (prober *TLSProber) Probe(
 	for _, reference := range request.Targets {
 		switch reference.Kind {
 		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
+		case offlinehold.EgressUpdate:
+			if reference.NetworkOrigin != "https://api.github.com" {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("update probe origin is not the closed release source"))
+			}
 		default:
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,

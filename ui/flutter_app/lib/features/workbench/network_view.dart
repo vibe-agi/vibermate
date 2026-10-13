@@ -8,6 +8,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'control_failure_notice.dart';
 import 'workbench_controller.dart';
+import 'native_tool_approval_row.dart';
 
 enum _NetworkPanel { approvals, connections, egress, rules }
 
@@ -23,6 +24,29 @@ final class NetworkView extends StatefulWidget {
 
 final class _NetworkViewState extends State<NetworkView> {
   _NetworkPanel _panel = _NetworkPanel.approvals;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.setNativeApprovalsVisible(true);
+  }
+
+  @override
+  void didUpdateWidget(covariant NetworkView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.setNativeApprovalsVisible(false);
+      widget.controller.setNativeApprovalsVisible(
+        _panel == _NetworkPanel.approvals,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.setNativeApprovalsVisible(false);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,6 +66,9 @@ final class _NetworkViewState extends State<NetworkView> {
           data: data,
           copy: copy,
           onSelected: (panel) {
+            controller.setNativeApprovalsVisible(
+              panel == _NetworkPanel.approvals,
+            );
             controller.clearNetworkNotice();
             setState(() => _panel = panel);
           },
@@ -242,7 +269,11 @@ final class _ApprovalsPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (approvals.isEmpty) {
+    if (approvals.isEmpty &&
+        !controller.nativeApprovalAttention &&
+        (controller.selectedCaptureKey == null ||
+            controller.nativeApprovalScanComplete &&
+                controller.nativeApprovalError == null)) {
       return CenteredMessage(
         icon: Icons.task_alt,
         title: copy('network.approval.empty.title'),
@@ -257,16 +288,55 @@ final class _ApprovalsPane extends StatelessWidget {
         ),
         const Divider(height: 1),
         Expanded(
-          child: ListView.separated(
+          child: ListView(
             padding: const EdgeInsets.only(bottom: 16),
-            itemCount: approvals.length,
-            separatorBuilder: (context, index) => const Divider(height: 1),
-            itemBuilder: (context, index) => _ApprovalRow(
-              key: ValueKey(approvals[index].id),
-              approval: approvals[index],
-              controller: controller,
-              copy: copy,
-            ),
+            children: [
+              for (final approval in approvals)
+                _ApprovalRow(
+                  key: ValueKey(approval.id),
+                  approval: approval,
+                  controller: controller,
+                  copy: copy,
+                ),
+              if (controller.selectedCaptureKey != null)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    '${controller.selectedCapture?.displayName ?? copy('native.selectedCapture')} · ${controller.nativeApprovalScanComplete ? copy.format('native.pendingCount', {'count': controller.nativeApprovals.length}) : copy('native.pending')}',
+                  ),
+                ),
+              for (final approval in controller.nativeApprovals)
+                NativeToolApprovalRow(
+                  key: ValueKey('native-${approval.id}'),
+                  approval: approval,
+                  profileName:
+                      controller.data?.environments
+                          .where(
+                            (environment) =>
+                                environment.id == approval.environment.id,
+                          )
+                          .firstOrNull
+                          ?.name ??
+                      copy('native.profile'),
+                  copy: copy,
+                  onDecision: (decision) => unawaited(
+                    controller.decideNativeApproval(approval, decision),
+                  ),
+                ),
+              if (controller.nativeApprovalError != null)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(copy('native.unavailable')),
+                ),
+              if (controller.selectedCaptureKey != null &&
+                  !controller.nativeApprovalScanComplete)
+                TextButton(
+                  onPressed: controller.nativeApprovalsLoading
+                      ? null
+                      : () => unawaited(controller.refreshNativeApprovals()),
+                  child: Text(copy('native.loadMore')),
+                ),
+            ],
           ),
         ),
       ],

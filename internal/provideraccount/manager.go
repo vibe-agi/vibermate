@@ -39,6 +39,7 @@ type Manager struct {
 	deletion       environment.AccountDeletionGuard
 	preparer       CredentialPreparer
 	egressProfiles egressprofile.Controller
+	egressDefaults egressprofile.Resolver
 	active         map[ID]uint64
 	operations     map[ID]accountOperation
 	refreshing     map[ID]chan struct{}
@@ -569,7 +570,7 @@ func (manager *Manager) Acquire(
 ) (providerauth.Lease, error) {
 	if ctx == nil || request.AccountRevision() == 0 || request.RealmID() == "" ||
 		request.UpstreamEndpointID() == "" || request.UpstreamEndpointRevision() == 0 ||
-		request.UpstreamEndpointOrigin().Validate() != nil {
+		request.UpstreamEndpointOrigin().Validate() != nil || request.EgressChoice().Validate() != nil {
 		return nil, ErrInvalidAccount
 	}
 	id, err := NewID(request.AccountID())
@@ -583,7 +584,7 @@ func (manager *Manager) Acquire(
 		upstreamEndpointID:       request.UpstreamEndpointID(),
 		upstreamEndpointRevision: uint64(request.UpstreamEndpointRevision()),
 		upstreamEndpointOrigin:   request.UpstreamEndpointOrigin(),
-		egressProfile:            request.EgressProfile(),
+		egressProfile:            request.EgressChoice(),
 	})
 }
 
@@ -618,6 +619,7 @@ func (manager *Manager) AcquireEndpointCredential(
 		return nil, ErrEndpointMismatch
 	}
 	return manager.acquire(ctx, accountLeaseScope{
+		egressProfile:            egressprofile.Inherit(),
 		id:                       account.ID,
 		accountRevision:          account.Revision,
 		realmID:                  endpoint.RealmID,
@@ -628,7 +630,7 @@ func (manager *Manager) AcquireEndpointCredential(
 }
 
 type accountLeaseScope struct {
-	egressProfile            egressprofile.ProfileRevision
+	egressProfile            egressprofile.Choice
 	ownerOperation           bool
 	id                       ID
 	accountRevision          uint64
@@ -717,6 +719,10 @@ func (manager *Manager) acquire(
 		endpoint.Origin != scope.upstreamEndpointOrigin || !account.CompatibleEndpoint(endpoint)) {
 		return nil, ErrEndpointMismatch
 	}
+	resolved, err := manager.resolveTargetEgress(ctx, account, scope.egressProfile, scope.upstreamEndpointOrigin)
+	if err != nil {
+		return nil, err
+	}
 	if credentialEpoch == 0 {
 		metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
 		if err != nil {
@@ -728,7 +734,7 @@ func (manager *Manager) acquire(
 		credentialEpoch = metadata.Revision
 		manager.observeCredentialEpoch(account.ID, credentialEpoch)
 	}
-	credentialScope := account.credentialScope(scope.realmID, uint64(credentialEpoch), scope.egressProfile)
+	credentialScope := account.credentialScope(scope.realmID, uint64(credentialEpoch), resolved)
 	if credentialScope.Validate() != nil {
 		return nil, ErrInvalidAccount
 	}

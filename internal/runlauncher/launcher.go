@@ -283,6 +283,18 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	if (grant.Adapter != nil && grant.Adapter.ID == "codex-cli") ||
+		(grant.Signer != nil && grant.Signer.ID == "codex-cli") ||
+		(grant.Run.ClientAdapter != nil && grant.Run.ClientAdapter.ID == "codex-cli") {
+		legacyIndependent := grant.Recognition == clientadapter.RecognitionVerified &&
+			grant.Adapter != nil && grant.Adapter.ID == "codex-cli" && grant.Adapter.Version == "0.145.0" &&
+			grant.LaunchRecipe == clientadapter.LaunchCodexResponsesHTTP
+		childArguments, err = prepareCodexCaptureArguments(ctx, grant.ExecutablePath, command[1:], childArguments, launcher.config.BaseEnvironment, legacyIndependent)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
 
 	childContext, cancelChild := context.WithCancelCause(context.WithoutCancel(ctx))
@@ -659,7 +671,7 @@ func (launcher *Launcher) heartbeat(
 				}
 				if retryableControlFailure(err) {
 					if !reconnecting {
-						fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
+						launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
 						reconnecting = true
 					}
 					// Do not measure an outage from the last successful heartbeat:
@@ -676,7 +688,7 @@ func (launcher *Launcher) heartbeat(
 					return
 				}
 				if reconnecting {
-					fmt.Fprintln(launcher.config.Stderr, "vibermate: Runtime connection restored.")
+					launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection restored.")
 					reconnecting = false
 				}
 				timer.Reset(launcher.config.HeartbeatInterval)

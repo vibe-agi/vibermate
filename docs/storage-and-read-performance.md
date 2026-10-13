@@ -77,6 +77,55 @@ go test ./internal/runtimepersistence -run TestConversationEvidence -bench Bench
 前端切换到账号、脚本或设置页后，周期性的管理信息刷新不再同时加载隐藏的会话目录和
 时间线。重新查看运行记录时仍会更新证据，不依赖隐藏页面轮询。
 
+### 阅读视图的冻结链与角色证明（2026-10-03）
+
+阅读视图从该 Exchange 的冻结 root 逐节点检查摘要、递减位置和 parent 形状，使用与
+完整分页、显式位置加载相同的节点校验。遍历受冻结消息数限制，损坏、缺失和循环直接
+拒绝，不等递归排序或超时后再判断。完整分页的递归步数也由冻结消息数控制。
+
+最近用户组的选择不再信任 SQL role。每个参与选择的角色（包括跳过的后台消息和组前
+的分隔消息）都通过重建整个 canonical message JSON 并核对既有 SHA-256 来证明；
+block manifest 本身不是该消息摘要的证明。角色证明共享预览的最多 24 条消息、128 KiB
+正文预算，而非另行加载整个历史。无法在预算内证明的角色通过已有的中性 deferred
+入口显式打开，不产生用户组 anchor。已证明组的最多 24 条后缀仍按原始顺序呈现，
+图片元数据和问题保持同组；重放沿用位置 anchor，同样文字的新位置得到不同 anchor。
+
+正文长度预检同时核对 SQLite 的实际 payload 长度与 codec/明文长度，避免伪造的小
+长度允许读取大正文。zstd 解码继续使用既有的 destination-cap 限制。实际 SQLite
+损坏夹具中，8 MiB identity payload 声称 100 字节：修复前读取分配约 16.80 MB，
+修复后在加载前拒绝，只分配约 12.2 KB。这里的分配是 Go 累计分配量，不是 RSS。
+128 KiB 是预览正文/角色证明预算，也不是 Go 对象、JSON 副本的总分配上限。
+
+English: Reading and paged content share frozen-ancestry validation. Every role used to select,
+skip, or delimit an input group is verified against the whole canonical message digest within
+the existing 24-message / 128-KiB preview budget. Unproved roles use a neutral deferred entry
+without an input anchor. Actual SQLite payload lengths are checked before hydration; existing
+bounded zstd decoding remains in place. No schema, digest, cursor, or wire format changed.
+
+复现完整性、边界和合成读取计时：
+
+```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools go test ./internal/runtimepersistence \
+  -run 'Reading.*(Reject|Integrity|Cycle|Preserves)|ContentPages' -count=1 -v
+DEVELOPER_DIR=/Library/Developer/CommandLineTools go test ./internal/runtimepersistence \
+  -run '^$' -bench '^BenchmarkReadingContentProof$' -benchtime=100x -count=1
+```
+
+1005 个位置的合成历史仅验证最新组及其分隔消息（5 个位置），返回图片、图片、问题
+共 3 条消息，序列化预览 1209 字节；一次本机读取约 0.78 ms。更老正文被损坏时，
+阅读视图仍可返回该组，而独立的完整证据读取拒绝损坏历史。该数值不是端到端 UI 延迟，
+也不是冷磁盘或任意设备的性能承诺。
+
+本机 Apple M5 Max、Go 1.26.8、darwin/arm64，每个合成正文约 1 KiB、100 次读取：
+
+| 历史位置数 | 完整分页尾页 | 阅读角色证明 | 阅读每次累计分配 |
+| --- | ---: | ---: | ---: |
+| 100 | 2.670 ms | 2.725 ms | 463.5 KB |
+| 1000 | 2.651 ms | 2.754 ms | 465.8 KB |
+
+两条路径都返回有界尾部窗口；这比较的是修复后的分页和角色证明成本，不是省略校验
+的旧阅读选择器。历史增加没有使这次默认读取加载全部历史正文。
+
 ## 尚未声称“最优”的部分
 
 - 会话目录与 Exchange 列表现在先返回已有持久投影，客户端日志身份补全由最长 15 秒的

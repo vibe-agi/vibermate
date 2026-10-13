@@ -869,7 +869,7 @@ func publishManagedEnvironment(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter.claude", Revision: 1,
 				},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: authoredEgress(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

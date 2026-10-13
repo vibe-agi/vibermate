@@ -35,8 +35,9 @@ func (digest ConnectionCompatibilityDigest) String() string {
 }
 
 const (
-	ConnectionModeBlind    ConnectionMode = "blind"
-	ConnectionModeSemantic ConnectionMode = "semantic"
+	ConnectionModeBlind       ConnectionMode = "blind"
+	ConnectionModeSemantic    ConnectionMode = "semantic"
+	ConnectionModeClientTools ConnectionMode = "client_tools"
 )
 
 // ConnectionBinding is the frozen downstream shape that determines whether
@@ -118,14 +119,30 @@ func (compiler Compiler) compile(input Environment, kind compilationKind) (Envir
 // authentication or model. Every unrelated destination remains a blind
 // tunnel.
 func (compiler Compiler) CompileSystemTransparent() (EnvironmentSnapshot, error) {
-	definition, err := systemTransparentDefinition()
+	return compiler.CompileSystemTransparentRevision(2)
+}
+
+// This privileged path reconstructs only the closed, immutable builtin revisions.
+// Ordinary Restore continues to reject system-owned configuration.
+func (compiler Compiler) CompileSystemTransparentRevision(revision Revision) (EnvironmentSnapshot, error) {
+	definition, err := systemTransparentDefinition(revision)
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
 	return compiler.compile(definition, compileSystem)
 }
 
-func systemTransparentDefinition() (Environment, error) {
+func systemTransparentDefinition(revision Revision) (Environment, error) {
+	if revision != 1 && revision != 2 {
+		return Environment{}, ErrEnvironmentNotFound
+	}
+	direct, err := egressprofile.Explicit(egressprofile.Direct())
+	if err != nil {
+		return Environment{}, err
+	}
+	if revision == 2 {
+		direct = egressprofile.Inherit()
+	}
 	type entry struct {
 		endpointID string
 		planID     string
@@ -153,21 +170,21 @@ func systemTransparentDefinition() (Environment, error) {
 			return Environment{}, fmt.Errorf("%w: system client origin", err)
 		}
 		endpoints = append(endpoints, ClientEndpoint{
-			ID: ClientEndpointID(entry.endpointID), Revision: 1, ClientOrigin: origin,
+			ID: ClientEndpointID(entry.endpointID), Revision: revision, ClientOrigin: origin,
 			ProtocolPlans: []ClientProtocolPlan{{
-				ID: ClientProtocolPlanID(entry.planID), Revision: 1,
+				ID: ClientProtocolPlanID(entry.planID), Revision: revision,
 				ClientProtocol: entry.protocol,
 				ClientAdapterPolicy: ClientAdapterPolicy{
 					ID: "adapter." + entry.planID, Revision: 1,
 				},
 				Destination:   DestinationPlan{Kind: DestinationKindOriginal},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: direct,
 			}},
 		})
 	}
 	return Environment{
 		ID: SystemTransparentID, Name: "System Transparent", State: StateActive,
-		Revision: 1, ClientEndpoints: endpoints,
+		Revision: revision, ClientEndpoints: endpoints,
 		ContentRecording: DefaultContentRecordingPolicy(),
 	}, nil
 }
@@ -260,9 +277,9 @@ func (snapshot EnvironmentSnapshot) BeginConnection(origin originidentity.Client
 	return snapshot.beginConnection(providerOrigin, origin)
 }
 
-// BeginProviderConnection resolves an ordinary proxy destination. Only an
-// exact HTTPS ClientOrigin already present in the Environment is semantic;
-// private cleartext and every other destination remain blind.
+// BeginProviderConnection resolves an ordinary proxy destination. Exact model
+// origins keep semantic mode; an enabled exact native-only HTTPS origin gets
+// its dedicated contract. Private cleartext and unrelated origins stay blind.
 func (snapshot EnvironmentSnapshot) BeginProviderConnection(
 	origin originidentity.ProviderOrigin,
 ) (ConnectionBinding, error) {
@@ -314,6 +331,13 @@ func (snapshot EnvironmentSnapshot) beginConnection(
 	}
 	endpoint, intercepted := snapshot.LookupCompiledClientOrigin(clientOrigin)
 	if !intercepted {
+		if route, ok := snapshot.clientToolRoute(providerOrigin); ok {
+			digest, err := nativeConnectionCompatibility(route)
+			if err != nil {
+				return ConnectionBinding{}, err
+			}
+			return ConnectionBinding{Mode: ConnectionModeClientTools, ProviderOrigin: providerOrigin, CompatibilityDigest: digest}, nil
+		}
 		return ConnectionBinding{
 			Mode: ConnectionModeBlind, ProviderOrigin: providerOrigin,
 		}, nil
@@ -501,6 +525,27 @@ func ValidateConnectionBinding(snapshot EnvironmentSnapshot, binding ConnectionB
 				}
 			}
 		}
+		if _, exists := snapshot.clientToolRoute(binding.ProviderOrigin); exists {
+			return ErrInvalidEnvironment
+		}
+		return nil
+	case ConnectionModeClientTools:
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" {
+			return ErrInvalidEnvironment
+		}
+		if origin, err := originidentity.ParseClientOrigin(binding.ProviderOrigin.String()); err == nil {
+			if _, exists := snapshot.LookupCompiledClientOrigin(origin); exists {
+				return ErrInvalidEnvironment
+			}
+		}
+		route, exists := snapshot.clientToolRoute(binding.ProviderOrigin)
+		if !exists {
+			return ErrInvalidEnvironment
+		}
+		digest, err := nativeConnectionCompatibility(route)
+		if err != nil || digest != binding.CompatibilityDigest {
+			return ErrInvalidEnvironment
+		}
 		return nil
 	case ConnectionModeSemantic:
 		if binding.ClientEndpointID == "" || binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
@@ -533,6 +578,10 @@ func validateConnectionBindingShape(binding ConnectionBinding) error {
 			binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
 			return ErrInvalidEnvironment
 		}
+	case ConnectionModeClientTools:
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" || binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
+			return ErrInvalidEnvironment
+		}
 	default:
 		return ErrInvalidEnvironment
 	}
@@ -541,7 +590,7 @@ func validateConnectionBindingShape(binding ConnectionBinding) error {
 
 func (snapshot EnvironmentSnapshot) validate() error {
 	if snapshot.system {
-		expected, definitionErr := systemTransparentDefinition()
+		expected, definitionErr := systemTransparentDefinition(snapshot.Revision())
 		expected, normalizeErr := normalizeSystem(expected)
 		expectedJSON, expectedErr := canonicalSystemJSON(expected)
 		actualJSON, actualErr := canonicalSystemJSON(snapshot.aggregate)

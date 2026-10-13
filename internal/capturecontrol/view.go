@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 const ClientAdapterSourcePrelaunchDigestCatalog = "prelaunch_digest_catalog"
@@ -76,6 +77,7 @@ type ClientSignerView struct {
 // sensitive and memory-only; none of the nested evidence includes internal
 // release digests or feature flags.
 type LaunchGrant struct {
+	NativeToolLogin *NativeToolLoginView          `json:"nativeToolLogin,omitempty"`
 	Run             CaptureRunView                `json:"run"`
 	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
 	Recognition     clientadapter.Recognition     `json:"recognition"`
@@ -99,6 +101,8 @@ type LaunchGrant struct {
 	// only to the child process created for this Capture.
 	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 }
+
+type NativeToolLoginView = capturegrant.NativeToolLoginView
 
 // CaptureRunViewOf projects a trusted lifecycle view onto the contracted
 // launcher wire. A persisted run is either verified or generic; failed adapter
@@ -242,6 +246,21 @@ func (evidence ClientSignerView) validate() error {
 // Validate is the one place a launch grant's producer and launcher consumer
 // agree on evidence, recognition, recipe, and contracted run metadata.
 func (grant LaunchGrant) Validate() error {
+	if grant.NativeToolLogin != nil {
+		if grant.NativeToolLogin.Validate() != nil {
+			return errors.New("CaptureRun native login view is invalid")
+		}
+		origin, _ := originidentity.ParseProviderOrigin(grant.NativeToolLogin.Origin)
+		found := false
+		for _, authority := range grant.ProtectedAuthorities {
+			if authority == origin.EndpointAuthority() {
+				found = true
+			}
+		}
+		if !found {
+			return errors.New("CaptureRun native login origin is outside protected authority")
+		}
+	}
 	if err := grant.Run.validate(); err != nil ||
 		!grant.CatalogRevision.Valid() || !grant.LaunchRecipe.Valid() ||
 		!grant.Recognition.Valid() || grant.ExecutablePath == "" ||

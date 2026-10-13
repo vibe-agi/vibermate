@@ -16,16 +16,22 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -37,6 +43,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -47,8 +54,13 @@ import (
 )
 
 type storageBuildRequest struct {
-	contentLimits *exchangecontent.SourceLimits
-	databasePath  string
+	databasePath         string
+	directory            string
+	dataGuard, hostGuard *instanceguard.Guard
+	now                  time.Time
+	upgradeTimeout       time.Duration
+	progress             func(runtimedata.SchemaUpgradePhase) error
+	contentLimits        *exchangecontent.SourceLimits
 }
 
 type storageBuildResult struct {
@@ -60,6 +72,15 @@ func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
+	if _, err := runtimedata.UpgradeSchemaOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
+		return storageBuildResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return storageBuildResult{}, err
+	}
+	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
+		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
+	}
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		ContentLimits:          request.contentLimits,
 		DatabasePath:           request.databasePath,
@@ -81,12 +102,14 @@ func buildStorage(
 }
 
 type environmentBuildRequest struct {
+	egressDefaults       egressprofile.Resolver
 	repository           environment.Repository
 	assignmentRepository captureassignment.Repository
 	activity             captureassignment.CaptureActivity
 	clock                captureassignment.Clock
 	accounts             environment.AccountCatalog
 	endpoints            upstreamendpoint.Catalog
+	nativeRevocation     captureassignment.NativeRevocation
 }
 
 type environmentRuntime interface {
@@ -130,16 +153,7 @@ func (resolver historicalEnvironmentResolver) ResolveRevision(
 		return environment.EnvironmentSnapshot{}, err
 	}
 	if id == environment.SystemTransparentID {
-		snapshot := resolver.system
-		if snapshot.Revision() != revision {
-			return environment.EnvironmentSnapshot{}, fmt.Errorf(
-				"%w: environmentId=%q revision=%d",
-				environment.ErrEnvironmentNotFound,
-				id,
-				revision,
-			)
-		}
-		return snapshot, nil
+		return resolver.compiler.CompileSystemTransparentRevision(revision)
 	}
 	aggregate, exists, err := resolver.repository.LoadRevision(ctx, id, revision)
 	if err != nil {
@@ -176,10 +190,12 @@ func buildEnvironment(
 		system:             system,
 	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository:   request.assignmentRepository,
-		Environments: resolver,
-		Activity:     request.activity,
-		Clock:        request.clock,
+		EgressDefaults:   request.egressDefaults,
+		Repository:       request.assignmentRepository,
+		Environments:     resolver,
+		Activity:         request.activity,
+		Clock:            request.clock,
+		NativeRevocation: request.nativeRevocation,
 	})
 	if err != nil {
 		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)
@@ -365,12 +381,13 @@ func buildConnectionEvent(
 }
 
 type approvalBuildRequest struct {
-	ctx        context.Context
-	repository toolapproval.Repository
-	clock      toolapproval.Clock
-	random     io.Reader
-	config     toolapproval.Config
-	remembered toolapproval.RememberedListener
+	ctx              context.Context
+	repository       toolapproval.Repository
+	clock            toolapproval.Clock
+	random           io.Reader
+	config           toolapproval.Config
+	remembered       toolapproval.RememberedListener
+	nativeRepository nativetool.LifecycleRepository
 }
 
 type approvalRuntime interface {
@@ -396,11 +413,12 @@ func buildApproval(
 	request approvalBuildRequest,
 ) (approvalRuntime, error) {
 	return toolapproval.New(request.ctx, toolapproval.Options{
-		Repository: request.repository,
-		Clock:      request.clock,
-		Random:     request.random,
-		Config:     request.config,
-		Remembered: request.remembered,
+		Repository:       request.repository,
+		Clock:            request.clock,
+		Random:           request.random,
+		Config:           request.config,
+		Remembered:       request.remembered,
+		NativeRepository: request.nativeRepository,
 	})
 }
 
@@ -413,14 +431,18 @@ func buildMonitor(request monitorBuildRequest) (ownedComponent, error) {
 }
 
 type providerBuildRequest struct {
-	coordinator offlinehold.Coordinator
-	secrets     secretstore.Reader
-	instanceIDs InstanceIDSource
-	audit       egressaudit.Writer
-	rawEvidence rawevidence.Observer
+	network        *egressnetwork.Builder
+	egressDefaults egressprofile.Resolver
+	coordinator    offlinehold.Coordinator
+	secrets        secretstore.Reader
+	instanceIDs    InstanceIDSource
+	audit          egressaudit.Writer
+	rawEvidence    rawevidence.Observer
 }
 
 type providerRuntime interface {
+	FetchProductRelease(context.Context, egressprofile.Resolved) (*http.Response, error)
+	codexoauth.LoginTokenClient
 	exchange.Provider
 	ReadAccount(context.Context, providertransport.AccountReadRequest) (*http.Response, error)
 	ConsumeResetCredit(context.Context, providertransport.ResetRedemption) (*http.Response, error)
@@ -456,6 +478,9 @@ func buildProvider(
 	if err != nil {
 		return nil, fmt.Errorf("build Codex OAuth AuthDriver: %w", err)
 	}
+	if request.network != nil {
+		return providertransport.NewProductionClientWithBuilder(providertransport.ClientOptions{Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearerAuthenticator, anthropicAuthenticator, codexOAuthAuthenticator}, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence, EgressDefaults: request.egressDefaults}, request.network, providertransport.DefaultTransportTimeouts())
+	}
 	return providertransport.NewProductionClientWithAuthenticators(
 		request.coordinator,
 		[]providertransport.Authenticator{
@@ -467,6 +492,7 @@ func buildProvider(
 		request.instanceIDs,
 		request.audit,
 		request.rawEvidence,
+		request.egressDefaults,
 	)
 }
 
@@ -905,14 +931,15 @@ func activityTransportEvidence(
 	}
 	if presentation.RequestedRef != "" {
 		converted.Presentation = &activity.WirePresentationEvidence{
-			RequestedRef:     presentation.RequestedRef,
-			EffectiveRef:     presentation.EffectiveRef,
-			Revision:         uint64(presentation.Revision),
-			Mode:             string(presentation.Mode),
-			Product:          string(presentation.Product),
-			ClientProtocol:   string(presentation.ClientProtocol),
-			UpstreamProtocol: string(presentation.UpstreamProtocol),
-			EvidenceDigest:   presentation.EvidenceDigest,
+			RequestedRef:       presentation.RequestedRef,
+			EffectiveRef:       presentation.EffectiveRef,
+			Revision:           uint64(presentation.Revision),
+			Mode:               string(presentation.Mode),
+			Product:            string(presentation.Product),
+			ClientProtocol:     string(presentation.ClientProtocol),
+			UpstreamProtocol:   string(presentation.UpstreamProtocol),
+			EvidenceDigest:     presentation.EvidenceDigest,
+			ProtocolAdjustment: presentation.ProtocolAdjustment,
 		}
 	}
 	for _, attempted := range evidence.FallbackChain() {
@@ -1022,6 +1049,7 @@ func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
 	audit       egressaudit.Writer
+	transport   originaltransport.Transport
 }
 
 type originalRuntime interface {
@@ -1032,15 +1060,19 @@ type originalRuntime interface {
 func buildOriginal(
 	request originalBuildRequest,
 ) (originalRuntime, error) {
+	if request.transport != nil {
+		return originaltransport.New(originaltransport.Options{Coordinator: request.coordinator, Audit: request.audit, Transport: request.transport})
+	}
 	return originaltransport.NewProduction(request.coordinator, request.audit)
 }
 
 type captureBuildRequest struct {
-	repository     capturerun.Repository
-	clock          capturerun.Clock
-	random         io.Reader
-	barrier        capturerun.EvidenceBarrier
-	archiveBarrier evidencearchive.CaptureCreationBarrier
+	nativeRevocation captureassignment.NativeRevocation
+	repository       capturerun.Repository
+	clock            capturerun.Clock
+	random           io.Reader
+	barrier          capturerun.EvidenceBarrier
+	archiveBarrier   evidencearchive.CaptureCreationBarrier
 }
 
 type captureRuntime interface {
@@ -1058,6 +1090,7 @@ func buildCapture(
 	request captureBuildRequest,
 ) (captureRuntime, error) {
 	options := capturerun.DefaultOptions(request.repository)
+	options.NativeRevocation = request.nativeRevocation
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
@@ -1066,11 +1099,12 @@ func buildCapture(
 }
 
 type manualCaptureBuildRequest struct {
-	repository     manualcapture.Repository
-	clock          manualcapture.Clock
-	random         io.Reader
-	barrier        manualcapture.EvidenceBarrier
-	archiveBarrier evidencearchive.CaptureCreationBarrier
+	nativeRevocation captureassignment.NativeRevocation
+	repository       manualcapture.Repository
+	clock            manualcapture.Clock
+	random           io.Reader
+	barrier          manualcapture.EvidenceBarrier
+	archiveBarrier   evidencearchive.CaptureCreationBarrier
 }
 
 type manualCaptureRuntime interface {
@@ -1087,6 +1121,7 @@ func buildManualCapture(
 	request manualCaptureBuildRequest,
 ) (manualCaptureRuntime, error) {
 	options := manualcapture.DefaultOptions(request.repository)
+	options.NativeRevocation = request.nativeRevocation
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
@@ -1119,21 +1154,24 @@ func buildLocalCA(
 }
 
 type proxyBuildRequest struct {
-	bodyAdmission *exchange.BodyAdmission
-	ownerContext  context.Context
-	admissions    captureadmission.Authorizer
-	assignments   loopbackproxy.CaptureAssignmentAuthority
-	exchanges     exchange.Executor
-	original      loopbackproxy.OriginalClient
-	accountReads  loopbackproxy.CapturedAccountReader
-	certificates  loopbackproxy.CertificateAuthority
-	connections   connectionevent.Runtime
-	policy        connectionpolicy.Source
-	approvals     loopbackproxy.NetworkApprovals
-	blindTunnels  loopbackproxy.BlindTunnelDialer
-	egressAudit   egressaudit.Writer
-	rawEvidence   rawevidence.RequestRecorder
-	random        io.Reader
+	nativeTools    nativemcp.Executor
+	nativeIDs      nativemcp.IDSource
+	ownerContext   context.Context
+	admissions     captureadmission.Authorizer
+	assignments    loopbackproxy.CaptureAssignmentAuthority
+	exchanges      exchange.Executor
+	original       loopbackproxy.OriginalClient
+	accountReads   loopbackproxy.CapturedAccountReader
+	certificates   loopbackproxy.CertificateAuthority
+	connections    connectionevent.Runtime
+	policy         connectionpolicy.Source
+	approvals      loopbackproxy.NetworkApprovals
+	blindTunnels   loopbackproxy.BlindTunnelDialer
+	egressDefaults egressprofile.Resolver
+	egressAudit    egressaudit.Writer
+	rawEvidence    rawevidence.RequestRecorder
+	random         io.Reader
+	bodyAdmission  *exchange.BodyAdmission
 }
 
 type proxyRuntime interface {
@@ -1147,20 +1185,22 @@ func buildProxy(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
 	return loopbackproxy.New(loopbackproxy.Options{
-		BodyAdmission: request.bodyAdmission,
-		OwnerContext:  request.ownerContext,
-		Admissions:    request.admissions,
-		Assignments:   request.assignments,
-		Exchanges:     request.exchanges,
-		Original:      request.original,
-		AccountReads:  request.accountReads,
-		Certificates:  request.certificates,
-		Connections:   request.connections,
-		Policy:        request.policy,
-		Approvals:     request.approvals,
-		BlindTunnels:  request.blindTunnels,
-		EgressAudit:   request.egressAudit,
-		RawEvidence:   request.rawEvidence,
+		NativeTools: request.nativeTools, NativeOperationIDs: request.nativeIDs,
+		OwnerContext:   request.ownerContext,
+		Admissions:     request.admissions,
+		Assignments:    request.assignments,
+		Exchanges:      request.exchanges,
+		Original:       request.original,
+		AccountReads:   request.accountReads,
+		Certificates:   request.certificates,
+		Connections:    request.connections,
+		Policy:         request.policy,
+		Approvals:      request.approvals,
+		BlindTunnels:   request.blindTunnels,
+		EgressDefaults: request.egressDefaults,
+		EgressAudit:    request.egressAudit,
+		RawEvidence:    request.rawEvidence,
+		BodyAdmission:  request.bodyAdmission,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),

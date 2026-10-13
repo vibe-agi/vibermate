@@ -184,7 +184,7 @@ type CompiledProtocolPlan struct {
 	adapterPolicy       ClientAdapterPolicy
 	operations          []protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
-	egressProfile       egressprofile.ProfileRevision
+	egressProfile       egressprofile.Choice
 	transformPipeline   messagetransform.Pipeline
 	originalCodec       protocolspec.CodecPlan
 	originalWireProfile wireprofile.CompiledUpstreamWireProfile
@@ -204,10 +204,12 @@ func (plan CompiledProtocolPlan) DestinationKind() DestinationKind {
 	return plan.destinationKind
 }
 func (plan CompiledProtocolPlan) EgressPolicy() egressnetwork.Policy {
-	return plan.egressProfile.Policy
+	profile, _ := plan.egressProfile.ExplicitProfile()
+	return profile.Policy
 }
 func (plan CompiledProtocolPlan) EgressProfile() egressprofile.ProfileRevision {
-	return plan.egressProfile
+	profile, _ := plan.egressProfile.ExplicitProfile()
+	return profile
 }
 func (plan CompiledProtocolPlan) TransformPipeline() messagetransform.Pipeline {
 	return plan.transformPipeline
@@ -249,6 +251,8 @@ type RequestFacts struct {
 }
 
 type RequestPlan struct {
+	resolvedEgress      egressprofile.Resolved
+	clientTool          *ClientToolPlan
 	environmentID       EnvironmentID
 	environmentRevision Revision
 	environmentDigest   CandidateDigest
@@ -258,7 +262,7 @@ type RequestPlan struct {
 	protocol            CompiledProtocolPlan
 	operation           protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
-	egressProfile       egressprofile.ProfileRevision
+	egressProfile       egressprofile.Choice
 	transformPipeline   messagetransform.Pipeline
 	codecPlan           protocolspec.CodecPlan
 	wireProfile         wireprofile.CompiledUpstreamWireProfile
@@ -285,9 +289,10 @@ func (plan RequestPlan) PreservesOriginalDestination() bool {
 func (plan RequestPlan) UsesUpstreamDestination() bool {
 	return plan.destinationKind == DestinationKindUpstream
 }
-func (plan RequestPlan) EgressPolicy() egressnetwork.Policy { return plan.egressProfile.Policy }
+func (plan RequestPlan) EgressPolicy() egressnetwork.Policy { return plan.EgressProfile().Policy }
 func (plan RequestPlan) EgressProfile() egressprofile.ProfileRevision {
-	return plan.egressProfile
+	profile, _ := plan.egressProfile.ExplicitProfile()
+	return profile
 }
 func (plan RequestPlan) TransformPipeline() messagetransform.Pipeline {
 	return plan.transformPipeline

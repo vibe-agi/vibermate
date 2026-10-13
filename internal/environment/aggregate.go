@@ -32,6 +32,7 @@ func ParseCandidateDigest(value string) (CandidateDigest, error) {
 
 func (environment Environment) Clone() Environment {
 	cloned := environment
+	cloned.ClientToolAccess = cloneClientToolAccess(environment.ClientToolAccess)
 	cloned.LaunchEnvironment = environment.LaunchEnvironment.Clone()
 	if environment.PolicySet != nil {
 		policy := *environment.PolicySet
@@ -170,6 +171,9 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 		return Environment{}, err
 	}
 	value.LaunchEnvironment, _ = normalizeLaunchEnvironment(value.LaunchEnvironment)
+	if value.ClientToolAccess != nil && !value.ClientToolAccess.Enabled {
+		value.ClientToolAccess = nil
+	}
 	// Observe is the canonical zero/default. Explicit Observe and an omitted
 	// policy are one authority and therefore one digest.
 	if value.EffectivePolicySet() == DefaultPolicySet() {
@@ -375,6 +379,14 @@ func normalizeUpstreamPlan(
 }
 
 func validateRoot(value Environment, allowSystem bool) error {
+	if value.ClientToolAccess != nil {
+		if err := value.ClientToolAccess.Validate(); err != nil {
+			return err
+		}
+		if value.ID == SystemTransparentID && value.ClientToolAccess.Enabled {
+			return ErrInvalidEnvironment
+		}
+	}
 	if err := validateID("Environment ID", value.ID.String()); err != nil {
 		return err
 	}
@@ -593,6 +605,10 @@ func validateRetiredChildIdentities(value Environment) error {
 			return fmt.Errorf("%w: retired child %q has an invalid revision", ErrInvalidEnvironment, identity.ID)
 		}
 		switch identity.Kind {
+		case ChildIdentityClientToolRoute:
+			if validateID("retired ClientToolRoute ID", identity.ID) != nil || identity.ParentID != value.ID.String() {
+				return ErrInvalidEnvironment
+			}
 		case ChildIdentityClientEndpoint:
 			if err := validateID("retired ClientEndpoint ID", identity.ID); err != nil || identity.ParentID != value.ID.String() {
 				return fmt.Errorf("%w: retired ClientEndpoint identity is invalid", ErrInvalidEnvironment)
@@ -620,6 +636,10 @@ func validateRetiredChildIdentities(value Environment) error {
 
 func currentChildIdentities(value Environment) map[string]RetiredChildIdentity {
 	identities := make(map[string]RetiredChildIdentity)
+	if value.ClientToolAccess != nil && value.ClientToolAccess.Route != nil {
+		identity := RetiredChildIdentity{Kind: ChildIdentityClientToolRoute, ID: value.ClientToolAccess.Route.ID.String(), ParentID: value.ID.String()}
+		identities[childIdentityKey(identity.Kind, identity.ID)] = identity
+	}
 	for _, endpoint := range value.ClientEndpoints {
 		identity := RetiredChildIdentity{
 			Kind: ChildIdentityClientEndpoint, ID: endpoint.ID.String(), ParentID: value.ID.String(),

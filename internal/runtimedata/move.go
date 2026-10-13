@@ -110,6 +110,11 @@ func copyDataDirectory(
 			return ErrCopy
 		}
 		defer serverGuard.Release()
+		// An unresolved upgrade must be reconciled in its original owned root;
+		// exporting or relocating it could lose that private preservation proof.
+		if _, err := os.Lstat(filepath.Join(source, schemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
+			return ErrSchemaUpgradeIncomplete
+		}
 	}
 	if kind == dataCopyRestore {
 		if err := validateBackupLocked(ctx, source); err != nil {

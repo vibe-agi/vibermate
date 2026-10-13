@@ -32,6 +32,18 @@ final class ConversationReadingView extends StatefulWidget {
 
 enum _ReaderDetail { tools, reasoning, context, usage, raw, other }
 
+final class _ToolLookupOutcome {
+  const _ToolLookupOutcome(this.items, {required this.complete});
+  final List<ToolResultMatch> items;
+  final bool complete;
+}
+
+final class _CachedToolResults {
+  const _CachedToolResults(this.items, this.bytes);
+  final List<ToolResultMatch> items;
+  final int bytes;
+}
+
 final class _ReaderSelection {
   const _ReaderSelection(
     this.activity,
@@ -61,6 +73,12 @@ final class _ConversationReadingViewState
   final _usage = <String, RuntimeUsageReport>{};
   final _usageVersions = <String, int>{};
   final _detailTabs = <String, int>{};
+  final _toolLookups = <(String, String), Future<_ToolLookupOutcome>>{};
+  final _toolResults = <(String, String), _CachedToolResults>{};
+  int _toolLookupGeneration = 0, _toolResultBytes = 0;
+  bool _restoreToolPanel = false;
+  String? _refreshingToolPanel;
+  int _panelNavigation = 0;
   final _panelOffsets = <String, double>{};
   final _pageStorage = PageStorageBucket();
   final _inspectorFocus = FocusNode(debugLabel: 'conversation-inspector');
@@ -78,6 +96,25 @@ final class _ConversationReadingViewState
       return time == 0 ? a.id.compareTo(b.id) : time;
     });
 
+  bool _showInput(ActivityRecord activity, String anchor) =>
+      !widget.activities.any(
+        (other) =>
+            other.conversation.id == activity.conversation.id &&
+            (other.occurredAt.isBefore(activity.occurredAt) ||
+                (other.occurredAt == activity.occurredAt &&
+                    other.id.compareTo(activity.id) < 0)) &&
+            widget.controller
+                    .exchangeDetail(other.id, contentView: 'reading')
+                    ?.content
+                    .page
+                    ?.inputAnchor ==
+                anchor,
+      );
+
+  void _inputLoaded() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -87,7 +124,10 @@ final class _ConversationReadingViewState
   @override
   void didUpdateWidget(covariant ConversationReadingView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
+    final conversationChanged = _conversationIds(
+      oldWidget.activities,
+    ).intersection(_conversationIds(widget.activities)).isEmpty;
+    if (oldWidget.controller != widget.controller || conversationChanged) {
       _usageLoads.clear();
       _usage.clear();
       _usageVersions.clear();
@@ -95,12 +135,42 @@ final class _ConversationReadingViewState
       _selection = null;
       _inspection = null;
       _detailTabs.clear();
+      _invalidateToolLookups(clearResults: true);
       _panelOffsets.clear();
       _follow = true;
       _unread = 0;
     }
     final ids = widget.activities.map((a) => a.id).toSet();
     final previous = oldWidget.activities.map((a) => a.id).toSet();
+    final deleted = previous.difference(ids);
+    final changedConversations =
+        {
+              ..._conversationIds(oldWidget.activities),
+              ..._conversationIds(widget.activities),
+            }
+            .where(
+              (id) =>
+                  _toolActivityVersion(oldWidget.activities, id) !=
+                  _toolActivityVersion(widget.activities, id),
+            )
+            .toSet();
+    final changedOrigins = {
+      for (final activity in [...oldWidget.activities, ...widget.activities])
+        if (changedConversations.contains(activity.conversation.id))
+          activity.id,
+    };
+    _removeToolResults(
+      (key, value) =>
+          changedOrigins.contains(key.$1) ||
+          deleted.contains(key.$1) ||
+          value.items.any((item) => deleted.contains(item.exchangeId)),
+    );
+    final selection = _selection;
+    if (selection != null &&
+        changedConversations.contains(selection.activity.conversation.id)) {
+      _beginToolPanelRefresh();
+      _invalidateToolLookups();
+    }
     final newest = _ordered.lastOrNull;
     if (newest != null && !previous.contains(newest.id)) {
       final restore = _beforeLayoutChange();
@@ -129,8 +199,57 @@ final class _ConversationReadingViewState
     _usageVersions.removeWhere((id, _) => !ids.contains(id));
     _itemKeys.removeWhere((id, _) => !ids.contains(id));
     if (_selection != null && !ids.contains(_selection!.activity.id)) {
+      _cancelToolPanelRestore();
+      _invalidateToolLookups();
       _selection = null;
       _inspection = null;
+    }
+  }
+
+  Set<String> _conversationIds(List<ActivityRecord> activities) =>
+      activities.map((a) => a.conversation.id).toSet();
+
+  // Polling recreates records: compare the observed fields, not object identity.
+  // Any request in this conversation can carry a previously missing return.
+  String _toolActivityVersion(
+    List<ActivityRecord> activities,
+    String conversationId,
+  ) => jsonEncode(
+    (activities
+        .where((a) => a.conversation.id == conversationId)
+        .map(
+          (a) => [
+            a.id,
+            a.status,
+            a.contentAvailable,
+            a.reasonCode,
+            a.occurredAt.toIso8601String(),
+          ],
+        )
+        .toList()
+      ..sort((a, b) => (a.first as String).compareTo(b.first as String))),
+  );
+
+  void _invalidateToolLookups({bool clearResults = false}) {
+    _toolLookupGeneration++;
+    _toolLookups.clear();
+    _restoreToolPanel = false;
+    if (clearResults) {
+      _cancelToolPanelRestore();
+      _toolResults.clear();
+      _toolResultBytes = 0;
+    }
+  }
+
+  void _removeToolResults(
+    bool Function((String, String), _CachedToolResults) test,
+  ) {
+    for (final key in _toolResults.keys.toList()) {
+      final result = _toolResults[key]!;
+      if (test(key, result)) {
+        _toolResults.remove(key);
+        _toolResultBytes -= result.bytes;
+      }
     }
   }
 
@@ -215,27 +334,61 @@ final class _ConversationReadingViewState
       '${_selection?.key}:${_detailTabs[_selection?.key] ?? 0}';
 
   void _savePanel() {
+    // Pending results can temporarily clamp the list to zero. A second refresh
+    // must preserve the position from before this loading episode.
+    if (_refreshingToolPanel == _panelKey) return;
     if (_panelScroll.hasClients) _panelOffsets[_panelKey] = _panelScroll.offset;
   }
 
-  void _restorePanel() => WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (!mounted || !_panelScroll.hasClients) return;
-    _panelScroll.jumpTo(
-      (_panelOffsets[_panelKey] ?? 0).clamp(
-        0,
-        _panelScroll.position.maxScrollExtent,
-      ),
-    );
-  });
+  void _beginToolPanelRefresh() {
+    _savePanel();
+    if (_selection?.kind == _ReaderDetail.tools &&
+        _detailTabs[_selection?.key] == 1) {
+      _refreshingToolPanel = _panelKey;
+    }
+  }
+
+  void _cancelToolPanelRestore() {
+    _refreshingToolPanel = null;
+    _restoreToolPanel = false;
+    _panelNavigation++;
+  }
+
+  void _restorePanel({bool completesToolRefresh = false}) {
+    final key = _panelKey;
+    final generation = _toolLookupGeneration, navigation = _panelNavigation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_panelScroll.hasClients ||
+          key != _panelKey ||
+          generation != _toolLookupGeneration ||
+          navigation != _panelNavigation) {
+        return;
+      }
+      _panelScroll.jumpTo(
+        (_panelOffsets[key] ?? 0).clamp(
+          0,
+          _panelScroll.position.maxScrollExtent,
+        ),
+      );
+      if (completesToolRefresh &&
+          _refreshingToolPanel == key &&
+          (_panelScroll.offset - (_panelOffsets[key] ?? 0)).abs() <= 1) {
+        _refreshingToolPanel = null;
+      }
+    });
+  }
 
   void _inspect(_ReaderSelection selection) {
     _savePanel();
+    _cancelToolPanelRestore();
     final focus = FocusManager.instance.primaryFocus;
     if (focus != _inspectorFocus &&
         !(focus?.ancestors.contains(_inspectorFocus) ?? false)) {
       _returnFocus = focus;
     }
     setState(() {
+      _invalidateToolLookups();
       _selection = selection;
       _inspectedUsage = selection.aggregateUsage
           ? _usage.values.toList(growable: false)
@@ -255,7 +408,11 @@ final class _ConversationReadingViewState
 
   void _closeDetails() {
     _savePanel();
+    _cancelToolPanelRestore();
     setState(() {
+      final id = _selection?.activity.id;
+      _invalidateToolLookups();
+      _removeToolResults((key, _) => key.$1 == id);
       _selection = null;
       _inspection = null;
     });
@@ -273,6 +430,7 @@ final class _ConversationReadingViewState
 
   @override
   void dispose() {
+    _invalidateToolLookups(clearResults: true);
     _scroll.dispose();
     _panelScroll.dispose();
     _inspectorFocus.dispose();
@@ -390,6 +548,8 @@ final class _ConversationReadingViewState
                           loadUsage: () => _loadUsage(activity.id),
                           onInspect: _inspect,
                           beforeLayoutChange: _beforeLayoutChange,
+                          showInput: (anchor) => _showInput(activity, anchor),
+                          onInputLoaded: _inputLoaded,
                         );
                       },
                     ),
@@ -543,7 +703,9 @@ final class _ConversationReadingViewState
                       ? copy.format('reader.usage_snapshot', {
                           'count': _inspectedUsage.length,
                         })
-                      : selection.activity.id,
+                      : selection.kind == _ReaderDetail.raw
+                      ? selection.activity.id
+                      : _clockTime(selection.activity.occurredAt),
                   style: monoStyle.copyWith(
                     color: context.viberColors.textMuted,
                   ),
@@ -568,7 +730,12 @@ final class _ConversationReadingViewState
                         title: copy('reader.unavailable'),
                       );
                     }
-                    return _detailBody(selection, detail);
+                    return _ContentPageScope(
+                      controller: widget.controller,
+                      exchangeId: detail.id,
+                      openPage: _ContentPageScope.of(context)?.openPage,
+                      child: _detailBody(selection, detail),
+                    );
                   },
                 ),
               ),
@@ -746,6 +913,7 @@ final class _ConversationReadingViewState
                 ),
                 onPressed: () {
                   _savePanel();
+                  _cancelToolPanelRestore();
                   setState(() => _detailTabs[selection.key] = i);
                   _restorePanel();
                 },
@@ -755,12 +923,23 @@ final class _ConversationReadingViewState
         ),
       );
 
-  Widget _panelList(List<Widget> children) => ListView(
-    key: PageStorageKey('reader-panel-$_panelKey'),
-    controller: _panelScroll,
-    padding: const EdgeInsets.all(12),
-    children: children,
-  );
+  Widget _panelList(List<Widget> children) =>
+      NotificationListener<UserScrollNotification>(
+        onNotification: (notification) {
+          if (notification.depth == 0 &&
+              notification.direction != ScrollDirection.idle) {
+            // A drag/wheel scroll supersedes an automatic position restoration.
+            _cancelToolPanelRestore();
+          }
+          return false;
+        },
+        child: ListView(
+          key: PageStorageKey('reader-panel-$_panelKey'),
+          controller: _panelScroll,
+          padding: const EdgeInsets.all(12),
+          children: children,
+        ),
+      );
 
   Widget _toolInspector(_ReaderSelection selection, ExchangeDetail detail) {
     final ids = selection.toolIds;
@@ -778,7 +957,7 @@ final class _ConversationReadingViewState
             if (ids.contains(block.callId))
               (block: block, requestId: detail.id, input: false),
         ];
-    // Later incremental requests can carry this call's return. Never match by
+    // Later requests can carry this call's return. Never match by
     // neighbouring text, tool name, or a different conversation/actor.
     for (final activity in widget.activities) {
       if (activity.id == detail.id ||
@@ -786,8 +965,14 @@ final class _ConversationReadingViewState
           !activity.occurredAt.isAfter(selection.activity.occurredAt)) {
         continue;
       }
-      final next = widget.controller.exchangeDetail(activity.id)?.content;
-      if (next?.requestProjection?.relationship != 'incremental') continue;
+      final next =
+          (widget.controller.exchangeDetail(
+                    activity.id,
+                    contentView: 'reading',
+                  ) ??
+                  widget.controller.exchangeDetail(activity.id))
+              ?.content;
+      if (next?.request == null) continue;
       for (final block in next!.request!.messages.expand((m) => m.blocks)) {
         if (block.kind == 'tool_result' &&
             block.callId != null &&
@@ -810,11 +995,6 @@ final class _ConversationReadingViewState
         _tabs(selection, ['reader.arguments', 'reader.results'], tab),
         Expanded(
           child: _panelList([
-            Text(
-              copy('reader.tool_pairing'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
             if (selection.unkeyedTools.isNotEmpty) ...[
               Text(
                 copy('reader.unmatched_tool'),
@@ -846,11 +1026,44 @@ final class _ConversationReadingViewState
                       copy('exchange.tool.unknown'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-              if (tab == 1)
-                SelectableText(
-                  id.isEmpty ? copy('reader.unmatched_tool') : id,
-                  style: monoStyle,
+              KeyedSubtree(
+                // ExpansionTile's bool state must not share the panel's
+                // PageStorage path, which stores a double scroll offset.
+                key: PageStorageKey('reader-tool-expansion-${detail.id}-$id'),
+                child: ExpansionTile(
+                  key: Key('reader-tool-record-${detail.id}-$id'),
+                  title: Text(
+                    copy('reader.technical_details'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  children: [
+                    Text(
+                      copy('reader.tool_pairing'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    SelectableText(
+                      id,
+                      key: PageStorageKey('tool-record-call-${detail.id}-$id'),
+                      style: monoStyle,
+                    ),
+                    for (final entry in wanted.where(
+                      (e) => e.block.callId == id,
+                    ))
+                      SelectableText(
+                        key: PageStorageKey(
+                          'tool-record-source-${entry.requestId}-$id-${entry.input}',
+                        ),
+                        copy.format(
+                          entry.input
+                              ? 'reader.tool_source_input'
+                              : 'reader.tool_source_output',
+                          {'request': entry.requestId},
+                        ),
+                        style: monoStyle,
+                      ),
+                  ],
                 ),
+              ),
               const SizedBox(height: 6),
               Builder(
                 builder: (context) {
@@ -865,9 +1078,68 @@ final class _ConversationReadingViewState
                   // Multiple distinct candidates are evidence, not permission to pick
                   // whichever result happens to appear last.
                   if (matches.isEmpty) {
-                    return Text(
-                      copy('reader.tool_not_observed'),
-                      style: Theme.of(context).textTheme.bodySmall,
+                    if (tab == 0) return Text(copy('reader.tool_not_observed'));
+                    return FutureBuilder<_ToolLookupOutcome>(
+                      future: _toolLookup(detail.id, id),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState != ConnectionState.done) {
+                          return const CompactProgressIndicator();
+                        }
+                        if (_restoreToolPanel) {
+                          _restoreToolPanel = false;
+                          // Restore after the result has actually been laid out,
+                          // not while the pending indicator still bounds the list.
+                          _restorePanel(
+                            completesToolRefresh:
+                                snapshot.data?.complete == true &&
+                                snapshot.data!.items.isNotEmpty,
+                          );
+                        }
+                        if (snapshot.hasError) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(copy('reader.tool_lookup_failed')),
+                              TextButton(
+                                key: Key(
+                                  'reader-tool-refresh-${detail.id}-$id',
+                                ),
+                                onPressed: _refreshToolResults,
+                                child: Text(copy('common.retry')),
+                              ),
+                            ],
+                          );
+                        }
+                        final found =
+                            snapshot.data?.items ?? const <ToolResultMatch>[];
+                        if (found.isEmpty) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(copy('reader.tool_not_observed')),
+                              TextButton.icon(
+                                key: Key(
+                                  'reader-tool-refresh-${detail.id}-$id',
+                                ),
+                                onPressed: _refreshToolResults,
+                                icon: const Icon(Icons.refresh, size: 14),
+                                label: Text(copy('reader.tool_refresh')),
+                              ),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final entry in found)
+                              _ContentBlocksView(
+                                id: 'looked-up-${entry.exchangeId}-$id',
+                                blocks: [entry.block],
+                                copy: copy,
+                              ),
+                          ],
+                        );
+                      },
                     );
                   }
                   return Column(
@@ -879,16 +1151,6 @@ final class _ConversationReadingViewState
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       for (final (index, entry) in matches.indexed) ...[
-                        SelectableText(
-                          copy.format(
-                            entry.input
-                                ? 'reader.tool_source_input'
-                                : 'reader.tool_source_output',
-                            {'request': entry.requestId},
-                          ),
-                          style: monoStyle,
-                        ),
-                        const SizedBox(height: 6),
                         _ContentBlocksView(
                           id: 'reader-tool-${detail.id}-$id-$tab-$index',
                           blocks: [entry.block],
@@ -908,6 +1170,99 @@ final class _ConversationReadingViewState
         ),
       ],
     );
+  }
+
+  void _refreshToolResults() {
+    _beginToolPanelRefresh();
+    setState(() {
+      _invalidateToolLookups();
+      _removeToolResults((key, _) => key.$1 == _selection?.activity.id);
+    });
+  }
+
+  Future<_ToolLookupOutcome> _toolLookup(String exchangeId, String callId) {
+    final key = (exchangeId, callId);
+    return _toolLookups.putIfAbsent(key, () {
+      final cached = _toolResults.remove(key);
+      if (cached != null) {
+        _toolResults[key] = cached; // Access refreshes the LRU order.
+        return Future.value(_ToolLookupOutcome(cached.items, complete: true));
+      }
+      final generation = _toolLookupGeneration;
+      final navigation = _panelNavigation;
+      return _findToolResults(exchangeId, callId, generation).then((outcome) {
+        if (mounted && generation == _toolLookupGeneration) {
+          if (outcome.complete && outcome.items.isNotEmpty) {
+            _rememberToolResult(key, outcome.items);
+          }
+          if (navigation == _panelNavigation) _restoreToolPanel = true;
+        }
+        return outcome;
+      });
+    });
+  }
+
+  void _rememberToolResult((String, String) key, List<ToolResultMatch> items) {
+    int bytes(String? text) => text == null ? 0 : utf8.encode(text).length;
+    var size = bytes(key.$1) + bytes(key.$2);
+    for (final item in items) {
+      final block = item.block;
+      size +=
+          bytes(item.exchangeId) +
+          bytes(block.text) +
+          bytes(block.arguments == null ? null : jsonEncode(block.arguments)) +
+          bytes(block.callId) +
+          bytes(block.toolName) +
+          bytes(block.toolNamespace) +
+          bytes(block.providerSource) +
+          bytes(block.providerKind) +
+          bytes(block.fingerprint) +
+          bytes(block.agent?.agentName) +
+          bytes(block.agent?.author) +
+          bytes(block.agent?.recipient) +
+          bytes(block.deferred?.exchangeId) +
+          bytes(block.deferred?.cursor);
+    }
+    _removeToolResults((candidate, _) => candidate == key);
+    if (size > 4 * 1024 * 1024) return;
+    _toolResults[key] = _CachedToolResults(List.unmodifiable(items), size);
+    _toolResultBytes += size;
+    while (_toolResults.length > 32 || _toolResultBytes > 4 * 1024 * 1024) {
+      final oldest = _toolResults.keys.first;
+      _toolResultBytes -= _toolResults.remove(oldest)!.bytes;
+    }
+  }
+
+  Future<_ToolLookupOutcome> _findToolResults(
+    String exchangeId,
+    String callId,
+    int generation,
+  ) async {
+    final controller = widget.controller;
+    final found = <ToolResultMatch>[];
+    final seen = <String>{};
+    String? cursor;
+    do {
+      final page = await controller.loadToolResults(
+        exchangeId,
+        callId,
+        cursor: cursor,
+      );
+      if (!mounted ||
+          generation != _toolLookupGeneration ||
+          widget.controller != controller ||
+          _selection?.activity.id != exchangeId) {
+        return _ToolLookupOutcome(found, complete: false);
+      }
+      found.addAll(page.items);
+      cursor = page.nextCursor;
+      if (found.isNotEmpty || cursor == null) {
+        return _ToolLookupOutcome(found, complete: true);
+      }
+      if (!seen.add(cursor)) {
+        throw const ControlContractException('Tool lookup cursor repeated');
+      }
+    } while (true);
   }
 
   Widget _usageInspector(_ReaderSelection selection) => selection.aggregateUsage
@@ -952,9 +1307,39 @@ final class _ConversationReadingViewState
 List<ExchangeContentBlock> _readerText(Iterable<ExchangeContentBlock> blocks) =>
     blocks
         .where(
-          (b) => b.kind == 'text' || b.kind == 'refusal' || b.deferred != null,
+          (b) =>
+              b.kind == 'text' ||
+              b.kind == 'refusal' ||
+              b.deferred != null ||
+              (b.kind == 'provider_extension' &&
+                  b.providerKind == 'input_image'),
         )
         .toList(growable: false);
+
+List<ExchangeContentBlock> _readerInput(List<ExchangeContentMessage> messages) {
+  final blocks = _readerText(messages.expand((m) => m.blocks));
+  final images = blocks.where((b) => b.providerKind == 'input_image').toList();
+  if (images.isEmpty) return blocks;
+  final attachmentLabel = RegExp(r'^\s*(?:\[Image #\d+\]\s*)+$');
+  final fileLabel = RegExp(r'^\s*<image name=\[Image #\d+\] path="[^"]+">\s*$');
+  return blocks
+      .where(
+        (b) =>
+            !(b.kind == 'text' &&
+                (attachmentLabel.hasMatch(b.text ?? '') ||
+                    fileLabel.hasMatch(b.text ?? ''))),
+      )
+      .toList(growable: false);
+}
+
+// A wire-user message may carry protocol tool returns. Only verified human
+// block kinds establish a User row; deferred blocks retain neutral provenance.
+bool _isHumanInput(ExchangeContentBlock block) =>
+    block.deferred == null &&
+    (block.kind == 'text' ||
+        block.kind == 'refusal' ||
+        (block.kind == 'provider_extension' &&
+            block.providerKind == 'input_image'));
 
 final class _ReadingRequest extends StatefulWidget {
   const _ReadingRequest({
@@ -965,6 +1350,8 @@ final class _ReadingRequest extends StatefulWidget {
     required this.loadUsage,
     required this.onInspect,
     required this.beforeLayoutChange,
+    required this.showInput,
+    required this.onInputLoaded,
     super.key,
   });
   final ActivityRecord activity;
@@ -974,6 +1361,8 @@ final class _ReadingRequest extends StatefulWidget {
   final Future<RuntimeUsageReport?> Function() loadUsage;
   final ValueChanged<_ReaderSelection> onInspect;
   final VoidCallback Function() beforeLayoutChange;
+  final bool Function(String) showInput;
+  final VoidCallback onInputLoaded;
   @override
   State<_ReadingRequest> createState() => _ReadingRequestState();
 }
@@ -986,7 +1375,10 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
   @override
   void initState() {
     super.initState();
-    _detail = widget.controller.exchangeDetail(widget.activity.id);
+    _detail = widget.controller.exchangeDetail(
+      widget.activity.id,
+      contentView: 'reading',
+    );
     _loading = _detail == null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_load());
@@ -1008,6 +1400,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
     final usage = widget.loadUsage();
     final detail = await widget.controller.loadExchangeDetail(
       widget.activity.id,
+      contentView: 'reading',
       refresh: refresh,
     );
     if (!mounted || generation != _generation) return;
@@ -1017,6 +1410,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
       _loading = false;
     });
     restore();
+    widget.onInputLoaded();
     final report = await usage;
     if (mounted && generation == _generation) setState(() => _usage = report);
   }
@@ -1067,9 +1461,20 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
     final content = detail.content;
     final incremental =
         content.requestProjection?.relationship == 'incremental';
-    final inputs = incremental
+    final inputAnchor = content.page?.inputAnchor;
+    final readingInput = inputAnchor != null;
+    // Reading can deliberately withhold the anchor when canonical role proof
+    // needs explicit loading. Keep that neutral entry even for a checkpoint.
+    final readingView = content.requestProjection?.view == 'reading';
+    final inputs =
+        (readingInput
+            ? widget.showInput(inputAnchor)
+            : readingView || incremental)
         ? content.request!.messages
         : const <ExchangeContentMessage>[];
+    final inputBlocks = _readerInput(
+      inputs.where((message) => message.role == 'user').toList(),
+    );
     final toolBlocks = [
       for (final m in inputs)
         ...m.blocks.where(
@@ -1110,7 +1515,7 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               Flexible(
                 flex: 8,
                 child: Text(
-                  '${copy('conversation.exchange')} ${widget.number} · ${_clockTime(widget.activity.occurredAt)}',
+                  _clockTime(widget.activity.occurredAt),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -1140,7 +1545,8 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
             ),
           if (content.state == 'not_recorded')
             InlineNotice(message: copy('exchange.content.not_recorded')),
-          if (content.requestProjection?.relationship == 'checkpoint')
+          if (content.requestProjection?.relationship == 'checkpoint' &&
+              !readingInput)
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -1161,25 +1567,30 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
               copy: copy,
               label: copy('content_page.earlier'),
             ),
+          if (readingInput)
+            _ReadingInput(
+              id: '${detail.id}-input',
+              exchangeId: detail.id,
+              role: 'user',
+              blocks: inputBlocks,
+              copy: copy,
+            ),
           for (final (index, message) in inputs.indexed)
             if (message.role != 'system' &&
                 message.role != 'developer' &&
-                message.role != 'tool' &&
-                _readerText(message.blocks).isNotEmpty)
-              _ReadingMessage(
+                (!readingInput || message.role != 'user'))
+              _ReadingInput(
                 id: '${detail.id}-input-$index',
+                exchangeId: detail.id,
                 role: message.role,
-                blocks: _readerText(message.blocks),
+                blocks: message.blocks,
                 copy: copy,
                 agent: message.agent,
-                roleLabel:
-                    '${copy('exchange.role.${message.role}')} · ${copy('reader.input')}',
-                usage: null,
-                onUsage: null,
               ),
           if (text.isNotEmpty)
             _ReadingMessage(
               id: '${detail.id}-response',
+              exchangeId: detail.id,
               role: 'assistant',
               roleLabel: actorLabel ?? copy('reader.agent_reply'),
               blocks: text,
@@ -1252,6 +1663,68 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
   }
 }
 
+final class _ReadingInput extends StatelessWidget {
+  const _ReadingInput({
+    required this.id,
+    required this.exchangeId,
+    required this.role,
+    required this.blocks,
+    required this.copy,
+    this.agent,
+  });
+  final String id, exchangeId, role;
+  final List<ExchangeContentBlock> blocks;
+  final AppCopy copy;
+  final ExchangeAgentContext? agent;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    var human = <ExchangeContentBlock>[];
+    var segment = 0;
+    void flushHuman() {
+      if (human.isEmpty) return;
+      children.add(
+        _ReadingMessage(
+          id: segment == 0 ? id : '$id-part-$segment',
+          exchangeId: exchangeId,
+          role: role,
+          blocks: human,
+          copy: copy,
+          agent: agent,
+          roleLabel: copy('exchange.role.$role'),
+          usage: null,
+          onUsage: null,
+        ),
+      );
+      segment++;
+      human = <ExchangeContentBlock>[];
+    }
+
+    for (final block in blocks) {
+      if (block.deferred case final deferred?) {
+        flushHuman();
+        children.add(
+          _ContentPageButton(
+            exchangeId: deferred.exchangeId,
+            cursor: deferred.cursor,
+            estimatedBytes: deferred.estimatedBytes,
+            copy: copy,
+          ),
+        );
+      } else if ((role == 'user' || role == 'assistant') &&
+          _isHumanInput(block)) {
+        human.add(block);
+      }
+    }
+    flushHuman();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+}
+
 final class _ReadingMessage extends StatelessWidget {
   const _ReadingMessage({
     required this.id,
@@ -1262,12 +1735,14 @@ final class _ReadingMessage extends StatelessWidget {
     required this.onUsage,
     this.agent,
     this.roleLabel,
+    this.exchangeId,
   });
   final String id, role;
   final List<ExchangeContentBlock> blocks;
   final AppCopy copy;
   final ExchangeAgentContext? agent;
   final String? roleLabel;
+  final String? exchangeId;
   final RuntimeUsageReport? usage;
   final VoidCallback? onUsage;
   @override
@@ -1330,10 +1805,15 @@ final class _ReadingMessage extends StatelessWidget {
                   borderRadius: ViberMetrics.surfaceRadius,
                 )
               : null,
-          child: _ContentBlocksView(
-            id: 'reader-message-$id',
-            blocks: blocks,
-            copy: copy,
+          child: _ContentPageScope(
+            controller: _ContentPageScope.of(context)!.controller,
+            exchangeId: exchangeId,
+            openPage: _ContentPageScope.of(context)?.openPage,
+            child: _ContentBlocksView(
+              id: 'reader-message-$id',
+              blocks: blocks,
+              copy: copy,
+            ),
           ),
         ),
       ],

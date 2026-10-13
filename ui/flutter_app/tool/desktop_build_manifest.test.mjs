@@ -68,6 +68,7 @@ test("v3 is a closed Flutter-only build contract", () => {
     "flutter-macos-framework",
     "url-launcher-framework",
     "vibermate",
+    "vibermate-xray",
     "vibermated",
   ]);
   assert.doesNotThrow(() =>
@@ -109,6 +110,12 @@ test("manifest refuses stale, dirty, non-Flutter, and open shapes", () => {
 });
 
 test("manifest requires every Flutter configuration and nested code digest", () => {
+  const missingKernel = manifest();
+  delete missingKernel.nestedCodeSHA256["vibermate-xray"];
+  assert.throws(() => validateFlutterDesktopBuildManifest(missingKernel));
+  const wrongKernel = manifest();
+  wrongKernel.nestedCodeSHA256["vibermate-xray"] = "wrong";
+  assert.throws(() => validateFlutterDesktopBuildManifest(wrongKernel));
   const missingConfiguration = manifest();
   delete missingConfiguration.configurationSHA256["ui/flutter_app/pubspec.lock"];
   assert.throws(() =>

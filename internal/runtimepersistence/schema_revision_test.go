@@ -11,13 +11,17 @@ import (
 	"time"
 )
 
-// schema.sql and schemaRevision change together. When this fails after an
-// edit to schema.sql, bump schemaRevision and record the new digest here.
+// Unpublished v2 additions update its exact admitted layout and v1 delta, not
+// frozen v1. Earlier private-v2 layouts must remain explicitly rejected.
 func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	t.Parallel()
 	const revision1 = "393b7d67f8ffd1952fc516a150e1a2a68707b67536fbc2e7f5a7f17208424cb1"
+	const revision2 = "d8ef36c8b49439cd82625b2e780bbf5cff9d1be9c7593c94d33ca816cac1ec42"
+	if frozen := sha256.Sum256([]byte(schemaV1SQL)); hex.EncodeToString(frozen[:]) != revision1 {
+		t.Fatal("frozen v1 changed")
+	}
 	digest := sha256.Sum256([]byte(schemaSQL))
-	if schemaRevision != 1 || hex.EncodeToString(digest[:]) != revision1 {
+	if schemaRevision != 2 || hex.EncodeToString(digest[:]) != revision2 {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
 	}
 }

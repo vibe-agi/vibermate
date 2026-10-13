@@ -29,11 +29,12 @@ const (
 )
 
 var (
-	ErrInvalidRequest     = errors.New("invalid CaptureRun request")
-	ErrNotFound           = errors.New("CaptureRun not found")
-	ErrCapabilityRejected = errors.New("CaptureRun capability rejected")
-	ErrStateConflict      = errors.New("CaptureRun state conflict")
-	ErrRuntimeStopping    = errors.New("CaptureRun runtime is stopping")
+	ErrInvalidRequest       = errors.New("invalid CaptureRun request")
+	ErrNotFound             = errors.New("CaptureRun not found")
+	ErrCapabilityRejected   = errors.New("CaptureRun capability rejected")
+	ErrStateConflict        = errors.New("CaptureRun state conflict")
+	ErrRuntimeStopping      = errors.New("CaptureRun runtime is stopping")
+	ErrCommitOutcomeUnknown = errors.New("authenticated CaptureRun stop commit outcome is unknown")
 )
 
 type State string

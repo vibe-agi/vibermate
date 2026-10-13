@@ -218,12 +218,16 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	want := p.TotalMessageCount
 	switch p.View {
 	case RequestViewFull:
+	case RequestViewReading:
 	case RequestViewIncremental:
 		want -= i
 	default:
 		return ErrInvalidEvidence
 	}
 	if page := p.Page; page != nil {
+		if page.InputAnchor != "" && (p.View != RequestViewReading || !validFingerprint("sha256:"+page.InputAnchor) || len(p.Request.Messages) == 0) {
+			return ErrInvalidEvidence
+		}
 		if page.RequestOffset < p.TotalMessageCount-want || page.RequestOffset > p.TotalMessageCount || len(p.Request.Messages) > p.TotalMessageCount-page.RequestOffset || len(p.Request.Messages) > PageMessageLimit || !validPageCursor(page.RequestNextCursor) || !validPageCursor(page.RequestEvidenceNextCursor) || !validPageCursor(page.ResponseEvidenceNextCursor) {
 			return ErrInvalidEvidence
 		}

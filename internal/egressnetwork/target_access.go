@@ -24,6 +24,18 @@ func WithTargetAccess(ctx context.Context, access TargetAccess) context.Context 
 	return context.WithValue(ctx, targetAccessKey{}, access)
 }
 
+// EffectiveTargetAccess snapshots the allowance already carried by ctx.
+func EffectiveTargetAccess(ctx context.Context) TargetAccess {
+	if ctx == nil {
+		return TargetAccessPublicOnly
+	}
+	access, set := ctx.Value(targetAccessKey{}).(TargetAccess)
+	if set && access != TargetAccessOwnerConfigured {
+		return TargetAccessPublicOnly
+	}
+	return TargetAccessOwnerConfigured
+}
+
 func publicTargetsOnly(ctx context.Context) bool {
 	access, set := ctx.Value(targetAccessKey{}).(TargetAccess)
 	return set && access != TargetAccessOwnerConfigured

@@ -3,6 +3,7 @@ package provideraccount
 import (
 	"context"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -26,7 +27,7 @@ func (manager *Manager) AcquireReadCredential(ctx context.Context, plan environm
 		id: id, accountRevision: uint64(account.Revision), realmID: account.RealmID,
 		upstreamEndpointID: account.UpstreamEndpointID, upstreamEndpointRevision: uint64(account.UpstreamEndpointRevision),
 		upstreamEndpointOrigin: route.ProviderTarget().Origin,
-		egressProfile:          plan.EgressProfile(),
+		egressProfile:          plan.EgressChoice(),
 	})
 }
 
@@ -41,7 +42,7 @@ func (manager *Manager) AcquireOwnedCredential(ctx context.Context, id ID) (prov
 	if err != nil {
 		return nil, originidentity.ProviderOrigin{}, err
 	}
-	lease, err := manager.acquire(ctx, accountLeaseScope{id: id, accountRevision: account.Revision, realmID: account.RealmID,
+	lease, err := manager.acquire(ctx, accountLeaseScope{egressProfile: egressprofile.Inherit(), id: id, accountRevision: account.Revision, realmID: account.RealmID,
 		upstreamEndpointOrigin: account.Origin, ownerOperation: true})
 	return lease, account.Origin, err
 }

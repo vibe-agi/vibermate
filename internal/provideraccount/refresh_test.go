@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -50,7 +51,7 @@ func testOAuthRefreshRecovery(t *testing.T, recovery string) {
 	}
 	defer value.Destroy()
 	secrets := &writeLockedSecrets{Store: newMemorySecrets()}
-	manager, err := NewManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, secrets, testEndpoints(t), BuiltInRealms(), clock)
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, secrets, testEndpoints(t), BuiltInRealms(), clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,12 +245,14 @@ type heldOAuthHTTP struct {
 	release chan struct{}
 	token   string
 	status  int
+	scope   providerauth.AccountRef
 }
 
-func (client *heldOAuthHTTP) Do(request *http.Request, _ providerauth.AccountRef) (*http.Response, error) {
+func (client *heldOAuthHTTP) Do(request *http.Request, scope providerauth.AccountRef) (*http.Response, error) {
 	if request.URL.String() != codexoauth.TokenURL || request.Method != http.MethodPost {
 		return nil, errors.New("unexpected synthetic OAuth request")
 	}
+	client.scope = scope
 	close(client.started)
 	select {
 	case <-request.Context().Done():
@@ -292,6 +295,7 @@ func TestManualOAuthRefreshWaitsBeforeFreezingNewAccountLeases(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defaults := bindTestAccountDefaults(t, manager)
 			wire := &heldOAuthHTTP{started: make(chan struct{}), release: make(chan struct{}), token: token, status: test.status}
 			defer func() { close(wire.release); _ = manager.Shutdown(context.Background()) }()
 			oauth, err := codexoauth.NewManager(codexoauth.Options{Secrets: secrets, Client: wire, Clock: fixedClock{now: now}})
@@ -314,6 +318,12 @@ func TestManualOAuthRefreshWaitsBeforeFreezingNewAccountLeases(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("manual refresh did not reach the synthetic token endpoint")
 			}
+			if wire.scope.ResolvedEgress.Source() != egressprofile.SelectionBuiltin || wire.scope.ResolvedEgress.DefaultRevision() != 1 {
+				t.Fatal("winning refresh did not freeze its admitted default")
+			}
+			defaults.mu.Lock()
+			defaults.setting.Revision = 2
+			defaults.mu.Unlock()
 			if test.cancelRefresh {
 				cancelRefresh() // Leaving the page cannot thaw an in-progress rotation.
 			}
@@ -325,6 +335,12 @@ func TestManualOAuthRefreshWaitsBeforeFreezingNewAccountLeases(t *testing.T) {
 			}
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("refresh became an immediate credential failure instead of a cancelable wait: %v", err)
+			}
+			defaults.mu.Lock()
+			readsWhileWaiting := defaults.reads
+			defaults.mu.Unlock()
+			if readsWhileWaiting != 1 {
+				t.Fatal("pre-admission waiter resolved an exit before account admission")
 			}
 			other, err := manager.Create(ctx, CreateCommand{ID: "other", DisplayName: "Other", UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID, Driver: providerauth.CodexOAuthDriverRef(), Secret: value})
 			if err != nil {
@@ -386,6 +402,9 @@ func TestManualOAuthRefreshWaitsBeforeFreezingNewAccountLeases(t *testing.T) {
 				if got.err != nil || got.account.CredentialEpoch != wantEpoch || got.account.ID != "oauth" {
 					t.Fatalf("new request froze an old/different account: %+v", got)
 				}
+				if got.account.ResolvedEgress.Source() != egressprofile.SelectionBuiltin || got.account.ResolvedEgress.DefaultRevision() != 2 || wire.scope.ResolvedEgress.DefaultRevision() != 1 {
+					t.Fatal("pre-admission waiter did not freeze the new default independently of the existing refresh")
+				}
 			case <-time.After(time.Second):
 				t.Fatal("completed refresh did not release the account waiter")
 			}
@@ -400,7 +419,7 @@ func (preparer *rotatingCredentialPreparer) Refresh(ctx context.Context, driver 
 func TestExplicitRefreshChecksEpochAndDoesNotRetargetIdentity(t *testing.T) {
 	ctx := context.Background()
 	secrets := newMemorySecrets()
-	manager, err := NewManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, secrets, testEndpoints(t), BuiltInRealms(), nil)
+	manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: make(map[ID]Account)}, secrets, testEndpoints(t), BuiltInRealms(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

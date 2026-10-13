@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
 
@@ -49,6 +51,10 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, fmt.Errorf("begin Capture deletion: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	capture := captureidentity.Reference{Kind: captureidentity.Kind(captureKind), ID: captureID}
+	if err := revokeNativeScope(operation, transaction, capture, time.Now().UTC()); err != nil {
+		return CaptureDeletion{}, err
+	}
 
 	if err := selectCaptureEvidence(
 		operation, transaction, captureKind, captureID,
@@ -56,6 +62,10 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, err
 	}
 	deletion := CaptureDeletion{}
+	nativeApprovals, err := deleteCounted(operation, transaction, `DELETE FROM native_tool_approvals WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, captureKind, captureID)
+	if err != nil {
+		return CaptureDeletion{}, err
+	}
 	deletion.Approvals, err = deleteCounted(
 		operation, transaction,
 		`DELETE FROM tool_approvals
@@ -64,6 +74,7 @@ func (store *Store) DeleteCapture(
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture approvals: %w", err)
 	}
+	deletion.Approvals += nativeApprovals
 	deletion.Attempts, err = deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_egress_attempts
@@ -107,6 +118,15 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, fmt.Errorf("delete Capture raw evidence: %w", err)
 	}
 	deletion.Envelopes = uint64(envelopes)
+	if _, err := deleteNativeContents(operation, transaction, `operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, captureKind, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
+	if _, err := transaction.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, captureKind, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
+	if _, err := transaction.ExecContext(operation, `UPDATE native_tool_scopes SET state='closed',replay_barrier=1 WHERE capture_kind=? AND capture_id=?`, captureKind, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
 	activityColumn := "capture_run_id"
 	if captureKind == "manual_capture" {
 		activityColumn = "manual_capture_id"
@@ -226,6 +246,10 @@ func selectCaptureEvidence(
 			[]any{captureID},
 		},
 		{
+			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id) SELECT attempt_id FROM native_tool_once WHERE capture_kind=? AND capture_id=?`,
+			[]any{captureKind, captureID},
+		},
+		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_raw_evidence_envelopes
 			 WHERE scope_kind = ? AND scope_id = ? AND attempt_id <> ''`,
@@ -234,11 +258,11 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE parent_exchange_id IN (
+			 WHERE purpose<>'client_tool_service' AND (parent_exchange_id IN (
 			   SELECT id FROM capture_purge_exchange_ids
 			 ) OR connection_id IN (
 			   SELECT id FROM capture_purge_connection_ids
-			 )`,
+			 ))`,
 			nil,
 		},
 		{
@@ -251,7 +275,7 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
+			 WHERE purpose<>'client_tool_service' AND connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
 			nil,
 		},
 	}
@@ -316,6 +340,9 @@ var evidenceTables = []string{
 	"runtime_usage_observations",
 	"runtime_usage_retention_caps",
 	"tool_approvals",
+	"native_tool_approvals",
+	"native_tool_contents",
+	"native_tool_operations",
 	"runtime_exchange_agent_identities",
 	"runtime_activities",
 	"runtime_connection_events",
@@ -355,6 +382,12 @@ func (store *Store) ClearEvidence(ctx context.Context) (ArchiveClear, error) {
 	defer func() { _ = transaction.Rollback() }()
 
 	cleared := ArchiveClear{}
+	if err := revokeNativeScopesWhere(operation, transaction, "state<>'closed'", time.Now().UTC()); err != nil {
+		return ArchiveClear{}, err
+	}
+	if _, err := transaction.ExecContext(operation, `UPDATE native_tool_scopes SET state='closed',replay_barrier=1`); err != nil {
+		return ArchiveClear{}, err
+	}
 	// Reject pre-clear terminal callbacks even for traffic without a Capture.
 	// Keep the collection setting, but begin a fresh observation interval.
 	if _, err := transaction.ExecContext(operation, `UPDATE runtime_usage_policy SET revision=revision+1,
@@ -370,8 +403,8 @@ func (store *Store) ClearEvidence(ctx context.Context) (ArchiveClear, error) {
 			return ArchiveClear{}, fmt.Errorf("clear %s: %w", table, deleteErr)
 		}
 		switch table {
-		case "tool_approvals":
-			cleared.Approvals = count
+		case "tool_approvals", "native_tool_approvals":
+			cleared.Approvals += count
 		case "runtime_exchange_contents":
 			cleared.Exchanges = count
 		case "runtime_raw_evidence_envelopes":

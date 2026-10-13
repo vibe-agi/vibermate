@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -1074,7 +1075,7 @@ type Provider interface {
 // provider attempt. It is derived only from the frozen Environment request
 // plan; an ingress caller cannot choose a different account or realm.
 type AccountLeaseRequest struct {
-	egressProfile            egressprofile.ProfileRevision
+	egressProfile            egressprofile.Choice
 	environmentID            environment.EnvironmentID
 	environmentRevision      environment.Revision
 	environmentDigest        environment.CandidateDigest
@@ -1089,8 +1090,10 @@ type AccountLeaseRequest struct {
 }
 
 func (request AccountLeaseRequest) EgressProfile() egressprofile.ProfileRevision {
-	return request.egressProfile
+	profile, _ := request.egressProfile.ExplicitProfile()
+	return profile
 }
+func (request AccountLeaseRequest) EgressChoice() egressprofile.Choice { return request.egressProfile }
 
 func (request AccountLeaseRequest) EnvironmentID() environment.EnvironmentID {
 	return request.environmentID
@@ -1257,6 +1260,11 @@ func (decision ToolDecision) validate() error {
 // ToolDecisionRequest is an immutable complete decision group. Parallel tool
 // calls from one provider terminal are never split into independent decisions.
 type ToolDecisionRequest struct {
+	nativeOperation     nativetool.ID
+	nativeBinding       *nativetool.Binding
+	nativeContext       ToolDecisionContext
+	nativeWitness       *nativetool.RegisteredParentWitness
+	nativeToolWitness   *nativetool.SensitiveToolWitness
 	exchangeID          string
 	environmentID       environment.EnvironmentID
 	environmentRevision environment.Revision

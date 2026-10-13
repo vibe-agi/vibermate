@@ -16,6 +16,93 @@ import 'runtime_usage_fixture.dart';
 
 void main() {
   test(
+    'SOCKS delivery create rejects changed HTTP or SOCKS endpoint after review',
+    () async {
+      final context = ManualCaptureContext.fromJson(
+        {
+          'confirmationToken': 'ctx_${'A' * 43}',
+          'proxyAddress': 'http://127.0.0.1:32123',
+          'socksAddress': '127.0.0.1:32124',
+          'environmentId': 'work',
+          'environmentRevision': 7,
+          'environmentDigest': 'a' * 64,
+          'launchAuthorityDigest': 'b' * 64,
+          'protectedAuthorities': <String>[],
+          'managedCredentialAuthorities': <String>[],
+          'defaultTemporarySeconds': 3600,
+          'maxTemporarySeconds': 86400,
+        },
+        'context',
+        expectedEnvironmentId: 'work',
+      );
+      var proxyAddress = context.proxyAddress;
+      String? socksAddress = context.socksAddress;
+      var requests = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        requests++;
+        expect(request.method, 'POST');
+        expect(request.uri.path, '/api/v1/manual-captures');
+        await request.drain<void>();
+        request.response.statusCode = 201;
+        request.response.headers.contentType = ContentType.json;
+        request.response.headers.set('etag', '"mc_${'A' * 43}"');
+        request.response.headers.set('cache-control', 'no-store');
+        request.response.write(
+          jsonEncode({
+            'capture': {
+              'id': 'manual-test',
+              'displayName': 'Test',
+              'clientClass': 'other',
+              'lifetime': 'until_revoked',
+              'state': 'active',
+              'observation': 'waiting_for_traffic',
+              'createdAt': '2026-10-11T00:00:00Z',
+              'updatedAt': '2026-10-11T00:00:00Z',
+            },
+            'proxyAddress': proxyAddress,
+            'socksAddress': ?socksAddress,
+            'proxyUsername': 'capture',
+            'proxyPassword': 'synthetic-one-time',
+            'environmentId': 'work',
+            'assignmentRevision': 7,
+            'launchAuthorityDigest': 'b' * 64,
+            'protectedAuthorities': <String>[],
+            'managedCredentialAuthorities': <String>[],
+          }),
+        );
+        await request.response.close();
+      });
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: 'R' * 43,
+          writeToken: 'W' * 43,
+          instanceId: 'socks-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+        inspectSession: false,
+      );
+      addTearDown(api.close);
+      Future<ManualCaptureGrantStateTag> create() => api.createManualCapture(
+        context: context,
+        displayName: 'Test',
+        clientClass: 'other',
+        lifetime: 'until_revoked',
+      );
+      expect((await create()).grant.socksAddress, '127.0.0.1:32124');
+      proxyAddress = 'http://127.0.0.1:32125';
+      await expectLater(create(), throwsA(isA<ControlContractException>()));
+      proxyAddress = context.proxyAddress;
+      socksAddress = '127.0.0.1:32126';
+      await expectLater(create(), throwsA(isA<ControlContractException>()));
+      socksAddress = null;
+      await expectLater(create(), throwsA(isA<ControlContractException>()));
+      expect(requests, 4);
+    },
+  );
+  test(
     'activity summary is a closed, scoped and internally consistent contract',
     () async {
       final payload = <String, Object?>{
@@ -1586,7 +1673,7 @@ void main() {
   );
 
   test(
-    'HTTP API sends one canonical mapped draft before preview and publish',
+    'HTTP API sends one canonical mapped client tool permission draft before preview and publish',
     () async {
       final preview = PreviewControlApi();
       addTearDown(preview.close);
@@ -1648,6 +1735,7 @@ void main() {
         expectedDraftRevision: 0,
         name: 'Work mapped',
         clientEndpoints: normalized,
+        clientToolAccessEnabled: true,
       );
       final digest = List.filled(64, 'b').join();
       final candidate = work.copyWith(
@@ -1655,6 +1743,18 @@ void main() {
         revision: work.revision + 1,
         digest: digest,
         clientEndpoints: normalized,
+        clientToolAccess: EnvironmentClientToolAccess(
+          enabled: true,
+          route: EnvironmentClientToolRoute(
+            id: 'client.tools.synthetic',
+            revision: 1,
+            targetOrigin: Uri.parse('https://chatgpt.com'),
+            path: '/backend-api/ps/mcp',
+            credentialOwner: 'original_client',
+            egressProfile: EgressProfileRevision.direct,
+            contract: 'codex_legacy_2025_06_18',
+          ),
+        ),
       );
       final impactJson = <String, Object?>{
         'environmentId': work.id,
@@ -1747,11 +1847,25 @@ void main() {
       );
       expect(impact.candidateDigest, digest);
       expect(published.environment.routes, hasLength(work.routes.length));
+      expect(saved.candidate.clientToolAccessEnabled, isTrue);
+      expect(
+        published.environment.clientToolAccess!.route!.credentialOwner,
+        'original_client',
+      );
+      expect(
+        published.environment.clientToolAccess!.route!.id,
+        'client.tools.synthetic',
+      );
+      expect(
+        published.environment.contentRecording.toJson(),
+        work.contentRecording.toJson(),
+      );
 
       final put = requests.singleWhere((request) => request.method == 'PUT');
       expect(put.uri.path, '/api/v1/environments/work/draft');
       expect(put.ifMatch, '${work.revision}');
       final wireBody = jsonDecode(utf8.decode(put.body));
+      expect(wireBody['clientToolAccess'], {'enabled': true});
       expect(wireBody, input.toJson());
       expect(normalizedRoute.revision, route.revision + 1);
       expect(

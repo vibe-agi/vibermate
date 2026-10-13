@@ -98,6 +98,7 @@ func TestAProviderRequestFreezesItsTrafficEgressPolicy(t *testing.T) {
 	}
 	options.AccountRef.EgressProfile = testAccountEgress()
 	options.AccountRef.EgressProfile.Policy = want
+	options.AccountRef.ResolvedEgress, _ = egressprofile.RestoreResolved(options.AccountRef.EgressProfile, egressprofile.SelectionAccount, 0)
 	frozen, err := NewRequest(options)
 	if err != nil {
 		t.Fatalf("NewRequest(): %v", err)

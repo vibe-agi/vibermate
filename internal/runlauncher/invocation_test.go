@@ -1,6 +1,7 @@
 package runlauncher
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -8,6 +9,21 @@ import (
 	"net/url"
 	"strings"
 )
+
+// Losing any mandatory recipe override must prevent the legacy interactive
+// fallback at the actual recipe consumer, not merely in a literal fixture.
+func TestCodexCaptureIsolationConsumesLegacyLaunchRecipe(t *testing.T) {
+	for _, original := range [][]string{nil, {"resume", "thread"}, {"fork", "--last"}} {
+		prepared, err := buildChildArguments(append([]string{"codex"}, original...), nil, clientadapter.LaunchCodexResponsesHTTP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := prepareCodexCaptureArguments(context.Background(), "/not/executed", original, prepared, nil, true)
+		if err != nil || !slices.Equal(got, prepared) {
+			t.Fatalf("recipe consumer lost legacy isolation: %v %v", got, err)
+		}
+	}
+}
 
 func TestBuildChildArgumentsKeepsNonCodexInvocationsExact(t *testing.T) {
 	t.Parallel()

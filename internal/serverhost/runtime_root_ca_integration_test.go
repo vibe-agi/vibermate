@@ -25,10 +25,66 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/runlauncher"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/serverhost"
 	"github.com/vibe-agi/vibermate/internal/serveridentity"
 )
+
+func TestClientLoginDownloadsOnlyPublicCAAndHonorsRevocation(t *testing.T) {
+	ctx := context.Background()
+	options := serverOptions(t, t.TempDir())
+	options.Transport.Mode = serverhost.TransportHTTP
+	host, err := serverhost.Start(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownServer(t, host) })
+	if _, err = host.Runtime().RuntimeUsers().Create(ctx, runtimeuser.CreateCommand{Username: "ca-client", Password: []byte("test-client-password")}); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := serverconnection.ParseTarget("http://" + host.Status().ListenAddress)
+	config := runlauncher.RemoteConfig{Target: target, StateDirectory: filepath.Join(t.TempDir(), "client"), DisplayName: "CA test client", Clock: productruntime.SystemClock{}, Random: rand.Reader}
+	if _, err = runlauncher.LoginRemote(ctx, runlauncher.RemoteLoginRequest{Config: config, Username: "ca-client", Password: []byte("test-client-password")}); err != nil {
+		t.Fatal(err)
+	}
+	material, err := runlauncher.RemoteRootCertificate(ctx, config, 5*time.Second)
+	if err != nil {
+		t.Fatalf("logged-in client could not download its public CA: %v", err)
+	}
+	if _, err = runlauncher.ValidatePublicCA([]byte(material.CertificatePEM), material.Fingerprint, config.Clock.Now()); err != nil || strings.Contains(material.CertificatePEM, "PRIVATE KEY") {
+		t.Fatal("client received invalid or private CA material")
+	}
+	store, err := serverconnection.OpenLoginStore(filepath.Join(config.StateDirectory, "login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := store.Load(target, config.Clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{servercontrol.ServerAccessPath, servercontrol.RuntimeUsersPath} {
+		request, _ := http.NewRequest(http.MethodGet, target.Origin()+path, nil)
+		request.Header.Set("Authorization", "Bearer "+login.SessionToken().Value())
+		response, e := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+		if e != nil {
+			t.Fatal(e)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatal("CA access granted unrelated management permissions")
+		}
+	}
+	if err = host.Runtime().RuntimeUsers().Logout(ctx, login.SessionToken().Value()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runlauncher.RemoteRootCertificate(ctx, config, 5*time.Second); err == nil {
+		t.Fatal("revoked client still downloaded the CA")
+	}
+}
 
 func rootCATestSession(t *testing.T, client *http.Client, host *serverhost.Host) servercontrol.AdminSession {
 	t.Helper()

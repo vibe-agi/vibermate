@@ -161,6 +161,11 @@ func (repository *captureAssignmentRepository) Write(ctx context.Context, expect
 			Outcome: captureassignment.CommitOutcomeConflict, Assignment: current, Actual: actual,
 		}, nil
 	}
+	if expected > 0 {
+		if err := revokeNativeScope(permit.context, transaction, candidate.Capture, candidate.UpdatedAt); err != nil {
+			return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, err
+		}
+	}
 	commitErr := repository.committer.Commit(transaction)
 	if commitErr == nil {
 		return captureassignment.CommitResult{

@@ -79,6 +79,16 @@ func main() {
 		os.Exit(2)
 	}
 	defer resources.bootstrap.Close()
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	vlessExecutable, err := resolveVLESSExecutable(config.vlessExecutable, executable)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -113,11 +123,8 @@ func main() {
 		os.Exit(1)
 	}
 	options.Host.RemoteServerListenAddress = config.remoteServerListenAddress
-	executable, err := os.Executable()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	options.Host.SOCKSListenAddress = config.socksListenAddress
+	options.Host.Runtime.VLESSExecutable = vlessExecutable
 	managementUIRoot, err := packagedManagementUIRoot(executable)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -131,6 +138,12 @@ func main() {
 }
 
 const serverHelp = `Run a ViberMate Runtime Server and Web workbench.
+
+Optional packet proxy: --socks-listen=127.0.0.1:1080 (disabled by default).
+Advertised packet endpoint: --socks-access-address=proxy.example:1080 (requires SOCKS).
+This separate raw SOCKS listener has no HTTP relay encryption or NAT traversal promise.
+Trusted VLESS kernel startup: --vless-executable=/absolute/path/to/xray.
+The ready JSON reports socksAddress. The kernel path is never imported from a URI.
 
 Local on this computer (no domain or certificate):
   vibermated server
@@ -291,12 +304,15 @@ func directManagementUIRoot(root string, optional bool) (string, error) {
 }
 
 type serverCommandConfig struct {
-	dataDirectory  string
-	listenAddress  string
-	accessAddress  string
-	webRoot        string
-	transport      serverhost.TransportOptions
-	trustedProxies ipallowlist.List
+	socksListenAddress string
+	socksAccessAddress string
+	vlessExecutable    string
+	dataDirectory      string
+	listenAddress      string
+	accessAddress      string
+	webRoot            string
+	transport          serverhost.TransportOptions
+	trustedProxies     ipallowlist.List
 }
 
 func runServer(arguments []string) {
@@ -305,12 +321,17 @@ func runServer(arguments []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	vlessExecutable, err := resolveVLESSExecutable(config.vlessExecutable, executable)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if config.webRoot == "" {
-		executable, executableErr := os.Executable()
-		if executableErr != nil {
-			fmt.Fprintln(os.Stderr, executableErr)
-			os.Exit(1)
-		}
 		config.webRoot, err = serverManagementUIRoot(executable)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -343,6 +364,9 @@ func runServer(arguments []string) {
 	}
 	options.Host.AccessAddress = config.accessAddress
 	options.Host.TrustedProxies = config.trustedProxies
+	options.Host.SOCKSListenAddress = config.socksListenAddress
+	options.Host.SOCKSAccessAddress = config.socksAccessAddress
+	options.Host.Runtime.VLESSExecutable = vlessExecutable
 	if err := serverdaemon.Run(ctx, options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -360,6 +384,7 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		name, value, hasInline := strings.Cut(argument, "=")
 		switch name {
 		case "--data-dir", "--listen", "--access-address", "--web-root",
+			"--socks-listen", "--socks-access-address", "--vless-executable",
 			"--transport", "--tls-cert", "--tls-key", "--tls-hosts",
 			"--acme-email", "--acme-challenge", "--acme-http-port", "--acme-ca",
 			"--acme-agree-terms", "--trusted-proxies":
@@ -388,6 +413,12 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 			return serverCommandConfig{}, errors.New(name + " requires a value")
 		}
 		switch name {
+		case "--socks-listen":
+			config.socksListenAddress = value
+		case "--socks-access-address":
+			config.socksAccessAddress = value
+		case "--vless-executable":
+			config.vlessExecutable = value
 		case "--data-dir":
 			config.dataDirectory = value
 		case "--listen":
@@ -432,6 +463,16 @@ func parseServerArguments(arguments []string) (serverCommandConfig, error) {
 		if defaultErr != nil {
 			return serverCommandConfig{}, defaultErr
 		}
+	}
+	if err := validatePacketStartup(config.socksListenAddress, config.vlessExecutable, false); err != nil {
+		return serverCommandConfig{}, err
+	}
+	if config.socksAccessAddress != "" {
+		address, err := serverconnection.ParseAddress(config.socksAccessAddress)
+		if err != nil || config.socksListenAddress == "" {
+			return serverCommandConfig{}, errors.New("--socks-access-address requires an enabled SOCKS listener and a valid host:port")
+		}
+		config.socksAccessAddress = address.String()
 	}
 	if !filepath.IsAbs(config.dataDirectory) ||
 		filepath.Clean(config.dataDirectory) != config.dataDirectory ||
@@ -495,6 +536,8 @@ func validServerTransport(transport serverhost.TransportOptions) bool {
 }
 
 type commandConfig struct {
+	socksListenAddress        string
+	vlessExecutable           string
 	appCacheDirectory         string
 	dataDirectory             string
 	webviewOrigin             string
@@ -507,6 +550,24 @@ type commandConfig struct {
 type commandResources struct {
 	bootstrap      *os.File
 	parentLifetime *os.File
+}
+
+// These are trusted process startup settings, never URI or request fields.
+func validatePacketStartup(address, executable string, desktop bool) error {
+	if executable != "" && (!filepath.IsAbs(executable) || filepath.Clean(executable) != executable) {
+		return errors.New("VLESS executable must be an absolute canonical startup path")
+	}
+	if address != "" {
+		host, port, err := net.SplitHostPort(address)
+		ip := net.ParseIP(host)
+		if err != nil || ip == nil || (desktop && host != "127.0.0.1") {
+			return errors.New("SOCKS bind must be explicit and Desktop must use literal IPv4 loopback")
+		}
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return errors.New("SOCKS bind port is invalid")
+		}
+	}
+	return nil
 }
 
 func parseArguments(arguments []string) (commandConfig, commandResources, error) {
@@ -531,8 +592,20 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 func parseCommandConfig(arguments []string) (commandConfig, error) {
 	var config commandConfig
 	remoteServerListenSet := false
+	packetFlags := make(map[string]bool)
 	for _, argument := range arguments {
 		switch {
+		case strings.HasPrefix(argument, "--socks-listen="), strings.HasPrefix(argument, "--vless-executable="):
+			name, value, _ := strings.Cut(argument, "=")
+			if packetFlags[name] || value == "" {
+				return commandConfig{}, errors.New("packet startup option must be nonempty and specified once")
+			}
+			packetFlags[name] = true
+			if name == "--socks-listen" {
+				config.socksListenAddress = value
+			} else {
+				config.vlessExecutable = value
+			}
 		case strings.HasPrefix(argument, "--app-cache-dir="):
 			config.appCacheDirectory = strings.TrimPrefix(
 				argument,
@@ -586,6 +659,9 @@ func parseCommandConfig(arguments []string) (commandConfig, error) {
 	}
 	if !remoteServerListenSet {
 		config.remoteServerListenAddress = "127.0.0.1:9666"
+	}
+	if err := validatePacketStartup(config.socksListenAddress, config.vlessExecutable, true); err != nil {
+		return commandConfig{}, err
 	}
 	remoteHost, remotePort, remoteErr := net.SplitHostPort(
 		config.remoteServerListenAddress,

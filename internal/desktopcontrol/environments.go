@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
@@ -19,6 +21,10 @@ import (
 
 type EnvironmentListResponse struct {
 	Items []EnvironmentResponse `json:"items"`
+}
+
+type ClientToolAccessBuilder interface {
+	PrepareClientToolAccess(context.Context, environment.Environment, *environment.ClientToolAccessPolicy) (environment.ClientToolAccessPolicy, error)
 }
 
 type EnvironmentResponse struct {
@@ -34,6 +40,7 @@ type EnvironmentResponse struct {
 	ContentRecording  environment.ContentRecordingPolicy  `json:"contentRecording"`
 	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet         environment.PolicySet               `json:"policySet"`
+	ClientToolAccess  *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -54,6 +61,7 @@ type EnvironmentDraftInput struct {
 	ContentRecording      environment.ContentRecordingPolicy  `json:"contentRecording"`
 	LaunchEnvironment     environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet             *environment.PolicySet              `json:"policySet,omitempty"`
+	ClientToolAccess      *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
 }
 
 type EnvironmentImpactResponse struct {
@@ -98,6 +106,7 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 		ContentRecording:  aggregate.ContentRecording,
 		LaunchEnvironment: aggregate.LaunchEnvironment.Clone(),
 		PolicySet:         aggregate.EffectivePolicySet(),
+		ClientToolAccess:  aggregate.Clone().ClientToolAccess,
 	}
 }
 
@@ -269,7 +278,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 	}
 	id, idErr := environment.NewEnvironmentID(request.PathValue("environmentId"))
 	var input EnvironmentDraftInput
-	if idErr != nil || decodeStrictJSON(body, &input) != nil {
+	if idErr != nil || !validClientToolAccessInput(body) || decodeStrictJSON(body, &input) != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -291,6 +300,27 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			ContentRecording:  input.ContentRecording,
 			LaunchEnvironment: input.LaunchEnvironment.Clone(),
 			PolicySet:         input.PolicySet,
+			ClientToolAccess:  input.ClientToolAccess,
+		}
+		if candidate.ClientToolAccess != nil {
+			if !candidate.ClientToolAccess.Enabled {
+				if candidate.ClientToolAccess.Validate() != nil {
+					return problemResponse(classifyEnvironmentError(environment.ErrInvalidEnvironment))
+				}
+				candidate.ClientToolAccess = nil
+			} else {
+				if handler.clientToolAccess == nil {
+					return problemResponse(problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonClientToolAccessUnsupported})
+				}
+				prepared, prepareErr := handler.clientToolAccess.PrepareClientToolAccess(request.Context(), candidate.Clone(), input.ClientToolAccess)
+				if prepareErr != nil {
+					if errors.Is(prepareErr, environment.ErrClientProtocolNotMatched) {
+						return problemResponse(problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonClientToolAccessUnsupported})
+					}
+					return problemResponse(classifyEnvironmentError(prepareErr))
+				}
+				candidate.ClientToolAccess = &prepared
+			}
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision:  environment.Revision(expectedBase),
@@ -308,6 +338,107 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 	writeCached(writer, response)
 }
 
+// Null and missing enabled are not OFF consent; omission alone is legacy OFF.
+func validClientToolAccessInput(body []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return false
+	}
+	var raw json.RawMessage
+	present := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		if err != nil || !isName {
+			return false
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return false
+		}
+		if !strings.EqualFold(name, "clientToolAccess") {
+			continue
+		}
+		if name != "clientToolAccess" || present {
+			return false
+		}
+		raw, present = value, true
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return false
+	}
+	if !present {
+		return true
+	}
+	policy := clientToolAccessObject(raw, []string{"enabled"}, "route")
+	if policy == nil {
+		return false
+	}
+	enabled := policy["enabled"]
+	if bytes.Equal(bytes.TrimSpace(enabled), []byte("false")) {
+		return len(policy) == 1
+	}
+	if !bytes.Equal(bytes.TrimSpace(enabled), []byte("true")) {
+		return false
+	}
+	rawRoute, present := policy["route"]
+	if !present {
+		return true
+	}
+	route := clientToolAccessObject(rawRoute, []string{"id", "revision", "targetOrigin", "path", "credentialOwner", "egressProfile", "contract"})
+	if route == nil {
+		return false
+	}
+	var choice egressprofile.Choice
+	return json.Unmarshal(route["egressProfile"], &choice) == nil && choice.Validate() == nil
+}
+
+// The new permission and frozen route use exact names and non-null values.
+// Inspect tokens before typed decoding: encoding/json otherwise folds casing
+// and overwrites duplicate members. This helper is used only by this wire shape.
+func clientToolAccessObject(raw json.RawMessage, required []string, optional ...string) map[string]json.RawMessage {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return nil
+	}
+	allowed := make(map[string]bool, len(required)+len(optional))
+	for _, name := range required {
+		allowed[name] = true
+	}
+	for _, name := range optional {
+		allowed[name] = true
+	}
+	fields := make(map[string]json.RawMessage, len(allowed))
+	for decoder.More() {
+		token, err := decoder.Token()
+		name, isName := token.(string)
+		if err != nil || !isName || !allowed[name] {
+			return nil
+		}
+		if _, duplicate := fields[name]; duplicate {
+			return nil
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil
+		}
+		fields[name] = value
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return nil
+	}
+	for _, name := range required {
+		if _, present := fields[name]; !present {
+			return nil
+		}
+	}
+	return fields
+}
+
 func (handler *Handler) resolvePublishedEgressProfiles(
 	ctx context.Context,
 	endpoints []environment.ClientEndpoint,
@@ -315,9 +446,12 @@ func (handler *Handler) resolvePublishedEgressProfiles(
 	direct := egressprofile.Direct()
 	for endpointIndex := range endpoints {
 		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
-			profile := &endpoints[endpointIndex].ProtocolPlans[planIndex].EgressProfile
-			if profile.Equal(direct) {
-				*profile = direct
+			choice := &endpoints[endpointIndex].ProtocolPlans[planIndex].EgressProfile
+			if choice.Validate() != nil {
+				return egressprofile.ErrInvalidProfile
+			}
+			profile, explicit := choice.ExplicitProfile()
+			if !explicit || profile.Equal(direct) {
 				continue
 			}
 			if handler.egressProfiles == nil {
@@ -329,10 +463,13 @@ func (handler *Handler) resolvePublishedEgressProfiles(
 			if err != nil {
 				return err
 			}
-			if !published.Equal(*profile) {
+			if !published.Equal(profile) {
 				return egressprofile.ErrInvalidProfile
 			}
-			*profile = published
+			*choice, err = egressprofile.Explicit(published)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

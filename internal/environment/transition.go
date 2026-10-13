@@ -32,6 +32,9 @@ func validatePreparedTransition(previous, candidate Environment) error {
 	if oldValue.ID != newValue.ID || newValue.Revision != oldValue.Revision+1 {
 		return fmt.Errorf("%w: root identity or revision did not advance exactly once", ErrInvalidTransition)
 	}
+	if err := validateClientToolTransition(oldValue, newValue); err != nil {
+		return err
+	}
 	oldEndpoints := make(map[ClientEndpointID]ClientEndpoint, len(oldValue.ClientEndpoints))
 	oldPlans := make(map[ClientProtocolPlanID]ClientProtocolPlan)
 	oldRoutes := make(map[UpstreamRouteID]UpstreamRoute)

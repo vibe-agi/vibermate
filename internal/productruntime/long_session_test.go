@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -331,6 +332,14 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		t.Fatal(err)
 	}
 	plan, err := snapshot.ResolveRequest(f.aggregate.ClientEndpoints[0].ClientOrigin, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "POST", Path: "/backend-api/codex/responses", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedEgress, err := f.runtime.egressDefaults.Resolve(ctx, egressprofile.Inherit(), plan.EgressChoice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = plan.WithResolvedEgress(resolvedEgress)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import '../../core/api/control_models.dart';
+import '../../core/api/control_api.dart' show ControlProblem;
 import '../../core/design/agent_client_profile.dart';
 import '../../core/design/agent_identity.dart';
 import '../../core/design/viber_theme.dart';
@@ -21,6 +22,7 @@ import 'usage_dashboard_view.dart' show usageCostLabel;
 
 part 'conversation_reader.dart';
 part 'content_page_view.dart';
+part 'image_attachment_view.dart';
 
 final class EvidenceConversationTimeline extends StatefulWidget {
   const EvidenceConversationTimeline({
@@ -1017,7 +1019,13 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
   final VoidCallback onToggleFull;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _ContentPageScope(
+    controller: controller,
+    exchangeId: activity.id,
+    child: Builder(builder: _buildEvidence),
+  );
+
+  Widget _buildEvidence(BuildContext context) {
     final detail = controller.exchangeDetail(
       activity.id,
       contentView: showFull ? 'full' : 'incremental',
@@ -3572,6 +3580,10 @@ final class _ContentBlockView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (block.kind == 'provider_extension' &&
+        block.providerKind == 'input_image') {
+      return _ImageAttachmentView(fingerprint: block.fingerprint, copy: copy);
+    }
     if (block.availability == 'omitted') {
       if (block.kind == 'provider_extension') {
         final digest = block.fingerprint?.replaceFirst('sha256:', '');
@@ -3643,12 +3655,19 @@ final class _ContentBlockView extends StatelessWidget {
                       child: Text(
                         multiAgent
                             ? copy('exchange.agent.action.${block.toolName}')
-                            : (block.toolName ?? copy('exchange.tool.unknown')),
+                            : switch (block.toolName) {
+                                'exec' => copy('reader.execute_code'),
+                                'exec_command' => copy(
+                                  'reader.execute_command',
+                                ),
+                                _ =>
+                                  block.toolName ??
+                                      copy('exchange.tool.unknown'),
+                              },
                       ),
                     ),
                   ],
                 ),
-                Text(block.callId ?? '—', style: monoStyle),
               ],
             ),
             if (block.arguments != null) ...[
@@ -3657,6 +3676,9 @@ final class _ContentBlockView extends StatelessWidget {
                 const JsonEncoder.withIndent('  ').convert(block.arguments),
                 style: monoStyle,
               ),
+            ] else if (block.text != null) ...[
+              const SizedBox(height: 5),
+              SelectableText(block.text!, style: monoStyle),
             ],
           ],
         ),

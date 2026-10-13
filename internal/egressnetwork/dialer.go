@@ -21,10 +21,17 @@ type Resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
 }
 
+// VLESSConnector is trusted host composition; it only receives frozen public
+// identity and admitted literal targets, never owner-supplied executable paths.
+type VLESSConnector interface {
+	DialContext(context.Context, ProxyPolicy, string, string) (net.Conn, error)
+}
+
 type BuilderOptions struct {
 	BaseDialer      ContextDialer
 	SystemResolver  Resolver
 	TLSClientConfig *tls.Config
+	VLESS           VLESSConnector
 }
 
 // Builder compiles one frozen Policy into a context-aware target dialer. Its
@@ -34,6 +41,7 @@ type Builder struct {
 	base           ContextDialer
 	systemResolver Resolver
 	tlsConfig      *tls.Config
+	vless          VLESSConnector
 }
 
 func NewBuilder(options BuilderOptions) (*Builder, error) {
@@ -54,7 +62,7 @@ func NewBuilder(options BuilderOptions) (*Builder, error) {
 			tlsConfig.MinVersion = tls.VersionTLS12
 		}
 	}
-	return &Builder{base: base, systemResolver: resolver, tlsConfig: tlsConfig}, nil
+	return &Builder{base: base, systemResolver: resolver, tlsConfig: tlsConfig, vless: options.VLESS}, nil
 }
 
 func (builder *Builder) Dialer(policy Policy) (ContextDialer, error) {
@@ -66,6 +74,10 @@ func (builder *Builder) Dialer(policy Policy) (ContextDialer, error) {
 	if err != nil {
 		return nil, err
 	}
+	proxyDialer, err := builder.proxyDialer(normalized.Proxy)
+	if err != nil {
+		return nil, err
+	}
 	var targetResolver Resolver
 	switch normalized.Resolver.Kind {
 	case ResolverSystem:
@@ -73,14 +85,12 @@ func (builder *Builder) Dialer(policy Policy) (ContextDialer, error) {
 	case ResolverDoH:
 		resolverDialer := builder.base
 		if normalized.Resolver.Transport == ResolverTransportProxy {
-			resolverDialer, err = newSOCKSDialer(
-				builder.base,
-				normalized.Proxy.Endpoint,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("build proxied DoH transport: %w", err)
-			}
+			resolverDialer = proxyDialer
 		}
+		// Infrastructure bootstrap uses explicit Runtime system resolution,
+		// independent of the target's configured DoH. The owner configured
+		// this resolver endpoint; it does not grant private target authority.
+		resolverDialer = bootstrapDialer{dialer: &policyDialer{policy: Policy{Proxy: ProxyPolicy{Kind: ProxySOCKS5}}, base: builder.base, proxy: resolverDialer, resolver: builder.systemResolver}}
 		targetResolver, err = newDoHResolver(
 			normalized.Resolver.DoHURL,
 			resolverDialer,
@@ -92,18 +102,12 @@ func (builder *Builder) Dialer(policy Policy) (ContextDialer, error) {
 	default:
 		return nil, ErrInvalidPolicy
 	}
-	var proxyDialer ContextDialer
-	if normalized.Proxy.Kind != ProxyDirect {
-		proxyDialer, err = newSOCKSDialer(builder.base, normalized.Proxy.Endpoint)
-		if err != nil {
-			return nil, err
-		}
-	}
 	return &policyDialer{
 		policy:   normalized,
 		base:     builder.base,
 		resolver: targetResolver,
 		proxy:    proxyDialer,
+		system:   builder.systemResolver,
 	}, nil
 }
 
@@ -112,6 +116,7 @@ type policyDialer struct {
 	base     ContextDialer
 	resolver Resolver
 	proxy    ContextDialer
+	system   Resolver
 }
 
 func (dialer *policyDialer) DialContext(
@@ -138,17 +143,51 @@ func (dialer *policyDialer) DialContext(
 		return nil, fmt.Errorf("traffic egress target host: %w", err)
 	}
 	canonical := net.JoinHostPort(host, port)
+	if dialer.policy.DirectDomains.Matches(host) {
+		direct := &policyDialer{base: dialer.base, resolver: dialer.system}
+		return direct.resolveAndDial(ctx, network, host, port, dialer.base)
+	}
 	switch dialer.policy.Proxy.Kind {
 	case ProxyDirect:
 		if dialer.policy.Resolver.Kind == ResolverSystem && !publicTargetsOnly(ctx) {
 			return dialer.base.DialContext(ctx, network, canonical)
 		}
 		return dialer.resolveAndDial(ctx, network, host, port, dialer.base)
-	case ProxySOCKS5:
+	case ProxySOCKS5, ProxyVLESS:
 		if dialer.proxy == nil {
 			return nil, errors.New("SOCKS5 target dialer is unavailable")
 		}
 		return dialer.resolveAndDial(ctx, network, host, port, dialer.proxy)
+	default:
+		return nil, ErrInvalidPolicy
+	}
+}
+
+type vlessDialer struct {
+	connector VLESSConnector
+	policy    ProxyPolicy
+}
+
+type bootstrapDialer struct{ dialer *policyDialer }
+
+func (d bootstrapDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return d.dialer.DialContext(WithTargetAccess(ctx, TargetAccessOwnerConfigured), network, address)
+}
+
+func (d vlessDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if d.connector == nil {
+		return nil, errors.New("VLESS transport is unavailable")
+	}
+	return d.connector.DialContext(ctx, d.policy, network, address)
+}
+func (builder *Builder) proxyDialer(policy ProxyPolicy) (ContextDialer, error) {
+	switch policy.Kind {
+	case ProxyDirect:
+		return nil, nil
+	case ProxySOCKS5:
+		return newSOCKSDialer(builder.base, policy.Endpoint)
+	case ProxyVLESS:
+		return vlessDialer{connector: builder.vless, policy: policy}, nil
 	default:
 		return nil, ErrInvalidPolicy
 	}

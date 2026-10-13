@@ -85,11 +85,12 @@ func TestUsageShorterRetentionIsImmediateAndNeverResurrected(t *testing.T) {
 	if err := store.RecordUsage(ctx, runtimeusage.Observation{ExchangeID: "old", StartedAt: start, OccurredAt: start, Status: activity.StatusSucceeded}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.database.ExecContext(ctx, `
+	const unavailableUsageTriggers = `
 CREATE TRIGGER unavailable_usage_update BEFORE UPDATE ON runtime_usage_observations
 BEGIN SELECT RAISE(ABORT,'synthetic history write failure'); END;
 CREATE TRIGGER unavailable_usage_delete BEFORE DELETE ON runtime_usage_observations
-BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`); err != nil {
+BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`
+	if _, err := store.database.ExecContext(ctx, unavailableUsageTriggers); err != nil {
 		t.Fatal(err)
 	}
 	period, _ := runtimeusage.NewQuery("2026-09-01", "2026-10-01", "UTC")
@@ -127,8 +128,16 @@ BEGIN SELECT RAISE(ABORT,'synthetic history delete failure'); END;`); err != nil
 		t.Fatal(err)
 	}
 	check(1) // New observations use the new policy, not an older pending restriction.
+	// Exact schema admission must reject extra triggers. Remove the synthetic
+	// fault seam for the reopen proof, then reinstall it on the validated Store.
+	if _, err := store.database.ExecContext(ctx, `DROP TRIGGER unavailable_usage_update; DROP TRIGGER unavailable_usage_delete;`); err != nil {
+		t.Fatal(err)
+	}
 	shutdownTestStore(t, store)
 	store = openDisabledUsageTestStore(t, path)
+	if _, err := store.database.ExecContext(ctx, unavailableUsageTriggers); err != nil {
+		t.Fatal(err)
+	}
 	check(1)
 	if err := store.MaintainExpired(ctx, now); err == nil {
 		t.Fatal("maintenance did not attempt to apply the shortened retention")

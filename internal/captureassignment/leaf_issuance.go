@@ -9,6 +9,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 var (
@@ -31,6 +33,13 @@ type LeafIssuanceRequest struct {
 	clientOrigin        originidentity.ClientOrigin
 	san                 certidentity.SubjectAlternativeName
 	algorithm           certidentity.LeafKeyAlgorithm
+	mode                environment.ConnectionMode
+	nativeDigest        environment.ConnectionCompatibilityDigest
+}
+
+func (request LeafIssuanceRequest) ConnectionMode() environment.ConnectionMode { return request.mode }
+func (request LeafIssuanceRequest) NativeCompatibilityDigest() environment.ConnectionCompatibilityDigest {
+	return request.nativeDigest
 }
 
 func (request LeafIssuanceRequest) RootRevision() certidentity.RootRevision {
@@ -64,10 +73,21 @@ func (request LeafIssuanceRequest) validate() error {
 	if !request.rootRevision.Valid() || request.capture.Validate() != nil ||
 		request.assignmentRevision == 0 || request.assignmentRevision > MaxRevision ||
 		request.environmentID == "" || request.environmentRevision == 0 ||
-		request.endpointID == "" || request.endpointRevision == 0 ||
 		request.clientOrigin.Validate() != nil || !request.san.Valid() ||
 		request.san.Kind() != certidentity.SANKindDNS ||
 		request.san.Value() != request.clientOrigin.Host() || !request.algorithm.Valid() {
+		return ErrLeafIssuanceInvalid
+	}
+	switch request.mode {
+	case environment.ConnectionModeSemantic:
+		if request.endpointID == "" || request.endpointRevision == 0 || request.nativeDigest != (environment.ConnectionCompatibilityDigest{}) {
+			return ErrLeafIssuanceInvalid
+		}
+	case environment.ConnectionModeClientTools:
+		if request.endpointID != "" || request.endpointRevision != 0 || request.nativeDigest == (environment.ConnectionCompatibilityDigest{}) {
+			return ErrLeafIssuanceInvalid
+		}
+	default:
 		return ErrLeafIssuanceInvalid
 	}
 	return nil
@@ -135,21 +155,38 @@ func (manager *Manager) admitLeaf(
 	}
 	state := manager.state(capture)
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	connection := state.connections[connectionID]
-	if connection == nil || state.shutdown || state.poisoned ||
-		connection.binding.Mode != environment.ConnectionModeSemantic {
+	if connection == nil || state.shutdown || state.poisoned || state.transitioning ||
+		(connection.binding.Mode != environment.ConnectionModeSemantic && connection.binding.Mode != environment.ConnectionModeClientTools) {
+		state.mu.Unlock()
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
 	assignment := connection.assignment
 	snapshot := connection.snapshot
+	binding := connection.binding
+	state.mu.Unlock()
 	if assignment.Validate() != nil || assignment.Capture != capture ||
 		snapshot.ID() != assignment.EnvironmentID ||
-		snapshot.Revision() != assignment.LaunchAuthority.InitialEnvironmentRevision() ||
-		snapshot.Digest() != assignment.LaunchAuthority.InitialEnvironmentDigest() {
+		snapshot.Revision() != assignment.EnvironmentRevision ||
+		snapshot.Digest() != assignment.EnvironmentDigest {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
-	if environment.ValidateConnectionBinding(snapshot, connection.binding) != nil {
+	if environment.ValidateConnectionBinding(snapshot, binding) != nil {
+		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+	}
+	if binding.Mode == environment.ConnectionModeClientTools {
+		initial, err := manager.environments.ResolveRevision(ctx, assignment.LaunchAuthority.InitialEnvironmentID(), assignment.LaunchAuthority.InitialEnvironmentRevision())
+		plan, planErr := snapshot.ResolveClientToolRequest(binding, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "GET", Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1})
+		native, ok := plan.ClientToolPlan()
+		if err != nil || planErr != nil || !ok || initial.ValidateClientToolLaunchAuthority(assignment.LaunchAuthority, native) != nil {
+			return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+		}
+	} else if snapshot.Revision() != assignment.LaunchAuthority.InitialEnvironmentRevision() || snapshot.Digest() != assignment.LaunchAuthority.InitialEnvironmentDigest() {
+		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.connections[connectionID] != connection || state.shutdown || state.poisoned || state.transitioning || connection.assignment != assignment || connection.binding != binding {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
 	clientOrigin, err := originidentity.ParseClientOrigin(
@@ -158,17 +195,24 @@ func (manager *Manager) admitLeaf(
 	if err != nil {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
-	endpoint, exists := snapshot.LookupCompiledClientOrigin(connection.binding.ClientOrigin)
-	if !exists || endpoint.ID() != connection.binding.ClientEndpointID ||
-		san.Kind() != certidentity.SANKindDNS || san.Value() != clientOrigin.Host() {
+	if san.Kind() != certidentity.SANKindDNS || san.Value() != clientOrigin.Host() {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
 	request := LeafIssuanceRequest{
 		rootRevision: rootRevision, capture: capture,
 		assignmentRevision: assignment.Revision,
 		environmentID:      assignment.EnvironmentID, environmentRevision: snapshot.Revision(),
-		endpointID: endpoint.ID(), endpointRevision: endpoint.Revision(),
 		clientOrigin: clientOrigin, san: san, algorithm: algorithm,
+		mode: connection.binding.Mode,
+	}
+	if connection.binding.Mode == environment.ConnectionModeClientTools {
+		request.nativeDigest = connection.binding.CompatibilityDigest
+	} else {
+		endpoint, exists := snapshot.LookupCompiledClientOrigin(connection.binding.ClientOrigin)
+		if !exists || endpoint.ID() != connection.binding.ClientEndpointID {
+			return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+		}
+		request.endpointID, request.endpointRevision = endpoint.ID(), endpoint.Revision()
 	}
 	if request.validate() != nil {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceInvalid
@@ -188,7 +232,13 @@ func (manager *Manager) leafRequestCurrent(admission *leafAdmissionState) bool {
 	defer state.mu.Unlock()
 	current := state.connections[admission.connectionID]
 	return !state.shutdown && !state.poisoned && current == admission.connection &&
-		current.binding.Mode == environment.ConnectionModeSemantic &&
+		!state.transitioning &&
+		current.binding.Mode == admission.request.mode &&
 		current.binding.ProviderOrigin.String() == admission.request.clientOrigin.String() &&
-		current.binding.ClientEndpointID == admission.request.endpointID
+		current.binding.ClientEndpointID == admission.request.endpointID &&
+		(current.binding.Mode != environment.ConnectionModeClientTools ||
+			(current.binding.CompatibilityDigest == admission.request.nativeDigest &&
+				current.assignment.Revision == admission.request.assignmentRevision &&
+				current.snapshot.ID() == admission.request.environmentID &&
+				current.snapshot.Revision() == admission.request.environmentRevision))
 }

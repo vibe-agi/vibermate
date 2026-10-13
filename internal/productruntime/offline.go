@@ -14,6 +14,7 @@ type runtimeResumeProber struct {
 	provider offlinehold.Prober
 	original offlinehold.Prober
 	blind    offlinehold.Prober
+	udp      offlinehold.Prober
 }
 
 func newRuntimeResumeProber(
@@ -49,9 +50,14 @@ func (prober *runtimeResumeProber) Probe(
 	for _, target := range request.Targets {
 		var selected offlinehold.Prober
 		switch target.Kind {
+		case offlinehold.EgressDatagram:
+			selected = prober.udp
+			if selected == nil {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("datagram setup prober is unavailable"))
+			}
 		case offlinehold.EgressProvider:
 			selected = prober.provider
-		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
+		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary, offlinehold.EgressUpdate:
 			selected = prober.original
 		case offlinehold.EgressBlindTunnel:
 			// A CONNECT that arrived after Enter is queued like anything else,
@@ -60,7 +66,7 @@ func (prober *runtimeResumeProber) Probe(
 			// every provider request waiting behind it.
 			selected = prober.blind
 		default:
-			// Plugin distribution and update egress have Hold kinds but no
+			// Plugin distribution has Hold kinds but no
 			// subsystem that can queue one yet, so reaching here is a
 			// programming error rather than a network condition. Saying that
 			// is more useful than a reason code a person would read as "the
@@ -159,9 +165,13 @@ func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 		target.PlanDigest,
 		string(target.EgressPolicy.Proxy.Kind),
 		target.EgressPolicy.Proxy.Endpoint,
+		target.EgressPolicy.Proxy.CredentialRef,
+		fmt.Sprintf("%020d", target.EgressPolicy.Proxy.CredentialRevision),
+		string(target.EgressPolicy.DirectDomains),
 		string(target.EgressPolicy.Resolver.Kind),
 		target.EgressPolicy.Resolver.DoHURL,
 		string(target.EgressPolicy.Resolver.Transport),
+		fmt.Sprintf("%03d", target.TargetAccess),
 	}, "\x00")
 }
 

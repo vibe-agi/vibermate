@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
 
@@ -27,8 +28,9 @@ const manualCaptureColumns = `
 	last_observed_at_unix_ms`
 
 type manualCaptureRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	database      *sql.DB
+	operations    *operationGate
+	stopCommitter transactionCommitter
 }
 
 const manualCaptureActivityAt = `MAX(created_at_unix_ms, COALESCE(
@@ -264,6 +266,9 @@ func (repository *manualCaptureRepository) mutate(
 		}
 		return current, outcome
 	}
+	if err := revokeNativeScope(operation, transaction, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: id.String()}, now); err != nil {
+		return manualcapture.DurableRecord{}, err
+	}
 	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
 		`SELECT `+manualCaptureColumns+` FROM manual_captures WHERE capture_id = ?`,
@@ -272,8 +277,14 @@ func (repository *manualCaptureRepository) mutate(
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read mutated ManualCapture: %w", err)
 	}
-	if err := transaction.Commit(); err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture mutation: %w", err)
+	var commitErr error
+	if revokedIsSuccess {
+		commitErr = commitNativeStop(operation, repository.database, transaction, repository.stopCommitter, manualcapture.ErrCommitOutcomeUnknown, "revoked", uint64(expected), `SELECT state,credential_revision FROM manual_captures WHERE capture_id=? AND owner_kind=? AND owner_id=?`, id.String(), string(owner.Kind()), ownerStorageID(owner))
+	} else {
+		commitErr = transaction.Commit()
+	}
+	if commitErr != nil {
+		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture mutation: %w", commitErr)
 	}
 	return record, nil
 }
@@ -574,6 +585,9 @@ func (repository *manualCaptureRepository) Recover(
 		return manualcapture.Recovery{}, fmt.Errorf("count expired ManualCaptures: %w", err)
 	}
 	var active int
+	if err := revokeNativeScopesWhere(operation, transaction, `capture_kind='manual_capture' AND capture_id IN(SELECT capture_id FROM manual_captures WHERE state='expired')`, now); err != nil {
+		return manualcapture.Recovery{}, err
+	}
 	if err := transaction.QueryRowContext(
 		operation,
 		`SELECT COUNT(*) FROM manual_captures WHERE state = 'active'`,

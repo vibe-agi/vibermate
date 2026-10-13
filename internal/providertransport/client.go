@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -47,6 +49,7 @@ const (
 )
 
 type ClientOptions struct {
+	EgressDefaults egressprofile.Resolver
 	Coordinator    offlinehold.Coordinator
 	Authenticator  Authenticator
 	Authenticators []Authenticator
@@ -123,7 +126,8 @@ func (operation *clientOperation) takeLease() offlinehold.Lease {
 }
 
 type Client struct {
-	mu sync.Mutex
+	egressDefaults egressprofile.Resolver
+	mu             sync.Mutex
 
 	coordinator    offlinehold.Coordinator
 	authenticators map[providerauth.DriverRef]Authenticator
@@ -185,6 +189,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		authenticators: byRef,
 		transport:      options.Transport,
 		instanceIDs:    options.InstanceIDs,
+		egressDefaults: options.EgressDefaults,
 		runtimePlan:    runtimePlan,
 		audit:          options.Audit,
 		raw:            options.RawEvidence,
@@ -223,6 +228,7 @@ func NewProductionClientWithAuthenticators(
 	instanceIDs InstanceIDSource,
 	audit egressaudit.Writer,
 	rawEvidence rawevidence.Observer,
+	defaults egressprofile.Resolver,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
 	if err != nil {
@@ -235,7 +241,23 @@ func NewProductionClientWithAuthenticators(
 		InstanceIDs:    instanceIDs,
 		Audit:          audit,
 		RawEvidence:    rawEvidence,
+		EgressDefaults: defaults,
 	})
+}
+
+// NewProductionClientWithBuilder shares the Runtime-owned network path while
+// retaining provider authentication, admission and strict TLS semantics.
+func NewProductionClientWithBuilder(options ClientOptions, builder *egressnetwork.Builder, timeouts TransportTimeouts) (*Client, error) {
+	strict, err := newStrictTransportWithDialers(nil, builder, timeouts)
+	if err != nil {
+		return nil, err
+	}
+	cleartext, err := newCleartextTransportWithDialers(builder, timeouts)
+	if err != nil {
+		return nil, err
+	}
+	options.Transport = &productionTransport{strictTLS: strict, cleartext: cleartext}
+	return NewClient(options)
 }
 
 // Do acquires the global egress lease before secret access, authentication, or
@@ -1111,11 +1133,13 @@ func providerEgressDecision(frozen Request) egressaudit.DecisionRef {
 	if rule == "" {
 		rule = "original.destination"
 	}
+	selection, defaultRevision := frozen.resolvedEgress.Source(), frozen.resolvedEgress.DefaultRevision()
 	return egressaudit.DecisionRef{
 		PolicyID: frozen.provenance.environmentID.String(), PolicyRevision: uint64(frozen.provenance.environmentRevision),
 		Authority: authority, RuleID: rule,
 		ProxyID: frozen.egressProfile.ID.String(), ProxyRevision: uint64(frozen.egressProfile.Revision),
 		AccountID: frozen.accountRef.ID, AccountSettingsRevision: frozen.accountRef.SettingsRevision,
+		SelectionSource: selection, DefaultRevision: defaultRevision,
 	}
 }
 

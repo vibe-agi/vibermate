@@ -6,8 +6,10 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -24,16 +26,21 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/productupdate"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -43,9 +50,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
+	"github.com/vibe-agi/vibermate/internal/socksproxy"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/vlessprofile"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -53,6 +62,11 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	socks              *socksproxy.Server
+	udp                *runtimeUDP
+	vlessProfiles      *vlessprofile.Manager
+	network            *egressnetwork.Builder
+	productUpdates     *productupdate.Reader
 	bodyAdmission      *exchange.BodyAdmission
 	launchSnapshots    launchsnapshot.Store
 	paths              RuntimePaths
@@ -77,8 +91,11 @@ type Runtime struct {
 	codexLogins        *codexoauth.LoginManager
 	codeLibrary        *codelibrary.Manager
 	egressProfiles     *egressprofile.Manager
+	egressDefaults     *egressprofile.DefaultManager
 	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
+	nativeTools        nativemcp.Executor
+	nativeContentKey   [32]byte
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
@@ -109,8 +126,13 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 }
 
 type runtimeBuildOverrides struct {
-	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
-	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
+	connectionEvent func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
+	originalProber  func() (*originaltransport.TLSProber, error)
+	providerProber  func() (*providertransport.ProviderProber, error)
+	blindProber     func() (*blindtunnel.ReachabilityProber, error)
+	environment     func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	provider        func(providerBuildRequest) (providerRuntime, error)
+	recoverEgress   func(context.Context, egressaudit.Repository, time.Time) error
 }
 
 func recoverEgressAttempts(
@@ -200,9 +222,22 @@ func startWithBuilders(
 		return fail("data directory ownership", err)
 	}
 	cleanups.register("data directory ownership", func(context.Context) error { return dataGuard.Release() })
+	hostGuard := options.SchemaUpgradeHostGuard
+	if hostGuard == nil {
+		hostGuard, err = instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), "server.lock"))
+		if err != nil {
+			return fail("host ownership", err)
+		}
+		// Retain through Open, all startup and failed-start cleanup. Desktop's
+		// existing serverhost.Attach acquires it only after Start returns.
+		defer hostGuard.Release()
+	} else if hostGuard.Path() != filepath.Join(options.Paths.DataDirectory(), "server.lock") || !hostGuard.OwnsDirectory(options.Paths.DataDirectory()) {
+		return fail("host ownership", ErrInvalidOptions)
+	}
 	storageResult, err := buildStorage(ctx, storageBuildRequest{
+		databasePath: options.Paths.DatabasePath(),
+		directory:    options.Paths.DataDirectory(), dataGuard: dataGuard, hostGuard: hostGuard, now: options.Clock.Now().UTC(), upgradeTimeout: options.SchemaUpgradeTimeout, progress: options.SchemaUpgradeProgress,
 		contentLimits: contentLimits,
-		databasePath:  options.Paths.DatabasePath(),
 	})
 	if err != nil {
 		return fail("sqlite", err)
@@ -224,6 +259,9 @@ func startWithBuilders(
 		return fail("sqlite", incompleteErr)
 	}
 	cleanups.register("sqlite", storageResult.store.Shutdown)
+	if err := storageResult.store.NativeToolRepository().Recover(ctx, options.Clock.Now().UTC()); err != nil {
+		return fail("native tool recovery", err)
+	}
 	egressRepository := storageResult.store.EgressAttemptRepository()
 	if egressRepository == nil {
 		return fail(
@@ -243,6 +281,10 @@ func startWithBuilders(
 	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	var nativeContentKey [32]byte
+	if _, err := io.ReadFull(securityRandom, nativeContentKey[:]); err != nil {
+		return fail("native content cursor key", err)
+	}
 	clientAnnotations, err := clientannotation.Open(ctx, options.Secrets, securityRandom)
 	if err != nil {
 		return fail("client annotation signing", err)
@@ -264,6 +306,10 @@ func startWithBuilders(
 	)
 	if err != nil {
 		return fail("egress profiles", err)
+	}
+	egressDefaults, err := egressprofile.NewDefaultManager(storageResult.store.EgressDefaultRepository(), egressProfiles)
+	if err != nil {
+		return fail("egress defaults", err)
 	}
 	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
 		Repository:      storageResult.store.RuntimeUserRepository(),
@@ -383,6 +429,9 @@ func startWithBuilders(
 	if err := accounts.BindEgressProfiles(egressProfiles); err != nil {
 		return fail("ProviderAccount egress profiles", err)
 	}
+	if err := accounts.BindEgressDefaults(egressDefaults); err != nil {
+		return fail("ProviderAccount egress defaults", err)
+	}
 	captureRunRepository := storageResult.store.CaptureRunRepository()
 	manualCaptureRepository := storageResult.store.ManualCaptureRepository()
 	captureActivity, err := newCaptureActivityResolver(
@@ -394,7 +443,10 @@ func startWithBuilders(
 		return fail("Capture activity projection", err)
 	}
 
+	nativeRevoker := &nativeRevocation{}
 	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
+		egressDefaults:       egressDefaults,
+		nativeRevocation:     nativeRevoker,
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
 		activity:             captureActivity,
@@ -455,7 +507,11 @@ func startWithBuilders(
 	}
 	cleanups.register("Exchange content component", contents.Shutdown)
 
-	connections, err := buildConnectionEvent(ctx, connectionEventBuildRequest{
+	connectionBuilder := buildConnectionEvent
+	if overrides.connectionEvent != nil {
+		connectionBuilder = overrides.connectionEvent
+	}
+	connections, err := connectionBuilder(ctx, connectionEventBuildRequest{
 		repository: storageResult.store.ConnectionEventRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -487,12 +543,13 @@ func startWithBuilders(
 	}
 
 	approvals, err := buildApproval(approvalBuildRequest{
-		ctx:        ctx,
-		repository: storageResult.store.ToolApprovalRepository(),
-		clock:      options.Clock,
-		random:     securityRandom,
-		config:     options.Approvals,
-		remembered: connectionRules,
+		ctx:              ctx,
+		repository:       storageResult.store.ToolApprovalRepository(),
+		clock:            options.Clock,
+		random:           securityRandom,
+		config:           options.Approvals,
+		remembered:       connectionRules,
+		nativeRepository: storageResult.store.NativeToolRepository(),
 	})
 	if err != nil || approvals == nil {
 		buildErr := err
@@ -532,17 +589,55 @@ func startWithBuilders(
 	}
 	cleanups.register("storage health monitor", monitor.Shutdown)
 
-	providerResumeProber, err := providertransport.NewProviderProber()
+	vlessProfiles, err := vlessprofile.New(vlessprofile.Options{Store: options.Secrets, Profiles: egressProfiles, Owner: ownerContext, Executable: options.VLESSExecutable, SystemResolver: options.NetworkOptions.SystemResolver})
+	if err != nil {
+		return fail("VLESS profile authority", err)
+	}
+	cleanups.register("VLESS sessions", vlessProfiles.Shutdown)
+	networkOptions := options.NetworkOptions
+	networkOptions.VLESS = vlessProfiles
+	network, err := egressnetwork.NewBuilder(networkOptions)
+	if err != nil {
+		return fail("shared egress network", err)
+	}
+	buildProviderProber := func() (*providertransport.ProviderProber, error) {
+		return providertransport.NewProviderProberWithBuilder(network, nil)
+	}
+	if overrides.providerProber != nil {
+		buildProviderProber = overrides.providerProber
+	}
+	providerResumeProber, err := buildProviderProber()
 	if err != nil {
 		return fail("offline-hold provider probe", err)
 	}
-	originalResumeProber, err := originaltransport.NewTLSProber()
+	if providerResumeProber == nil {
+		return fail("offline-hold provider probe", fmt.Errorf("%w: provider prober is nil", ErrInvalidBuildResult))
+	}
+	buildOriginalProber := func() (*originaltransport.TLSProber, error) {
+		return originaltransport.NewTLSProberWithBuilder(network, nil)
+	}
+	if overrides.originalProber != nil {
+		buildOriginalProber = overrides.originalProber
+	}
+	originalResumeProber, err := buildOriginalProber()
 	if err != nil {
 		return fail("offline-hold original-origin probe", err)
 	}
-	blindResumeProber, err := blindtunnel.NewReachabilityProber()
+	if originalResumeProber == nil {
+		return fail("offline-hold original-origin probe", fmt.Errorf("%w: original prober is nil", ErrInvalidBuildResult))
+	}
+	buildBlindProber := func() (*blindtunnel.ReachabilityProber, error) {
+		return blindtunnel.NewReachabilityProberWithBuilder(network)
+	}
+	if overrides.blindProber != nil {
+		buildBlindProber = overrides.blindProber
+	}
+	blindResumeProber, err := buildBlindProber()
 	if err != nil {
 		return fail("offline-hold blind tunnel probe", err)
+	}
+	if blindResumeProber == nil {
+		return fail("offline-hold blind tunnel probe", fmt.Errorf("%w: blind prober is nil", ErrInvalidBuildResult))
 	}
 	resumeProber, err := newRuntimeResumeProber(
 		providerResumeProber,
@@ -552,13 +647,20 @@ func startWithBuilders(
 	if err != nil {
 		return fail("offline-hold resume probe", err)
 	}
+	resumeProber.udp = udpSetupProber{network: network}
 
-	provider, err := buildProvider(providerBuildRequest{
-		coordinator: options.OfflineHold,
-		secrets:     options.Secrets,
-		instanceIDs: options.InstanceIDs,
-		audit:       runtimeEgress,
-		rawEvidence: rawEvidence,
+	providerBuilder := buildProvider
+	if overrides.provider != nil {
+		providerBuilder = overrides.provider
+	}
+	provider, err := providerBuilder(providerBuildRequest{
+		network:        network,
+		egressDefaults: egressDefaults,
+		coordinator:    options.OfflineHold,
+		secrets:        options.Secrets,
+		instanceIDs:    options.InstanceIDs,
+		audit:          runtimeEgress,
+		rawEvidence:    rawEvidence,
 	})
 	if err != nil {
 		return fail("provider transport", err)
@@ -570,6 +672,10 @@ func startWithBuilders(
 		)
 	}
 	pending.register("provider transport", provider.Shutdown)
+	productUpdates, err := productupdate.New(egressDefaults, provider, options.Clock.Now)
+	if err != nil {
+		return fail("product update reader", err)
+	}
 	codexOAuth, err := codexoauth.NewManager(codexoauth.Options{
 		Secrets: options.Secrets,
 		Client:  codexOAuthHTTPClient{provider: provider},
@@ -583,7 +689,8 @@ func startWithBuilders(
 		return fail("ProviderAccount credential preparation authority", err)
 	}
 	codexLogins, err := codexoauth.NewLoginManager(codexoauth.LoginOptions{
-		Client: codexOAuthHTTPClient{provider: provider}, Clock: options.Clock,
+		TokenClient: provider,
+		Client:      codexOAuthHTTPClient{provider: provider}, Clock: options.Clock,
 		Persist: persistCodexLogin(accounts, options.Secrets),
 	})
 	if err != nil {
@@ -591,7 +698,12 @@ func startWithBuilders(
 	}
 	pending.register("Codex OAuth login manager", codexLogins.Shutdown)
 
+	nativeTransport, err := selectOriginalTransport(options, network)
+	if err != nil {
+		return fail("native strict transport", err)
+	}
 	original, err := buildOriginal(originalBuildRequest{
+		transport:   nativeTransport,
 		coordinator: options.OfflineHold,
 		audit:       runtimeEgress,
 	})
@@ -608,6 +720,13 @@ func startWithBuilders(
 		)
 	}
 	pending.register("original-origin transport", original.Shutdown)
+	nativeOperationIDs := nativeIDs{random: securityRandom}
+	nativeTools, err := nativemcp.New(nativemcp.Dependencies{EgressDefaults: egressDefaults, OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs, ContentProfiles: options.ContentProfiles}, nativemcp.DefaultLimits())
+	if err != nil {
+		return fail("native MCP recovery", err)
+	}
+	nativeRevoker.install(nativeTools)
+	pending.register("native MCP module", nativeTools.Close)
 
 	exchanges, err := buildExchange(exchangeBuildRequest{
 		bodyAdmission:            bodyAdmission,
@@ -642,10 +761,11 @@ func startWithBuilders(
 
 	archiveBarrier := evidencearchive.NewBarrier()
 	captureRuns, err := buildCapture(ctx, captureBuildRequest{
-		repository:     captureRunRepository,
-		clock:          options.Clock,
-		random:         securityRandom,
-		archiveBarrier: archiveBarrier,
+		nativeRevocation: nativeRevoker,
+		repository:       captureRunRepository,
+		clock:            options.Clock,
+		random:           securityRandom,
+		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -661,10 +781,11 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 	manualCaptures, err := buildManualCapture(ctx, manualCaptureBuildRequest{
-		repository:     manualCaptureRepository,
-		clock:          options.Clock,
-		random:         securityRandom,
-		archiveBarrier: archiveBarrier,
+		nativeRevocation: nativeRevoker,
+		repository:       manualCaptureRepository,
+		clock:            options.Clock,
+		random:           securityRandom,
+		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -689,7 +810,7 @@ func startWithBuilders(
 
 	// A blind tunnel dials through the same egress admission as every other
 	// outbound, so it cannot become the one path that ignores a planned hold.
-	blindTunnels, err := newBlindTunnelDialer(options.OfflineHold)
+	blindTunnels, err := selectBlindTunnels(options, network)
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
@@ -698,23 +819,25 @@ func startWithBuilders(
 		return fail("account operation reader", err)
 	}
 	proxy, err := buildProxy(proxyBuildRequest{
-		bodyAdmission: bodyAdmission,
-		ownerContext:  ownerContext,
-		admissions:    captureAdmissions,
-		assignments:   assignments,
+		ownerContext: ownerContext,
+		admissions:   captureAdmissions,
+		assignments:  assignments,
+		nativeTools:  nativeTools, nativeIDs: nativeOperationIDs,
 		exchanges:     exchanges,
 		original:      original,
 		accountReads:  accountReads,
 		certificates:  certificateAuthority,
 		connections:   connections,
 		policy:        connectionRules.Source(),
+		bodyAdmission: bodyAdmission,
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
-		approvals:    approvals,
-		blindTunnels: blindTunnels,
-		egressAudit:  runtimeEgress,
-		rawEvidence:  rawEvidence,
-		random:       securityRandom,
+		approvals:      approvals,
+		blindTunnels:   blindTunnels,
+		egressDefaults: egressDefaults,
+		egressAudit:    runtimeEgress,
+		rawEvidence:    rawEvidence,
+		random:         securityRandom,
 	})
 	if err != nil {
 		return fail("loopback proxy handler", err)
@@ -726,6 +849,21 @@ func startWithBuilders(
 		)
 	}
 	pending.register("loopback proxy handler", proxy.Shutdown)
+	udp := &runtimeUDP{owner: ownerContext, activity: captureActivity,
+		policy: connectionRules.Source(), approvals: approvals,
+		defaults: egressDefaults, gate: options.OfflineHold, network: network,
+		connections: connections, audit: runtimeEgress, clock: options.Clock, changed: make(chan struct{})}
+	pending.register("UDP finalization", udp.Shutdown)
+	socks, err := socksproxy.New(socksproxy.Options{
+		Authorizer: captureAdmissions, TCPHandler: proxy,
+		UDP:          udp,
+		TargetAccess: egressnetwork.TargetAccessPublicOnly,
+	})
+	if err != nil {
+		return fail("SOCKS proxy", err)
+	}
+	pending.register("SOCKS proxy", socks.Shutdown)
+	nativeRevoker.installSOCKS(socks)
 
 	if err := options.OfflineHold.Start(ctx, offlinehold.RuntimeBinding{
 		InstanceID: instanceID,
@@ -768,7 +906,11 @@ func startWithBuilders(
 	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("Capture assignment drain", assignments.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
+	cleanups.register("UDP finalization drain", udp.Drain)
+	cleanups.register("SOCKS proxy drain", socks.Drain)
+	cleanups.register("native MCP module", nativeTools.Close)
 	cleanups.register("provider transport", provider.Shutdown)
+	cleanups.register("Codex OAuth login manager", codexLogins.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)
 	cleanups.register("ManualCapture component", manualCaptures.Shutdown)
@@ -799,6 +941,14 @@ func startWithBuilders(
 		proxy.BeginShutdown()
 		return nil
 	})
+	cleanups.register("SOCKS proxy admission", func(context.Context) error {
+		socks.BeginShutdown()
+		return nil
+	})
+	cleanups.register("UDP admission", func(context.Context) error {
+		udp.BeginShutdown()
+		return nil
+	})
 	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPObservations(), captureRuns, assignments, environments, options.Clock)
 	if err != nil {
 		return fail("ACP observations", err)
@@ -810,11 +960,19 @@ func startWithBuilders(
 		return fail("foundation state verification", err)
 	}
 	tracker.commitInitialized(finalState.Revision)
+	if err := ctx.Err(); err != nil {
+		return fail("startup cancellation", err)
+	}
+	if !dataGuard.OwnsDirectory(options.Paths.DataDirectory()) || !hostGuard.OwnsDirectory(options.Paths.DataDirectory()) {
+		return fail("startup ownership", runtimedata.ErrSchemaUpgradeIncomplete)
+	}
 	var shutdownBudgetDone chan struct{}
 	if bodyAdmission != nil {
 		shutdownBudgetDone = make(chan struct{})
 	}
 	return &Runtime{
+		socks:              socks,
+		udp:                udp,
 		bodyAdmission:      bodyAdmission,
 		paths:              options.Paths,
 		storage:            storageResult.store,
@@ -838,8 +996,14 @@ func startWithBuilders(
 		codexLogins:        codexLogins,
 		codeLibrary:        codeLibrary,
 		egressProfiles:     egressProfiles,
+		vlessProfiles:      vlessProfiles,
+		network:            network,
+		egressDefaults:     egressDefaults,
+		productUpdates:     productUpdates,
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
+		nativeTools:        nativeTools,
+		nativeContentKey:   nativeContentKey,
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
@@ -1045,6 +1209,14 @@ func (r *Runtime) EgressProfiles() egressprofile.Controller {
 	return r.egressProfiles
 }
 
+// VLESSProfiles accepts private imports at the existing owner-control boundary.
+func (r *Runtime) VLESSProfiles() vlessprofile.Importer { return r.vlessProfiles }
+
+// EgressDefaults is the instance-owned global configuration, not send authority.
+func (r *Runtime) EgressDefaults() egressprofile.Defaults { return r.egressDefaults }
+
+func (r *Runtime) ProductUpdates() *productupdate.Reader { return r.productUpdates }
+
 // UpstreamEndpoints returns the reusable upstream authority. Every managed
 // ProviderAccount belongs to exactly one Endpoint exposed by this controller.
 func (r *Runtime) UpstreamEndpoints() upstreamendpoint.Controller {
@@ -1078,6 +1250,14 @@ func (r *Runtime) FetchModelsDevPrices(ctx context.Context) (*http.Response, err
 	}
 	return r.provider.FetchModelsDevPrices(ctx)
 }
+
+// NativeToolRepository and NativeToolPreviews expose the same Store and live
+// executor used by captured native traffic to authenticated host composition.
+func (r *Runtime) NativeToolRepository() nativetool.Repository {
+	return r.storage.NativeToolRepository()
+}
+func (r *Runtime) NativeToolPreviews() nativemcp.Executor { return r.nativeTools }
+func (r *Runtime) NativeToolContentKey() [32]byte         { return r.nativeContentKey }
 
 // ToolApprovals returns the durable interactive tool decision authority used
 // by the Exchange pipeline.

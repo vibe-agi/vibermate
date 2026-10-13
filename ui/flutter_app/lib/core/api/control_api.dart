@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'acp_models.dart';
 import 'control_models.dart';
+import 'native_tool_models.dart';
 import 'account_facts_models.dart';
 import 'provider_origin.dart';
 import 'runtime_storage.dart';
@@ -17,6 +18,33 @@ abstract interface class ACPObservationApi {
 }
 
 abstract interface class ControlApi {
+  Future<ProductUpdateMetadata> checkProductUpdate();
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  });
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  );
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  });
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  });
+  Future<NativeApproval> nativeApproval(String captureKey, String approvalId);
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  );
   Future<List<LaunchEnvironmentSnapshot>> launchEnvironmentSnapshots();
   Future<RuntimeStorageLocation> storageLocation();
   Future<DeletionOutcome> cleanupExpiredEvidence();
@@ -111,6 +139,13 @@ abstract interface class ControlApi {
 
   Future<EgressProfileCatalog> egressProfiles();
 
+  Future<EgressDefaultSetting> egressDefault();
+
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  );
+
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
     required int expectedRevision,
@@ -119,6 +154,21 @@ abstract interface class ControlApi {
   });
 
   Future<EgressProfileRevision> egressProfileRevision(String id, int revision);
+
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  );
+
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  });
 
   Future<EnvironmentPublishResult> publishEnvironmentDraft(
     String environmentId,
@@ -163,6 +213,11 @@ abstract interface class ControlApi {
   });
 
   Future<RawEvidencePage> rawEvidence(String exchangeId);
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  });
 
   Future<ExchangeContentPage> exchangeContentPage(
     String exchangeId,
@@ -170,6 +225,10 @@ abstract interface class ControlApi {
   );
 
   Future<RevealedRawEvidence> revealRawEvidence({required String envelopeId});
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  });
 
   Future<String> revealRawHeader({
     required String envelopeId,
@@ -469,6 +528,173 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi implements ControlApi, ACPObservationApi {
+  @override
+  Future<ProductUpdateMetadata> checkProductUpdate() async =>
+      ProductUpdateMetadata.fromJson(
+        await _command(
+          'POST',
+          '/api/v1/product-update/check',
+          body: const <String, Object?>{},
+        ),
+      );
+  @override
+  Future<NativeToolOperationPage> nativeToolOperations(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async {
+    validateNativeCapture(captureKey);
+    if (afterSequence < 0 || limit < 1 || limit > 199) {
+      throw const ControlContractException('Invalid native operation query');
+    }
+    return NativeToolOperationPage.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+      ),
+      captureKey,
+      afterSequence,
+      limit,
+    );
+  }
+
+  @override
+  Future<NativeToolOperation> nativeToolOperation(
+    String captureKey,
+    String operationId,
+  ) async {
+    nativeHex(operationId, 32);
+    final value = NativeToolOperation.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}/$operationId',
+      ),
+      captureKey,
+    );
+    if (value.operationId != operationId) {
+      throw const ControlContractException('Native operation mismatch');
+    }
+    return value;
+  }
+
+  @override
+  Future<NativeToolContentPage> nativeToolContent(
+    String captureKey,
+    String operationId,
+    String part, {
+    String? cursor,
+  }) async {
+    nativeHex(operationId, 32);
+    if (part != 'tool_arguments' && part != 'tool_result' ||
+        cursor != null && (cursor.isEmpty || cursor.length > 512)) {
+      throw const ControlContractException('Invalid native content query');
+    }
+    final query = Uri(queryParameters: {'part': part, 'cursor': ?cursor}).query;
+    return NativeToolContentPage.fromJson(
+      await _readNativePreview(
+        '${_nativeOperationsPath(captureKey)}/$operationId/content?$query',
+      ),
+      captureKey,
+      operationId,
+      part,
+    );
+  }
+
+  String _nativeOperationsPath(String capture) {
+    validateNativeCapture(capture);
+    return '/api/v1/captures/${Uri.encodeComponent(capture)}/native-tools/operations';
+  }
+
+  String _nativeApprovalsPath(String captureKey) {
+    validateNativeCapture(captureKey);
+    return '/api/v1/captures/${Uri.encodeComponent(captureKey)}/native-tools/approvals';
+  }
+
+  Future<Object?> _readNativePreview(String path) async {
+    await _ensureFreshSession();
+    final result = await _send(
+      'GET',
+      path,
+      token: _session.readToken,
+      expectedStatus: 200,
+      maximumResponseBytes: 14 << 20,
+    );
+    if (result.headers.value('cache-control') != 'no-store') {
+      throw const ControlContractException('Native preview may be cached');
+    }
+    return result.payload;
+  }
+
+  @override
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    int afterSequence = 0,
+    int limit = 50,
+  }) async {
+    if (afterSequence < 0 || limit < 1 || limit > 199) {
+      throw const ControlContractException('Invalid native page request');
+    }
+    final payload = await _readNativePreview(
+      '${_nativeApprovalsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+    );
+    return NativeApprovalPage.fromJson(
+      payload,
+      captureKey,
+      afterSequence: afterSequence,
+      limit: limit,
+    );
+  }
+
+  @override
+  Future<NativeApproval> nativeApproval(
+    String captureKey,
+    String approvalId,
+  ) async {
+    nativeHex(approvalId, 32);
+    final value = NativeApproval.fromJson(
+      await _readNativePreview(
+        '${_nativeApprovalsPath(captureKey)}/$approvalId',
+      ),
+      captureKey,
+    );
+    if (value.id != approvalId) {
+      throw const ControlContractException('Native approval ID mismatch');
+    }
+    return value;
+  }
+
+  @override
+  Future<NativeApproval> decideNativeApproval(
+    String captureKey,
+    NativeApproval approval,
+    NativeDecision decision,
+  ) async {
+    if (captureKey != approval.captureKey ||
+        !approval.pending ||
+        decision == NativeDecision.allowOnce && !approval.canAllow) {
+      throw const ControlContractException(
+        'Native approval no longer available',
+      );
+    }
+    final value = NativeApproval.fromJson(
+      await _mutation(
+        'POST',
+        '${_nativeApprovalsPath(captureKey)}/${approval.id}/actions/decide',
+        expectedRevision: approval.revision,
+        body: {
+          'decision': decision.wire,
+          'bindingDigest': approval.bindingDigest,
+        },
+      ),
+      captureKey,
+    );
+    if (!value.sameIntent(approval) ||
+        value.revision <= approval.revision ||
+        value.state !=
+            (decision == NativeDecision.allowOnce ? 'allowed' : 'denied')) {
+      throw const ControlContractException('Native decision response mismatch');
+    }
+    return value;
+  }
+
   @override
   Future<ACPRecord?> acpObservation(String captureKey) async {
     try {
@@ -1051,6 +1277,39 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       );
 
   @override
+  Future<EgressDefaultSetting> egressDefault() async =>
+      EgressDefaultSetting.fromJson(await _read('/api/v1/egress-default'));
+
+  @override
+  Future<EgressDefaultSetting> setEgressDefault(
+    EgressDefaultSetting current,
+    EgressProfileRevision? profile,
+  ) async {
+    if (profile != null) {
+      EgressChoice.fromJson(profile.toJson(), 'defaultProfile');
+    }
+    final result = EgressDefaultSetting.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/egress-default',
+        expectedRevision: current.revision,
+        body: {
+          'profile': profile == null
+              ? null
+              : {'id': profile.id, 'revision': profile.revision},
+        },
+      ),
+    );
+    final expected = current.revision + (current.profile == profile ? 0 : 1);
+    if (result.revision != expected || result.profile != profile) {
+      throw const ControlContractException(
+        'Default mutation acknowledgement is inconsistent',
+      );
+    }
+    return result;
+  }
+
+  @override
   Future<EgressProfileRevision> publishEgressProfile({
     required String id,
     required int expectedRevision,
@@ -1070,6 +1329,79 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
         body: {'displayName': displayName, 'policy': policy.toJson()},
       ),
       'egressProfile',
+    );
+  }
+
+  @override
+  Future<EgressProfileRevision> importVlessEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required String uri,
+    required TrafficResolverPolicy resolver,
+    required String directDomains,
+    VlessTLSImportOptions? tls,
+  }) async {
+    if (!_validResourceId(id) ||
+        id == EgressProfileRevision.direct.id ||
+        expectedRevision < 0 ||
+        BigInt.from(expectedRevision) >= BigInt.parse('9223372036854775807')) {
+      throw const ControlContractException(
+        'Egress profile import authority is invalid',
+      );
+    }
+    if (tls != null &&
+        tls.mode == 'custom_ca' &&
+        (tls.caPem == null ||
+            tls.caPem!.trim().isEmpty ||
+            utf8.encode(tls.caPem!).length > 64 * 1024)) {
+      throw const ControlContractException('Custom CA input is invalid');
+    }
+    final response = await _mutation(
+      'POST',
+      '/api/v1/egress-profiles/import-vless',
+      expectedRevision: expectedRevision,
+      body: {
+        'id': id,
+        'displayName': displayName,
+        'uri': uri,
+        'resolver': resolver.toJson(),
+        'directDomains': directDomains,
+        if (tls != null)
+          'tls': {
+            'mode': tls.mode,
+            if (tls.mode == 'custom_ca') 'caPem': tls.caPem,
+          },
+      },
+    );
+    final profile = EgressProfileRevision.fromJson(response, 'egressProfile');
+    if (profile.id != id ||
+        profile.revision != expectedRevision + 1 ||
+        !profile.policy.proxy.isVless) {
+      throw const ControlContractException(
+        'Egress profile import acknowledgement is inconsistent',
+      );
+    }
+    return profile;
+  }
+
+  @override
+  Future<VlessProfileDescription> vlessProfileDescription(
+    String id,
+    int revision,
+  ) async {
+    if (!_validResourceId(id) ||
+        revision < 1 ||
+        BigInt.from(revision) > BigInt.parse('9223372036854775807')) {
+      throw const ControlContractException(
+        'VLESS settings authority is invalid',
+      );
+    }
+    return VlessProfileDescription.fromJson(
+      await _read(
+        '/api/v1/egress-profiles/${Uri.encodeComponent(id)}/revisions/$revision/vless-settings',
+      ),
+      'vlessSettings',
     );
   }
 
@@ -1289,7 +1621,7 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     String contentView = 'incremental',
   }) async {
     if (!_validResourceId(exchangeId) ||
-        !const {'incremental', 'full'}.contains(contentView)) {
+        !const {'incremental', 'full', 'reading'}.contains(contentView)) {
       throw const ControlContractException('Exchange query is invalid');
     }
     final uri = Uri(
@@ -1303,6 +1635,14 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
     try {
       payload = await _read(uri.toString());
     } on ControlProblem catch (problem) {
+      if (contentView == 'reading' &&
+          problem.status == 422 &&
+          const {
+            'invalid_request',
+            'invalid_control_request',
+          }.contains(problem.reasonCode)) {
+        return exchange(exchangeId, contentView: 'incremental');
+      }
       // Older Runtimes reject the new query. Keep small legacy reads usable;
       // the ordinary 2 MiB guard is never relaxed, including on this fallback.
       if (!_pagedExchangeReads ||
@@ -1380,6 +1720,31 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   }
 
   @override
+  Future<ToolResultPage> toolResults(
+    String exchangeId,
+    String callId, {
+    String? cursor,
+  }) async {
+    if (!_validResourceId(exchangeId) ||
+        callId.isEmpty ||
+        callId.length > 512 ||
+        (cursor != null &&
+            (cursor.length > 8192 ||
+                !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)))) {
+      throw const ControlContractException('Tool result query is invalid');
+    }
+    final uri = Uri(
+      path: '/api/v1/exchanges/${Uri.encodeComponent(exchangeId)}/tool-results',
+      queryParameters: {'callId': callId, 'cursor': ?cursor},
+    );
+    return ToolResultPage.fromJson(
+      await _read(uri.toString()),
+      exchangeId,
+      callId,
+    );
+  }
+
+  @override
   Future<RevealedRawEvidence> revealRawEvidence({
     required String envelopeId,
   }) async {
@@ -1404,6 +1769,34 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       'rawReveal',
       expectedEnvelopeId: envelopeId,
     );
+  }
+
+  @override
+  Future<RetainedImagePreview> previewRawImage({
+    required String envelopeId,
+    required String fingerprint,
+  }) async {
+    if (!_validRawEvidenceIdentity(envelopeId) ||
+        !RegExp(r'^sha256:[0-9a-f]{64}$').hasMatch(fingerprint)) {
+      throw const ControlContractException('Image preview identity is invalid');
+    }
+    await _ensureFreshSession();
+    final uri = Uri(
+      path:
+          '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal',
+      queryParameters: {'bodyView': 'image', 'fingerprint': fingerprint},
+    );
+    final response = await _send(
+      'POST',
+      uri.toString(),
+      token: _session.writeToken,
+      expectedStatus: 200,
+      maximumResponseBytes: 6 << 20,
+    );
+    if (response.headers.value('cache-control') != 'no-store') {
+      throw const ControlContractException('Image preview may be cached');
+    }
+    return RetainedImagePreview.fromJson(response.payload, fingerprint);
   }
 
   @override
@@ -2452,7 +2845,9 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
       response.payload,
       'manualCaptureGrant',
     );
-    if (grant.environmentId != context.environmentId ||
+    if (grant.proxyAddress != context.proxyAddress ||
+        grant.socksAddress != context.socksAddress ||
+        grant.environmentId != context.environmentId ||
         grant.capture.displayName != displayName ||
         grant.capture.clientClass != clientClass ||
         grant.capture.lifetime != lifetime ||

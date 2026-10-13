@@ -143,7 +143,7 @@ func compatibilityEnvironment(
 						}},
 					},
 				},
-				EgressProfile: egressprofile.Direct(),
+				EgressProfile: authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	}, clientOrigin, path

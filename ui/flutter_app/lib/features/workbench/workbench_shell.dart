@@ -269,9 +269,13 @@ final class _TitleBar extends StatelessWidget {
             children: [
               const _ViberMark(),
               const SizedBox(width: ViberSpacing.md),
-              Text(
-                copy('app.name'),
-                style: Theme.of(context).textTheme.titleMedium,
+              Flexible(
+                child: Text(
+                  copy('app.name'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
               ),
               if (!compact) ...[
                 const SizedBox(width: ViberSpacing.md),
@@ -373,14 +377,21 @@ final class _ApprovalAttention extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = controller.pendingApprovalCount;
+    final nativePending = controller.nativeApprovalAttention;
+    final partialNative =
+        nativePending && !controller.nativeApprovalScanComplete;
+    final nativeLabel =
+        '${controller.selectedCapture?.displayName ?? copy('native.selectedCapture')} · ${controller.nativeApprovalScanComplete ? copy.format('native.pendingCount', {'count': controller.nativePendingCount!}) : copy('native.pending')}';
     final unavailable =
         count == null && controller.approvalAttentionError != null;
-    if (!unavailable && (count == null || count == 0)) {
+    if (!unavailable && !nativePending && (count == null || count == 0)) {
       return const SizedBox.shrink();
     }
-    final pending = count != null && count > 0;
+    final pending = nativePending || count != null && count > 0;
     final label = unavailable
         ? copy('approval.attention.unavailable')
+        : nativePending
+        ? '${copy.format('approval.attention.count', {'count': controller.pendingApprovals?.length ?? 0})} · $nativeLabel'
         : copy.format('approval.attention.count', {'count': count ?? 0});
     final color = unavailable
         ? context.viberColors.danger
@@ -400,7 +411,13 @@ final class _ApprovalAttention extends StatelessWidget {
     });
     final icon = Badge(
       isLabelVisible: pending,
-      label: Text(count == 50 ? '50+' : '${count ?? 0}'),
+      label: Text(
+        partialNative
+            ? '•'
+            : count == 50
+            ? '50+'
+            : '${count ?? 0}',
+      ),
       backgroundColor: context.viberColors.warning,
       textColor: context.viberColors.rail,
       textStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -450,9 +467,11 @@ final class _ApprovalAttention extends StatelessWidget {
               ).copyWith(side: focusSide),
               icon: icon,
               label: Text(
-                pending
+                nativePending
+                    ? nativeLabel
+                    : pending
                     ? copy.format('approval.attention.pending', {
-                        'count': count,
+                        'count': count ?? 0,
                       })
                     : copy('approval.attention.none'),
               ),

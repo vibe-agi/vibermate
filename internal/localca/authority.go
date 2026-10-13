@@ -183,6 +183,8 @@ type tlsCertificate struct {
 }
 
 type leafCacheKey struct {
+	mode                environment.ConnectionMode
+	nativeDigest        environment.ConnectionCompatibilityDigest
 	rootRevision        RootRevision
 	environmentID       environment.EnvironmentID
 	environmentRevision environment.Revision
@@ -196,6 +198,7 @@ type leafCacheKey struct {
 
 func leafKey(request captureassignment.LeafIssuanceRequest) leafCacheKey {
 	return leafCacheKey{
+		mode: request.ConnectionMode(), nativeDigest: request.NativeCompatibilityDigest(),
 		rootRevision:        request.RootRevision(),
 		environmentID:       request.EnvironmentID(),
 		environmentRevision: request.EnvironmentRevision(),
@@ -210,7 +213,7 @@ func leafKey(request captureassignment.LeafIssuanceRequest) leafCacheKey {
 
 func (key leafCacheKey) flightKey() string {
 	return fmt.Sprintf(
-		"%d\x00%s\x00%d\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
+		"%d\x00%s\x00%d\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
 		key.rootRevision,
 		key.environmentID.String(),
 		key.environmentRevision,
@@ -220,6 +223,7 @@ func (key leafCacheKey) flightKey() string {
 		key.sanKind,
 		key.sanValue,
 		key.algorithm,
+		key.mode, key.nativeDigest.String(),
 	)
 }
 

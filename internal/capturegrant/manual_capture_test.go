@@ -9,10 +9,13 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -24,6 +27,67 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
+
+// No CaptureRun is issued by these ManualCapture constructor tests.
+type unusedCaptureRuns struct{ capturerun.Controller }
+
+func TestManualSOCKSAddressValidationAndConfirmation(t *testing.T) {
+	manuals := &recordingManualCaptures{}
+	base, root := manualCaptureTestIssuer(t, manuals, fixedManualAuthorities(t, nil))
+	verifier, err := clientadapter.NewReleaseVerifier(clientadapter.BuiltInCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := Options{Runs: unusedCaptureRuns{}, ManualCaptures: manuals, Verifier: verifier, Authorities: base.authorities, ProxyOrigin: base.proxyOrigin, Generation: base.generation, RootIdentity: root.Identity(), Root: root.Certificate(), RunLifetime: time.Minute, Workspaces: NewCompanionWorkspaceResolver(), ProxyDelivery: ProxyDeliveryLocalListener}
+	for _, test := range []struct {
+		address string
+		valid   bool
+	}{
+		{"", true}, {"127.0.0.1:1080", true}, {"[::1]:1080", true},
+		{"localhost:1080", false}, {"proxy.example:1080", false}, {"0.0.0.0:1080", false}, {"[::]:1080", false}, {"127.0.0.1:0", false}, {"http://127.0.0.1:1080", false}, {"user@127.0.0.1:1080", false}, {"127.0.0.1:1080/path", false}, {"[0:0:0:0:0:0:0:1]:1080", false}, {"127.0.0.1:01080", false},
+	} {
+		t.Run(test.address, func(t *testing.T) {
+			options.ManualSOCKSAddress = test.address
+			_, err := New(options)
+			if (err == nil) != test.valid {
+				t.Fatalf("address %q valid=%t err=%v", test.address, test.valid, err)
+			}
+		})
+	}
+	options.ManualSOCKSAddress = "127.0.0.1:1080"
+	first, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.ManualSOCKSAddress = "127.0.0.1:1081"
+	second, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := manualCapturePrincipal(t)
+	review, err := first.GetManualCaptureContext(t.Context(), principal, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := second.GetManualCaptureContext(t.Context(), principal, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.SOCKSAddress != "127.0.0.1:1080" || next.SOCKSAddress != "127.0.0.1:1081" || review.ConfirmationToken == next.ConfirmationToken {
+		t.Fatal("SOCKS-only change did not change reviewed confirmation")
+	}
+	_, err = second.IssueManualCapture(t.Context(), principal, ManualCaptureRequest{EnvironmentID: "work", DisplayName: "owned synthetic", ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeUntilRevoked, ConfirmationToken: review.ConfirmationToken})
+	if !errors.Is(err, ErrManualCaptureConflict) || manuals.calls != 0 {
+		t.Fatalf("stale SOCKS review err=%v create calls=%d", err, manuals.calls)
+	}
+	options.ProxyOrigin = ""
+	options.ProxyDelivery = ProxyDeliveryClientRelay
+	options.ManualProxyOrigin = "https://proxy.example:9666"
+	options.ManualSOCKSAddress = "proxy.example:1080"
+	if _, err := New(options); err != nil {
+		t.Fatal("remote canonical SOCKS rejected", err)
+	}
+}
 
 type recordingManualCaptures struct {
 	command manualcapture.CreateCommand
@@ -719,7 +783,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.claude", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       egressprofile.Direct(),
+				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
 			}},
 		}},
 	})

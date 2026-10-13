@@ -6,16 +6,13 @@ import (
 	"net"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
 // DefaultReachabilityTimeout bounds one blind target. It is a connect, not a
 // handshake and not a request, so it is short.
 const DefaultReachabilityTimeout = 5 * time.Second
-
-type probeDialer interface {
-	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-}
 
 // ReachabilityProber answers whether a blind target can be reached.
 //
@@ -41,29 +38,39 @@ type probeDialer interface {
 // reachable when the released request actually dials. The planned gate never
 // claimed to replace the pre-semantic Hold.
 type ReachabilityProber struct {
-	dialer  probeDialer
+	builder *egressnetwork.Builder
 	timeout time.Duration
 }
 
 func NewReachabilityProber() (*ReachabilityProber, error) {
-	return newReachabilityProber(&net.Dialer{}, DefaultReachabilityTimeout)
+	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return NewReachabilityProberWithBuilder(builder)
+}
+
+// NewReachabilityProberWithBuilder composes a trusted transport dependency;
+// each queued target still supplies its frozen policy and allowance.
+func NewReachabilityProberWithBuilder(builder *egressnetwork.Builder) (*ReachabilityProber, error) {
+	return newReachabilityProber(builder, DefaultReachabilityTimeout)
 }
 
 func newReachabilityProber(
-	dialer probeDialer,
+	builder *egressnetwork.Builder,
 	timeout time.Duration,
 ) (*ReachabilityProber, error) {
-	if dialer == nil || timeout <= 0 {
+	if builder == nil || timeout <= 0 {
 		return nil, errors.New("blind tunnel reachability probe dialer is missing")
 	}
-	return &ReachabilityProber{dialer: dialer, timeout: timeout}, nil
+	return &ReachabilityProber{builder: builder, timeout: timeout}, nil
 }
 
 func (prober *ReachabilityProber) Probe(
 	ctx context.Context,
 	request offlinehold.ProbeRequest,
 ) error {
-	if prober == nil || prober.dialer == nil || ctx == nil ||
+	if prober == nil || prober.builder == nil || ctx == nil ||
 		len(request.Targets) == 0 {
 		return offlinehold.NewProbeFailure(
 			offlinehold.ProbeReasonFailed,
@@ -71,7 +78,7 @@ func (prober *ReachabilityProber) Probe(
 		)
 	}
 	for _, target := range request.Targets {
-		if target.Kind != offlinehold.EgressBlindTunnel {
+		if target.Kind != offlinehold.EgressBlindTunnel || target.Transport != offlinehold.ProbeTransportTCP {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
 				errors.New("blind tunnel prober received an unsupported egress kind"),
@@ -99,7 +106,7 @@ func (prober *ReachabilityProber) Probe(
 				errors.New("blind tunnel probe network identities disagree"),
 			)
 		}
-		if err := prober.reach(ctx, target.HTTPAuthority); err != nil {
+		if err := prober.reach(ctx, target); err != nil {
 			return err
 		}
 	}
@@ -108,8 +115,9 @@ func (prober *ReachabilityProber) Probe(
 
 func (prober *ReachabilityProber) reach(
 	ctx context.Context,
-	authority string,
+	target offlinehold.ProbeTarget,
 ) error {
+	authority := target.HTTPAuthority
 	host, port, err := net.SplitHostPort(authority)
 	if err != nil || host == "" || port == "" {
 		return offlinehold.NewProbeFailure(
@@ -119,8 +127,13 @@ func (prober *ReachabilityProber) reach(
 	}
 	targetContext, cancel := context.WithTimeout(ctx, prober.timeout)
 	defer cancel()
+	targetContext = egressnetwork.WithTargetAccess(targetContext, target.TargetAccess)
+	dialer, err := prober.builder.Dialer(target.EgressPolicy)
+	if err != nil {
+		return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, err)
+	}
 
-	connection, dialErr := prober.dialer.DialContext(
+	connection, dialErr := dialer.DialContext(
 		targetContext,
 		"tcp",
 		authority,

@@ -350,7 +350,7 @@ EnvironmentProtocolPlan _originalProtocolPlan(
       revision: 1,
     ),
     destination: const EnvironmentDestination.original(),
-    egressProfile: EgressProfileRevision.direct,
+    egressProfile: EgressChoice.inherit,
     transforms: const [],
     pluginBindings: const [],
   );
@@ -469,7 +469,7 @@ EnvironmentProtocolPlan _protocolPlanFor(
         routes: [route],
       ),
     ),
-    egressProfile: EgressProfileRevision.direct,
+    egressProfile: EgressChoice.inherit,
     transforms: const [],
     pluginBindings: const [],
   );
@@ -546,12 +546,9 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressProfile({
   required List<EnvironmentClientEndpoint> endpoints,
   required String clientEndpointId,
   required String protocolPlanId,
-  required EgressProfileRevision profile,
+  required EgressChoice profile,
 }) {
-  final validated = EgressProfileRevision.fromJson(
-    profile.toJson(),
-    'egressProfile',
-  );
+  final validated = EgressChoice.fromJson(profile.toJson(), 'egressProfile');
   var found = false;
   var changed = false;
   final result = <EnvironmentClientEndpoint>[];

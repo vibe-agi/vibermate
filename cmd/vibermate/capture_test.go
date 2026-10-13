@@ -57,6 +57,7 @@ func TestCaptureReviewLocalizesFactsWithoutLeakingInternalState(t *testing.T) {
 	context := capturecontrol.ManualCaptureContext{
 		ConfirmationToken: "ctx_private-review-token",
 		ProxyAddress:      "http://127.0.0.1:32123",
+		SOCKSAddress:      "127.0.0.1:32124",
 		EnvironmentID:     "work",
 		Root:              root,
 	}
@@ -78,6 +79,7 @@ func TestCaptureReviewLocalizesFactsWithoutLeakingInternalState(t *testing.T) {
 		for _, expected := range []string{
 			"Project terminal",
 			"http://127.0.0.1:32123",
+			"127.0.0.1:32124", "SOCKS5",
 			"work", "AA:BB:CC",
 			"/private/root.pem",
 		} {
@@ -113,6 +115,63 @@ func TestCaptureConfirmationDefaultsToNo(t *testing.T) {
 		if err != nil || got != test.want {
 			t.Fatalf("readConfirmation(%q)=%v err=%v", test.input, got, err)
 		}
+	}
+}
+
+func TestSOCKSDeliveryHumanCopyAndUnchangedShell(t *testing.T) {
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := capturecontrol.ManualCaptureGrant{
+		Capture:      capturecontrol.ManualCaptureView{ID: "manual-one"},
+		ProxyAddress: "http://127.0.0.1:32123", SOCKSAddress: "127.0.0.1:32124",
+		ProxyUsername: "capture", ProxyPassword: "one-time-password", EnvironmentID: "work",
+		Root: &capturecontrol.RootPublicDelivery{PEMPath: "/private/root.pem"},
+	}
+	for _, locale := range []locales.Locale{locales.EnglishUS, locales.SimplifiedChinese} {
+		var human, shell bytes.Buffer
+		if err := renderCaptureGrant(catalogs, locale, &human, "human", grant); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(human.String(), "SOCKS5") || !strings.Contains(human.String(), "127.0.0.1:32124") || !strings.Contains(human.String(), "capture") || !strings.Contains(human.String(), "UDP") {
+			t.Fatalf("missing SOCKS delivery: %s", human.String())
+		}
+		if err := renderCaptureGrant(catalogs, locale, &shell, "shell", grant); err != nil {
+			t.Fatal(err)
+		}
+		want := "export HTTPS_PROXY='http://capture:one-time-password@127.0.0.1:32123'\nexport HTTP_PROXY='http://capture:one-time-password@127.0.0.1:32123'\nexport NODE_EXTRA_CA_CERTS='/private/root.pem'\nexport SSL_CERT_FILE='/private/root.pem'\n"
+		if shell.String() != want {
+			t.Fatalf("shell changed: %q", shell.String())
+		}
+		grant.SOCKSAddress = ""
+		var disabled bytes.Buffer
+		if err := renderCaptureGrant(catalogs, locale, &disabled, "human", grant); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(disabled.String(), "SOCKS5") {
+			t.Fatal("disabled listener advertised")
+		}
+		grant.SOCKSAddress = "127.0.0.1:32124"
+	}
+}
+
+func TestSOCKSDeliveryGrantMustMatchReviewedEndpoints(t *testing.T) {
+	reviewed := capturecontrol.ManualCaptureContext{ProxyAddress: "http://127.0.0.1:32123", SOCKSAddress: "127.0.0.1:32124", EnvironmentID: "work", LaunchAuthorityDigest: strings.Repeat("a", 64)}
+	grant := capturecontrol.ManualCaptureGrant{ProxyAddress: reviewed.ProxyAddress, SOCKSAddress: reviewed.SOCKSAddress, EnvironmentID: reviewed.EnvironmentID, LaunchAuthorityDigest: reviewed.LaunchAuthorityDigest}
+	if !captureGrantMatchesReview(grant, reviewed) {
+		t.Fatal("equal review rejected")
+	}
+	for _, address := range []string{"", "127.0.0.1:32125"} {
+		grant.SOCKSAddress = address
+		if captureGrantMatchesReview(grant, reviewed) {
+			t.Errorf("changed SOCKS endpoint %q accepted after review", address)
+		}
+	}
+	grant.SOCKSAddress = reviewed.SOCKSAddress
+	grant.ProxyAddress = "http://127.0.0.1:32126"
+	if captureGrantMatchesReview(grant, reviewed) {
+		t.Fatal("changed HTTP endpoint accepted after review")
 	}
 }
 
