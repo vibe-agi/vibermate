@@ -199,10 +199,11 @@ func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testi
 	// Observe both while persistence is still blocked, not eventual Shutdown.
 	second := f.firstTerminal(t)
 	f.network.requireClosed(t)
+	var shutdownErr error
 	select {
-	case e := <-done:
-		if e == nil || f.runtime.egressCompletion.failure() == nil {
-			t.Error("shutdown masked terminal durability failure", e)
+	case shutdownErr = <-done:
+		if shutdownErr == nil {
+			t.Error("shutdown masked terminal durability failure", shutdownErr)
 		}
 	case <-time.After(4 * f.budget):
 		t.Error("Runtime shutdown blocked past its owned lifecycle budget")
@@ -218,6 +219,8 @@ func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testi
 		defer cancel()
 		if e := f.runtime.udp.Drain(joined); e != nil {
 			t.Error("context-aware terminal workers did not join after shutdown", e)
+		} else if f.runtime.egressCompletion.failure() == nil {
+			t.Error("shutdown masked terminal durability failure", shutdownErr)
 		}
 		if f.runtime.offlineHold.Snapshot().ActiveActions != 0 {
 			t.Error("shutdown retained packet leases")
