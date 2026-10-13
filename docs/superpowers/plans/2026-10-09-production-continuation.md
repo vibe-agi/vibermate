@@ -17,12 +17,13 @@
 ## 当前检查点
 
 - 开发目录：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，分支`fix/production-readiness-20261003`。
-- 最近源码单元提交`1c83102e47b3938c0b8928f74a5729db59a25309`关闭B4；B1/B2/B3/B4均已提交，不重开。所有本阶段新增功能仍未正式发布。
+- 最近源码单元提交`99a589a168067b4f190675199781813749d64d16`关闭B5仓库规则修正；B1/B2/B3/B4此前均已提交，不重开。所有本阶段新增功能仍未正式发布。
 - B3 Task1已真实修复原生恢复探测误拒绝，以及已批准未发送调用取消时未同步关闭批准的问题。初审Important测试证据缺口已通过fix1补齐并复审关闭；最终Runtime正常5项/race25及未变Store/native/prober证据保留。测试临时目录生命周期和撤销合法竞态预期也已纠正，未扩大生产权限或超时。
 - B3 Task2已在当前源码完成正常7项/race35项/受影响5项验证，fix2限定复审关闭全部剩余finding，并已提交。旧Task2所谓raw日志实为工作者摘要，已明确限制证据级别并保留；本次采用真实进程输出、逐次源码哈希和实际退出结果，不恢复或冒认旧日志。
 - B4已完成9项正常场景记录、45项race执行与23项受影响回归，并通过独立审查、提交。两处测试构造错误已纠正；未改生产行为或超时。中断前正常运行的外层shell退出值不可恢复，但完整JSONL含两个包及全部场景通过，限制已明确保留。
-- 唯一下一动作：执行B5已确认仓库检查失败的狭窄修正，随后候选冻结与发布验收。计划：`docs/superpowers/plans/2026-10-13-repository-rules-closure.md`；当前账本：`.superpowers/sdd/2026-10-13-repository-rules-closure/progress.md`，实际BASE、所有者和进度以账本与工具句柄为准。
-- B5仓库规则检查仍有实际失败：保留快照被误扫、两处私有内核连接与Unicode测试源码规则，狭窄修正计划已准备，未修复/未豁免。候选完整审查、当前源码验收、签名公证、安装和GitHub/Homebrew仍未完成。
+- B5仓库规则修正已完成真实RED→GREEN、独立审查与提交：仅准确排除历史SDD目录，准确识别两个既有私有内核连接表达式，保持Unicode测试运行值。实际仓库检查、规则包和Unicode测试通过，无整文件/模块豁免。
+- 唯一下一动作：准备一致的0.1.26+28候选元数据和发布说明，然后冻结源码并执行既定发布验收。计划：`docs/superpowers/plans/2026-10-13-phase-b-functional-release.md`；当前账本：`.superpowers/sdd/2026-10-13-phase-b-functional-release/progress.md`，实际BASE、所有者和进度以账本与工具句柄为准。版本号目前未写入源码或保留远端标签。
+- 候选完整审查、当前源码CI/数据/真实包验收、签名公证、安装和GitHub/Homebrew仍未完成；不能将规则通过称为已发布或最终Goal完成。
 - 原始失败、缺失的历史逐次映射和非阻断建议保留给最终审查；不把局部通过称为版本就绪。用户App、账号、信任、数据、原工作区和无关缓存未动；恢复只核对变化。
 
 ## 已完成基线：不得重开
@@ -44,6 +45,7 @@
 | 原生工具Hold恢复与发送前取消收尾 | 已修复、真实Runtime/Store验证、独立审查和fix1复审关闭、提交，未发布 | b429d1a0；native-egress-closure Task1；恢复与未消耗批准原子关闭，保留首失败及历史证据边界 |
 | 原生关联回复/恢复、独立新调用及发送后故障 | 已补齐真实FP/FD/未设置出口、每阶段物理发送/审批/审计/拒绝重放验证，正常7/race35/受影响5与限定复审通过、提交；生产逻辑未改，未发布 | 59ae9ef2；native-egress-closure Task2及fix2-review；当前真实日志与历史摘要严格区分 |
 | 盲转发/普通HTTP剩余出口 | 真实默认未设置、配置读取失败、暂停/修改/恢复/取消、真实代理断开及不回退验证，正常9/race45/受影响23与独立审查通过、提交；生产逻辑未改，未发布 | 1c83102e；blind-cleartext-egress-closure Task1；保留首失败、精确映射修正和正常shell退出值不可恢复的限制 |
+| 仓库规则实际失败修正 | 真实RED→GREEN及独立审查通过、提交；保留历史快照，准确表达式级私有连接识别，Unicode字节不变；实际扫描通过 | 99a589a1；2026-10-13-repository-rules-closure Task1；语法检查不冒称全程序污点/已安装资格 |
 | 托管模型令牌轮换后代理断开及下一请求独立审计预期 | 已完成实际故障验收、测试修正、独立审查及提交，生产逻辑未改，未发布 | 31bb94de；managed-egress-tail Task1，保留原观察器失败及分源码覆盖边界 |
 | 原始/原目标转换转发与流式出口 | 测试实现、保留验证、独立补充复审及提交已完成，未发布 | 6ed836b；captured-original Task3与task-3-fix1-review；真实父级/请求/审计关联缺口已关闭，T3-M1/M2非阻断建议保留 |
 
@@ -61,11 +63,11 @@ v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448
 | B2 已关闭 | 令牌轮换成功后、首个模型发送前真实代理断开及现存P3独立预期断言已验收、审查、提交；生产逻辑未改，不重开 | 31bb94de；2026-10-12-managed-egress-tail计划及SDD |
 | B3 已关闭 | Task1/2均已验证、独立审查及修正复审关闭并提交；真实审批/once/receipt、关联恢复和不重复执行已覆盖，不重开；阶段C新续流机制未实现 | b429d1a0/59ae9ef2；2026-10-12-native-egress-closure计划及当前SDD |
 | B4 已关闭 | 已列明的盲转发/普通HTTP缺口均完成真实验收、独立审查并提交，不重开；生产逻辑未改 | 1c83102e；2026-10-12-blind-cleartext-egress-closure计划及SDD |
-| B5 当前：发布收尾 | 先关闭已确认的仓库规则失败；冻结候选，执行适用Go/Flutter/Chrome、race、安全、规则和CI以及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-13-repository-rules-closure；2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
+| B5 当前：发布收尾 | 规则失败已关闭；准备0.1.26+28元数据并冻结候选，完成适用CI/安全/全局与完整候选独立审查、实际共享数据与真实包验收，随后同源签名公证/安装/GitHub/Homebrew和公开下载验证 | 2026-10-13-phase-b-functional-release；2026-10-05-global-default-egress Task6；真实冻结SHA及产物写入发布账本 |
 
 全局细项证据：`.superpowers/sdd/2026-10-05-global-default-egress/phase-b-remaining-audit.md`。该报告原表为历史pin；本快照及其顶部已关闭记录优先于旧表的E/I，不能重新派发owned/manual/models/first-login。metadata/prices、固定更新请求及既有UI覆盖继续复用；冻结时核验实际变化的消费者，不重建已完成界面。
 
-B5实际仓库规则失败的源码诊断见`.superpowers/sdd/2026-10-09-production-continuation/b5-repositorycheck-diagnosis-b4249020.md`，root已全文读取；单一狭窄修正计划为`docs/superpowers/plans/2026-10-13-repository-rules-closure.md`，尚未执行且检查仍失败。保留历史快照，只排除准确证据目录；私有连接例外限定真实方法/接收者/调用形状，不能豁免整个文件或模块；Unicode转义须保持实际测试值。B3/B4之后执行，不新增产品功能或重跑未变VLESS行为矩阵；候选安装验收仍保留。
+B5规则单元已按`docs/superpowers/plans/2026-10-13-repository-rules-closure.md`关闭99a589a1。独立审查无finding；实际scanner83884、规则包28950、Unicode15817均exit0。保留原始失败及快照，精确表达式例外不替代全程序来源分析；root复核当前私有端点构造及无变更。详细证据和限定见该SDD的report/manifest/review；不重跑未变VLESS矩阵，最终候选真实包验收仍保留。
 
 B5现有发布命令/输入/产物/审批节点的只读准备已完成，见`.superpowers/sdd/2026-10-09-production-continuation/b5-release-preflight-b4249020.md`。root已全文读取；这是固定源码上的执行清单，不是候选验收、环境可用性检查或发布证明，不重复派发同一准备任务。B3/B4关闭后按真实候选源码核对执行；没有扩大当前版本门槛。
 
