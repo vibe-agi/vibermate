@@ -6,7 +6,7 @@
 
 持续分阶段交付用户实际可用的ViberMate，最终完成全部已批准功能、生产验收与GitHub/Homebrew发布；功能正确性优先，性能优化单独衡量。阶段交付不等于最终Goal完成。
 
-完整十项范围与执行约束见Goal引用文件：`/Users/null/.codex/attachments/5333dda7-121c-46a7-9d24-77ee624ae66c/pasted-text-1.txt`。保留十项原文，没有删减范围、重开已交付工作或创建新Goal。2026-10-13 get_goal实际返回blocked；root未设置此状态，工具也不能将其恢复active。用户“继续”授权当前开发继续，当前没有已成立的开发阻塞；卡片状态不冒称active或complete。
+完整十项范围与执行约束见Goal引用文件：`/Users/null/.codex/attachments/5333dda7-121c-46a7-9d24-77ee624ae66c/pasted-text-1.txt`。保留十项原文，没有删减范围、重开已交付工作或创建新Goal。2026-10-13用户恢复Goal后，get_goal已实际返回active；沿用已保存任务和测试证据接续，不重建目标，也不把局部通过标成complete。
 
 已发现的执行偏移是：旧文档同时保留“额度待审查”“终端未实现”“合流尚未发生”“captured计划尚未实施”等互相覆盖的现在时段落，混合目标、历史与待办。本次将其归档并改为下面唯一快照。原文及目标修订前全文位于：
 
@@ -17,10 +17,11 @@
 ## 当前检查点
 
 - 开发目录：`/Users/null/Code/github/vibe-agi/vibermate/.worktrees/production-readiness`，分支`fix/production-readiness-20261003`。
-- 最近源码单元提交`59ae9ef24d61281dca79c947a3f1d2871f10d287`关闭B3 Task2；Task1为`b429d1a0`，B1/B2/B3均已提交，不重开。所有本阶段新增功能仍未正式发布。
+- 最近源码单元提交`1c83102e47b3938c0b8928f74a5729db59a25309`关闭B4；B1/B2/B3/B4均已提交，不重开。所有本阶段新增功能仍未正式发布。
 - B3 Task1已真实修复原生恢复探测误拒绝，以及已批准未发送调用取消时未同步关闭批准的问题。初审Important测试证据缺口已通过fix1补齐并复审关闭；最终Runtime正常5项/race25及未变Store/native/prober证据保留。测试临时目录生命周期和撤销合法竞态预期也已纠正，未扩大生产权限或超时。
 - B3 Task2已在当前源码完成正常7项/race35项/受影响5项验证，fix2限定复审关闭全部剩余finding，并已提交。旧Task2所谓raw日志实为工作者摘要，已明确限制证据级别并保留；本次采用真实进程输出、逐次源码哈希和实际退出结果，不恢复或冒认旧日志。
-- 唯一下一动作：执行B4盲转发/普通HTTP的既定出口验证。计划：`docs/superpowers/plans/2026-10-12-blind-cleartext-egress-closure.md`；账本：`.superpowers/sdd/2026-10-12-blind-cleartext-egress-closure/progress.md`，实际BASE、所有者和进度以账本与工具句柄为准。
+- B4已完成9项正常场景记录、45项race执行与23项受影响回归，并通过独立审查、提交。两处测试构造错误已纠正；未改生产行为或超时。中断前正常运行的外层shell退出值不可恢复，但完整JSONL含两个包及全部场景通过，限制已明确保留。
+- 唯一下一动作：执行B5已确认仓库检查失败的狭窄修正，随后候选冻结与发布验收。计划：`docs/superpowers/plans/2026-10-13-repository-rules-closure.md`；当前账本：`.superpowers/sdd/2026-10-13-repository-rules-closure/progress.md`，实际BASE、所有者和进度以账本与工具句柄为准。
 - B5仓库规则检查仍有实际失败：保留快照被误扫、两处私有内核连接与Unicode测试源码规则，狭窄修正计划已准备，未修复/未豁免。候选完整审查、当前源码验收、签名公证、安装和GitHub/Homebrew仍未完成。
 - 原始失败、缺失的历史逐次映射和非阻断建议保留给最终审查；不把局部通过称为版本就绪。用户App、账号、信任、数据、原工作区和无关缓存未动；恢复只核对变化。
 
@@ -42,6 +43,7 @@
 | 原账号模型请求暂停/故障出口 | 已补齐实际Runtime与物理网络验收，normal/race/受影响回归及独立审查通过、提交；生产逻辑未改，未发布 | 055990b；captured-original Task2；实际原请求ID与持久Exchange关联，证据边界明确 |
 | 原生工具Hold恢复与发送前取消收尾 | 已修复、真实Runtime/Store验证、独立审查和fix1复审关闭、提交，未发布 | b429d1a0；native-egress-closure Task1；恢复与未消耗批准原子关闭，保留首失败及历史证据边界 |
 | 原生关联回复/恢复、独立新调用及发送后故障 | 已补齐真实FP/FD/未设置出口、每阶段物理发送/审批/审计/拒绝重放验证，正常7/race35/受影响5与限定复审通过、提交；生产逻辑未改，未发布 | 59ae9ef2；native-egress-closure Task2及fix2-review；当前真实日志与历史摘要严格区分 |
+| 盲转发/普通HTTP剩余出口 | 真实默认未设置、配置读取失败、暂停/修改/恢复/取消、真实代理断开及不回退验证，正常9/race45/受影响23与独立审查通过、提交；生产逻辑未改，未发布 | 1c83102e；blind-cleartext-egress-closure Task1；保留首失败、精确映射修正和正常shell退出值不可恢复的限制 |
 | 托管模型令牌轮换后代理断开及下一请求独立审计预期 | 已完成实际故障验收、测试修正、独立审查及提交，生产逻辑未改，未发布 | 31bb94de；managed-egress-tail Task1，保留原观察器失败及分源码覆盖边界 |
 | 原始/原目标转换转发与流式出口 | 测试实现、保留验证、独立补充复审及提交已完成，未发布 | 6ed836b；captured-original Task3与task-3-fix1-review；真实父级/请求/审计关联缺口已关闭，T3-M1/M2非阻断建议保留 |
 
@@ -58,14 +60,16 @@ v0.1.25的已核验发布记录：2026-10-10T10:48:48Z，GitHub release408868448
 | B1 已关闭 | Task1/2/3均已验证、独立审查并提交；保留证据与非阻断建议，不重做实现或整套验证 | 2026-10-12-captured-original-egress计划及当前SDD |
 | B2 已关闭 | 令牌轮换成功后、首个模型发送前真实代理断开及现存P3独立预期断言已验收、审查、提交；生产逻辑未改，不重开 | 31bb94de；2026-10-12-managed-egress-tail计划及SDD |
 | B3 已关闭 | Task1/2均已验证、独立审查及修正复审关闭并提交；真实审批/once/receipt、关联恢复和不重复执行已覆盖，不重开；阶段C新续流机制未实现 | b429d1a0/59ae9ef2；2026-10-12-native-egress-closure计划及当前SDD |
-| B4 当前 | 执行盲转发/普通HTTP的已列明缺口：真实默认直连、默认读取失败不外发、代理失效不回退，以及实际暂停/编辑/取消恢复；单元计划及接口预检已准备，执行状态以账本为准 | 2026-10-12-blind-cleartext-egress-closure计划；全局差距报告blind/cleartext行 |
-| B5 发布收尾 | 冻结候选；执行实际变更相关的Go/Flutter/Chrome、race、安全、规则和CI等适用验证及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
+| B4 已关闭 | 已列明的盲转发/普通HTTP缺口均完成真实验收、独立审查并提交，不重开；生产逻辑未改 | 1c83102e；2026-10-12-blind-cleartext-egress-closure计划及SDD |
+| B5 当前：发布收尾 | 先关闭已确认的仓库规则失败；冻结候选，执行适用Go/Flutter/Chrome、race、安全、规则和CI以及全局单元/完整候选独立审查；核验实际共享数据库升级/恢复与安装；完成同源构建、签名公证、GitHub/Homebrew和公开下载验证 | 2026-10-13-repository-rules-closure；2026-10-05-global-default-egress Task6与生产/发布计划；冻结时填写真实版本/源码/产物 |
 
 全局细项证据：`.superpowers/sdd/2026-10-05-global-default-egress/phase-b-remaining-audit.md`。该报告原表为历史pin；本快照及其顶部已关闭记录优先于旧表的E/I，不能重新派发owned/manual/models/first-login。metadata/prices、固定更新请求及既有UI覆盖继续复用；冻结时核验实际变化的消费者，不重建已完成界面。
 
 B5实际仓库规则失败的源码诊断见`.superpowers/sdd/2026-10-09-production-continuation/b5-repositorycheck-diagnosis-b4249020.md`，root已全文读取；单一狭窄修正计划为`docs/superpowers/plans/2026-10-13-repository-rules-closure.md`，尚未执行且检查仍失败。保留历史快照，只排除准确证据目录；私有连接例外限定真实方法/接收者/调用形状，不能豁免整个文件或模块；Unicode转义须保持实际测试值。B3/B4之后执行，不新增产品功能或重跑未变VLESS行为矩阵；候选安装验收仍保留。
 
 B5现有发布命令/输入/产物/审批节点的只读准备已完成，见`.superpowers/sdd/2026-10-09-production-continuation/b5-release-preflight-b4249020.md`。root已全文读取；这是固定源码上的执行清单，不是候选验收、环境可用性检查或发布证明，不重复派发同一准备任务。B3/B4关闭后按真实候选源码核对执行；没有扩大当前版本门槛。
+
+2026-10-13已额外只读核对远端：最新公开版本仍为v0.1.25，main为4e89f628；发布相关工作流active，macos-signing/notarization/public-release仍有指定审核人保护。记录见`.superpowers/sdd/2026-10-09-production-continuation/b5-remote-availability-20261013.md`。尚未保留新版本号、验证凭据、派发候选、审批或发布；冻结和集成时再次核对，不代替用户审批。
 
 P3和现有两步Resume体验在相关独立审查中明确结论；只有确实影响候选功能/安全/数据/安装的问题阻挡发布，不凭未证实假设把性能或未来能力升级为门槛。非法配置在真实校验边界被拒绝是正确结果，不放宽产品权限来满足测试构造。
 
