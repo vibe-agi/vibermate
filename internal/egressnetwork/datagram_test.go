@@ -117,7 +117,7 @@ func TestDirectDomainsCompactIdentityEdges(t *testing.T) {
 	}{
 		{"example.com", "example.com", true}, {"example.com", "a.example.com", true}, {"*.example.com", "example.com", false}, {"*.example.com", "a.example.com", true},
 		{"example.com", "evilexample.com", false}, {"example.com", "example.com.evil", false}, {"example.com", "127.0.0.1", false},
-		{"BÜCHER.example.", "xn--bcher-kva.example", true}, {"bücher.example", "A.BÜCHER.example.", true},
+		{"B\u00dcCHER.example.", "xn--bcher-kva.example", true}, {"b\u00fccher.example", "A.B\u00dcCHER.example.", true},
 	} {
 		rules, e := DirectDomains(c.rules).Normalize()
 		if e != nil || rules.Matches(c.host) != c.want {

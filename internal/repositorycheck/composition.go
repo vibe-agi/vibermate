@@ -538,6 +538,14 @@ func productionGoFiles(repositoryRoot string) ([]productionFile, error) {
 				return walkErr
 			}
 			if entry.IsDir() {
+				relative, err := filepath.Rel(repositoryRoot, path)
+				if err != nil {
+					return err
+				}
+				if filepath.ToSlash(relative) == ".superpowers/sdd" {
+					// Retained review evidence is not shipped production composition.
+					return filepath.SkipDir
+				}
 				switch entry.Name() {
 				case ".git", "node_modules", "target", "testdata", "vendor":
 					return filepath.SkipDir

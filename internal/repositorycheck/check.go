@@ -1137,6 +1137,7 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 					}
 					imports[name] = importPath
 				}
+				privateDials := privateCoreDialSymbols(relative, parsed, imports)
 				ast.Inspect(parsed, func(node ast.Node) bool {
 					selector, ok := node.(*ast.SelectorExpr)
 					if !ok {
@@ -1151,6 +1152,9 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 						return true
 					}
 					if _, protected := protectedSymbols[importPath][selector.Sel.Name]; !protected {
+						return true
+					}
+					if privateDials[selector] {
 						return true
 					}
 					position := fileSet.Position(selector.Pos())
