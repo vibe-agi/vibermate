@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -224,6 +226,128 @@ func TestActualRuntimeManagedRotationThenProxyLossBeforeModelSend(t *testing.T) 
 }
 func TestActualRuntimeExplicitAccountRefreshAndModelIgnoreUnavailableGlobal(t *testing.T) {
 	runRuntimeInheritedSOCKSTLS(t, true, true, true)
+}
+
+func TestSyntheticDefaultFaultRestoreWaitsForSQLiteWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	seed, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(`CREATE TABLE runtime_egress_default(
+		singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+		revision INTEGER NOT NULL,
+		egress_id TEXT,
+		egress_revision INTEGER
+	) STRICT;
+	INSERT INTO runtime_egress_default(singleton,revision,egress_id,egress_revision)
+	VALUES(1,2,'profile.runtime-original',1)`); err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := openSyntheticDefaultFaultDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	if _, err := fixture.Exec(`DELETE FROM runtime_egress_default WHERE singleton=1`); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), runtimepersistence.DefaultBusyTimeout+time.Second)
+	defer cancel()
+	conn, err := blocker.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock := func(statement string) error {
+		deadline, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := conn.ExecContext(deadline, statement)
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	profile := egressprofile.ProfileRevision{ID: "profile.runtime-original", Revision: 1}
+	done := make(chan error, 1)
+	go func() { done <- restoreSyntheticDefaultFault(fixture, profile) }()
+	released, joined := false, false
+	defer func() {
+		if !released {
+			if err := unlock("ROLLBACK"); err != nil {
+				t.Error("release SQLite writer", err)
+			}
+		}
+		if !joined {
+			select {
+			case <-done:
+			case <-time.After(runtimepersistence.DefaultBusyTimeout + time.Second):
+				t.Error("fixture restore did not join")
+			}
+		}
+		if err := conn.Close(); err != nil {
+			t.Error("close SQLite writer", err)
+		}
+	}()
+	var restoreErr error
+	early := false
+	select {
+	case restoreErr = <-done:
+		early, joined = true, true
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := unlock("COMMIT"); err != nil {
+		t.Fatal("release SQLite writer", err)
+	}
+	released = true
+	if !joined {
+		select {
+		case restoreErr = <-done:
+			joined = true
+		case <-time.After(runtimepersistence.DefaultBusyTimeout + time.Second):
+			t.Fatal("fixture restore did not finish after writer release")
+		}
+	}
+	if early {
+		t.Fatalf("fixture restore returned while SQLite writer held lock: %v", restoreErr)
+	}
+	if restoreErr != nil {
+		t.Fatal("restore synthetic default fault", restoreErr)
+	}
+	var singleton, revision, profileRevision int
+	var profileID string
+	if err := fixture.QueryRow(`SELECT singleton,revision,egress_id,egress_revision FROM runtime_egress_default`).Scan(&singleton, &revision, &profileID, &profileRevision); err != nil {
+		t.Fatal("read restored singleton", err)
+	}
+	if singleton != 1 || revision != 2 || profileID != "profile.runtime-original" || profileRevision != 1 {
+		t.Fatalf("restored singleton = (%d,%d,%q,%d)", singleton, revision, profileID, profileRevision)
+	}
+}
+
+func openSyntheticDefaultFaultDB(databasePath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", runtimepersistence.DefaultBusyTimeout.Milliseconds())); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return db, nil
+}
+
+func restoreSyntheticDefaultFault(db *sql.DB, profile egressprofile.ProfileRevision) error {
+	_, err := db.Exec(`INSERT INTO runtime_egress_default(singleton,revision,egress_id,egress_revision) VALUES(1,2,?,?)`, profile.ID, profile.Revision)
+	return err
 }
 
 // A token refresh must be resumable through the concrete Runtime prober,
@@ -586,7 +710,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	if accountOverride {
 		// Isolated persisted configuration corruption only, never session,
 		// credential, binding, once or approval authority. Preserve/restore row.
-		db, err := sql.Open("sqlite", options.Paths.DatabasePath())
+		db, err := openSyntheticDefaultFaultDB(options.Paths.DatabasePath())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -595,7 +719,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Fatal(err)
 		}
 		defer func() {
-			if _, err := db.Exec(`INSERT INTO runtime_egress_default(singleton,revision,egress_id,egress_revision) VALUES(1,2,?,?)`, profile.ID, profile.Revision); err != nil {
+			if err := restoreSyntheticDefaultFault(db, profile); err != nil {
 				t.Error("restore synthetic default fault", err)
 			}
 		}()
