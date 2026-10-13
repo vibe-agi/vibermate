@@ -56,12 +56,14 @@ type runtimeNativeCall struct {
 	Captured nativemcp.CapturedRequest
 	Done     <-chan nativemcp.Terminal
 	Cancel   context.CancelFunc
+	Response *httptest.ResponseRecorder
 }
 type runtimeNativeFlight struct {
 	call   runtimeNativeCall
 	joined bool
 }
 type runtimeNativeCounts struct{ DirectAttempts, DirectConnections, AAttempts, BAttempts, AConnects, BConnects, TLS, HTTP, Unexpected, Credentials int64 }
+type runtimeNativeRequest struct{ Method, Cursor, Body string }
 
 // Only these two proxy addresses and the synthetic native destination can dial.
 type runtimeNativeNetwork struct {
@@ -70,7 +72,7 @@ type runtimeNativeNetwork struct {
 }
 
 func (n *runtimeNativeNetwork) LookupNetIP(_ context.Context, network, host string) ([]netip.Addr, error) {
-	if network != "ip" || host != "native.example" {
+	if (network != "ip" && network != "ip4" && network != "ip6") || host != "native.example" {
 		n.unexpected.Add(1)
 		return nil, errors.New("native fixture denied DNS")
 	}
@@ -86,7 +88,7 @@ func (n *runtimeNativeNetwork) DialContext(ctx context.Context, network, address
 		n.aAttempts.Add(1)
 	case n.b:
 		n.bAttempts.Add(1)
-	case "127.0.0.1:443":
+	case "127.0.0.1:443", "native.example:443":
 		n.directAttempts.Add(1)
 		c, e := (&net.Dialer{}).DialContext(ctx, "tcp4", n.upstream)
 		if e == nil {
@@ -186,12 +188,7 @@ func (p *runtimeNativeProxy) serve(c net.Conn, upstream string) {
 }
 func (p *runtimeNativeProxy) closeAndJoin(t *testing.T) {
 	t.Helper()
-	p.Close()
-	p.mu.Lock()
-	for c := range p.sockets {
-		c.Close()
-	}
-	p.mu.Unlock()
+	p.drop()
 	done := make(chan struct{})
 	go func() { p.workers.Wait(); close(done) }()
 	select {
@@ -199,6 +196,14 @@ func (p *runtimeNativeProxy) closeAndJoin(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Error("native proxy copy/accept drain exceeded safeguard")
 	}
+}
+func (p *runtimeNativeProxy) drop() {
+	_ = p.Close()
+	p.mu.Lock()
+	for c := range p.sockets {
+		c.Close()
+	}
+	p.mu.Unlock()
 }
 
 type runtimeNativeWire struct {
@@ -208,13 +213,15 @@ type runtimeNativeWire struct {
 }
 type runtimeNativeEntry struct {
 	id      nativetool.ID
+	method  string
+	cursor  string
 	body    string
 	release chan error
 	ctx     context.Context
 }
 
 func (w *runtimeNativeWire) RoundTrip(r *http.Request, policy egressnetwork.Policy) (*http.Response, error) {
-	if r.Method != "POST" || r.URL.Scheme != "https" || r.URL.Host != "native.example" || r.URL.Path != environment.ClientToolMCPPath || r.URL.RawQuery != "" {
+	if (r.Method != "POST" && r.Method != "GET") || r.URL.Scheme != "https" || r.URL.Host != "native.example" || r.URL.Path != environment.ClientToolMCPPath || r.URL.RawQuery != "" {
 		w.f.network.unexpected.Add(1)
 		return nil, errors.New("native fixture denied request target")
 	}
@@ -224,7 +231,7 @@ func (w *runtimeNativeWire) RoundTrip(r *http.Request, policy egressnetwork.Poli
 	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
 	w.f.mu.Lock()
-	id, ok := w.f.bodies[string(body)]
+	id, ok := w.f.requests[runtimeNativeRequestKey(r.Method, r.Header.Get("Last-Event-Id"), string(body))]
 	w.f.mu.Unlock()
 	if !ok {
 		return nil, errors.New("native fixture denied unregistered RPC bytes")
@@ -232,7 +239,7 @@ func (w *runtimeNativeWire) RoundTrip(r *http.Request, policy egressnetwork.Poli
 	// A separate observer reads real Start/receipt evidence while I/O is blocked.
 	barrierContext, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	entry := runtimeNativeEntry{id: id, body: string(body), release: make(chan error, 1), ctx: barrierContext}
+	entry := runtimeNativeEntry{id: id, method: r.Method, cursor: r.Header.Get("Last-Event-Id"), body: string(body), release: make(chan error, 1), ctx: barrierContext}
 	select {
 	case w.f.entries <- entry:
 	case <-barrierContext.Done():
@@ -258,7 +265,12 @@ func (f *runtimeNativeEgressFixture) inspectEntry(entry runtimeNativeEntry) erro
 	id := entry.id
 	f.mu.Lock()
 	expected := f.expected[id]
+	wantCounts, checkCounts := f.entryCounts[id]
+	f.observedEntries[id] = append(f.observedEntries[id], runtimeNativeRequest{entry.method, entry.cursor, entry.body})
 	f.mu.Unlock()
+	if got := f.counts(); checkCounts && got != wantCounts {
+		return fmt.Errorf("native phase entry %s counts=%+v want=%+v", id, got, wantCounts)
+	}
 	record, e := f.audit(id)
 	if e != nil {
 		return e
@@ -277,8 +289,30 @@ func (f *runtimeNativeEgressFixture) inspectEntry(entry runtimeNativeEntry) erro
 	if once != 1 || attemptID != record.Attempt.ID() {
 		return fmt.Errorf("native entry once=%d attempt=%s audit=%s", once, attemptID, record.Attempt.ID())
 	}
-	if strings.Contains(entry.body, `"method":"tools/call"`) && consumed != 1 {
-		return fmt.Errorf("native entry consumed Allow=%d", consumed)
+	needsApproval := strings.Contains(entry.body, `"method":"tools/call"`) || strings.Contains(entry.body, `"id":"native-parent-ping"`)
+	if needsApproval && consumed != 1 {
+		return fmt.Errorf("native approved POST entry consumed Allow=%d", consumed)
+	}
+	op, e := f.r.NativeToolRepository().Get(entry.ctx, id)
+	if e != nil {
+		return e
+	}
+	if needsApproval {
+		if op.ApprovalID == nil {
+			return errors.New("native approved entry lacks actual Approval")
+		}
+		approval, err := f.r.NativeToolRepository().GetApproval(entry.ctx, *op.ApprovalID)
+		if err != nil {
+			return err
+		}
+		if approval.OperationID != id || approval.State != "allowed" || approval.ConsumedAt == nil || op.BindingDigest == nil || approval.BindingDigest != *op.BindingDigest {
+			return fmt.Errorf("native actual consumed Approval=%+v", approval)
+		}
+	} else if op.ApprovalID != nil {
+		return errors.New("native GET unexpectedly has Approval")
+	}
+	if !needsApproval && consumed != 0 {
+		return fmt.Errorf("native GET entry consumed Allow=%d", consumed)
 	}
 	f.mu.Lock()
 	f.started[id] = record
@@ -305,6 +339,13 @@ type runtimeNativeEgressFixture struct {
 	mu                                  sync.Mutex
 	next                                uint64
 	bodies                              map[string]nativetool.ID
+	requests                            map[string]nativetool.ID
+	entryCounts                         map[nativetool.ID]runtimeNativeCounts
+	observedEntries                     map[nativetool.ID][]runtimeNativeRequest
+	endpointRequests                    []runtimeNativeRequest
+	mode                                string
+	edge                                string
+	choice                              string
 	expected                            map[nativetool.ID]runtimeNativeExpected
 	started                             map[nativetool.ID]egressaudit.Record
 	flights                             map[nativetool.ID]*runtimeNativeFlight
@@ -312,6 +353,17 @@ type runtimeNativeEgressFixture struct {
 	entries                             chan runtimeNativeEntry
 	observerCancel                      context.CancelFunc
 	observerDone                        chan struct{}
+	entryGates                          map[nativetool.ID]chan error
+	entryErrors                         map[nativetool.ID]error
+	acceptedRead                        chan struct{}
+	acceptedRelease                     chan struct{}
+	acceptedBody                        string
+	acceptedReads                       atomic.Int64
+	acceptedReleaseOnce                 sync.Once
+}
+
+func runtimeNativeRequestKey(method, cursor, body string) string {
+	return method + "\x00" + cursor + "\x00" + body
 }
 
 func runtimeNativeCertificate(t *testing.T, name string, serial int64) (tls.Certificate, *x509.Certificate) {
@@ -333,15 +385,12 @@ func runtimeNativeCertificate(t *testing.T, name string, serial int64) (tls.Cert
 }
 func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) *runtimeNativeEgressFixture {
 	t.Helper()
-	if cfg.choice != "global" {
-		t.Fatalf("unsupported Task1 native choice %q", cfg.choice)
-	}
 	// Register temporary-data cleanup first so Runtime and SQL close before it.
 	paths, e := NewRuntimePaths(filepath.Join(t.TempDir(), "runtime-data"))
 	if e != nil {
 		t.Fatal(e)
 	}
-	f := &runtimeNativeEgressFixture{databasePath: paths.DatabasePath(), network: &runtimeNativeNetwork{}, bodies: make(map[string]nativetool.ID), expected: make(map[nativetool.ID]runtimeNativeExpected), started: make(map[nativetool.ID]egressaudit.Record), flights: make(map[nativetool.ID]*runtimeNativeFlight)}
+	f := &runtimeNativeEgressFixture{databasePath: paths.DatabasePath(), network: &runtimeNativeNetwork{}, bodies: make(map[string]nativetool.ID), requests: make(map[string]nativetool.ID), entryCounts: make(map[nativetool.ID]runtimeNativeCounts), observedEntries: make(map[nativetool.ID][]runtimeNativeRequest), edge: cfg.edge, choice: cfg.choice, expected: make(map[nativetool.ID]runtimeNativeExpected), started: make(map[nativetool.ID]egressaudit.Record), flights: make(map[nativetool.ID]*runtimeNativeFlight), entryGates: make(map[nativetool.ID]chan error), entryErrors: make(map[nativetool.ID]error), acceptedRead: make(chan struct{}, 1), acceptedRelease: make(chan struct{})}
 	t.Cleanup(func() { f.cleanup(t) })
 	good, goodCert := runtimeNativeCertificate(t, "native.example", 1)
 	bad, badCert := runtimeNativeCertificate(t, "wrong.native.example", 2)
@@ -396,7 +445,22 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 		for {
 			select {
 			case entry := <-f.entries:
-				entry.release <- f.inspectEntry(entry)
+				err := f.inspectEntry(entry)
+				if f.holdEntry(entry) {
+					gate := make(chan error, 1)
+					f.mu.Lock()
+					f.entryGates[entry.id] = gate
+					f.entryErrors[entry.id] = err
+					f.mu.Unlock()
+					select {
+					case err = <-gate:
+					case <-entry.ctx.Done():
+						err = entry.ctx.Err()
+					case <-observerContext.Done():
+						err = observerContext.Err()
+					}
+				}
+				entry.release <- err
 			case <-observerContext.Done():
 				return
 			}
@@ -413,9 +477,39 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	}
 	f.profileA = publish("profile.native-a", f.network.a)
 	f.profileB = publish("profile.native-b", f.network.b)
-	f.setDefault(t, &f.profileA)
+	var authored egressprofile.Choice
+	switch cfg.choice {
+	case "flow_proxy":
+		profile, err := f.r.EgressProfiles().GetRevision(t.Context(), f.profileA.ID, f.profileA.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c, err := egressprofile.Explicit(profile); err == nil {
+			authored = c
+		} else {
+			t.Fatal(err)
+		}
+		f.setDefault(t, &f.profileB)
+		f.mu.Lock()
+		f.current = runtimeNativeExpected{ProfileID: f.profileA.ID.String(), ProfileRevision: uint64(f.profileA.Revision), Source: egressprofile.SelectionFlow, DefaultRevision: 0}
+		f.mu.Unlock()
+	case "flow_direct":
+		authored, _ = egressprofile.Explicit(egressprofile.Direct())
+		f.setDefault(t, &f.profileB)
+		f.mu.Lock()
+		f.current = runtimeNativeExpected{ProfileID: egressprofile.DirectID.String(), ProfileRevision: 1, Source: egressprofile.SelectionFlow, DefaultRevision: 0}
+		f.mu.Unlock()
+	case "builtin":
+		authored = egressprofile.Inherit()
+		f.mu.Lock()
+		f.current = runtimeNativeExpected{ProfileID: egressprofile.DirectID.String(), ProfileRevision: 1, Source: egressprofile.SelectionBuiltin, DefaultRevision: 1}
+		f.mu.Unlock()
+	default:
+		f.setDefault(t, &f.profileA)
+		authored = egressprofile.Inherit()
+	}
 	origin, _ := originidentity.ParseProviderOrigin("https://native.example")
-	env := environment.Environment{ID: "native.egress", Name: "Native egress", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyReview}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.egress.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofile.Inherit()}}}
+	env := environment.Environment{ID: "native.egress", Name: "Native egress", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyReview}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.egress.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authored}}}
 	draft, e := f.r.Environments().SaveDraft(t.Context(), environment.DraftCommand{Candidate: env})
 	if e != nil {
 		t.Fatal(e)
@@ -453,8 +547,52 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	}
 	return f
 }
+func (f *runtimeNativeEgressFixture) holdEntry(entry runtimeNativeEntry) bool {
+	if f.edge == "tool_proxy_down" && strings.Contains(entry.body, `"method":"tools/call"`) {
+		return true
+	}
+	if f.edge == "reply_proxy_down" && strings.Contains(entry.body, `"id":"native-parent-ping"`) {
+		return true
+	}
+	return f.edge == "recovery_proxy_down" && entry.method == "GET" && entry.cursor == "native-progress"
+}
+func (f *runtimeNativeEgressFixture) releaseEntry(t *testing.T, id nativetool.ID) {
+	t.Helper()
+	f.mu.Lock()
+	gate := f.entryGates[id]
+	err := f.entryErrors[id]
+	f.mu.Unlock()
+	if gate == nil {
+		t.Fatalf("transport entry gate missing for %s", id)
+	}
+	gate <- err
+}
+func (f *runtimeNativeEgressFixture) waitAcceptedBody(t *testing.T, want string) {
+	t.Helper()
+	runtimeNativeObserve(t, "accepted body read", func(context.Context) bool {
+		select {
+		case <-f.acceptedRead:
+			return true
+		default:
+			return false
+		}
+	}, func() any {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return fmt.Sprintf("reads=%d body=%q", f.acceptedReads.Load(), f.acceptedBody)
+	})
+	f.mu.Lock()
+	body := f.acceptedBody
+	f.mu.Unlock()
+	if body != want || f.acceptedReads.Load() != 1 {
+		t.Fatalf("accepted body read=%d body=%q want=%q", f.acceptedReads.Load(), body, want)
+	}
+}
+func (f *runtimeNativeEgressFixture) releaseAccepted() {
+	f.acceptedReleaseOnce.Do(func() { close(f.acceptedRelease) })
+}
 func (f *runtimeNativeEgressFixture) handle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" || r.Host != "native.example" || r.URL.Path != environment.ClientToolMCPPath || r.URL.RawQuery != "" {
+	if (r.Method != "POST" && r.Method != "GET") || r.Host != "native.example" || r.URL.Path != environment.ClientToolMCPPath || r.URL.RawQuery != "" {
 		f.network.unexpected.Add(1)
 		w.WriteHeader(403)
 		return
@@ -469,7 +607,10 @@ func (f *runtimeNativeEgressFixture) handle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	f.mu.Lock()
-	_, ok := f.bodies[string(body)]
+	_, ok := f.requests[runtimeNativeRequestKey(r.Method, r.Header.Get("Last-Event-Id"), string(body))]
+	if ok {
+		f.endpointRequests = append(f.endpointRequests, runtimeNativeRequest{r.Method, r.Header.Get("Last-Event-Id"), string(body)})
+	}
 	f.mu.Unlock()
 	if !ok {
 		f.network.unexpected.Add(1)
@@ -477,6 +618,40 @@ func (f *runtimeNativeEgressFixture) handle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	f.httpCount.Add(1)
+	if f.edge == "tool_accepted_then_dropped" && r.Method == "POST" && strings.Contains(string(body), `"id":44`) {
+		f.mu.Lock()
+		f.acceptedBody = string(body)
+		f.mu.Unlock()
+		f.acceptedReads.Add(1)
+		select {
+		case f.acceptedRead <- struct{}{}:
+		default:
+		}
+		select {
+		case <-f.acceptedRelease:
+		case <-r.Context().Done():
+			return
+		}
+		if hijacker, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hijacker.Hijack(); err == nil {
+				_ = conn.Close()
+				return
+			}
+		}
+	}
+	if r.Method == "POST" && strings.Contains(string(body), `"id":"native-parent-ping"`) {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if r.Method == "GET" {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if r.Header.Get("Last-Event-Id") == "native-progress" {
+			io.WriteString(w, "id: native-terminal\ndata: {\"jsonrpc\":\"2.0\",\"id\":44,\"result\":{\"content\":[]}}\n\n")
+		} else {
+			io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"id\":\"native-parent-ping\",\"method\":\"ping\"}\n\n")
+		}
+		return
+	}
 	var rpc struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -502,6 +677,11 @@ func (f *runtimeNativeEgressFixture) handle(w http.ResponseWriter, r *http.Reque
 	case "tools/list":
 		result = `{"tools":[{"name":"read_file","inputSchema":{"type":"object"}}]}`
 	case "tools/call":
+		if f.mode == "matrix" && strings.Contains(string(body), `"id":44`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "id: native-progress\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"native-token\",\"progress\":1}}\n\n")
+			return
+		}
 		result = `{"content":[{"type":"text","text":"synthetic result"}]}`
 	default:
 		f.network.unexpected.Add(1)
@@ -515,6 +695,14 @@ func (f *runtimeNativeEgressFixture) begin(t *testing.T, method, body, cursor st
 	f.mu.Lock()
 	expected := f.current
 	f.mu.Unlock()
+	return f.beginExpected(t, method, body, cursor, expected)
+}
+func (f *runtimeNativeEgressFixture) beginExpected(t *testing.T, method, body, cursor string, expected runtimeNativeExpected) runtimeNativeCall {
+	t.Helper()
+	return f.beginPhase(t, method, body, cursor, expected, nil)
+}
+func (f *runtimeNativeEgressFixture) beginPhase(t *testing.T, method, body, cursor string, expected runtimeNativeExpected, entryCounts *runtimeNativeCounts) runtimeNativeCall {
+	t.Helper()
 	facts := environment.RequestFacts{Target: protocolspec.RequestTarget{Method: method, Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}
 	lease, e := f.r.assignments.BeginRequest(t.Context(), f.capture, "native.egress.connection", facts)
 	if e != nil {
@@ -524,7 +712,11 @@ func (f *runtimeNativeEgressFixture) begin(t *testing.T, method, body, cursor st
 	f.next++
 	id, _ := nativetool.NewID(fmt.Sprintf("%032x", f.next))
 	f.expected[id] = expected
+	if entryCounts != nil {
+		f.entryCounts[id] = *entryCounts
+	}
 	f.bodies[body] = id
+	f.requests[runtimeNativeRequestKey(method, cursor, body)] = id
 	f.mu.Unlock()
 	request := httptest.NewRequest(method, "https://native.example"+environment.ClientToolMCPPath, strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer synthetic-original-login")
@@ -545,11 +737,12 @@ func (f *runtimeNativeEgressFixture) begin(t *testing.T, method, body, cursor st
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan nativemcp.Terminal, 1)
-	call := runtimeNativeCall{ID: id, Captured: captured, Done: done, Cancel: cancel}
+	response := httptest.NewRecorder()
+	call := runtimeNativeCall{ID: id, Captured: captured, Done: done, Cancel: cancel, Response: response}
 	f.mu.Lock()
 	f.flights[id] = &runtimeNativeFlight{call: call}
 	f.mu.Unlock()
-	go func() { done <- f.r.nativeTools.Serve(ctx, captured, httptest.NewRecorder()) }()
+	go func() { done <- f.r.nativeTools.Serve(ctx, captured, response) }()
 	return call
 }
 func (f *runtimeNativeEgressFixture) handshake(t *testing.T) {
@@ -561,7 +754,7 @@ func (f *runtimeNativeEgressFixture) handshake(t *testing.T) {
 			t.Fatalf("native handshake %+v counters=%+v", terminal, f.counts())
 		}
 	}
-	if c := f.counts(); c.HTTP != 3 || c.AConnects != 3 || c.TLS != 3 {
+	if c := f.counts(); c.HTTP != 3 || (c.AConnects != 3 && c.DirectConnections != 3) || c.TLS != 3 {
 		t.Fatalf("native baseline %+v", c)
 	}
 }
@@ -606,6 +799,18 @@ func (f *runtimeNativeEgressFixture) waitQueued(t *testing.T) offlinehold.ProbeT
 	}, func() any { return fmt.Sprintf("gate=%+v counts=%+v", f.gate.Snapshot(), f.counts()) })
 	return f.gate.PendingProbeTargets()[0]
 }
+func (f *runtimeNativeEgressFixture) waitStarted(t *testing.T, id nativetool.ID) {
+	t.Helper()
+	runtimeNativeObserve(t, "native transport entry", func(context.Context) bool {
+		f.mu.Lock()
+		_, ok := f.started[id]
+		if ok && (f.edge == "tool_proxy_down" || f.edge == "reply_proxy_down" || f.edge == "recovery_proxy_down") {
+			_, ok = f.entryGates[id]
+		}
+		f.mu.Unlock()
+		return ok
+	}, func() any { return fmt.Sprintf("started=%s counts=%+v", id, f.counts()) })
+}
 func (f *runtimeNativeEgressFixture) setDefault(t *testing.T, profile *egressprofile.ProfileRef) uint64 {
 	t.Helper()
 	old, e := f.r.EgressDefaults().GetDefault(t.Context())
@@ -615,6 +820,9 @@ func (f *runtimeNativeEgressFixture) setDefault(t *testing.T, profile *egresspro
 	setting, e := f.r.EgressDefaults().SetDefault(t.Context(), egressprofile.SetDefaultCommand{ExpectedRevision: old.Revision, Profile: profile})
 	if e != nil {
 		t.Fatal(e)
+	}
+	if f.choice == "flow_proxy" || f.choice == "flow_direct" {
+		return setting.Revision
 	}
 	if profile == nil {
 		f.mu.Lock()
@@ -659,7 +867,14 @@ func (f *runtimeNativeEgressFixture) checkAudit(record egressaudit.Record, id na
 	if a.Purpose() != egressaudit.PurposeClientToolService || a.Parent().Kind != egressaudit.ParentClientOperation || a.Parent().ID != id.String() || a.Caller() != egressaudit.CallerCore || a.TargetOrigin() != "https://native.example" || d.PolicyID != "native.egress" || d.PolicyRevision != 1 || d.Authority != egressaudit.AuthorityEnvironment || d.RuleID != "native.egress.route" || d.ProxyID != want.ProfileID || d.ProxyRevision != want.ProfileRevision || d.SelectionSource != want.Source || d.DefaultRevision != want.DefaultRevision || d.AccountID != "" || d.AccountSettingsRevision != 0 {
 		return fmt.Errorf("native audit identity mismatch id=%s want=%+v audit=%+v", id, want, d)
 	}
-	if strings.Contains(f.bodyFor(id), `"method":"tools/call"`) && a.PayloadClass() != egressaudit.PayloadClientData {
+	body := f.bodyFor(id)
+	wantPayload := egressaudit.PayloadClass("")
+	if f.methodFor(id) == "GET" {
+		wantPayload = egressaudit.PayloadNone
+	} else if strings.Contains(body, `"method":"tools/call"`) || strings.Contains(body, `"id":"native-parent-ping"`) {
+		wantPayload = egressaudit.PayloadClientData
+	}
+	if wantPayload != "" && a.PayloadClass() != wantPayload {
 		return errors.New("native tool audit payload mismatch")
 	}
 	if outcome == "" {
@@ -669,7 +884,32 @@ func (f *runtimeNativeEgressFixture) checkAudit(record egressaudit.Record, id na
 	} else if !a.Terminal() || string(a.Outcome()) != outcome || a.ErrorClass() != errorClass {
 		return fmt.Errorf("native audit terminal mismatch: %s/%s", a.Outcome(), a.ErrorClass())
 	}
+	if a.Terminal() {
+		if outcome == "completed" && (!a.ByteCountsKnown() || a.BytesOut() != int64(len(body)) || (a.BytesIn() <= 0 && a.BytesOut() <= 0)) {
+			return fmt.Errorf("native completed byte counts unknown/empty in=%d out=%d known=%t", a.BytesIn(), a.BytesOut(), a.ByteCountsKnown())
+		}
+		if errorClass == "execution_uncertain" && (a.ByteCountsKnown() || a.BytesIn() != 0 || a.BytesOut() != 0) {
+			return fmt.Errorf("native uncertain byte counts unexpectedly known in=%d out=%d", a.BytesIn(), a.BytesOut())
+		}
+		if errorClass == "transport_failed" {
+			// Broken exchanges cannot observe request writes through this
+			// transport API, so both directions stay unknown even after SSE.
+			if a.ByteCountsKnown() || a.BytesIn() != 0 || a.BytesOut() != 0 {
+				return errors.New("native broken exchange invented observed bytes")
+			}
+		}
+	}
 	return nil
+}
+func (f *runtimeNativeEgressFixture) methodFor(id nativetool.ID) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, owner := range f.requests {
+		if owner == id {
+			return strings.SplitN(key, "\x00", 2)[0]
+		}
+	}
+	return ""
 }
 func (f *runtimeNativeEgressFixture) bodyFor(id nativetool.ID) string {
 	f.mu.Lock()
@@ -718,6 +958,97 @@ func (f *runtimeNativeEgressFixture) assertNoStart(t *testing.T, id nativetool.I
 	}
 	t.Logf("native no-Start id=%s once=%d audit=%d consumedAllow=%d counts=%+v gate=%+v", id, once, audits, consumed, f.counts(), f.gate.Snapshot())
 }
+func (f *runtimeNativeEgressFixture) assertReplayAndFreshStart(t *testing.T, call runtimeNativeCall) {
+	t.Helper()
+	beforeCounts := f.counts()
+	before := f.failureState(t, call.ID)
+	f.mu.Lock()
+	beforeEntries := len(f.observedEntries[call.ID])
+	beforeRequests := append([]runtimeNativeRequest(nil), f.endpointRequests...)
+	f.mu.Unlock()
+	assertUnchanged := func(stage string) {
+		t.Helper()
+		after := f.failureState(t, call.ID)
+		f.mu.Lock()
+		entries := len(f.observedEntries[call.ID])
+		requests := append([]runtimeNativeRequest(nil), f.endpointRequests...)
+		f.mu.Unlock()
+		if !reflect.DeepEqual(before, after) || f.counts() != beforeCounts || entries != beforeEntries || !reflect.DeepEqual(beforeRequests, requests) {
+			t.Fatalf("%s mutated operation/Allow/once/audit or transport before=%+v after=%+v entries=%d/%d counts=%+v/%+v", stage, before, after, beforeEntries, entries, beforeCounts, f.counts())
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	replay := f.r.nativeTools.Serve(ctx, call.Captured, httptest.NewRecorder())
+	if replay.OperationID != call.ID || replay.Outcome != nativemcp.OutcomeRejected || replay.Reason != nativemcp.ReasonProtocolInvalid {
+		t.Fatalf("native captured-request replay rejection=%+v", replay)
+	}
+	assertUnchanged("captured-request replay")
+	scope, err := f.r.NativeToolRepository().GetScope(t.Context(), f.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.r.NativeToolRepository().Start(t.Context(), call.ID, "fresh-attempt-"+call.ID.String(), scope.Revision, time.Now().UTC())
+	if !errors.Is(err, nativetool.ErrReplay) || fresh != (nativetool.StartReceipt{}) {
+		t.Fatalf("fresh Store.Start unexpectedly accepted receipt=%+v err=%v", fresh, err)
+	}
+	assertUnchanged("fresh Store.Start")
+}
+
+type runtimeNativeFailureState struct {
+	Operation              nativetool.Operation
+	Approval               nativetool.Approval
+	Audit                  egressaudit.Record
+	Once, Consumed, Audits int
+	AttemptID              string
+}
+
+func (f *runtimeNativeEgressFixture) failureState(t *testing.T, id nativetool.ID) runtimeNativeFailureState {
+	t.Helper()
+	var state runtimeNativeFailureState
+	var err error
+	state.Operation, err = f.r.NativeToolRepository().Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantState, wantReason := "uncertain", "execution_uncertain"
+	if f.methodFor(id) == "GET" {
+		wantState, wantReason = "failed", "transport_failed"
+	}
+	if state.Operation.State != wantState || state.Operation.Reason != wantReason || state.Operation.CompletedAt == nil || state.Operation.BytesIn != nil || state.Operation.BytesOut != nil {
+		t.Fatalf("native failure logical/byte state=%+v", state.Operation)
+	}
+	if state.Operation.ApprovalID != nil {
+		state.Approval, err = f.r.NativeToolRepository().GetApproval(t.Context(), *state.Operation.ApprovalID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Approval.State != "allowed" || state.Approval.ConsumedAt == nil {
+			t.Fatalf("failure Allow=%+v", state.Approval)
+		}
+	}
+	state.Audit, err = f.audit(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.QueryRow(`SELECT COUNT(*),COALESCE(MAX(attempt_id),'') FROM native_tool_once WHERE operation_id=?`, id.String()).Scan(&state.Once, &state.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND consumed_at_unix_ms IS NOT NULL`, id.String()).Scan(&state.Consumed); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.QueryRow(`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=? AND purpose='client_tool_service'`, id.String()).Scan(&state.Audits); err != nil {
+		t.Fatal(err)
+	}
+	wantConsumed := 1
+	if f.methodFor(id) == "GET" {
+		wantConsumed = 0
+	}
+	if state.Once != 1 || state.Audits != 1 || state.Consumed != wantConsumed || state.AttemptID != state.Audit.Attempt.ID() {
+		t.Fatalf("failure once/Allow/audit=%+v", state)
+	}
+	return state
+}
 func (f *runtimeNativeEgressFixture) counts() runtimeNativeCounts {
 	return runtimeNativeCounts{f.network.directAttempts.Load(), f.network.directConnections.Load(), f.network.aAttempts.Load(), f.network.bAttempts.Load(), f.proxyA.connects.Load(), f.proxyB.connects.Load(), f.tlsCount.Load(), f.httpCount.Load(), f.network.unexpected.Load(), f.badCredentials.Load()}
 }
@@ -742,6 +1073,7 @@ func (f *runtimeNativeEgressFixture) cleanup(t *testing.T) {
 		return
 	}
 	f.cleaned = true
+	f.releaseAccepted()
 	if f.r != nil {
 		for _, path := range []string{filepath.Dir(f.databasePath), f.databasePath} {
 			if _, e := os.Stat(path); e != nil {
