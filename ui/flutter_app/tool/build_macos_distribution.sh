@@ -55,19 +55,10 @@ if [[ ! -d "${source_app}" || -e "${release_directory}" ]]; then
   exit 70
 fi
 
-temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/vibermate-flutter-distribution.XXXXXX")"
-cleanup() {
-  case "${temporary_directory}" in
-    "${TMPDIR:-/tmp}"/vibermate-flutter-distribution.*)
-      rm -rf -- "${temporary_directory}"
-      ;;
-    *)
-      echo "refusing to clean an unexpected distribution temporary path" >&2
-      return 1
-      ;;
-  esac
-}
-trap cleanup EXIT
+source "${script_directory}/macos_distribution_temp.sh"
+create_distribution_temp "${TMPDIR:-/tmp}"
+temporary_directory="${distribution_temp_directory}"
+trap 'cleanup_distribution_temp || exit 1' EXIT
 
 macos_sdk_root="$(xcrun --sdk macosx --show-sdk-path)"
 if ! test -d "${macos_sdk_root}"; then
