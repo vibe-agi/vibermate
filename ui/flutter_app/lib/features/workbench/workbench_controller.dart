@@ -1334,9 +1334,11 @@ final class WorkbenchController extends ChangeNotifier
     // every overview poll even when the Capture lasted hours.
     final capture = selectedCapture;
     final start = capture?.createdAt.toUtc() ?? at.toUtc();
-    final untilDay = DateTime.utc(at.year, at.month, at.day).add(
-      const Duration(days: 1),
-    );
+    final untilDay = DateTime.utc(
+      at.year,
+      at.month,
+      at.day,
+    ).add(const Duration(days: 1));
     final fromDay = DateTime.utc(start.year, start.month, start.day);
     var days = untilDay.difference(fromDay).inDays;
     if (days < 1) days = 1;

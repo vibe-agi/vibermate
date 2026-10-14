@@ -101,8 +101,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
       final requests = await widget.controller.loadActivitySummary(scope);
       if (!mounted || generation != _generation) return;
       setState(() => _requests = requests);
-      final captureRunning =
-          widget.controller.selectedCapture?.running == true;
+      final captureRunning = widget.controller.selectedCapture?.running == true;
       final needUsage =
           forceUsage ||
           scopeChanged ||
