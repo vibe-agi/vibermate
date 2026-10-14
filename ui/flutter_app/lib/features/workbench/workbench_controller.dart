@@ -1679,7 +1679,10 @@ final class WorkbenchController extends ChangeNotifier
   bool get _pollNeedsInventory =>
       section == WorkbenchSection.captures ||
       section == WorkbenchSection.settings ||
-      section == WorkbenchSection.usage;
+      section == WorkbenchSection.usage ||
+      // Account settings can change on another client; the open editor must
+      // observe the remote revision before the next local edit.
+      section == WorkbenchSection.providerAccounts;
 
   Future<void> _poll() async {
     if (_disposed ||
@@ -1696,8 +1699,8 @@ final class WorkbenchController extends ChangeNotifier
     _pollInFlight = true;
     final generation = _dashboardGeneration;
     try {
-      // Off Captures/Settings/Usage, only refresh readiness — inventory rides
-      // section switches and explicit mutations.
+      // Off Captures/Settings/Usage/Accounts, only refresh readiness —
+      // inventory rides section switches and explicit mutations.
       if (!_pollNeedsInventory && _api is RuntimeStatusReader) {
         await _pollRuntimeStatusOnly(generation);
         if (section == WorkbenchSection.network) {
@@ -4181,6 +4184,9 @@ final class WorkbenchController extends ChangeNotifier
       final launchScope = capture.isManual
           ? ActivitySummaryScope(manualCaptureId: capture.id)
           : ActivitySummaryScope(captureRunId: capture.captureRunId!);
+      // Future.wait keeps every sibling error handled. Starting assignment
+      // first and then throwing synchronously from a later sibling would
+      // orphan that Future and surface it as an uncaught zone error.
       final assignmentFuture = _loadCaptureAssignment(capture).then((
         assignment,
       ) {
@@ -4194,20 +4200,27 @@ final class WorkbenchController extends ChangeNotifier
         }
         return assignment;
       });
+      // Launch summary carries an EXISTS for retained full bodies. When the
+      // Server proves absence, skip conversations(200) identity enrichment.
+      final summaryFuture = _futureOrError(
+        () => loadActivitySummary(launchScope),
+      );
       final acpFuture = capture.isACP && _api is ACPObservationApi
           ? (_api as ACPObservationApi).acpObservation(capture.key)
           : Future<ACPRecord?>.value();
-      // Launch summary carries an EXISTS for retained full bodies. When the
-      // Server proves absence, skip conversations(200) identity enrichment.
-      final summaryFuture = loadActivitySummary(launchScope);
-      final assignment = await assignmentFuture;
-      final summary = await summaryFuture;
-      final acp = await acpFuture;
+      final values = await Future.wait<Object?>([
+        assignmentFuture,
+        summaryFuture,
+        acpFuture,
+      ]);
       if (_disposed ||
           generation != _selectionGeneration ||
           selectedCaptureKey != capture.key) {
         return;
       }
+      final assignment = values[0] as CaptureAssignment?;
+      final summary = values[1]! as ExchangeSummary;
+      final acp = values[2] as ACPRecord?;
       selectedAssignment = assignment;
       selectedACP = acp;
       selectedCaptureLaunchIncomplete = selectedAssignment == null;
@@ -5084,6 +5097,16 @@ final class ConversationSummary {
 /// Five pages is deep enough that ordinary scrolling never reaches the edge,
 /// and the tail is not lost — `loadMoreCaptureActivities` fetches it again.
 const retainedCaptureActivityLimit = 500;
+
+/// Turns a synchronous throw from [start] into a Future error so siblings
+/// already in flight stay observed by Future.wait.
+Future<T> _futureOrError<T>(Future<T> Function() start) {
+  try {
+    return start();
+  } catch (error, stack) {
+    return Future<T>.error(error, stack);
+  }
+}
 
 /// Merges a freshly polled window into what is already held.
 ///

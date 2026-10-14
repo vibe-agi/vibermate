@@ -710,7 +710,7 @@ void main() {
     expect(find.text('Agent'), findsNothing);
     expect(tester.takeException(), isNull);
   });
-  testWidgets('Capture has a standalone neutral tool service reader', (
+  testWidgets('stats-only overview omits the tool service reader', (
     tester,
   ) async {
     final controller = nativeController(PreviewControlApi());
@@ -731,8 +731,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Tool service'), findsOneWidget);
-    expect(find.byKey(const Key('native-tool-reader')), findsOneWidget);
+    expect(find.text('Tool service'), findsNothing);
+    expect(find.byKey(const Key('native-tool-reader')), findsNothing);
     expect(tester.takeException(), isNull);
   });
   for (final chinese in [false, true]) {

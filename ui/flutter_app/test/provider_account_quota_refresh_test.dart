@@ -395,6 +395,24 @@ final class _QuotaApi extends Fake implements ControlApi {
   }
 
   @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
+    return ExchangeSummary(
+      scope: scope,
+      generatedAt: DateTime.utc(2026, 10, 11),
+      requests: 0,
+      succeeded: 0,
+      failed: 0,
+      canceled: 0,
+      pending: 0,
+      firstObservedAt: null,
+      lastObservedAt: null,
+      failures: const {},
+      otherFailures: 0,
+      contentBodiesAvailable: true,
+    );
+  }
+
+  @override
   Future<ConversationPage> conversations({
     String? cursor,
     int limit = 50,
