@@ -7,12 +7,81 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type leaseEgressResolver struct {
 	value egressprofile.Resolved
 	err   error
 	reads int
+}
+
+// A managed model account does not own the caller's startup probes.
+// This bodyless original-credential operation still needs one frozen exit.
+func TestManagedOpaqueRequestFreezesEgressAndReleasesFailedLease(t *testing.T) {
+	policy := environmentFixture(t, "managed-opaque", "adapter.shared")
+	protocol := &policy.ClientEndpoints[0].ProtocolPlans[0]
+	protocol.EgressProfile = egressprofile.Inherit()
+	base := newTestManager(t, newMemoryRepository(), newRevisionResolver(t, policy))
+	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionBuiltin, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := &leaseEgressResolver{value: resolved}
+	manager, err := NewManager(Options{Repository: base.repository, Environments: base.environments, Activity: base.activity, Clock: base.clock, EgressDefaults: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Create(t.Context(), CreateCommand{Capture: testCapture(), EnvironmentID: policy.ID, Source: SourceLaunch}); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := manager.RegisterConnection(t.Context(), testCapture(), "egress.managed-opaque", semanticOrigin(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	facts := semanticRequestFacts()
+	facts.Target.Method, facts.Target.Path = "GET", "/api/hello"
+	lease, err := manager.BeginRequest(t.Context(), testCapture(), "egress.managed-opaque", facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	plan := lease.Plan()
+	if plan.Operation().Kind() != protocolspec.ClientOperationOpaque || !plan.UsesUpstreamDestination() || plan.UsesOriginalAccount() {
+		t.Fatal("fixture did not reach original forwarding under a managed model route")
+	}
+	got, err := plan.ResolvedEgress()
+	if err != nil || got.DefaultRevision() != 3 || defaults.reads != 1 {
+		t.Fatalf("managed opaque request missing frozen exit: err=%v reads=%d", err, defaults.reads)
+	}
+	defaults.value, _ = egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionBuiltin, 4)
+	next, err := manager.BeginRequest(t.Context(), testCapture(), "egress.managed-opaque", facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := next.Plan().ResolvedEgress()
+	next.Release()
+	old, oldErr := lease.Plan().ResolvedEgress()
+	if err != nil || oldErr != nil || selected.DefaultRevision() != 4 || old.DefaultRevision() != 3 || defaults.reads != 2 {
+		t.Fatal("default edit did not affect only the next opaque request")
+	}
+	lease.Release()
+	defaults.err = errors.New("synthetic unavailable")
+	failed, err := manager.BeginRequest(t.Context(), testCapture(), "egress.managed-opaque", facts)
+	if err == nil || failed != nil {
+		if failed != nil {
+			failed.Release()
+		}
+		t.Fatal("unavailable default admitted opaque request")
+	}
+	state := manager.state(testCapture())
+	state.mu.Lock()
+	active := state.connections["egress.managed-opaque"].activeRequests
+	state.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("failed resolution retained %d consumers", active)
+	}
 }
 
 func (r *leaseEgressResolver) Resolve(_ context.Context, account, flow egressprofile.Choice) (egressprofile.Resolved, error) {

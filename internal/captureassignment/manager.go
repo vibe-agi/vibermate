@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
@@ -604,7 +605,10 @@ func (manager *Manager) BeginRequest(
 			}
 		}
 	}
-	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
+	// Opaque startup probes keep the client's credentials even when model
+	// requests use a managed account. Their original forwarder needs the same
+	// request-scoped exit as any other original-credential operation.
+	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() || plan.Operation().Kind() == protocolspec.ClientOperationOpaque {
 		var resolved egressprofile.Resolved
 		choice := plan.EgressChoice()
 		if manager.egressDefaults != nil {
