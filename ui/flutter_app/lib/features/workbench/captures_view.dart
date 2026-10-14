@@ -761,18 +761,10 @@ final class _CaptureConversationWorkspaceState
       _collapsed.clear();
     }
     final sessions = _captureSessionGroups(conversations);
-    // An in-flight request has not acquired its content yet. It must not
-    // replace the user's view while the next terminal observation is pending.
-    final activities = controller.selectedActivities.where(
-      (item) => item.status != 'pending',
-    );
-    // Launch-summary EXISTS or directory AvailableBodies is enough when every
-    // latest is known-absent; the activity timeline is skipped in that case
-    // and must not flip this.
-    final withoutBodies =
-        controller.captureBodiesKnownAbsent ||
-        (activities.isNotEmpty &&
-            activities.every((item) => item.contentAvailable == false));
+    // Capture-wide only: launch-summary EXISTS or every directory latest is
+    // known-absent. The selected conversation's timeline must not hide retained
+    // bodies that still exist on other conversations.
+    final withoutBodies = controller.captureBodiesKnownAbsent;
     final selected = controller.selectedCaptureConversation;
     final selectedConversationSession = sessions
         .where(
