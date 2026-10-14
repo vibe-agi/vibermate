@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/account_facts_models.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
@@ -159,6 +160,50 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'selected body-free conversation does not hide capture with retained bodies',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _MixedBodyDirectoryApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.delegate.close,
+      );
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('capture-row-managed_run:run-1')));
+      await tester.pumpAndSettle();
+      expect(controller.captureBodiesKnownAbsent, isFalse);
+      expect(find.byKey(const Key('capture-evidence-mode')), findsOneWidget);
+      final bodyFree = controller.captureConversations.firstWhere(
+        (record) => record.latest.contentAvailable == false,
+      );
+      await controller.selectCaptureConversation(bodyFree.key);
+      await tester.pumpAndSettle();
+      expect(
+        controller.selectedActivities.every(
+          (record) => record.contentAvailable == false,
+        ),
+        isTrue,
+      );
+      // Directory / mode chrome stays mounted; stats-only early-return does not.
+      expect(find.byKey(const Key('capture-evidence-mode')), findsOneWidget);
+      expect(controller.captureBodiesKnownAbsent, isFalse);
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   for (final width in [390.0, 1440.0]) {
     testWidgets('Local overview at $width groups without requiring members', (
@@ -394,6 +439,135 @@ Widget overview(WorkbenchController controller, AppLanguage language) =>
         ),
       ),
     );
+
+/// One directory entry keeps retained bodies; another is known-absent so the
+/// selected timeline can look body-free without the Capture being stats-only.
+final class _MixedBodyDirectoryApi implements ControlApi {
+  _MixedBodyDirectoryApi()
+    : delegate = PreviewControlApi(retainConversationBodies: true);
+
+  final PreviewControlApi delegate;
+  String? bodyFreeConversationId;
+
+  ActivityRecord _withoutBody(ActivityRecord latest) => ActivityRecord(
+    id: latest.id,
+    occurredAt: latest.occurredAt,
+    title: latest.title,
+    status: latest.status,
+    reasonCode: latest.reasonCode,
+    source: latest.source,
+    conversation: latest.conversation,
+    environment: latest.environment,
+    parentRefs: latest.parentRefs,
+    requestPreview: latest.requestPreview,
+    contentAvailable: false,
+  );
+
+  @override
+  Future<DashboardData> loadDashboard() => delegate.loadDashboard();
+
+  @override
+  Future<RuntimeStatus> loadRuntimeStatus() => delegate.loadRuntimeStatus();
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
+    final base = await delegate.activitySummary(scope);
+    return ExchangeSummary(
+      scope: base.scope,
+      generatedAt: base.generatedAt,
+      requests: base.requests,
+      succeeded: base.succeeded,
+      failed: base.failed,
+      canceled: base.canceled,
+      pending: base.pending,
+      firstObservedAt: base.firstObservedAt,
+      lastObservedAt: base.lastObservedAt,
+      failures: base.failures,
+      otherFailures: base.otherFailures,
+      contentBodiesAvailable: true,
+    );
+  }
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    final page = await delegate.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+    if (page.items.length < 2) return page;
+    final bodyFree = page.items.last;
+    bodyFreeConversationId = bodyFree.conversation.id;
+    return ConversationPage(
+      nextCursor: page.nextCursor,
+      items: [
+        for (final record in page.items)
+          record.conversation.id == bodyFreeConversationId
+              ? ConversationRecord(
+                  conversation: record.conversation,
+                  firstObservedAt: record.firstObservedAt,
+                  turnCount: record.turnCount,
+                  latest: _withoutBody(record.latest),
+                )
+              : record,
+      ],
+    );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    final page = await delegate.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    if (conversationId == null ||
+        conversationId != bodyFreeConversationId ||
+        page.items.isEmpty) {
+      return page;
+    }
+    return ActivityPage(
+      nextCursor: page.nextCursor,
+      items: page.items.map(_withoutBody).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() =>
+      delegate.pendingApprovals();
+
+  @override
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) =>
+      delegate.runtimeUsage(query);
+
+  @override
+  Future<AccountFacts> accountFacts(String id, {bool history = false}) =>
+      delegate.accountFacts(id, history: history);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
 
 final class _OverviewApi implements ControlApi {
   _OverviewApi({
