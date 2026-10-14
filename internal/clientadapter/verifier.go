@@ -244,6 +244,7 @@ func signerSortKey(signer Signer) string {
 		signer.OperatingSystem,
 		signer.Architecture,
 		signer.InvocationLabel,
+		string(signer.InstallShape),
 	}, "\x00")
 }
 
@@ -500,9 +501,13 @@ func (verifier *ReleaseVerifier) Verify(
 	if len(candidates) > 0 {
 		detection.Recognition = RecognitionUnverified
 	}
+	// One Verify may try adjacent catalog versions that share a wrapper and
+	// the same native child. Cache digests by resolved path so a mismatch on
+	// 0.159.2 does not re-hash the ~230MB child for 0.160.0.
+	digests := map[string]fileDigestCacheEntry{}
 	var matched []Release
 	for _, candidate := range candidates {
-		ok, matchErr := verifyRelease(ctx, canonical, candidate)
+		ok, matchErr := verifyRelease(ctx, canonical, candidate, digests)
 		if matchErr != nil {
 			detection.Status = StatusFailed
 			return detection, matchErr
@@ -616,10 +621,17 @@ func (verifier *ReleaseVerifier) releasesForLabel(label string) []Release {
 	return matches
 }
 
+type fileDigestCacheEntry struct {
+	digest string
+	size   int64
+	mode   os.FileMode
+}
+
 func verifyRelease(
 	ctx context.Context,
 	canonicalEntrypoint string,
 	release Release,
+	digests map[string]fileDigestCacheEntry,
 ) (bool, error) {
 	if release.CanonicalEntrypointName != "" &&
 		filepath.Base(canonicalEntrypoint) !=
@@ -705,12 +717,13 @@ func verifyRelease(
 		if maxBytes == 0 {
 			maxBytes = defaultMaxArtifactBytes
 		}
-		actual, eligible, err := regularFileDigest(
+		actual, eligible, err := cachedRegularFileDigest(
 			ctx,
 			resolvedPath,
 			maxBytes,
 			artifact.Role == ArtifactEntrypoint ||
 				artifact.Role == ArtifactNativeChild,
+			digests,
 		)
 		if err != nil {
 			return false, fmt.Errorf(
@@ -793,33 +806,72 @@ func canonicalExecutable(request Request) (string, string, error) {
 	return canonical, invocationLabel, nil
 }
 
+func cachedRegularFileDigest(
+	ctx context.Context,
+	path string,
+	maxBytes int64,
+	requireExecutable bool,
+	digests map[string]fileDigestCacheEntry,
+) (string, bool, error) {
+	if digests != nil {
+		if cached, ok := digests[path]; ok {
+			eligible := cached.size > 0 &&
+				cached.size <= maxBytes &&
+				cached.mode.IsRegular()
+			if requireExecutable &&
+				runtime.GOOS != "windows" &&
+				cached.mode.Perm()&0o111 == 0 {
+				eligible = false
+			}
+			if !eligible {
+				return "", false, nil
+			}
+			return cached.digest, true, nil
+		}
+	}
+	digest, eligible, size, mode, err := regularFileDigest(ctx, path, maxBytes, requireExecutable)
+	if err != nil || digests == nil {
+		return digest, eligible, err
+	}
+	// Only remember a complete hash. A miss caused by this artifact's MaxBytes
+	// must not poison a later candidate that allows a larger file.
+	if eligible {
+		digests[path] = fileDigestCacheEntry{
+			digest: digest,
+			size:   size,
+			mode:   mode,
+		}
+	}
+	return digest, eligible, nil
+}
+
 func regularFileDigest(
 	ctx context.Context,
 	path string,
 	maxBytes int64,
 	requireExecutable bool,
-) (string, bool, error) {
+) (string, bool, int64, os.FileMode, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
+			return "", false, 0, 0, nil
 		}
-		return "", false, err
+		return "", false, 0, 0, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return "", false, err
+		return "", false, 0, 0, err
 	}
 	if !info.Mode().IsRegular() ||
 		info.Size() <= 0 ||
 		info.Size() > maxBytes {
-		return "", false, nil
+		return "", false, info.Size(), info.Mode(), nil
 	}
 	if requireExecutable &&
 		runtime.GOOS != "windows" &&
 		info.Mode().Perm()&0o111 == 0 {
-		return "", false, nil
+		return "", false, info.Size(), info.Mode(), nil
 	}
 	hash := sha256.New()
 	reader := bufio.NewReaderSize(file, 64<<10)
@@ -827,26 +879,26 @@ func regularFileDigest(
 	var total int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return "", false, err
+			return "", false, 0, 0, err
 		}
 		count, readErr := reader.Read(buffer)
 		if count > 0 {
 			total += int64(count)
 			if total > maxBytes {
-				return "", false, nil
+				return "", false, info.Size(), info.Mode(), nil
 			}
 			if _, err := hash.Write(buffer[:count]); err != nil {
-				return "", false, err
+				return "", false, 0, 0, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return "", false, readErr
+			return "", false, 0, 0, readErr
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil)), true, nil
+	return hex.EncodeToString(hash.Sum(nil)), true, info.Size(), info.Mode(), nil
 }
 
 func pathWithin(root string, candidate string) bool {
@@ -1208,7 +1260,7 @@ func codexCLI01450Release(
 // empty or partially active catalog.
 func BuiltInCatalog() Catalog {
 	return Catalog{
-		revision: 5,
+		revision: 6,
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
 			ClaudeCode221220DarwinAMD64(),
@@ -1224,6 +1276,7 @@ func BuiltInCatalog() Catalog {
 		signers: []Signer{
 			ClaudeCodeSignerDarwin(),
 			CodexCLISignerDarwin(),
+			CodexCLINativeSignerDarwin(),
 		},
 	}
 }

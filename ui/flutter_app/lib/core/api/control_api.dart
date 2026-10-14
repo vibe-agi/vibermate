@@ -17,6 +17,11 @@ abstract interface class ACPObservationApi {
   Future<ACPRecord?> acpObservation(String captureKey);
 }
 
+/// Cheap readiness / generation read for sections that do not need inventory.
+abstract interface class RuntimeStatusReader {
+  Future<RuntimeStatus> loadRuntimeStatus();
+}
+
 abstract interface class ControlApi {
   Future<ProductUpdateMetadata> checkProductUpdate();
   Future<NativeToolOperationPage> nativeToolOperations(
@@ -527,7 +532,8 @@ final class ControlProblem implements Exception {
       : 'Control problem $status: $reasonCode — $detail';
 }
 
-final class HttpControlApi implements ControlApi, ACPObservationApi {
+final class HttpControlApi
+    implements ControlApi, ACPObservationApi, RuntimeStatusReader {
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       ProductUpdateMetadata.fromJson(
@@ -822,16 +828,17 @@ final class HttpControlApi implements ControlApi, ACPObservationApi {
   }
 
   @override
+  Future<RuntimeStatus> loadRuntimeStatus() async => RuntimeStatus.fromJson(
+    await _read('/api/v1/status'),
+    expectedInstanceId: _session.instanceId,
+  );
+
+  @override
   Future<DashboardData> loadDashboard() async {
     RuntimeStatus? status;
     try {
       final results = await Future.wait<Object?>([
-        _read('/api/v1/status').then(
-          (json) => status = RuntimeStatus.fromJson(
-            json,
-            expectedInstanceId: _session.instanceId,
-          ),
-        ),
+        loadRuntimeStatus().then((value) => status = value),
         captures(),
         _read('/api/v1/environments'),
         _read('/api/v1/upstream-endpoints'),

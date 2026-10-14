@@ -535,7 +535,7 @@ void main() {
       closeRuntime: fixture.close,
       terminalManagement: false,
       initialPreferences: const WorkbenchPreferences(
-        section: WorkbenchSection.environments,
+        section: WorkbenchSection.settings,
       ),
     );
     await controller.initialize();
@@ -559,6 +559,39 @@ void main() {
     expect(controller.data!.accounts.first.note, 'changed by poll');
     controller.dispose();
   });
+
+  testWidgets(
+    'non-inventory sections poll status without reloading inventory',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final api = _StatusPollTrackingApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        terminalManagement: false,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.environments,
+        ),
+      );
+      await controller.initialize();
+      final dashboardCallsAfterInit = api.dashboardCalls;
+      final statusCallsAfterInit = api.statusCalls;
+
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.dashboardCalls, dashboardCallsAfterInit);
+      expect(api.statusCalls, greaterThan(statusCallsAfterInit));
+
+      controller.selectSection(WorkbenchSection.settings);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.dashboardCalls, greaterThan(dashboardCallsAfterInit));
+      controller.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,
@@ -1781,6 +1814,10 @@ final class _UsageTrackingApi implements ControlApi {
   Future<DashboardData> loadDashboard() => delegate.loadDashboard();
 
   @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) =>
+      delegate.activitySummary(scope);
+
+  @override
   Future<AccountFacts> accountFacts(String id, {bool history = false}) =>
       delegate.accountFacts(id, history: history);
 
@@ -1901,6 +1938,26 @@ final class _LiveEvidenceApi extends _UsageTrackingApi {
             nextCursor: page.nextCursor,
           )
         : page;
+  }
+}
+
+final class _StatusPollTrackingApi extends _UsageTrackingApi
+    implements RuntimeStatusReader {
+  _StatusPollTrackingApi(super.delegate);
+
+  int dashboardCalls = 0;
+  int statusCalls = 0;
+
+  @override
+  Future<DashboardData> loadDashboard() {
+    dashboardCalls++;
+    return super.loadDashboard();
+  }
+
+  @override
+  Future<RuntimeStatus> loadRuntimeStatus() {
+    statusCalls++;
+    return delegate.loadRuntimeStatus();
   }
 }
 
@@ -2284,6 +2341,10 @@ final class _ControlledActivityApi implements ControlApi {
   @override
   Future<CaptureAssignment> captureAssignment(String captureKey) =>
       delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) =>
+      delegate.activitySummary(scope);
 
   @override
   Future<ConversationPage> conversations({

@@ -1328,9 +1328,25 @@ final class WorkbenchController extends ChangeNotifier
   Future<RuntimeUsageReport> loadCaptureUsage(
     ActivitySummaryScope scope,
     DateTime at,
-  ) => _api.runtimeUsage(
-    _usageQuery(days: 366, filters: scope.usageFilters, at: at),
-  );
+  ) {
+    // Capture-scoped usage only needs civil days covering the Capture's life.
+    // A fixed 366-day window forced ScanUsage to build a 366-row day CTE on
+    // every overview poll even when the Capture lasted hours.
+    final capture = selectedCapture;
+    final start = capture?.createdAt.toUtc() ?? at.toUtc();
+    final untilDay = DateTime.utc(
+      at.year,
+      at.month,
+      at.day,
+    ).add(const Duration(days: 1));
+    final fromDay = DateTime.utc(start.year, start.month, start.day);
+    var days = untilDay.difference(fromDay).inDays;
+    if (days < 1) days = 1;
+    if (days > 366) days = 366;
+    return _api.runtimeUsage(
+      _usageQuery(days: days, filters: scope.usageFilters, at: at),
+    );
+  }
 
   /// Read the independent, body-free ledger for exactly one request. Never use
   /// a broader report as this request's usage when an older Server lacks the
@@ -1660,6 +1676,14 @@ final class WorkbenchController extends ChangeNotifier
     return !_disposed && generation == _dashboardGeneration;
   }
 
+  bool get _pollNeedsInventory =>
+      section == WorkbenchSection.captures ||
+      section == WorkbenchSection.settings ||
+      section == WorkbenchSection.usage ||
+      // Account settings can change on another client; the open editor must
+      // observe the remote revision before the next local edit.
+      section == WorkbenchSection.providerAccounts;
+
   Future<void> _poll() async {
     if (_disposed ||
         !_pollingVisible ||
@@ -1675,6 +1699,15 @@ final class WorkbenchController extends ChangeNotifier
     _pollInFlight = true;
     final generation = _dashboardGeneration;
     try {
+      // Off Captures/Settings/Usage/Accounts, only refresh readiness —
+      // inventory rides section switches and explicit mutations.
+      if (!_pollNeedsInventory && _api is RuntimeStatusReader) {
+        await _pollRuntimeStatusOnly(generation);
+        if (section == WorkbenchSection.network) {
+          await _refreshNetwork(quiet: true);
+        }
+        return;
+      }
       final updated = await _api.loadDashboard();
       if (_disposed ||
           generation != _dashboardGeneration ||
@@ -1694,10 +1727,36 @@ final class WorkbenchController extends ChangeNotifier
         await refreshPendingApprovals(quiet: true);
       }
       final capture = selectedCapture;
-      await refreshNativeTools();
+      // A Capture opened before the first retained body latches stats-only.
+      // While it is still running, re-probe so a later full body remounts the
+      // directory instead of staying on statistics until a manual refresh.
+      if (section == WorkbenchSection.captures &&
+          capture != null &&
+          capture.running &&
+          _summaryBodiesAbsent) {
+        final scope = capture.isManual
+            ? ActivitySummaryScope(manualCaptureId: capture.id)
+            : ActivitySummaryScope(captureRunId: capture.captureRunId!);
+        try {
+          final summary = await loadActivitySummary(scope);
+          if (summary.contentBodiesAvailable == true) {
+            _summaryBodiesAbsent = false;
+            await _loadCaptureDetail(capture, quiet: true);
+          }
+        } on Object {
+          // Keep the latched statistics view; the next tick retries.
+        }
+      }
+      // Native tool chrome is off the stats-only overview; do not poll it.
+      if (!_captureBodiesKnownAbsent) {
+        await refreshNativeTools();
+      }
+      // Stats-only Captures already refresh counts on the 15s overview timer.
+      // Reloading conversations(200) here only re-arms the identity indexer.
       if (section == WorkbenchSection.captures &&
           capture != null &&
           !_evidencePollInFlight &&
+          !_captureBodiesKnownAbsent &&
           (captureDetailError != null ||
               (!capture.running &&
                   !selectedActivities.any(
@@ -1732,6 +1791,42 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<void> _pollRuntimeStatusOnly(int generation) async {
+    final status = await (_api as RuntimeStatusReader).loadRuntimeStatus();
+    if (_disposed || generation != _dashboardGeneration || data == null) {
+      return;
+    }
+    final previous = data!;
+    final hadInventoryFailure = _inventoryFailureStatus != null;
+    _inventoryFailureStatus = null;
+    if (_sameRuntimeStatus(previous.status, status) && !hadInventoryFailure) {
+      return;
+    }
+    data = DashboardData(
+      status: status,
+      captures: previous.captures,
+      captureNextCursor: previous.captureNextCursor,
+      environments: previous.environments,
+      endpoints: previous.endpoints,
+      accounts: previous.accounts,
+    );
+    notifyListeners();
+  }
+
+  /// Launch summary EXISTS or directory AvailableBodies already proved that no
+  /// full conversation body remains. Statistics do not need the activity
+  /// timeline, so evidence polling must not refill an empty page every second.
+  bool _summaryBodiesAbsent = false;
+
+  bool get captureBodiesKnownAbsent =>
+      _summaryBodiesAbsent ||
+      (captureConversations.isNotEmpty &&
+          captureConversations.every(
+            (conversation) => conversation.latest.contentAvailable == false,
+          ));
+
+  bool get _captureBodiesKnownAbsent => captureBodiesKnownAbsent;
+
   Future<void> _pollSelectedEvidence() async {
     final capture = selectedCapture;
     if (_disposed ||
@@ -1746,6 +1841,7 @@ final class WorkbenchController extends ChangeNotifier
         captureActivitiesLoading ||
         inventoryMutating ||
         environmentMutating ||
+        _captureBodiesKnownAbsent ||
         (!capture.running &&
             !selectedActivities.any((item) => item.status == 'pending'))) {
       return;
@@ -3591,6 +3687,7 @@ final class WorkbenchController extends ChangeNotifier
     selectedCapturePage = null;
     showCaptureRequestRecords = false;
     _captureViewChosen = false;
+    _summaryBodiesAbsent = false;
     summarizeClientSession = false;
     detailLoading = false;
     captureActivitiesLoading = false;
@@ -4084,33 +4181,78 @@ final class WorkbenchController extends ChangeNotifier
       notifyListeners();
     }
     try {
+      final launchScope = capture.isManual
+          ? ActivitySummaryScope(manualCaptureId: capture.id)
+          : ActivitySummaryScope(captureRunId: capture.captureRunId!);
+      // Future.wait keeps every sibling error handled. Starting assignment
+      // first and then throwing synchronously from a later sibling would
+      // orphan that Future and surface it as an uncaught zone error.
+      final assignmentFuture = _loadCaptureAssignment(capture).then((
+        assignment,
+      ) {
+        // Assignment and evidence are independent reads. A failed index
+        // must not turn a confirmed assignment into an unassigned run.
+        if (!_disposed &&
+            generation == _selectionGeneration &&
+            selectedCaptureKey == capture.key) {
+          selectedAssignment = assignment;
+          selectedCaptureLaunchIncomplete = assignment == null;
+        }
+        return assignment;
+      });
+      // Launch summary carries an EXISTS for retained full bodies. When the
+      // Server proves absence, skip conversations(200) identity enrichment.
+      final summaryFuture = _futureOrError(
+        () => loadActivitySummary(launchScope),
+      );
+      final acpFuture = capture.isACP && _api is ACPObservationApi
+          ? (_api as ACPObservationApi).acpObservation(capture.key)
+          : Future<ACPRecord?>.value();
       final values = await Future.wait<Object?>([
-        _loadCaptureAssignment(capture).then((assignment) {
-          // Assignment and evidence are independent reads. A failed index
-          // must not turn a confirmed assignment into an unassigned run.
-          if (!_disposed &&
-              generation == _selectionGeneration &&
-              selectedCaptureKey == capture.key) {
-            selectedAssignment = assignment;
-            selectedCaptureLaunchIncomplete = assignment == null;
-          }
-          return assignment;
-        }),
-        _captureConversationPage(capture, limit: 200),
-        if (capture.isACP && _api is ACPObservationApi)
-          (_api as ACPObservationApi).acpObservation(capture.key)
-        else
-          Future<ACPRecord?>.value(),
+        assignmentFuture,
+        summaryFuture,
+        acpFuture,
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
           selectedCaptureKey != capture.key) {
         return;
       }
-      selectedAssignment = values[0] as CaptureAssignment?;
-      selectedACP = values[2] as ACPRecord?;
+      final assignment = values[0] as CaptureAssignment?;
+      final summary = values[1]! as ExchangeSummary;
+      final acp = values[2] as ACPRecord?;
+      selectedAssignment = assignment;
+      selectedACP = acp;
       selectedCaptureLaunchIncomplete = selectedAssignment == null;
-      final conversationPage = values[1]! as ConversationPage;
+      if (summary.contentBodiesAvailable == false) {
+        _summaryBodiesAbsent = true;
+        selectedCaptureConversations = const ConversationPage(
+          items: [],
+          nextCursor: null,
+        );
+        selectedCaptureConversationKey = null;
+        selectedCapturePage = const ActivityPage(items: [], nextCursor: null);
+        if (!_captureViewChosen) {
+          showCaptureRequestRecords = false;
+          _captureViewChosen = true;
+        }
+        captureActivitiesLoading = false;
+        detailLoading = false;
+        if (errorMessage == captureDetailError) errorMessage = null;
+        captureDetailError = null;
+        notifyListeners();
+        return;
+      }
+      _summaryBodiesAbsent = summary.contentBodiesAvailable == false;
+      final conversationPage = await _captureConversationPage(
+        capture,
+        limit: 200,
+      );
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          selectedCaptureKey != capture.key) {
+        return;
+      }
       selectedCaptureConversations = conversationPage;
       final available = captureConversations;
       if (followLatest && available.isNotEmpty) {
@@ -4134,7 +4276,21 @@ final class WorkbenchController extends ChangeNotifier
       final cached = selectedKey == null
           ? null
           : _cachedCaptureConversationPage(capture.key, selectedKey);
-      final latest = selectedKey == null
+      // Directory AvailableBodies is a bounded metadata check. When every
+      // conversation already proves absent bodies, skip the activity timeline
+      // fetch — statistics use activitySummary, not this page.
+      final directoryBodies = available
+          .map((conversation) => conversation.latest.contentAvailable)
+          .toList(growable: false);
+      final anyRetainedBody = directoryBodies.any((value) => value == true);
+      final allKnownAbsent =
+          directoryBodies.isNotEmpty &&
+          directoryBodies.every((value) => value == false);
+      if (!_captureViewChosen && (anyRetainedBody || allKnownAbsent)) {
+        showCaptureRequestRecords = anyRetainedBody;
+        _captureViewChosen = true;
+      }
+      final latest = selectedKey == null || allKnownAbsent
           ? const ActivityPage(items: [], nextCursor: null)
           : await _captureActivityPage(
               capture,
@@ -4152,7 +4308,9 @@ final class WorkbenchController extends ChangeNotifier
               currentConversationKey == selectedCaptureConversationKey
           ? currentPage
           : cached;
-      selectedCapturePage = _reconcileCaptureConversationPage(retained, latest);
+      selectedCapturePage = allKnownAbsent
+          ? const ActivityPage(items: [], nextCursor: null)
+          : _reconcileCaptureConversationPage(retained, latest);
       if (!_captureViewChosen) {
         // The selected independent request may still be pending. Other
         // conversations can already prove retained bodies; do not hide their
@@ -4268,6 +4426,12 @@ final class WorkbenchController extends ChangeNotifier
     final generation = ++_selectionGeneration;
     final captureKey = capture.key;
     selectedCaptureConversationKey = key;
+    if (_captureBodiesKnownAbsent) {
+      selectedCapturePage = const ActivityPage(items: [], nextCursor: null);
+      captureActivitiesLoading = false;
+      notifyListeners();
+      return;
+    }
     final cached = _cachedCaptureConversationPage(captureKey, key);
     selectedCapturePage = cached;
     captureActivitiesLoading = true;
@@ -4933,6 +5097,16 @@ final class ConversationSummary {
 /// Five pages is deep enough that ordinary scrolling never reaches the edge,
 /// and the tail is not lost — `loadMoreCaptureActivities` fetches it again.
 const retainedCaptureActivityLimit = 500;
+
+/// Turns a synchronous throw from [start] into a Future error so siblings
+/// already in flight stay observed by Future.wait.
+Future<T> _futureOrError<T>(Future<T> Function() start) {
+  try {
+    return start();
+  } catch (error, stack) {
+    return Future<T>.error(error, stack);
+  }
+}
 
 /// Merges a freshly polled window into what is already held.
 ///

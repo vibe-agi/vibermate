@@ -8,9 +8,28 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/codesignature"
 )
+
+// Observed cold codesign of the ~230MB Codex native child on the launch path
+// has taken 25–90s when the page cache is cold. A 30s bound turned successful
+// signatures into adapter_verification_failed before the platform finished.
+// Verify warms pages first; the deadline must still cover warm+verify under
+// pressure, and stay inside the launcher's create budget.
+func TestVerifyDeadlineCoversColdSignatureOfLargeClients(t *testing.T) {
+	t.Parallel()
+
+	const observedColdCodesign = 35 * time.Second
+	if codesignature.VerifyDeadline < observedColdCodesign {
+		t.Fatalf(
+			"VerifyDeadline is %v, below the observed cold codesign of %v",
+			codesignature.VerifyDeadline,
+			observedColdCodesign,
+		)
+	}
+}
 
 // The smuggling case that motivated this, expressed as a compile-time fact.
 //

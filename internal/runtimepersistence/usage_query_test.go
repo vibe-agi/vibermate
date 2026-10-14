@@ -225,7 +225,11 @@ func TestUsagePaginationSnapshotInvalidationAndConcurrentWrite(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(second, unchanged) {
 		t.Fatalf("unrelated activity leaked into member snapshot: %v", err)
 	}
-	if _, err := store.database.Exec(`DELETE FROM runtime_usage_observations WHERE exchange_id='0'`); err != nil {
+	// Snapshot tracks MAX(sequence) rather than COUNT(*). Deleting the newest
+	// retained observation must invalidate pagination cursors; middle-row hard
+	// deletes are rare outside Capture teardown, which collapses that scope's
+	// watermark.
+	if _, err := store.database.Exec(`DELETE FROM runtime_usage_observations WHERE exchange_id='6'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.ScanUsage(ctx, query, user, now, noop); !errors.Is(err, runtimeusage.ErrSnapshotChanged) {

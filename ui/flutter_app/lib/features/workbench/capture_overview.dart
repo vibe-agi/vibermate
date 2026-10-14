@@ -47,10 +47,12 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshRevision = widget.controller.captureOverviewRefresh;
-    unawaited(_load());
+    unawaited(_load(forceUsage: true));
     _poller = Timer.periodic(const Duration(seconds: 15), (_) {
       final state = WidgetsBinding.instance.lifecycleState;
       if (state == null || state == AppLifecycleState.resumed) {
+        // Quiet polls refresh request counts; usage is expensive and only
+        // needed while the Capture is still producing observations.
         unawaited(_load());
       }
     });
@@ -58,7 +60,9 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(_load());
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_load(forceUsage: true));
+    }
   }
 
   @override
@@ -67,7 +71,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
     if (_scope != widget.controller.captureSummaryScope ||
         _refreshRevision != widget.controller.captureOverviewRefresh) {
       _refreshRevision = widget.controller.captureOverviewRefresh;
-      unawaited(_load());
+      unawaited(_load(forceUsage: true));
     }
   }
 
@@ -78,24 +82,33 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceUsage = false}) async {
     final scope = widget.controller.captureSummaryScope;
     if (scope == null || (_loading && scope == _scope)) return;
     final generation = ++_generation;
+    final scopeChanged = scope != _scope;
     setState(() {
-      if (scope != _scope) {
+      if (scopeChanged) {
         _requests = null;
         _usage = null;
       }
       _scope = scope;
       _loading = true;
       _failed = false;
-      _usageFailed = false;
+      if (forceUsage || scopeChanged) _usageFailed = false;
     });
     try {
       final requests = await widget.controller.loadActivitySummary(scope);
       if (!mounted || generation != _generation) return;
       setState(() => _requests = requests);
+      final captureRunning = widget.controller.selectedCapture?.running == true;
+      final needUsage =
+          forceUsage ||
+          scopeChanged ||
+          _usage == null ||
+          _usageFailed ||
+          captureRunning;
+      if (!needUsage) return;
       try {
         final usage = await widget.controller.loadCaptureUsage(
           scope,
@@ -136,7 +149,9 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          NativeToolReader(controller: widget.controller, copy: copy),
+          // Stats-only captures have no tool-operation timeline to refresh.
+          if (!widget.withoutBodies)
+            NativeToolReader(controller: widget.controller, copy: copy),
           Wrap(
             spacing: 12,
             runSpacing: 8,
@@ -164,7 +179,9 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
               IconButton(
                 key: const Key('capture-summary-refresh'),
                 tooltip: copy('status.refresh'),
-                onPressed: _loading ? null : () => unawaited(_load()),
+                onPressed: _loading
+                    ? null
+                    : () => unawaited(_load(forceUsage: true)),
                 icon: _loading
                     ? const CompactProgressIndicator()
                     : const Icon(Icons.refresh, size: 18),
@@ -198,7 +215,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
               child: _loading
                   ? CompactLoadingMessage(label: copy('common.loading'))
                   : TextButton(
-                      onPressed: () => unawaited(_load()),
+                      onPressed: () => unawaited(_load(forceUsage: true)),
                       child: Text(copy('common.retry')),
                     ),
             )
@@ -259,7 +276,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
                 copy: copy,
                 modelsOnly: true,
                 loadPage: widget.controller.loadUsagePage,
-                onRefresh: () => unawaited(_load()),
+                onRefresh: () => unawaited(_load(forceUsage: true)),
               ),
             ],
             const SizedBox(height: 24),
@@ -303,15 +320,17 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
                   'count': usageIntegerLabel(summary.otherFailures),
                 }),
               ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: widget.onShowRecords,
-                icon: const Icon(Icons.list_alt, size: 16),
-                label: Text(copy('capture.summary.selected_records')),
+            if (!widget.withoutBodies) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: widget.onShowRecords,
+                  icon: const Icon(Icons.list_alt, size: 16),
+                  label: Text(copy('capture.summary.selected_records')),
+                ),
               ),
-            ),
+            ],
           ],
         ],
       ),

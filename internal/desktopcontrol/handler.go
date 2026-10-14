@@ -259,6 +259,10 @@ type Handler struct {
 	indexing   bool
 	indexScope string
 	indexStart time.Time
+	// After a successful enrichment, an unchanged Capture activity watermark
+	// must not re-arm the 10k repair budget on directory polls.
+	indexIdleScope     string
+	indexIdleWatermark int64
 }
 
 type StatusResponse struct {
@@ -872,7 +876,7 @@ func (handler *Handler) scheduleConversationIndex(
 		return
 	}
 	scope := request.CaptureRunID
-	now := time.Now()
+	now := handler.clock.Now()
 	handler.indexMu.Lock()
 	if handler.indexing ||
 		(scope == handler.indexScope && now.Sub(handler.indexStart) < 5*time.Second) {
@@ -895,11 +899,55 @@ func (handler *Handler) scheduleConversationIndex(
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := handler.conversationIndexer.Reindex(ctx, request); err != nil &&
-			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-			log.Printf("Conversation index pass for Capture Run %s failed: %v", request.CaptureRunID, err)
+		watermark, err := handler.conversationIndexWatermark(ctx, request.CaptureRunID)
+		if err != nil {
+			log.Printf("Conversation index watermark for Capture Run %s failed: %v", request.CaptureRunID, err)
+			return
 		}
+		handler.indexMu.Lock()
+		idle := scope == handler.indexIdleScope && watermark <= handler.indexIdleWatermark
+		handler.indexMu.Unlock()
+		if idle {
+			return
+		}
+		if err := handler.conversationIndexer.Reindex(ctx, request); err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+				log.Printf("Conversation index pass for Capture Run %s failed: %v", request.CaptureRunID, err)
+			}
+			return
+		}
+		// A partial 10k repair must keep scheduling. Only latch idle after the
+		// indexer reports this Capture's cursor is fully caught up.
+		if progress, ok := handler.conversationIndexer.(interface {
+			CaptureRunCaughtUp(string) bool
+		}); ok && !progress.CaptureRunCaughtUp(scope) {
+			return
+		}
+		handler.indexMu.Lock()
+		handler.indexIdleScope = scope
+		handler.indexIdleWatermark = watermark
+		handler.indexMu.Unlock()
 	}()
+}
+
+// conversationIndexWatermark is the newest retained Activity sequence for a
+// Capture Run. Directory polls compare it to the last successful enrichment so
+// an idle Capture does not pay the repair budget again.
+func (handler *Handler) conversationIndexWatermark(
+	ctx context.Context,
+	captureRunID string,
+) (int64, error) {
+	page, err := handler.activities.ListExchanges(ctx, activity.PageRequest{
+		Limit:        1,
+		CaptureRunID: captureRunID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if len(page.Items) == 0 {
+		return 0, nil
+	}
+	return page.Items[0].Sequence, nil
 }
 
 func (handler *Handler) attachActivityIdentities(

@@ -33,10 +33,10 @@ const (
 	// measured in people rather than in milliseconds.
 	//
 	// Creating a run makes the runtime verify the launched artifact's platform
-	// signature (bounded by codesignature.VerifyDeadline, 30s — it hashes a
-	// binary that can be hundreds of megabytes) and, for a client recognized by
-	// its publisher rather than by a catalogued build, ask a person whether it
-	// may carry the Root (bounded by toolapproval.DefaultClientRootGrace, 30s).
+	// signature (bounded by codesignature.VerifyDeadline — it hashes a binary
+	// that can be hundreds of megabytes) and, for a client recognized by its
+	// publisher rather than by a catalogued build, ask a person whether it may
+	// carry the Root (bounded by toolapproval.DefaultClientRootGrace).
 	//
 	// The short budget was applied to it too, so the sum of the inner bounds
 	// was twelve times the outer one and the recognized tier could not

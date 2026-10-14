@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // CatalogDigest is the content of a catalog revision, in one value.
@@ -20,6 +21,7 @@ func (catalog Catalog) Digest() (string, error) {
 	canonical := canonicalCatalog{
 		Revision: uint64(catalog.revision),
 		Releases: make([]canonicalRelease, 0, len(catalog.releases)),
+		Signers:  make([]canonicalSigner, 0, len(catalog.signers)),
 	}
 	for _, release := range catalog.releases {
 		entry := canonicalRelease{
@@ -82,6 +84,39 @@ func (catalog Catalog) Digest() (string, error) {
 		}
 		return 1
 	})
+	for _, signer := range catalog.signers {
+		canonical.Signers = append(canonical.Signers, canonicalSigner{
+			ID:                      signer.ID,
+			Revision:                uint64(signer.Revision),
+			OperatingSystem:         signer.OperatingSystem,
+			Architecture:            signer.Architecture,
+			InstallShape:            string(signer.InstallShape),
+			InvocationLabel:         signer.InvocationLabel,
+			CanonicalEntrypointName: signer.CanonicalEntrypointName,
+			ArtifactRoot:            signer.ArtifactRoot,
+			SignedRelativePath:      signer.SignedRelativePath,
+			SigningIdentifier:       string(signer.SigningIdentifier),
+			TeamID:                  string(signer.TeamID),
+			LaunchRecipe:            string(signer.LaunchRecipe),
+		})
+	}
+	slices.SortFunc(canonical.Signers, func(left, right canonicalSigner) int {
+		leftKey := signerSortKey(Signer{
+			ID:              left.ID,
+			OperatingSystem: left.OperatingSystem,
+			Architecture:    left.Architecture,
+			InvocationLabel: left.InvocationLabel,
+			InstallShape:    InstallShape(left.InstallShape),
+		})
+		rightKey := signerSortKey(Signer{
+			ID:              right.ID,
+			OperatingSystem: right.OperatingSystem,
+			Architecture:    right.Architecture,
+			InvocationLabel: right.InvocationLabel,
+			InstallShape:    InstallShape(right.InstallShape),
+		})
+		return strings.Compare(leftKey, rightKey)
+	})
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize client catalog: %w", err)
@@ -93,6 +128,22 @@ func (catalog Catalog) Digest() (string, error) {
 type canonicalCatalog struct {
 	Revision uint64             `json:"revision"`
 	Releases []canonicalRelease `json:"releases"`
+	Signers  []canonicalSigner  `json:"signers,omitempty"`
+}
+
+type canonicalSigner struct {
+	ID                      string `json:"id"`
+	Revision                uint64 `json:"revision"`
+	OperatingSystem         string `json:"operatingSystem"`
+	Architecture            string `json:"architecture"`
+	InstallShape            string `json:"installShape"`
+	InvocationLabel         string `json:"invocationLabel"`
+	CanonicalEntrypointName string `json:"canonicalEntrypointName,omitempty"`
+	ArtifactRoot            string `json:"artifactRoot"`
+	SignedRelativePath      string `json:"signedRelativePath,omitempty"`
+	SigningIdentifier       string `json:"signingIdentifier"`
+	TeamID                  string `json:"teamId"`
+	LaunchRecipe            string `json:"launchRecipe"`
 }
 
 type canonicalRelease struct {

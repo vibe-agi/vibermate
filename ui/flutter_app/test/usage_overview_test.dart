@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/account_facts_models.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
@@ -15,11 +16,32 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   test(
+    'summary absent bodies skips conversations directory enrichment',
+    () async {
+      final api = _OverviewApi(retainBodies: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.delegate.close,
+      );
+      addTearDown(controller.dispose);
+      controller.data = await api.delegate.loadDashboard();
+      await controller.selectCapture('managed_run:run-1');
+      expect(api.conversationLoads, 0);
+      expect(controller.captureConversations, isEmpty);
+      expect(controller.selectedActivities, isEmpty);
+      expect(controller.showCaptureRequestRecords, isFalse);
+    },
+  );
+
+  test(
     'unknown directory body availability does not override absent bodies',
     () async {
       final api = _OverviewApi(
         retainBodies: false,
         unknownDirectoryBodies: true,
+        omitSummaryBodiesFlag: true,
       );
       final controller = WorkbenchController(
         api: api,
@@ -96,48 +118,16 @@ void main() {
         );
         if (!retain) {
           expect(find.textContaining('No conversation bodies'), findsOneWidget);
-          final completed = controller.selectedCapturePage!;
-          final activity = completed.items.first;
-          controller.selectedCapturePage = ActivityPage(
-            items: [
-              ActivityRecord(
-                id: 'pending-next-request',
-                occurredAt: activity.occurredAt,
-                title: activity.title,
-                status: 'pending',
-                reasonCode: null,
-                source: activity.source,
-                conversation: activity.conversation,
-                environment: activity.environment,
-                parentRefs: activity.parentRefs,
-              ),
-              ...completed.items,
-            ],
-            nextCursor: completed.nextCursor,
-          );
-          // A real view rebuild with a new pending request must keep Overview.
-          await tester.binding.setSurfaceSize(const Size(1440, 800));
-          await tester.pumpAndSettle();
+          // Stats-only: no Overview/Conversation chrome and no empty timeline.
+          expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
           expect(
-            find.byKey(const Key('capture-request-overview')),
-            findsOneWidget,
-          );
-          controller.selectedCapturePage = completed;
-          final mode = find.byKey(const Key('capture-evidence-mode'));
-          await tester.tap(
-            find.descendant(of: mode, matching: find.text('Conversation')),
-          );
-          await tester.pumpAndSettle();
-          expect(
-            find.byKey(const Key('capture-request-overview')),
+            find.byKey(const Key('capture-conversation-pane')),
             findsNothing,
           );
-          expect(
-            find.byKey(const Key('capture-evidence-mode')),
-            findsOneWidget,
-          );
-          // Refresh and navigating away both rebuild the workspace. The
-          // selected view belongs to the Capture, not to that widget lifetime.
+          expect(controller.showCaptureRequestRecords, isFalse);
+          expect(controller.selectedCapturePage?.items ?? const [], isEmpty);
+          // Refresh and navigating away must keep statistics — never invent a
+          // conversation view when bodies are known-absent.
           await controller.refresh();
           await tester.pumpAndSettle();
           controller.selectSection(WorkbenchSection.environments);
@@ -146,9 +136,10 @@ void main() {
           await tester.pumpAndSettle();
           expect(
             find.byKey(const Key('capture-request-overview')),
-            findsNothing,
+            findsOneWidget,
           );
-          expect(controller.showCaptureRequestRecords, isTrue);
+          expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
+          expect(controller.showCaptureRequestRecords, isFalse);
         } else {
           // Recorded bodies must not hide the statistics entry point.
           await tester.tap(
@@ -169,6 +160,50 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'selected body-free conversation does not hide capture with retained bodies',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = _MixedBodyDirectoryApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.delegate.close,
+      );
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('capture-row-managed_run:run-1')));
+      await tester.pumpAndSettle();
+      expect(controller.captureBodiesKnownAbsent, isFalse);
+      expect(find.byKey(const Key('capture-evidence-mode')), findsOneWidget);
+      final bodyFree = controller.captureConversations.firstWhere(
+        (record) => record.latest.contentAvailable == false,
+      );
+      await controller.selectCaptureConversation(bodyFree.key);
+      await tester.pumpAndSettle();
+      expect(
+        controller.selectedActivities.every(
+          (record) => record.contentAvailable == false,
+        ),
+        isTrue,
+      );
+      // Directory / mode chrome stays mounted; stats-only early-return does not.
+      expect(find.byKey(const Key('capture-evidence-mode')), findsOneWidget);
+      expect(controller.captureBodiesKnownAbsent, isFalse);
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   for (final width in [390.0, 1440.0]) {
     testWidgets('Local overview at $width groups without requiring members', (
@@ -258,14 +293,26 @@ void main() {
         findsOneWidget,
       );
       expect(api.queries.first.filters, {'capture': 'run-2'});
-      expect(api.queries.first.from, '2025-09-28');
-      expect(api.queries.first.until, '2026-09-29');
+      // Window covers the Capture lifetime through the summary's civil day,
+      // not a fixed 366-day archive scan.
+      final created = controller.selectedCapture!.createdAt.toUtc();
+      final until = DateTime.utc(2026, 9, 29);
+      final from = DateTime.utc(created.year, created.month, created.day);
+      String civil(DateTime value) => [
+        value.year.toString().padLeft(4, '0'),
+        value.month.toString().padLeft(2, '0'),
+        value.day.toString().padLeft(2, '0'),
+      ].join('-');
+      expect(api.queries.first.from, civil(from));
+      expect(api.queries.first.until, civil(until));
+      expect(until.difference(from).inDays, lessThanOrEqualTo(366));
       expect(api.queries.last.groupBy, 'model');
       expect(api.queries.last.filters, {'capture': 'run-2'});
 
+      final scopesBeforeMore = api.scopes.length;
       await controller.loadMoreSelectedCapture();
       await tester.pumpAndSettle();
-      expect(api.scopes.length, 1);
+      expect(api.scopes.length, scopesBeforeMore);
       expect(
         find.text(copy.format('capture.summary.calls', {'count': '1,357'})),
         findsOneWidget,
@@ -312,7 +359,8 @@ void main() {
       addTearDown(controller.dispose);
       await tester.pumpWidget(overview(controller, AppLanguage.english));
       await tester.pump();
-      final initial = api.scopes.single;
+      expect(api.scopes, isNotEmpty);
+      final initial = api.scopes.first;
       controller.selectCaptureSummarySession(true);
       await tester.pumpAndSettle();
       expect(find.text('2,714 requests'), findsOneWidget);
@@ -327,17 +375,24 @@ void main() {
       final requests = api.scopes.length;
       await tester.pump(const Duration(seconds: 14));
       expect(api.scopes.length, requests);
-      api.usageFails = true;
+      // Quiet polls still refresh request totals; usage reloads only while the
+      // Capture is running or on an explicit refresh.
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
       expect(api.scopes.length, requests + 1);
       expect(find.text('2,714 requests'), findsOneWidget);
+      api.usageFails = true;
+      await tester.tap(find.byKey(const Key('capture-summary-refresh')));
+      await tester.pumpAndSettle();
+      expect(find.text('2,714 requests'), findsOneWidget);
       expect(find.textContaining('Refresh failed'), findsOneWidget);
       expect(find.byKey(const Key('capture-usage-updated')), findsOneWidget);
+      final afterRefresh = api.scopes.length;
+      expect(afterRefresh, greaterThan(requests + 1));
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       await tester.pump(const Duration(seconds: 30));
-      expect(api.scopes.length, requests + 1);
+      expect(api.scopes.length, afterRefresh);
       api.summaryFails = true;
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
@@ -385,19 +440,157 @@ Widget overview(WorkbenchController controller, AppLanguage language) =>
       ),
     );
 
-final class _OverviewApi implements ControlApi {
-  _OverviewApi({bool retainBodies = true, this.unknownDirectoryBodies = false})
-    : delegate = PreviewControlApi(retainConversationBodies: retainBodies);
+/// One directory entry keeps retained bodies; another is known-absent so the
+/// selected timeline can look body-free without the Capture being stats-only.
+final class _MixedBodyDirectoryApi implements ControlApi, RuntimeStatusReader {
+  _MixedBodyDirectoryApi()
+    : delegate = PreviewControlApi(retainConversationBodies: true);
 
   final PreviewControlApi delegate;
+  String? bodyFreeConversationId;
+
+  ActivityRecord _withoutBody(ActivityRecord latest) => ActivityRecord(
+    id: latest.id,
+    occurredAt: latest.occurredAt,
+    title: latest.title,
+    status: latest.status,
+    reasonCode: latest.reasonCode,
+    source: latest.source,
+    conversation: latest.conversation,
+    environment: latest.environment,
+    parentRefs: latest.parentRefs,
+    requestPreview: latest.requestPreview,
+    contentAvailable: false,
+  );
+
+  @override
+  Future<DashboardData> loadDashboard() => delegate.loadDashboard();
+
+  @override
+  Future<RuntimeStatus> loadRuntimeStatus() => delegate.loadRuntimeStatus();
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
+    final base = await delegate.activitySummary(scope);
+    return ExchangeSummary(
+      scope: base.scope,
+      generatedAt: base.generatedAt,
+      requests: base.requests,
+      succeeded: base.succeeded,
+      failed: base.failed,
+      canceled: base.canceled,
+      pending: base.pending,
+      firstObservedAt: base.firstObservedAt,
+      lastObservedAt: base.lastObservedAt,
+      failures: base.failures,
+      otherFailures: base.otherFailures,
+      contentBodiesAvailable: true,
+    );
+  }
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    final page = await delegate.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+    if (page.items.length < 2) return page;
+    final bodyFree = page.items.last;
+    bodyFreeConversationId = bodyFree.conversation.id;
+    return ConversationPage(
+      nextCursor: page.nextCursor,
+      items: [
+        for (final record in page.items)
+          record.conversation.id == bodyFreeConversationId
+              ? ConversationRecord(
+                  conversation: record.conversation,
+                  firstObservedAt: record.firstObservedAt,
+                  turnCount: record.turnCount,
+                  latest: _withoutBody(record.latest),
+                )
+              : record,
+      ],
+    );
+  }
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    final page = await delegate.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    if (conversationId == null ||
+        conversationId != bodyFreeConversationId ||
+        page.items.isEmpty) {
+      return page;
+    }
+    return ActivityPage(
+      nextCursor: page.nextCursor,
+      items: page.items.map(_withoutBody).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() =>
+      delegate.pendingApprovals();
+
+  @override
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) =>
+      delegate.runtimeUsage(query);
+
+  @override
+  Future<AccountFacts> accountFacts(String id, {bool history = false}) =>
+      delegate.accountFacts(id, history: history);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _OverviewApi implements ControlApi {
+  _OverviewApi({
+    bool retainBodies = true,
+    this.unknownDirectoryBodies = false,
+    this.omitSummaryBodiesFlag = false,
+  }) : _retainBodies = retainBodies,
+       delegate = PreviewControlApi(retainConversationBodies: retainBodies);
+
+  final PreviewControlApi delegate;
+  final bool _retainBodies;
   final bool unknownDirectoryBodies;
+  final bool omitSummaryBodiesFlag;
   final scopes = <ActivitySummaryScope>[];
   final queries = <RuntimeUsageQuery>[];
+  int conversationLoads = 0;
   Completer<ExchangeSummary>? gate;
   bool usageFails = false, summaryFails = false;
 
   ExchangeSummary summary(ActivitySummaryScope scope) {
     final factor = scope.sessionId.isEmpty ? 1 : 2;
+    final launch =
+        scope.captureRunId.isNotEmpty || scope.manualCaptureId.isNotEmpty;
     return ExchangeSummary(
       scope: scope,
       generatedAt: DateTime.utc(2026, 9, 28, 12),
@@ -410,6 +603,9 @@ final class _OverviewApi implements ControlApi {
       lastObservedAt: DateTime.utc(2026, 9, 28, 12),
       failures: {'provider_transport_failed': 30 * factor},
       otherFailures: 0,
+      contentBodiesAvailable: omitSummaryBodiesFlag || !launch
+          ? null
+          : _retainBodies,
     );
   }
 
@@ -417,7 +613,12 @@ final class _OverviewApi implements ControlApi {
   Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
     scopes.add(scope);
     if (summaryFails) throw StateError('unavailable');
-    if (scopes.length == 1 && gate != null) return gate!.future;
+    // Capture detail probes summary for body presence first. Gate only the
+    // overview's initial follow-up (scopes == 2) so a later session switch is
+    // not blocked and selectCapture cannot deadlock on the gate.
+    if (gate != null && !gate!.isCompleted && scopes.length == 2) {
+      return gate!.future;
+    }
     return summary(scope);
   }
 
@@ -439,6 +640,7 @@ final class _OverviewApi implements ControlApi {
     String? captureRunId,
     String? manualCaptureId,
   }) async {
+    conversationLoads += 1;
     final page = await delegate.conversations(
       cursor: cursor,
       limit: limit,

@@ -761,14 +761,10 @@ final class _CaptureConversationWorkspaceState
       _collapsed.clear();
     }
     final sessions = _captureSessionGroups(conversations);
-    // An in-flight request has not acquired its content yet. It must not
-    // replace the user's view while the next terminal observation is pending.
-    final activities = controller.selectedActivities.where(
-      (item) => item.status != 'pending',
-    );
-    final withoutBodies =
-        activities.isNotEmpty &&
-        activities.every((item) => item.contentAvailable == false);
+    // Capture-wide only: launch-summary EXISTS or every directory latest is
+    // known-absent. The selected conversation's timeline must not hide retained
+    // bodies that still exist on other conversations.
+    final withoutBodies = controller.captureBodiesKnownAbsent;
     final selected = controller.selectedCaptureConversation;
     final selectedConversationSession = sessions
         .where(
@@ -787,6 +783,16 @@ final class _CaptureConversationWorkspaceState
     final visibleConversations =
         selectedSession?.conversations ?? conversations;
     final tree = _captureConversationTree(visibleConversations);
+    // No retained bodies: statistics only. Do not mount the conversation
+    // directory, timeline, or Overview/Records chrome — those loads are wasted.
+    if (withoutBodies) {
+      return CaptureRequestOverview(
+        controller: controller,
+        copy: copy,
+        withoutBodies: true,
+        onShowRecords: () {},
+      );
+    }
     final timelineTitle = selected?.exchangeScoped == true
         ? copy('conversation.exchanges_title')
         : copy('capture.conversation');

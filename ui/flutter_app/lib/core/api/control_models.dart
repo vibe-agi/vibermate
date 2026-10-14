@@ -8097,6 +8097,7 @@ final class ExchangeSummary {
     required this.lastObservedAt,
     required this.failures,
     required this.otherFailures,
+    this.contentBodiesAvailable,
   });
 
   factory ExchangeSummary.fromJson(Object? json, String path) {
@@ -8117,6 +8118,7 @@ final class ExchangeSummary {
         'failures',
         'otherFailures',
       },
+      optional: const {'contentBodiesAvailable'},
     );
     final failures = <String, int>{};
     final raw = requireList(value['failures'], '$path.failures');
@@ -8134,6 +8136,12 @@ final class ExchangeSummary {
       }
       failures[reason] = requireInteger(failure, 'count', path, minimum: 1);
     }
+    final bodies = value['contentBodiesAvailable'];
+    if (bodies != null && bodies is! bool) {
+      throw ControlContractException(
+        '$path.contentBodiesAvailable must be a boolean',
+      );
+    }
     final result = ExchangeSummary(
       scope: ActivitySummaryScope.fromJson(value['scope'], '$path.scope'),
       generatedAt: requireTimestamp(value, 'generatedAt', path),
@@ -8146,6 +8154,7 @@ final class ExchangeSummary {
       lastObservedAt: optionalTimestamp(value, 'lastObservedAt', path),
       failures: Map.unmodifiable(failures),
       otherFailures: requireInteger(value, 'otherFailures', path),
+      contentBodiesAvailable: bodies as bool?,
     );
     if (result.requests !=
             result.succeeded +
@@ -8168,6 +8177,9 @@ final class ExchangeSummary {
   final int requests, succeeded, failed, canceled, pending, otherFailures;
   final DateTime? firstObservedAt, lastObservedAt;
   final Map<String, int> failures;
+
+  /// Launch scopes may report whether any non-expired full body remains.
+  final bool? contentBodiesAvailable;
 }
 
 final class ActivityPage {

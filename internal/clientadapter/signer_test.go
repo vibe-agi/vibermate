@@ -331,3 +331,84 @@ func installedCodexEntrypoint(t *testing.T) string {
 	}
 	return path
 }
+
+// The managed app-server daemon ships a native `codex` binary, not the npm
+// wrapper. Recognition must still name OpenAI and carry the Codex Root recipe,
+// or vibermate launches it without a trust root and the TUI fails account/read.
+func TestANativeCodexDaemonEntrypointIsRecognized(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("native Codex signer coverage is darwin/arm64 here")
+	}
+	entrypoint := installedNativeCodexDaemonEntrypoint(t)
+	verifier := builtInVerifier(t)
+	detection, err := verifier.Verify(context.Background(), clientadapter.Request{
+		Command:        []string{"codex"},
+		CWD:            "/",
+		ExecutablePath: entrypoint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detection.Recognition != clientadapter.RecognitionRecognized {
+		t.Fatalf(
+			"native Codex was not recognized: recognition=%q status=%q",
+			detection.Recognition,
+			detection.Status,
+		)
+	}
+	if detection.Signer == nil {
+		t.Fatal("a recognized detection carries no signer evidence")
+	}
+	if detection.Signer.ID != "codex-cli" {
+		t.Fatalf("signer id is %q, want codex-cli", detection.Signer.ID)
+	}
+	if detection.Signer.InstallShape != clientadapter.InstallNativeSingleBinary {
+		t.Fatalf(
+			"install shape is %q, want native single binary",
+			detection.Signer.InstallShape,
+		)
+	}
+	if detection.Signer.LaunchRecipe != clientadapter.LaunchCodexResponsesHTTP {
+		t.Fatalf(
+			"recipe is %q, want the one Codex's runtime reads",
+			detection.Signer.LaunchRecipe,
+		)
+	}
+	if detection.Signer.SignedPath != entrypoint {
+		t.Fatalf(
+			"signed %q, want the native entrypoint itself",
+			detection.Signer.SignedPath,
+		)
+	}
+}
+
+func installedNativeCodexDaemonEntrypoint(t *testing.T) string {
+	t.Helper()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("home directory unavailable: %v", err)
+	}
+	candidates := []string{
+		filepath.Join(
+			home,
+			".codex/packages/app-server-daemon/releases/"+
+				"0.162.1-aarch64-apple-darwin/bin/codex",
+		),
+		filepath.Join(
+			home,
+			".codex/packages/app-server-daemon/releases/"+
+				"0.161.0-aarch64-apple-darwin/bin/codex",
+		),
+	}
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return path
+		}
+	}
+	t.Skip("no installed native Codex daemon release is present")
+	return ""
+}
