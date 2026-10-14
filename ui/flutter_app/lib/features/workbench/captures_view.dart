@@ -766,9 +766,13 @@ final class _CaptureConversationWorkspaceState
     final activities = controller.selectedActivities.where(
       (item) => item.status != 'pending',
     );
+    // Launch-summary EXISTS or directory AvailableBodies is enough when every
+    // latest is known-absent; the activity timeline is skipped in that case
+    // and must not flip this.
     final withoutBodies =
-        activities.isNotEmpty &&
-        activities.every((item) => item.contentAvailable == false);
+        controller.captureBodiesKnownAbsent ||
+        (activities.isNotEmpty &&
+            activities.every((item) => item.contentAvailable == false));
     final selected = controller.selectedCaptureConversation;
     final selectedConversationSession = sessions
         .where(
@@ -787,6 +791,16 @@ final class _CaptureConversationWorkspaceState
     final visibleConversations =
         selectedSession?.conversations ?? conversations;
     final tree = _captureConversationTree(visibleConversations);
+    // No retained bodies: statistics only. Do not mount the conversation
+    // directory, timeline, or Overview/Records chrome — those loads are wasted.
+    if (withoutBodies) {
+      return CaptureRequestOverview(
+        controller: controller,
+        copy: copy,
+        withoutBodies: true,
+        onShowRecords: () {},
+      );
+    }
     final timelineTitle = selected?.exchangeScoped == true
         ? copy('conversation.exchanges_title')
         : copy('capture.conversation');

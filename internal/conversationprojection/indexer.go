@@ -103,6 +103,19 @@ func (indexer *Indexer) Reindex(
 	return nil
 }
 
+// CaptureRunCaughtUp reports whether the last successful Reindex for this
+// Capture finished its repair budget. A partial pass must not idle-latch the
+// control-plane scheduler, or the remaining cursor never advances.
+func (indexer *Indexer) CaptureRunCaughtUp(captureRunID string) bool {
+	if indexer == nil {
+		return false
+	}
+	indexer.mu.Lock()
+	defer indexer.mu.Unlock()
+	scope, ok := indexer.scopes[captureRunID]
+	return ok && scope.repaired && scope.before == 0
+}
+
 func (indexer *Indexer) reindex(
 	ctx context.Context,
 	request activity.ConversationIndexRequest,

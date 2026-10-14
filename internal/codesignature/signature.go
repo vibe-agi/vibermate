@@ -21,6 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -40,14 +42,19 @@ var ErrNotSatisfied = errors.New("the file does not satisfy the requirement")
 
 // VerifyDeadline bounds the platform call. Verification reads and hashes the
 // whole file, and these clients are hundreds of megabytes, so this is not the
-// usual sub-second budget.
+// usual sub-second budget. Cold codesign of the ~230MB Codex native child has
+// been observed at 25–90s when the page cache is cold and the disk is busy;
+// keeping this below that turned a correct signature into
+// adapter_verification_failed. Verify warms the file with a normal sequential
+// read first so codesign usually finishes in well under a second after that;
+// the deadline still covers a worst-case warm plus verify under pressure.
 //
 // It is exported because it is not private to this package in practice:
 // verification happens inside a launch, and whoever budgets that launch has to
 // be able to cover this. Leaving it unexported is how three independently
 // chosen timeouts came to disagree, with the outer one smaller than the sum of
 // the inner ones.
-const VerifyDeadline = 30 * time.Second
+const VerifyDeadline = 60 * time.Second
 
 // Verify reports whether the platform accepts path as satisfying requirement.
 //
@@ -68,6 +75,18 @@ func Verify(ctx context.Context, path string, requirement Requirement) error {
 	}
 	bounded, cancel := context.WithTimeout(ctx, VerifyDeadline)
 	defer cancel()
+
+	// codesign hashes the file with small reads that often bypass the page
+	// cache. Under memory pressure those reads take tens of seconds on a
+	// ~230MB client binary. A normal sequential read first fills the cache;
+	// measured cold verify then drops from 6–90s to about 0.3s. This does not
+	// change what codesign checks.
+	if err := warmPages(bounded, path); err != nil {
+		if bounded.Err() != nil {
+			return fmt.Errorf("signature verification did not finish: %w", bounded.Err())
+		}
+		return fmt.Errorf("signature verification could not read the file: %w", err)
+	}
 
 	// The leading `=` is what makes codesign read the requirement as text
 	// rather than as a path to a file holding one. Without it the argument is
@@ -98,6 +117,31 @@ func Verify(ctx context.Context, path string, requirement Requirement) error {
 		)
 	}
 	return fmt.Errorf("signature verification could not run: %w", err)
+}
+
+// warmPages reads the whole file with ordinary buffered I/O so subsequent
+// codesign hashing hits resident pages. Cancellation ends the warm early.
+func warmPages(ctx context.Context, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 1<<20)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := file.Read(buffer)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 // boundedReason keeps the platform's explanation short enough to log and

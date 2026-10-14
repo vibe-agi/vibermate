@@ -49,6 +49,10 @@ type ExchangeSummary struct {
 	LastObservedAt  *time.Time     `json:"lastObservedAt"`
 	Failures        []FailureCount `json:"failures"`
 	OtherFailures   int            `json:"otherFailures"`
+	// ContentBodiesAvailable is set only for launch scopes. It answers whether
+	// any non-expired full conversation body remains for that Capture, so a
+	// statistics view can skip conversations(200) identity enrichment.
+	ContentBodiesAvailable *bool `json:"contentBodiesAvailable,omitempty"`
 }
 
 func (manager *Manager) SummarizeExchanges(ctx context.Context, scope SummaryScope) (ExchangeSummary, error) {

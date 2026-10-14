@@ -281,3 +281,22 @@ func CodexCLISignerDarwin() Signer {
 		LaunchRecipe:      LaunchCodexResponsesHTTP,
 	}
 }
+
+// CodexCLINativeSignerDarwin is the same OpenAI identity when the launched
+// entrypoint is the native binary itself (managed app-server daemon releases
+// and other single-binary installs). Without this shape, those paths fall to
+// RecognitionUnverified and start without a trust root.
+func CodexCLINativeSignerDarwin() Signer {
+	return Signer{
+		ID:                "codex-cli",
+		Revision:          1,
+		OperatingSystem:   "darwin",
+		Architecture:      "arm64",
+		InstallShape:      InstallNativeSingleBinary,
+		InvocationLabel:   "codex",
+		ArtifactRoot:      ".",
+		SigningIdentifier: "codex",
+		TeamID:            "2DC432GLL2",
+		LaunchRecipe:      LaunchCodexResponsesHTTP,
+	}
+}

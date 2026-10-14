@@ -697,8 +697,14 @@ func (issuer *Issuer) IssueCaptureRun(
 		return CaptureRunGrant{}, fmt.Errorf("%w: %v", ErrInvalidCaptureRun, err)
 	}
 	detection, err := issuer.resolveDetection(ctx, principal, request)
-	if err != nil || validateDetection(detection) != nil {
-		return CaptureRunGrant{}, ErrAdapterVerification
+	if err != nil {
+		// Keep the stage cause (for example a cold codesign deadline) so the
+		// next adapter_verification_failed is diagnosable; the wire reason
+		// code stays the same via errors.Is.
+		return CaptureRunGrant{}, fmt.Errorf("%w: %v", ErrAdapterVerification, err)
+	}
+	if err := validateDetection(detection); err != nil {
+		return CaptureRunGrant{}, fmt.Errorf("%w: %v", ErrAdapterVerification, err)
 	}
 	var runAdapter *clientadapter.Evidence
 	if detection.Status == clientadapter.StatusVerified &&

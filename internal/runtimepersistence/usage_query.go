@@ -97,26 +97,37 @@ func usageColumn(dimension string) string {
 	panic("usage dimension was not validated")
 }
 
+func usageSnapshotAggregateSQL() string {
+	return `SELECT coalesce(max(sequence),0),coalesce(min(expires_at_unix_ms),0) FROM runtime_usage_observations WHERE `
+}
+
 func usageReadSnapshot(ctx context.Context, tx *sql.Tx, query runtimeusage.AggregationQuery, userID runtimeuser.UserID, now time.Time) (runtimeusage.AggregationResult, error) {
 	policy, err := scanUsagePolicy(tx.QueryRowContext(ctx, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
 	if err != nil {
 		return runtimeusage.AggregationResult{}, err
 	}
 	where, args := usageWhere(query.Period, userID, now)
-	var count, latest int64
-	if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(max(sequence),0) FROM runtime_usage_observations WHERE `+where, args...).Scan(&count, &latest); err != nil {
+	var latest, soonestExpiry, retentionThrough int64
+	if err := tx.QueryRowContext(ctx, usageSnapshotAggregateSQL()+where, args...).Scan(&latest, &soonestExpiry); err != nil {
+		return runtimeusage.AggregationResult{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(through_sequence),0) FROM runtime_usage_retention_caps`).Scan(&retentionThrough); err != nil {
 		return runtimeusage.AggregationResult{}, err
 	}
 	// Hash rather than expose a global insertion sequence to a member. A change
-	// outside that member's period/scope cannot alter their snapshot. Immutable
-	// rows + non-reused sequence distinguish insert/delete even at equal counts.
+	// outside that member's period/scope cannot alter their snapshot. MAX(sequence)
+	// detects inserts; the soonest expiry fence detects rows disappearing as
+	// now advances; retentionThrough detects hide-range caps — all without
+	// COUNT(*) over the filtered observation set.
 	data, err := json.Marshal(struct {
-		Period          runtimeusage.Period
-		User            runtimeuser.UserID
-		Policy          runtimeusage.CollectionPolicy
-		Count, Latest   int64
-		PricingRevision string
-	}{query.Period.Period(), userID, policy, count, latest, query.PricingRevision})
+		Period           runtimeusage.Period
+		User             runtimeuser.UserID
+		Policy           runtimeusage.CollectionPolicy
+		Latest           int64
+		SoonestExpiry    int64
+		RetentionThrough int64
+		PricingRevision  string
+	}{query.Period.Period(), userID, policy, latest, soonestExpiry, retentionThrough, query.PricingRevision})
 	if err != nil {
 		return runtimeusage.AggregationResult{}, err
 	}
