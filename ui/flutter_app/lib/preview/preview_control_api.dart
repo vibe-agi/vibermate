@@ -10,7 +10,7 @@ import '../core/api/native_tool_models.dart';
 import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
-final class PreviewControlApi implements ControlApi {
+final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       throw const ControlContractException(
@@ -936,25 +936,31 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<RuntimeStatus> loadRuntimeStatus() async {
+    _requireOpen();
+    return RuntimeStatus(
+      ready: true,
+      productBuild: _productBuild,
+      state: 'initialized',
+      host: 'desktop',
+      schemaRevision: 1,
+      storage: 'healthy',
+      environmentProjection: 'healthy',
+      unavailableEnvironments: null,
+      offlineHold: _offline,
+      instanceId: 'preview-instance',
+      startedAt: _now.subtract(const Duration(hours: 19)),
+      stoppedAt: null,
+      stopReasonCode: null,
+    );
+  }
+
+  @override
   Future<DashboardData> loadDashboard() async {
     _requireOpen();
     final capturePage = await captures(limit: _dashboardCaptureLimit);
     return DashboardData(
-      status: RuntimeStatus(
-        ready: true,
-        productBuild: _productBuild,
-        state: 'initialized',
-        host: 'desktop',
-        schemaRevision: 1,
-        storage: 'healthy',
-        environmentProjection: 'healthy',
-        unavailableEnvironments: null,
-        offlineHold: _offline,
-        instanceId: 'preview-instance',
-        startedAt: _now.subtract(const Duration(hours: 19)),
-        stoppedAt: null,
-        stopReasonCode: null,
-      ),
+      status: await loadRuntimeStatus(),
       captures: capturePage.items,
       captureNextCursor: capturePage.nextCursor,
       environments: List.unmodifiable(_environments),
@@ -2820,6 +2826,8 @@ final class PreviewControlApi implements ControlApi {
     }
     int count(String status) =>
         values.where((record) => record.status == status).length;
+    final launch =
+        scope.captureRunId.isNotEmpty || scope.manualCaptureId.isNotEmpty;
     return ExchangeSummary(
       scope: scope,
       generatedAt: _now,
@@ -2832,6 +2840,7 @@ final class PreviewControlApi implements ControlApi {
       lastObservedAt: values.lastOrNull?.occurredAt,
       failures: failures,
       otherFailures: 0,
+      contentBodiesAvailable: launch ? _retainConversationBodies : null,
     );
   }
 

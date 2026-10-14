@@ -424,5 +424,27 @@ func (store *Store) ClearEvidence(ctx context.Context) (ArchiveClear, error) {
 	if err := transaction.Commit(); err != nil {
 		return ArchiveClear{}, fmt.Errorf("commit archive clear: %w", err)
 	}
+	// Logical clear already succeeded and must be reported as success. Reclaim
+	// freelist pages while callers still hold the archive barrier. Detach from
+	// the request deadline so a slow VACUUM cannot turn a wipe into HTTP 503;
+	// reclaim failure only leaves the file large, never revives deleted rows.
+	reclaim, cancel := context.WithTimeout(context.WithoutCancel(operation), 2*time.Minute)
+	defer cancel()
+	_ = store.reclaimEvidencePages(reclaim)
 	return cleared, nil
+}
+
+// reclaimEvidencePages checkpoints the WAL then VACUUMs. Call only after a
+// committed destructive archive action while Capture creation is barred.
+func (store *Store) reclaimEvidencePages(ctx context.Context) error {
+	if store == nil || store.database == nil {
+		return ErrInvalidCaptureTarget
+	}
+	if _, err := store.database.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return fmt.Errorf("checkpoint archive WAL: %w", err)
+	}
+	if _, err := store.database.ExecContext(ctx, `VACUUM`); err != nil {
+		return fmt.Errorf("vacuum archive: %w", err)
+	}
+	return nil
 }

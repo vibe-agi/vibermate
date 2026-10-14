@@ -222,22 +222,33 @@ func exchangePageQuery(request activity.PageRequest) (string, []any) {
 // winner. Keeping the IN predicate explicit is required for SQLite to use the
 // partial subject index; a kind equality alone makes each probe scan history.
 func exchangeCandidateQuery(request activity.PageRequest) (string, []any) {
-	query := `SELECT
-		     sequence, activity_id, occurred_at_unix_ms, kind,
-		     environment_id, environment_revision, environment_digest,
-		     client_endpoint_id, client_endpoint_revision,
-		     protocol_plan_id, protocol_plan_revision,
-		     route_id, route_revision,
-		     account_id, account_revision, credential_epoch,
-		     subject_id, status, reason_code,
-		     source_kind, source_display_name, source_recognition,
-		     capture_run_id, manual_capture_id, connection_id,
-		     conversation_projection_id, conversation_display_name,
-		     conversation_kind, conversation_evidence, conversation_actor,
-		     provider_status, provider_field, provider_error_code, client_field, client_path,
-		     transport_evidence_json
-		 FROM runtime_activities AS candidate
-		 WHERE kind IN ('exchange.started', 'exchange.completed')`
+	return exchangeCandidateQuerySelecting(request, `sequence, activity_id, occurred_at_unix_ms, kind,
+			     environment_id, environment_revision, environment_digest,
+			     client_endpoint_id, client_endpoint_revision,
+			     protocol_plan_id, protocol_plan_revision,
+			     route_id, route_revision,
+			     account_id, account_revision, credential_epoch,
+			     subject_id, status, reason_code,
+			     source_kind, source_display_name, source_recognition,
+			     capture_run_id, manual_capture_id, connection_id,
+			     conversation_projection_id, conversation_display_name,
+			     conversation_kind, conversation_evidence, conversation_actor,
+			     provider_status, provider_field, provider_error_code, client_field, client_path,
+			     transport_evidence_json`)
+}
+
+// exchangeSummaryCandidateQuery projects only the columns SummarizeExchanges
+// aggregates. The winner probe still needs subject_id and kind; transport and
+// conversation chrome must never ride through the GROUP BY input set.
+func exchangeSummaryCandidateQuery(request activity.PageRequest) (string, []any) {
+	return exchangeCandidateQuerySelecting(request,
+		`subject_id, status, reason_code, occurred_at_unix_ms, kind`)
+}
+
+func exchangeCandidateQuerySelecting(request activity.PageRequest, columns string) (string, []any) {
+	query := `SELECT ` + columns + `
+			 FROM runtime_activities AS candidate
+			 WHERE kind IN ('exchange.started', 'exchange.completed')`
 	arguments := []any{}
 	for _, filter := range []struct{ column, value string }{
 		{"capture_run_id", request.CaptureRunID},

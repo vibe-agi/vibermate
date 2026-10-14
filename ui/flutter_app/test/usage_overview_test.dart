@@ -15,11 +15,32 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   test(
+    'summary absent bodies skips conversations directory enrichment',
+    () async {
+      final api = _OverviewApi(retainBodies: false);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.delegate.close,
+      );
+      addTearDown(controller.dispose);
+      controller.data = await api.delegate.loadDashboard();
+      await controller.selectCapture('managed_run:run-1');
+      expect(api.conversationLoads, 0);
+      expect(controller.captureConversations, isEmpty);
+      expect(controller.selectedActivities, isEmpty);
+      expect(controller.showCaptureRequestRecords, isFalse);
+    },
+  );
+
+  test(
     'unknown directory body availability does not override absent bodies',
     () async {
       final api = _OverviewApi(
         retainBodies: false,
         unknownDirectoryBodies: true,
+        omitSummaryBodiesFlag: true,
       );
       final controller = WorkbenchController(
         api: api,
@@ -96,48 +117,16 @@ void main() {
         );
         if (!retain) {
           expect(find.textContaining('No conversation bodies'), findsOneWidget);
-          final completed = controller.selectedCapturePage!;
-          final activity = completed.items.first;
-          controller.selectedCapturePage = ActivityPage(
-            items: [
-              ActivityRecord(
-                id: 'pending-next-request',
-                occurredAt: activity.occurredAt,
-                title: activity.title,
-                status: 'pending',
-                reasonCode: null,
-                source: activity.source,
-                conversation: activity.conversation,
-                environment: activity.environment,
-                parentRefs: activity.parentRefs,
-              ),
-              ...completed.items,
-            ],
-            nextCursor: completed.nextCursor,
-          );
-          // A real view rebuild with a new pending request must keep Overview.
-          await tester.binding.setSurfaceSize(const Size(1440, 800));
-          await tester.pumpAndSettle();
+          // Stats-only: no Overview/Conversation chrome and no empty timeline.
+          expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
           expect(
-            find.byKey(const Key('capture-request-overview')),
-            findsOneWidget,
-          );
-          controller.selectedCapturePage = completed;
-          final mode = find.byKey(const Key('capture-evidence-mode'));
-          await tester.tap(
-            find.descendant(of: mode, matching: find.text('Conversation')),
-          );
-          await tester.pumpAndSettle();
-          expect(
-            find.byKey(const Key('capture-request-overview')),
+            find.byKey(const Key('capture-conversation-pane')),
             findsNothing,
           );
-          expect(
-            find.byKey(const Key('capture-evidence-mode')),
-            findsOneWidget,
-          );
-          // Refresh and navigating away both rebuild the workspace. The
-          // selected view belongs to the Capture, not to that widget lifetime.
+          expect(controller.showCaptureRequestRecords, isFalse);
+          expect(controller.selectedCapturePage?.items ?? const [], isEmpty);
+          // Refresh and navigating away must keep statistics — never invent a
+          // conversation view when bodies are known-absent.
           await controller.refresh();
           await tester.pumpAndSettle();
           controller.selectSection(WorkbenchSection.environments);
@@ -146,9 +135,10 @@ void main() {
           await tester.pumpAndSettle();
           expect(
             find.byKey(const Key('capture-request-overview')),
-            findsNothing,
+            findsOneWidget,
           );
-          expect(controller.showCaptureRequestRecords, isTrue);
+          expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
+          expect(controller.showCaptureRequestRecords, isFalse);
         } else {
           // Recorded bodies must not hide the statistics entry point.
           await tester.tap(
@@ -258,14 +248,29 @@ void main() {
         findsOneWidget,
       );
       expect(api.queries.first.filters, {'capture': 'run-2'});
-      expect(api.queries.first.from, '2025-09-28');
-      expect(api.queries.first.until, '2026-09-29');
+      // Window covers the Capture lifetime through the summary's civil day,
+      // not a fixed 366-day archive scan.
+      final created = controller.selectedCapture!.createdAt.toUtc();
+      final until = DateTime.utc(2026, 9, 29);
+      final from = DateTime.utc(created.year, created.month, created.day);
+      String civil(DateTime value) => [
+        value.year.toString().padLeft(4, '0'),
+        value.month.toString().padLeft(2, '0'),
+        value.day.toString().padLeft(2, '0'),
+      ].join('-');
+      expect(api.queries.first.from, civil(from));
+      expect(api.queries.first.until, civil(until));
+      expect(
+        until.difference(from).inDays,
+        lessThanOrEqualTo(366),
+      );
       expect(api.queries.last.groupBy, 'model');
       expect(api.queries.last.filters, {'capture': 'run-2'});
 
+      final scopesBeforeMore = api.scopes.length;
       await controller.loadMoreSelectedCapture();
       await tester.pumpAndSettle();
-      expect(api.scopes.length, 1);
+      expect(api.scopes.length, scopesBeforeMore);
       expect(
         find.text(copy.format('capture.summary.calls', {'count': '1,357'})),
         findsOneWidget,
@@ -312,7 +317,8 @@ void main() {
       addTearDown(controller.dispose);
       await tester.pumpWidget(overview(controller, AppLanguage.english));
       await tester.pump();
-      final initial = api.scopes.single;
+      expect(api.scopes, isNotEmpty);
+      final initial = api.scopes.first;
       controller.selectCaptureSummarySession(true);
       await tester.pumpAndSettle();
       expect(find.text('2,714 requests'), findsOneWidget);
@@ -327,17 +333,24 @@ void main() {
       final requests = api.scopes.length;
       await tester.pump(const Duration(seconds: 14));
       expect(api.scopes.length, requests);
-      api.usageFails = true;
+      // Quiet polls still refresh request totals; usage reloads only while the
+      // Capture is running or on an explicit refresh.
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
       expect(api.scopes.length, requests + 1);
       expect(find.text('2,714 requests'), findsOneWidget);
+      api.usageFails = true;
+      await tester.tap(find.byKey(const Key('capture-summary-refresh')));
+      await tester.pumpAndSettle();
+      expect(find.text('2,714 requests'), findsOneWidget);
       expect(find.textContaining('Refresh failed'), findsOneWidget);
       expect(find.byKey(const Key('capture-usage-updated')), findsOneWidget);
+      final afterRefresh = api.scopes.length;
+      expect(afterRefresh, greaterThan(requests + 1));
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       await tester.pump(const Duration(seconds: 30));
-      expect(api.scopes.length, requests + 1);
+      expect(api.scopes.length, afterRefresh);
       api.summaryFails = true;
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
@@ -386,18 +399,27 @@ Widget overview(WorkbenchController controller, AppLanguage language) =>
     );
 
 final class _OverviewApi implements ControlApi {
-  _OverviewApi({bool retainBodies = true, this.unknownDirectoryBodies = false})
-    : delegate = PreviewControlApi(retainConversationBodies: retainBodies);
+  _OverviewApi({
+    bool retainBodies = true,
+    this.unknownDirectoryBodies = false,
+    this.omitSummaryBodiesFlag = false,
+  }) : _retainBodies = retainBodies,
+       delegate = PreviewControlApi(retainConversationBodies: retainBodies);
 
   final PreviewControlApi delegate;
+  final bool _retainBodies;
   final bool unknownDirectoryBodies;
+  final bool omitSummaryBodiesFlag;
   final scopes = <ActivitySummaryScope>[];
   final queries = <RuntimeUsageQuery>[];
+  int conversationLoads = 0;
   Completer<ExchangeSummary>? gate;
   bool usageFails = false, summaryFails = false;
 
   ExchangeSummary summary(ActivitySummaryScope scope) {
     final factor = scope.sessionId.isEmpty ? 1 : 2;
+    final launch =
+        scope.captureRunId.isNotEmpty || scope.manualCaptureId.isNotEmpty;
     return ExchangeSummary(
       scope: scope,
       generatedAt: DateTime.utc(2026, 9, 28, 12),
@@ -410,6 +432,9 @@ final class _OverviewApi implements ControlApi {
       lastObservedAt: DateTime.utc(2026, 9, 28, 12),
       failures: {'provider_transport_failed': 30 * factor},
       otherFailures: 0,
+      contentBodiesAvailable: omitSummaryBodiesFlag || !launch
+          ? null
+          : _retainBodies,
     );
   }
 
@@ -417,7 +442,12 @@ final class _OverviewApi implements ControlApi {
   Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) async {
     scopes.add(scope);
     if (summaryFails) throw StateError('unavailable');
-    if (scopes.length == 1 && gate != null) return gate!.future;
+    // Capture detail probes summary for body presence first. Gate only the
+    // overview's initial follow-up (scopes == 2) so a later session switch is
+    // not blocked and selectCapture cannot deadlock on the gate.
+    if (gate != null && !gate!.isCompleted && scopes.length == 2) {
+      return gate!.future;
+    }
     return summary(scope);
   }
 
@@ -439,6 +469,7 @@ final class _OverviewApi implements ControlApi {
     String? captureRunId,
     String? manualCaptureId,
   }) async {
+    conversationLoads += 1;
     final page = await delegate.conversations(
       cursor: cursor,
       limit: limit,

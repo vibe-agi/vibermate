@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 )
@@ -17,7 +18,7 @@ func (repository *activityRepository) SummarizeExchanges(ctx context.Context, sc
 		return activity.ExchangeSummary{}, err
 	}
 	defer finish()
-	candidates, args := exchangeCandidateQuery(activity.PageRequest{
+	candidates, args := exchangeSummaryCandidateQuery(activity.PageRequest{
 		CaptureRunID: scope.CaptureRunID, ManualCaptureID: scope.ManualCaptureID,
 	})
 	if scope.SessionID != "" {
@@ -77,11 +78,46 @@ func (repository *activityRepository) SummarizeExchanges(ctx context.Context, sc
 		}
 		return left.ReasonCode < right.ReasonCode
 	})
-	if len(result.Failures) > 10 {
-		for _, failure := range result.Failures[10:] {
-			result.OtherFailures += failure.Count
+		if len(result.Failures) > 10 {
+			for _, failure := range result.Failures[10:] {
+				result.OtherFailures += failure.Count
+			}
+			result.Failures = result.Failures[:10]
 		}
-		result.Failures = result.Failures[:10]
+		if scope.CaptureRunID != "" || scope.ManualCaptureID != "" {
+			available, err := repository.launchContentBodiesAvailable(operation, scope)
+			if err != nil {
+				return activity.ExchangeSummary{}, err
+			}
+			result.ContentBodiesAvailable = &available
+		}
+		return result, nil
 	}
-	return result, nil
+
+// launchContentBodiesAvailable is one EXISTS against the content scope index.
+// Statistics use it instead of listing conversations and probing each Latest.
+func (repository *activityRepository) launchContentBodiesAvailable(
+	ctx context.Context,
+	scope activity.SummaryScope,
+) (bool, error) {
+	kind, id := "managed_run", scope.CaptureRunID
+	if scope.ManualCaptureID != "" {
+		kind, id = "manual_capture", scope.ManualCaptureID
+	}
+	var available int
+	err := repository.reads.QueryRowContext(
+		ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM runtime_exchange_contents
+			WHERE scope_kind = ? AND scope_id = ?
+			  AND mode = 'full' AND expires_at_unix_ms > ?
+		)`,
+		kind,
+		id,
+		time.Now().UTC().UnixMilli(),
+	).Scan(&available)
+	if err != nil {
+		return false, err
+	}
+	return available == 1, nil
 }
