@@ -139,6 +139,18 @@ jobs:
           go test -count=1 -run '^TestInstalledCodexRecoversTransientHTTPFailureThroughLauncher$' ./internal/runlauncher
           go test -count=1 -run '^TestInstalledCodex' ./internal/loopbackproxy
 
+      - name: Verify Codex 0.161.0 startup and account reads through a managed capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-codex-startup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" @openai/codex@0.161.0
+          codex_binary="$(find "${prefix}/node_modules" -type f -path '*/vendor/*/bin/codex')"
+          test -f "${codex_binary}"
+          test "$("${codex_binary}" --version)" = 'codex-cli 0.161.0'
+          VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}" \
+            go test -count=1 -run '^TestInstalledCodexReadsManagedAccount$' ./internal/productruntime
+
   race:
     needs: generated-structural
     runs-on: ubuntu-latest
