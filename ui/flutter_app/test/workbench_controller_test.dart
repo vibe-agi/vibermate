@@ -560,37 +560,38 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('non-inventory sections poll status without reloading inventory', (
-    tester,
-  ) async {
-    final fixture = PreviewControlApi();
-    final api = _StatusPollTrackingApi(fixture);
-    final controller = WorkbenchController(
-      api: api,
-      terminalCommands: PreviewTerminalCommandService(),
-      previewMode: true,
-      closeRuntime: fixture.close,
-      terminalManagement: false,
-      initialPreferences: const WorkbenchPreferences(
-        section: WorkbenchSection.environments,
-      ),
-    );
-    await controller.initialize();
-    final dashboardCallsAfterInit = api.dashboardCalls;
-    final statusCallsAfterInit = api.statusCalls;
+  testWidgets(
+    'non-inventory sections poll status without reloading inventory',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final api = _StatusPollTrackingApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+        terminalManagement: false,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.environments,
+        ),
+      );
+      await controller.initialize();
+      final dashboardCallsAfterInit = api.dashboardCalls;
+      final statusCallsAfterInit = api.statusCalls;
 
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pump();
-    expect(api.dashboardCalls, dashboardCallsAfterInit);
-    expect(api.statusCalls, greaterThan(statusCallsAfterInit));
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.dashboardCalls, dashboardCallsAfterInit);
+      expect(api.statusCalls, greaterThan(statusCallsAfterInit));
 
-    controller.selectSection(WorkbenchSection.settings);
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pump();
-    expect(api.dashboardCalls, greaterThan(dashboardCallsAfterInit));
-    controller.dispose();
-    await tester.pump();
-  });
+      controller.selectSection(WorkbenchSection.settings);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      expect(api.dashboardCalls, greaterThan(dashboardCallsAfterInit));
+      controller.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,

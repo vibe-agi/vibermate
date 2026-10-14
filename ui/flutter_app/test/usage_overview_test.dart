@@ -260,10 +260,7 @@ void main() {
       ].join('-');
       expect(api.queries.first.from, civil(from));
       expect(api.queries.first.until, civil(until));
-      expect(
-        until.difference(from).inDays,
-        lessThanOrEqualTo(366),
-      );
+      expect(until.difference(from).inDays, lessThanOrEqualTo(366));
       expect(api.queries.last.groupBy, 'model');
       expect(api.queries.last.filters, {'capture': 'run-2'});
 

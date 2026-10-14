@@ -532,7 +532,8 @@ final class ControlProblem implements Exception {
       : 'Control problem $status: $reasonCode — $detail';
 }
 
-final class HttpControlApi implements ControlApi, ACPObservationApi, RuntimeStatusReader {
+final class HttpControlApi
+    implements ControlApi, ACPObservationApi, RuntimeStatusReader {
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       ProductUpdateMetadata.fromJson(

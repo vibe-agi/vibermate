@@ -8177,6 +8177,7 @@ final class ExchangeSummary {
   final int requests, succeeded, failed, canceled, pending, otherFailures;
   final DateTime? firstObservedAt, lastObservedAt;
   final Map<String, int> failures;
+
   /// Launch scopes may report whether any non-expired full body remains.
   final bool? contentBodiesAvailable;
 }
