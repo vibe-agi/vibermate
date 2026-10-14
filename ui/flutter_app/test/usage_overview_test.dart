@@ -442,7 +442,7 @@ Widget overview(WorkbenchController controller, AppLanguage language) =>
 
 /// One directory entry keeps retained bodies; another is known-absent so the
 /// selected timeline can look body-free without the Capture being stats-only.
-final class _MixedBodyDirectoryApi implements ControlApi {
+final class _MixedBodyDirectoryApi implements ControlApi, RuntimeStatusReader {
   _MixedBodyDirectoryApi()
     : delegate = PreviewControlApi(retainConversationBodies: true);
 
