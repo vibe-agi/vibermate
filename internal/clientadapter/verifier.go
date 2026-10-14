@@ -501,21 +501,21 @@ func (verifier *ReleaseVerifier) Verify(
 	if len(candidates) > 0 {
 		detection.Recognition = RecognitionUnverified
 	}
-		// One Verify may try adjacent catalog versions that share a wrapper and
-		// the same native child. Cache digests by resolved path so a mismatch on
-		// 0.159.2 does not re-hash the ~230MB child for 0.160.0.
-		digests := map[string]fileDigestCacheEntry{}
-		var matched []Release
-		for _, candidate := range candidates {
-			ok, matchErr := verifyRelease(ctx, canonical, candidate, digests)
-			if matchErr != nil {
-				detection.Status = StatusFailed
-				return detection, matchErr
-			}
-			if ok {
-				matched = append(matched, candidate)
-			}
+	// One Verify may try adjacent catalog versions that share a wrapper and
+	// the same native child. Cache digests by resolved path so a mismatch on
+	// 0.159.2 does not re-hash the ~230MB child for 0.160.0.
+	digests := map[string]fileDigestCacheEntry{}
+	var matched []Release
+	for _, candidate := range candidates {
+		ok, matchErr := verifyRelease(ctx, canonical, candidate, digests)
+		if matchErr != nil {
+			detection.Status = StatusFailed
+			return detection, matchErr
 		}
+		if ok {
+			matched = append(matched, candidate)
+		}
+	}
 	if len(matched) == 0 {
 		// No catalogued build matched this copy. Before calling it generic,
 		// ask the platform whether a catalogued publisher signed it: a user

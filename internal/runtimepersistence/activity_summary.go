@@ -78,21 +78,21 @@ func (repository *activityRepository) SummarizeExchanges(ctx context.Context, sc
 		}
 		return left.ReasonCode < right.ReasonCode
 	})
-		if len(result.Failures) > 10 {
-			for _, failure := range result.Failures[10:] {
-				result.OtherFailures += failure.Count
-			}
-			result.Failures = result.Failures[:10]
+	if len(result.Failures) > 10 {
+		for _, failure := range result.Failures[10:] {
+			result.OtherFailures += failure.Count
 		}
-		if scope.CaptureRunID != "" || scope.ManualCaptureID != "" {
-			available, err := repository.launchContentBodiesAvailable(operation, scope)
-			if err != nil {
-				return activity.ExchangeSummary{}, err
-			}
-			result.ContentBodiesAvailable = &available
-		}
-		return result, nil
+		result.Failures = result.Failures[:10]
 	}
+	if scope.CaptureRunID != "" || scope.ManualCaptureID != "" {
+		available, err := repository.launchContentBodiesAvailable(operation, scope)
+		if err != nil {
+			return activity.ExchangeSummary{}, err
+		}
+		result.ContentBodiesAvailable = &available
+	}
+	return result, nil
+}
 
 // launchContentBodiesAvailable is one EXISTS against the content scope index.
 // Statistics use it instead of listing conversations and probing each Latest.
