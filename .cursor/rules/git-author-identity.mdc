@@ -1,0 +1,11 @@
+---
+description: Never attribute git commits or PRs to Cursor/cursoragent
+alwaysApply: true
+---
+
+# Git author identity
+
+- Commits and PRs must use only the repository's configured `user.name` / `user.email`.
+- Never add `Co-authored-by: Cursor`, `Co-authored-by: cursoragent`, or any `cursoragent@…` trailer.
+- Never set `GIT_AUTHOR_*` / `GIT_COMMITTER_*` to Cursor or cursoragent.
+- Do not amend history solely to rebrand authorship unless the user explicitly requests a rewrite.

@@ -1,0 +1,27 @@
+#!/bin/sh
+# Strip Cursor agent co-author trailers. Commits must use only the configured
+# git user.name / user.email — never attribute authorship to the agent.
+msg_file=$1
+source=${2:-}
+
+case "$source" in
+merge|squash) exit 0 ;;
+esac
+
+if [ ! -f "$msg_file" ]; then
+  exit 0
+fi
+
+tmp=$(mktemp) || exit 0
+# Drop Cursor / cursoragent co-author lines and tidy leftover blank runs.
+grep -v -E '^[[:space:]]*Co-authored-by:[[:space:]].*([Cc]ursor|[Cc]ursor[Aa]gent)' "$msg_file" |
+  awk '
+    NF { blank=0; print; next }
+    !blank { print; blank=1 }
+  ' >"$tmp" || {
+  rm -f "$tmp"
+  exit 0
+}
+cat "$tmp" >"$msg_file"
+rm -f "$tmp"
+exit 0
