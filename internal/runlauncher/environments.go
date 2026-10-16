@@ -9,20 +9,23 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servertransport"
 )
 
 // Environments reads only the launch choices allowed to the CLI's existing
 // local principal or saved Runtime User login. No management token is needed.
 func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.CaptureEnvironments, error) {
+	return launcher.environments(ctx, false)
+}
+
+func (launcher *Launcher) environments(ctx context.Context, readOnlyTrust bool) (capturecontrol.CaptureEnvironments, error) {
 	if launcher == nil || ctx == nil {
 		return capturecontrol.CaptureEnvironments{}, errors.New("launcher and context are required")
 	}
 	var client *controlClient
 	var err error
 	if remote := launcher.config.Remote; remote != nil {
-		store, openErr := serverconnection.OpenLoginStore(filepath.Join(remote.StateDirectory, "login"))
+		store, openErr := openRemoteLoginStore(remote.StateDirectory)
 		if openErr != nil {
 			return capturecontrol.CaptureEnvironments{}, openErr
 		}
@@ -30,9 +33,13 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 		if loadErr != nil {
 			return capturecontrol.CaptureEnvironments{}, errors.Join(ErrRemoteLoginRequired, loadErr)
 		}
+		machineID, identityErr := remoteLoginMachine(ctx, remote.StateDirectory, remote.Random, remote.Clock.Now())
+		if identityErr != nil {
+			return capturecontrol.CaptureEnvironments{}, identityErr
+		}
 		transport, openErr := servertransport.Open(servertransport.Options{
 			Target: remote.Target, TrustDirectory: filepath.Join(remote.StateDirectory, "trust"),
-			Clock: remote.Clock, Timeout: launcher.config.ControlTimeout,
+			Clock: remote.Clock, Timeout: launcher.config.ControlTimeout, ReadOnlyTrust: readOnlyTrust,
 		})
 		if openErr != nil {
 			return capturecontrol.CaptureEnvironments{}, openErr
@@ -40,6 +47,12 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 		client, err = newRemoteControlClient(remote.Target.Origin(), login.SessionToken().Value(), transport, transport.Close)
 		if err != nil {
 			transport.Close()
+		} else {
+			_, err = authenticateRemoteLogin(ctx, client, login, machineID)
+			if err != nil {
+				client.close()
+				return capturecontrol.CaptureEnvironments{}, err
+			}
 		}
 	} else {
 		session, loadErr := launcher.config.Discovery.Load()
@@ -55,6 +68,10 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 	var page capturecontrol.CaptureEnvironments
 	if err := client.jsonRequest(ctx, http.MethodGet, capturecontrol.EnvironmentsPath,
 		client.credential, "", nil, http.StatusOK, &page); err != nil {
+		var failure *ControlFailure
+		if launcher.config.Remote != nil && errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
+			err = errors.Join(ErrRemoteLoginRequired, err)
+		}
 		return capturecontrol.CaptureEnvironments{}, err
 	}
 	if page.Schema != capturecontrol.EnvironmentsSchema || page.Items == nil {

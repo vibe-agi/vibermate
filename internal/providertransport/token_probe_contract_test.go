@@ -91,7 +91,7 @@ func TestTokenProbeClosedProducerAndConcreteTLSReachability(t *testing.T) {
 				spec.contentType = "application/x-www-form-urlencoded"
 				spec.body = []byte("grant_type=authorization_code&code=synthetic")
 			}
-			target, err := client.runtimeProbeTarget(spec)
+			target, err := client.runtimeProbeTarget(t.Context(), spec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,9 +99,18 @@ func TestTokenProbeClosedProducerAndConcreteTLSReachability(t *testing.T) {
 			if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}}); err != nil {
 				t.Fatalf("closed token producer cannot reach concrete TLS probe: %v target=%+v", err, target)
 			}
-			if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://auth.openai.com" || target.NetworkOrigin != "https://auth.openai.com" || target.HTTPAuthority != "auth.openai.com" || target.TLSServerName != "auth.openai.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != 0 || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
+			if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://auth.openai.com" || target.NetworkOrigin != "https://auth.openai.com" || target.HTTPAuthority != "auth.openai.com" || target.TLSServerName != "auth.openai.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
 				t.Fatal("token probe changed route/identity or sent application bytes", target)
 			}
+			restricted, err := client.runtimeProbeTarget(egressnetwork.WithTargetAccess(t.Context(), egressnetwork.TargetAccessPublicOnly), spec)
+			if err != nil || restricted.TargetAccess != egressnetwork.TargetAccessPublicOnly {
+				t.Fatalf("restricted producer lost access: %+v %v", restricted, err)
+			}
+			physicalBefore := calls.Load()
+			if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{restricted}}); err == nil || calls.Load() != physicalBefore || network.direct.Load() != 0 || httpCalls.Load() != 0 {
+				t.Fatalf("restricted auxiliary probe escaped: err=%v proxy_dials=%d", err, calls.Load()-physicalBefore)
+			}
+
 		})
 	}
 	for _, edge := range []string{"origin", "port", "path", "query", "method", "reference", "content-type", "empty-body", "oversized-body", "credential", "captured", "invalid-account"} {
@@ -140,7 +149,7 @@ func TestTokenProbeClosedProducerAndConcreteTLSReachability(t *testing.T) {
 				spec.account = providerauth.AccountRef{ID: "incomplete"}
 			}
 			before := calls.Load()
-			target, producerErr := client.runtimeProbeTarget(spec)
+			target, producerErr := client.runtimeProbeTarget(t.Context(), spec)
 			if producerErr == nil {
 				probeErr := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}})
 				t.Errorf("altered token producer accepted edge=%s concreteProbeErr=%v", edge, probeErr)

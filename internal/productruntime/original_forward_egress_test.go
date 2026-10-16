@@ -538,7 +538,10 @@ func forwardTarget(f *capturedOriginalFixture, expected capturedOriginalExpected
 		policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: proxyEndpoint}
 	}
 	want := offlinehold.ProbeTarget{Kind: offlinehold.EgressOpaque, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: "https://chatgpt.com", NetworkOrigin: "https://chatgpt.com", HTTPAuthority: "chatgpt.com", TLSServerName: "chatgpt.com", EgressPolicy: policy}
-	if f.cfg.family != "raw" {
+	if f.cfg.family == "raw" {
+		// The raw request starts from the local test context with owner access.
+		want.TargetAccess = egressnetwork.TargetAccessOwnerConfigured
+	} else {
 		// Independent NUL-delimited literal original provenance: no route.
 		encoded := strings.Join([]string{"captured.original.egress", "1", f.assignment.EnvironmentDigest.String(), "original", "", "0", proxyKind, proxyEndpoint, "system", "", "direct"}, "\x00")
 		digest := sha256.Sum256([]byte(encoded))

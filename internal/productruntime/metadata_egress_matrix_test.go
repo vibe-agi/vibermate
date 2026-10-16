@@ -233,7 +233,7 @@ func runActualRuntimeMetadataCase(t *testing.T, tc metadataMatrixCase) {
 			time.Sleep(time.Millisecond)
 		}
 		targets := gate.PendingProbeTargets()
-		if len(targets) != 1 || gate.Snapshot().QueuedRequests != len(prices) || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].TargetRef != "https://models.dev" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].TargetAccess != 0 || targets[0].EgressPolicy != profile.Policy || network.dials.Load() != 0 || wire.sends.Load() != 0 {
+		if len(targets) != 1 || gate.Snapshot().QueuedRequests != len(prices) || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].TargetRef != "https://models.dev" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].TargetAccess != egressnetwork.TargetAccessOwnerConfigured || targets[0].EgressPolicy != profile.Policy || network.dials.Load() != 0 || wire.sends.Load() != 0 {
 			t.Fatalf("wrong queued targets %+v", targets)
 		}
 		if _, err = r.EgressDefaults().SetDefault(ctx, egressprofile.SetDefaultCommand{ExpectedRevision: 2}); err != nil {

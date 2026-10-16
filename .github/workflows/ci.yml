@@ -48,6 +48,7 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           node --test .github/check-action-pins.test.mjs
           node .github/check-action-pins.mjs
+          node --test tool/test-race-shard.test.mjs
       - name: Verify Flutter distribution and macOS release tooling
         run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs tool/docker/compose.test.mjs
       - name: Verify packaged acceptance contract
@@ -153,6 +154,10 @@ jobs:
 
   race:
     needs: generated-structural
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [native, persistence, rest]
     runs-on: ubuntu-latest
     # Enclose sequential packages' finite process watchdogs, not product SLAs.
     timeout-minutes: 120
@@ -165,7 +170,7 @@ jobs:
           cache: true
       # Short mode retains functional, concurrent read/write and isolation
       # checks; dedicated jobs below race full crash and response matrices.
-      - run: make test-race
+      - run: bash tool/test-race-shard.sh ${{ matrix.shard }}
 
   store-crash-race:
     needs: generated-structural

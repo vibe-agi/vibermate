@@ -79,3 +79,17 @@ func TestUnknownClientCannotClaimAnExplicitSemanticTarget(t *testing.T) {
 		t.Fatalf("unknown client resolved target=%+v available=%t error=%v", target, available, err)
 	}
 }
+
+// Exported keys cannot establish native stored-login or provider selection.
+func TestCodexNativeDestinationRemainsUnknownWithoutExplicitBase(t *testing.T) {
+	for _, facts := range []EnvironmentFacts{{}, {OpenAIAPIKeyPresent: true}, {CodexAPIKeyPresent: true}} {
+		profile, err := NewProfile(codexClientID, facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target, available, err := profile.Resolve(nil, nil)
+		if err != nil || available || target.Available() {
+			t.Fatalf("native destination inferred from key presence: target=%+v available=%t error=%v", target, available, err)
+		}
+	}
+}

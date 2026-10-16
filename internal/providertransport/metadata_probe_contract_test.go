@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -82,9 +83,15 @@ func TestMetadataAndPricesProbeHasOnlyOriginReachabilityIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"/models.json", "/api.json"} {
-		actual, err := client.runtimeProbeTarget(runtimeFetchSpec{purpose: egressaudit.PurposeModelMetadataDirectory, targetRef: "runtime.models-dev", target: target, method: http.MethodGet, relativePath: path, resolved: resolved})
-		if err != nil || actual.Kind != offlinehold.EgressAuxiliary || actual.Transport != offlinehold.ProbeTransportStrictTLS || actual.TargetRef != "https://models.dev" || actual.NetworkOrigin != "https://models.dev" || actual.HTTPAuthority != "models.dev" || actual.TLSServerName != "models.dev" || actual.PlanRevision != 0 || actual.PlanDigest != "" || actual.TargetAccess != 0 || actual.EgressPolicy != resolved.Profile().Policy {
+		spec := runtimeFetchSpec{purpose: egressaudit.PurposeModelMetadataDirectory, targetRef: "runtime.models-dev", target: target, method: http.MethodGet, relativePath: path, resolved: resolved}
+		actual, err := client.runtimeProbeTarget(t.Context(), spec)
+		if err != nil || actual.Kind != offlinehold.EgressAuxiliary || actual.Transport != offlinehold.ProbeTransportStrictTLS || actual.TargetRef != "https://models.dev" || actual.NetworkOrigin != "https://models.dev" || actual.HTTPAuthority != "models.dev" || actual.TLSServerName != "models.dev" || actual.PlanRevision != 0 || actual.PlanDigest != "" || actual.TargetAccess != egressnetwork.TargetAccessOwnerConfigured || actual.EgressPolicy != resolved.Profile().Policy {
 			t.Fatalf("metadata probe identity: %+v err=%v", actual, err)
 		}
+		restricted, err := client.runtimeProbeTarget(egressnetwork.WithTargetAccess(t.Context(), egressnetwork.TargetAccessPublicOnly), spec)
+		if err != nil || restricted.TargetAccess != egressnetwork.TargetAccessPublicOnly {
+			t.Fatalf("metadata caller access changed: %+v %v", restricted, err)
+		}
+
 	}
 }

@@ -17,20 +17,46 @@ test('test-race dry run invokes every package with finite sequential containment
   assert.equal(command.trim(), 'go test -race -short -p=1 ./... -count=1 -timeout=60m');
 });
 
-test('aggregate short race remains an unconditional bounded CI gate', () => {
-  const job = ci.match(/^  race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)?.[0];
+function assertRaceGate(source) {
+  const job = source.match(/^  race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)?.[0];
   assert.ok(job, 'complete short race job is required');
   assert.match(job, /^    needs: generated-structural$/mu);
   assert.match(job, /^    runs-on: ubuntu-latest$/mu);
   assert.match(job, /^    timeout-minutes: 120$/mu);
-  assert.match(job, /^      - run: make test-race$/mu);
-  assert.doesNotMatch(job, /\bif:|continue-on-error|\boptional\b/u);
+  const strategy = job.match(/^    strategy:\n(?:(?!^    \S)[\s\S])*/mu)?.[0];
+  assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence, rest]');
+  assert.match(job, /^      - run: bash tool\/test-race-shard\.sh \$\{\{ matrix\.shard \}\}$/mu);
+  assert.doesNotMatch(job, /\bif:|continue-on-error|\boptional\b|\bretry\b|\|\||\bGOFLAGS\b/u);
   for (const value of [
     'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
     'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16',
     'go-version-file: go.mod',
     'check-latest: false',
   ]) assert.ok(job.includes(value), value);
+}
+
+test('aggregate short race remains an unconditional bounded three-shard CI gate', () => {
+  assertRaceGate(ci);
+});
+
+test('race gate rejects omitted shards, cancellation, optional execution, and changed containment', () => {
+  assertRaceGate(ci);
+  const mutations = [
+    ['[native, persistence, rest]', '[native, rest]'],
+    ['fail-fast: false', 'fail-fast: true'],
+    ['    strategy:', '    if: false\n    strategy:'],
+    ['    strategy:', '    continue-on-error: true\n    strategy:'],
+    ['timeout-minutes: 120', 'timeout-minutes: 180'],
+    ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'make test-race'],
+    ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh native'],
+    ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh ${{ matrix.shard }} || true'],
+    ['        shard: [native, persistence, rest]', '        shard: [native, persistence, rest]\n        exclude:\n          - shard: persistence'],
+  ];
+  const job = ci.match(/^  race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)[0];
+  for (const [before, after] of mutations) {
+    assert.ok(job.includes(before), `mutation must apply: ${before}`);
+    assert.throws(() => assertRaceGate(ci.replace(job, job.replace(before, after))), undefined, after);
+  }
 });
 
 test('packaged V7 retains exact gates on disposable hosted inputs', () => {
@@ -59,6 +85,9 @@ test('CI retains hosted workflow and native release checks', () => {
   const check = 'node --test .github/packaged-acceptance-contract.test.mjs';
   assert.ok(ci.includes(check));
   assert.ok(make.includes(check));
+  const shards = 'node --test tool/test-race-shard.test.mjs';
+  assert.ok(ci.includes(shards));
+  assert.ok(make.includes(shards));
   assert.ok(ci.includes('make check-release-build'));
   assert.ok(ci.includes('govulncheck@v1.6.0 -tags vibermate_native_secrets ./...'));
   assert.ok(ci.includes('make test-store-crash-race'));

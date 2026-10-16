@@ -1262,6 +1262,10 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 }
 
 type proxyFixtureComposition struct {
+	connectionRepository func(connectionevent.Repository) connectionevent.Repository
+	captureRevocation    interface {
+		Revoke(context.Context, captureidentity.Reference, string) error
+	}
 	defaultRepository func(egressprofile.DefaultRepository) egressprofile.DefaultRepository
 	compiler          environment.Compiler
 	configure         func(*environment.Environment)
@@ -1284,6 +1288,9 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		t.Fatal(err)
 	}
 	runOptions := capturerun.DefaultOptions(store.CaptureRunRepository())
+	if composition != nil {
+		runOptions.NativeRevocation = composition.captureRevocation
+	}
 	runs, err := capturerun.NewManager(context.Background(), runOptions)
 	if err != nil {
 		t.Fatal(err)
@@ -1402,10 +1409,11 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	}
 	exchanges := &exchangeRecorder{}
 	original := &originalRecorder{}
-	connections, err := connectionevent.New(
-		context.Background(),
-		connectionevent.DefaultOptions(store.ConnectionEventRepository()),
-	)
+	journalRepository := store.ConnectionEventRepository()
+	if composition != nil && composition.connectionRepository != nil {
+		journalRepository = composition.connectionRepository(journalRepository)
+	}
+	connections, err := connectionevent.New(context.Background(), connectionevent.DefaultOptions(journalRepository))
 	if err != nil {
 		t.Fatal(err)
 	}

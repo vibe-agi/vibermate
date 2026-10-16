@@ -727,6 +727,10 @@ func (f *runtimeNativeEgressFixture) beginExpected(t *testing.T, method, body, c
 }
 func (f *runtimeNativeEgressFixture) beginPhase(t *testing.T, method, body, cursor string, expected runtimeNativeExpected, entryCounts *runtimeNativeCounts) runtimeNativeCall {
 	t.Helper()
+	return f.beginPhaseContext(t, context.Background(), method, body, cursor, expected, entryCounts)
+}
+func (f *runtimeNativeEgressFixture) beginPhaseContext(t *testing.T, parent context.Context, method, body, cursor string, expected runtimeNativeExpected, entryCounts *runtimeNativeCounts) runtimeNativeCall {
+	t.Helper()
 	facts := environment.RequestFacts{Target: protocolspec.RequestTarget{Method: method, Path: environment.ClientToolMCPPath, Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}
 	lease, e := f.r.assignments.BeginRequest(t.Context(), f.capture, "native.egress.connection", facts)
 	if e != nil {
@@ -759,7 +763,7 @@ func (f *runtimeNativeEgressFixture) beginPhase(t *testing.T, method, body, curs
 		lease.Release()
 		t.Fatal(e)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	done := make(chan nativemcp.Terminal, 1)
 	response := httptest.NewRecorder()
 	call := runtimeNativeCall{ID: id, Captured: captured, Done: done, Cancel: cancel, Response: response}

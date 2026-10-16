@@ -73,7 +73,7 @@ func TestClassifyCreateFailurePreservesTypedEnvironmentSelection(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			failure := &ControlFailure{Status: test.status, ReasonCode: test.reason}
-			got := classifyCreateFailure(failure)
+			got := classifyCreateFailure(failure, false)
 			if !errors.Is(got, test.want) || !errors.As(got, &failure) {
 				t.Fatalf("classifyCreateFailure()=%v", got)
 			}
@@ -86,7 +86,7 @@ func TestClassifyCreateFailureSeparatesPreparationTimeoutFromDeadRuntime(
 ) {
 	t.Parallel()
 
-	timedOut := classifyCreateFailure(context.DeadlineExceeded)
+	timedOut := classifyCreateFailure(context.DeadlineExceeded, false)
 	if !errors.Is(timedOut, ErrCapturePreparationTimedOut) ||
 		!errors.Is(timedOut, context.DeadlineExceeded) {
 		t.Fatalf("deadline classification = %v", timedOut)
@@ -96,12 +96,12 @@ func TestClassifyCreateFailureSeparatesPreparationTimeoutFromDeadRuntime(
 		Op:  http.MethodPost,
 		URL: "http://127.0.0.1:43123/api/v1/capture-runs",
 		Err: syscall.ECONNREFUSED,
-	})
+	}, false)
 	if !errors.Is(refused, ErrRuntimeUnavailable) {
 		t.Fatalf("connection refusal classification = %v", refused)
 	}
 
-	canceled := classifyCreateFailure(context.Canceled)
+	canceled := classifyCreateFailure(context.Canceled, false)
 	if !errors.Is(canceled, context.Canceled) ||
 		errors.Is(canceled, ErrCapturePreparationTimedOut) {
 		t.Fatalf("caller cancellation classification = %v", canceled)
@@ -114,7 +114,7 @@ func TestClassifyCreateFailureLeavesOtherProblemsIntact(t *testing.T) {
 		Status:     http.StatusUnprocessableEntity,
 		ReasonCode: capturecontrol.ReasonCaptureRunCreate,
 	}
-	if got := classifyCreateFailure(failure); got != failure {
+	if got := classifyCreateFailure(failure, false); got != failure {
 		t.Fatalf("classifyCreateFailure()=%v want original failure", got)
 	}
 }

@@ -3,10 +3,13 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Source package version: **0.1.28**. Latest published release: **v0.1.27**.
+Published-status snapshot at candidate preparation: **2026-10-17** (Asia/Singapore).
 
-[v0.1.27](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.27) is the latest
-published release. The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
+Source package version: **0.1.29**. Latest published release: **v0.1.28**.
+
+At that snapshot, [v0.1.28](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.28)
+was the latest published release; v0.1.29 was unpublished.
+The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
 and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
 schema-revision-1 data compatibility. Current source upgrades and private rollback
 are documented under [private rollback snapshots](deployment.md#private-rollback-snapshots);
@@ -86,14 +89,24 @@ preview normalization, all response stop reasons and empty terminals. Local
 macOS Codex capture and `vibermate doctor` check the current Root's trust status
 before recommending or starting a native-trust capture.
 
+Codex keeps its native provider and persisted login selection. The launcher
+preserves authentication inputs and translates only explicit `CODEX_BASE_URL`
+or `OPENAI_BASE_URL` settings; exported-key presence does not establish the
+native destination. With no explicit target, Capture retains the selected
+Environment's declared origin boundary and admits observed requests against it.
+A custom native provider does not automatically gain managed origin or Account
+authority. Native TUI login requirements remain Codex-owned; Capture does not
+supply a placeholder key or promise login-free startup.
+
 Interactive Codex captures, including resume and fork, must own their request
 backend. For a catalog-known Codex family, the launcher reads native help with a
-1500 ms deadline and a combined 64 KiB output limit, without Capture credentials
+30s deadline and a combined 64 KiB output limit, without Capture credentials
 or proxy environment. It adds `--no-daemon` when supported (confirmed startup
 contract in 0.159.2 and 0.160.0). The exact verified 0.145.0 adapter instead uses
 its mandatory launch-recipe config overrides, which prevent implicit daemon
-reuse. A help result never changes release recognition or grants Root/tool
-authority. Ordinary exec/review and foreground app-server retain their native
+reuse. A failed or timed-out probe is reported separately from a successful help
+result that lacks the required capability. A help result never changes release
+recognition or grants Root/tool authority. Ordinary exec/review and foreground app-server retain their native
 arguments. Remote connections, app-server daemon/proxy, agents, unknown options
 and unproven session-control modes fail before the captured command starts;
 existing backends are left running. Startup-contract checks do not by themselves
@@ -105,3 +118,8 @@ provider acceptance run does not prove every provider, model, client, or
 editor. The [packaged acceptance contract](m0-acceptance.md), [deployment
 guide](deployment.md), and [runtime module map](module-map.md) state the narrower
 boundaries behind this table.
+
+Remote launch and ACP session authentication use a separate 30s default budget;
+an explicit `Config.ControlTimeout` also bounds authentication. Lifecycle control
+(attach, heartbeat and finish) retains its 5s default, and Capture creation keeps
+its separate 90s default. Shorter caller deadlines and cancellation apply to each.

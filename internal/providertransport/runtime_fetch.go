@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -285,7 +286,7 @@ func (client *Client) fetchRuntimeJSON(
 	if err != nil {
 		return nil, fmt.Errorf("begin runtime egress action: %w", err)
 	}
-	probeTarget, err := client.runtimeProbeTarget(spec)
+	probeTarget, err := client.runtimeProbeTarget(operationContext, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +458,20 @@ func (client *Client) runtimeFetchIDs(
 	return values[0], values[1], values[2], nil
 }
 
-func (client *Client) runtimeProbeTarget(
+// Freeze the same target allowance used by the actual runtime HTTP request.
+// The resolver's owner-configured bootstrap allowance grants no target authority.
+func (client *Client) runtimeProbeTarget(ctx context.Context, spec runtimeFetchSpec) (offlinehold.ProbeTarget, error) {
+	target, err := client.runtimeProbeTargetIdentity(spec)
+	if err != nil {
+		return offlinehold.ProbeTarget{}, err
+	}
+	if target.Kind == offlinehold.EgressAuxiliary || target.Kind == offlinehold.EgressOpaque {
+		target.TargetAccess = egressnetwork.EffectiveTargetAccess(ctx)
+	}
+	return target, target.Validate()
+}
+
+func (client *Client) runtimeProbeTargetIdentity(
 	spec runtimeFetchSpec,
 ) (offlinehold.ProbeTarget, error) {
 	kind, err := offlinehold.KindForPurpose(spec.purpose)

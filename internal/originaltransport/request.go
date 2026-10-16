@@ -23,7 +23,7 @@ type RequestOptions struct {
 	ResolvedEgress egressprofile.Resolved
 	RequestID      string
 	Kind           offlinehold.EgressKind
-	Origin         originidentity.ClientOrigin
+	Origin         originidentity.ProviderOrigin
 	Method         string
 	Path           string
 	RawQuery       string
@@ -39,12 +39,12 @@ type RequestOptions struct {
 }
 
 // Request freezes an original-origin auxiliary or opaque representation. It
-// cannot replace its ClientOrigin with a provider target or arbitrary URL.
+// pins a pathless actual inbound authority; Path already contains the client base path.
 type Request struct {
 	resolvedEgress egressprofile.Resolved
 	requestID      string
 	kind           offlinehold.EgressKind
-	origin         originidentity.ClientOrigin
+	origin         originidentity.ProviderOrigin
 	method         string
 	path           string
 	rawQuery       string
@@ -101,8 +101,8 @@ func NewRequest(options RequestOptions) (Request, error) {
 	); err != nil {
 		return Request{}, err
 	}
-	if err := options.Origin.Validate(); err != nil {
-		return Request{}, errors.New("original ClientOrigin is incomplete")
+	if err := options.Origin.Validate(); err != nil || options.Origin.BasePath() != "" {
+		return Request{}, errors.New("original operation origin must be a valid pathless authority")
 	}
 	resolved := options.ResolvedEgress
 	if resolved.Validate() != nil || (resolved.Source() != egressprofile.SelectionFlow && resolved.Source() != egressprofile.SelectionGlobal && resolved.Source() != egressprofile.SelectionBuiltin) {
@@ -165,7 +165,7 @@ func (request Request) Kind() offlinehold.EgressKind {
 	return request.kind
 }
 
-func (request Request) Origin() originidentity.ClientOrigin {
+func (request Request) Origin() originidentity.ProviderOrigin {
 	return request.origin
 }
 
@@ -189,21 +189,30 @@ func (request Request) Body() []byte {
 	return bytes.Clone(request.body)
 }
 
-func (request Request) probeTarget() offlinehold.ProbeTarget {
+func (request Request) probeTarget(access egressnetwork.TargetAccess) offlinehold.ProbeTarget {
+	transport := offlinehold.ProbeTransportStrictTLS
+	serverName := request.origin.Host()
+	switch request.origin.Transport() {
+	case originidentity.ProviderTransportLoopbackCleartext:
+		transport, serverName = offlinehold.ProbeTransportLoopbackCleartext, ""
+	case originidentity.ProviderTransportPrivateCleartext:
+		transport, serverName = offlinehold.ProbeTransportPrivateCleartext, ""
+	}
 	return offlinehold.ProbeTarget{
 		Kind:          request.kind,
-		Transport:     offlinehold.ProbeTransportStrictTLS,
+		TargetAccess:  access,
+		Transport:     transport,
 		TargetRef:     request.origin.String(),
 		NetworkOrigin: request.origin.String(),
 		HTTPAuthority: request.origin.HTTPAuthority(),
-		TLSServerName: request.origin.Host(),
+		TLSServerName: serverName,
 		EgressPolicy:  request.egressPolicy,
 	}
 }
 
 func (request Request) targetURL() *url.URL {
 	return &url.URL{
-		Scheme:   "https",
+		Scheme:   request.origin.Scheme(),
 		Host:     request.origin.HTTPAuthority(),
 		Path:     request.path,
 		RawQuery: request.rawQuery,

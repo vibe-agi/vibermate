@@ -32,6 +32,8 @@ type Options struct {
 	// authoritative. Tests and explicitly scoped private-PKI callers may provide
 	// a pool without weakening hostname or validity verification.
 	RootCAs *x509.CertPool
+	// ReadOnlyTrust honors saved trust or platform roots without enrolling trust.
+	ReadOnlyTrust bool
 }
 
 type Transport struct {
@@ -97,7 +99,7 @@ func probeTLS(ctx context.Context, options SystemTrustProbeOptions, config *tls.
 		return nil, serverconnection.ErrInvalidAddress
 	}
 	networkDialer := &net.Dialer{
-		Timeout: min(options.Timeout, 5*time.Second), KeepAlive: 15 * time.Second,
+		Timeout: min(options.Timeout, 30*time.Second), KeepAlive: 15 * time.Second,
 	}
 	config.MinVersion = tls.VersionTLS13
 	config.NextProtos = []string{"http/1.1"}
@@ -140,7 +142,7 @@ func Open(options Options) (*Transport, error) {
 	result := &Transport{
 		target: options.Target,
 		dialer: &net.Dialer{
-			Timeout:   min(options.Timeout, 5*time.Second),
+			Timeout:   min(options.Timeout, 30*time.Second),
 			KeepAlive: 15 * time.Second,
 		},
 	}
@@ -157,7 +159,11 @@ func Open(options Options) (*Transport, error) {
 				rawCertificates [][]byte,
 				_ [][]*x509.Certificate,
 			) error {
-				verified, verifyErr := pins.VerifyPeer(
+				verifyPeer := pins.VerifyPeer
+				if options.ReadOnlyTrust {
+					verifyPeer = pins.VerifyPeerReadOnly
+				}
+				verified, verifyErr := verifyPeer(
 					options.Target.Address(),
 					rawCertificates,
 					options.Clock.Now().UTC(),

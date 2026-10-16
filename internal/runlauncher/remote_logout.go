@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/servertransport"
 )
@@ -30,7 +29,7 @@ func LogoutRemote(ctx context.Context, request RemoteLogoutRequest) error {
 	if err := config.validate(); err != nil {
 		return err
 	}
-	store, err := serverconnection.OpenLoginStore(filepath.Join(config.StateDirectory, "login"))
+	store, err := openRemoteLoginStore(config.StateDirectory)
 	if err != nil {
 		return err
 	}

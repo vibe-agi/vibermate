@@ -622,7 +622,7 @@ func TestActualRuntimeOwnedAccountHeldQuotaConcreteRecovery(t *testing.T) {
 	}()
 	targets := ownedWaitQueue(t, f)
 	t.Logf("actual owned quota queued targets=%+v snapshot=%+v", targets, f.gate.Snapshot())
-	if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].Transport != offlinehold.ProbeTransportStrictTLS || targets[0].TargetRef != "https://chatgpt.com" || targets[0].NetworkOrigin != "https://chatgpt.com" || targets[0].HTTPAuthority != "chatgpt.com" || targets[0].TLSServerName != "chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].TargetAccess != 0 || targets[0].EgressPolicy != f.profile.Policy {
+	if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].Transport != offlinehold.ProbeTransportStrictTLS || targets[0].TargetRef != "https://chatgpt.com" || targets[0].NetworkOrigin != "https://chatgpt.com" || targets[0].HTTPAuthority != "chatgpt.com" || targets[0].TLSServerName != "chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].TargetAccess != egressnetwork.TargetAccessOwnerConfigured || targets[0].EgressPolicy != f.profile.Policy {
 		t.Error("actual owned quota did not queue canonical frozen probe identity")
 	}
 	f.setDefault(t, 2, nil)
@@ -672,7 +672,7 @@ func TestActualRuntimeOwnedAccountHeldConsumeConcreteRecovery(t *testing.T) {
 				f.drain(t)
 				t.Fatal(err)
 			}
-			if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].Transport != offlinehold.ProbeTransportStrictTLS || targets[0].TargetRef != "https://chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].EgressPolicy != f.profile.Policy || f.gate.Snapshot().HeldBytes != 87 || f.details.Load() != 1 || f.consume.Load() != 0 {
+			if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].Transport != offlinehold.ProbeTransportStrictTLS || targets[0].TargetRef != "https://chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].EgressPolicy != f.profile.Policy || targets[0].TargetAccess != egressnetwork.TargetAccessOwnerConfigured || f.gate.Snapshot().HeldBytes != 87 || f.details.Load() != 1 || f.consume.Load() != 0 {
 				t.Error("explicit consume did not hold its own closed target/body")
 			}
 			f.setDefault(t, 2, nil)

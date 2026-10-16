@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,51 @@ import (
 	"testing"
 	"time"
 )
+
+// Control authorization/history checks exercise the production decision budget.
+// The general native fixture's accelerated expiry belongs to deadline tests;
+// it must not race a sequence of authenticated HTTP and SQLite operations.
+func newNativeControlFixture(t *testing.T) *nativeFixture {
+	t.Helper()
+	return newNativeFixtureWithApprovalConfig(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, authoredEgress(t, egressprofile.Direct()), toolapproval.DefaultConfig())
+}
+
+// Cancellation owns cleanup even if a control assertion fails before answering
+// the question. The production decision lifetime must never become a test join.
+func startNativeControl(t *testing.T, f *nativeFixture, request CapturedRequest) func() Terminal {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var result Terminal
+	go func() { result = f.executor.Serve(ctx, request, httptest.NewRecorder()); close(done) }()
+	await := func() Terminal {
+		t.Helper()
+		select {
+		case <-done:
+			return result
+		case <-time.After(3 * time.Second):
+			t.Fatal("native control operation did not join")
+		}
+		return Terminal{}
+	}
+	t.Cleanup(func() { cancel(); await() })
+	return await
+}
+
+func TestNativeControlFixtureCancellationJoinsPendingApproval(t *testing.T) {
+	f := newNativeControlFixture(t)
+	f.handshake(t)
+	call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	var approval nativetool.Approval
+	t.Run("unanswered_control", func(t *testing.T) {
+		startNativeControl(t, f, call)
+		approval = waitNativeQuestion(t, f, call.id)
+	})
+	current, err := f.store.NativeToolRepository().GetApproval(context.Background(), approval.ID)
+	if err != nil || current.State != "canceled" || current.ConsumedAt != nil || f.transport.sends() != 3 {
+		t.Fatalf("unanswered control cleanup: approval=%+v err=%v sends=%d", current, err, f.transport.sends())
+	}
+}
 
 type historyObservedWriter struct {
 	*httptest.ResponseRecorder
@@ -33,11 +80,76 @@ func (w *historyObservedWriter) Write(body []byte) (int, error) {
 	return n, err
 }
 
+// controlDelayedStart models scheduling between the real decision and Start.
+// It changes only the observation time supplied to the real repository; the
+// approval, receipt checks, transitions and executor cleanup remain real.
+type controlDelayedStart struct {
+	nativetool.Repository
+	entered chan time.Time
+	resume  chan struct{}
+	advance func(time.Time)
+}
+
+func (s *controlDelayedStart) Start(ctx context.Context, id nativetool.ID, attempt string, revision uint64, now time.Time) (nativetool.StartReceipt, error) {
+	op, err := s.Repository.Get(ctx, id)
+	if err != nil {
+		return nativetool.StartReceipt{}, err
+	}
+	if op.Kind == nativetool.RequestServerReply {
+		approval, err := s.Repository.GetApproval(ctx, *op.ApprovalID)
+		if err != nil {
+			return nativetool.StartReceipt{}, err
+		}
+		// The old control fixture expired at this exact boundary, although the
+		// authenticated control checks were not testing the decision deadline.
+		now = approval.CreatedAt.Add(3 * time.Second)
+		s.entered <- now
+		select {
+		case <-s.resume:
+			s.advance(now)
+		case <-ctx.Done():
+			return nativetool.StartReceipt{}, ctx.Err()
+		}
+	}
+	return s.Repository.Start(ctx, id, attempt, revision, now)
+}
+
+func ExerciseNativeDelayedStartControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval, func())) {
+	exerciseNativeHistoricalControl(t, false, true, check)
+}
+
 // Test-only completion barrier around the real executor/Store. The child
 // finishes before the handler retries; the parent can be held live separately.
 func ExerciseNativeHistoricalControl(t *testing.T, parentCompleted bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval, func())) {
 	t.Helper()
-	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	exerciseNativeHistoricalControl(t, parentCompleted, false, check)
+}
+
+func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval, func())) {
+	t.Helper()
+	f := newNativeControlFixture(t)
+	var delayedStart *controlDelayedStart
+	var resumeOnce sync.Once
+	resume := func() {
+		if delayedStart != nil {
+			resumeOnce.Do(func() { close(delayedStart.resume) })
+		}
+	}
+	defer resume()
+	if delayed {
+		delayedStart = &controlDelayedStart{Repository: f.store.NativeToolRepository(), entered: make(chan time.Time, 1), resume: make(chan struct{})}
+		clock := &unsentAtomicClock{}
+		delayedStart.advance = clock.set
+		e := f.executor.(*executor)
+		e.dependencies.Store = delayedStart
+		e.dependencies.Clock = func() time.Time {
+			now := time.Now().UTC()
+			if advanced := clock.now(); advanced.After(now) {
+				return advanced
+			}
+			return now
+		}
+	}
 	f.handshake(t)
 	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
 	if err != nil {
@@ -82,6 +194,7 @@ func ExerciseNativeHistoricalControl(t *testing.T, parentCompleted bool, check f
 	var parentResult Terminal
 	go func() { parentResult = f.executor.Serve(context.Background(), parent, w); close(parentDone) }()
 	defer func() {
+		resume()
 		release()
 		_ = f.executor.Close(context.Background())
 		if childDone != nil {
@@ -133,6 +246,21 @@ func ExerciseNativeHistoricalControl(t *testing.T, parentCompleted bool, check f
 	}
 	var beforeHistory state
 	complete := func() {
+		if delayedStart != nil {
+			select {
+			case observed := <-delayedStart.entered:
+				t.Logf("delayed Start observed=%s approvalExpires=%s", observed.Format(time.RFC3339Nano), a.ExpiresAt.Format(time.RFC3339Nano))
+			case <-time.After(3 * time.Second):
+				t.Fatal("approved child never reached Start")
+			}
+			resume()
+			await(childDone)
+			actual, err := f.store.NativeToolRepository().GetApproval(context.Background(), a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("delayed child=%s/%s approval=%s revision=%d consumed=%t", childResult.Outcome, childResult.Reason, actual.State, actual.Revision, actual.ConsumedAt != nil)
+		}
 		await(childDone)
 		if childResult.Outcome != OutcomeCompleted {
 			t.Fatalf("real child completion=%+v", childResult)
@@ -199,7 +327,7 @@ func ExerciseNativeHistoricalControl(t *testing.T, parentCompleted bool, check f
 // fixture without an import cycle or any test hook in production code.
 func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	t.Helper()
-	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	f := newNativeControlFixture(t)
 	f.handshake(t)
 	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
 	if err != nil {
@@ -228,8 +356,7 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 		return &http.Response{StatusCode: 202, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	}
 	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
-	parents := make(chan Terminal, 1)
-	go func() { parents <- f.executor.Serve(context.Background(), parent, httptest.NewRecorder()) }()
+	parents := startNativeControl(t, f, parent)
 	f.approve(t, parent.id)
 	deadline := time.Now().Add(time.Second)
 	found := false
@@ -254,14 +381,13 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 		t.Fatal("registered callback absent")
 	}
 	child := f.captured(t, "POST", reply, "synthetic-session")
-	children := make(chan Terminal, 1)
-	go func() { children <- f.executor.Serve(context.Background(), child, httptest.NewRecorder()) }()
+	children := startNativeControl(t, f, child)
 	approval := waitNativeQuestion(t, f, child.id)
 	check(f.executor, f.store, manuals, f.capture, approval)
-	if result := <-children; result.Outcome != OutcomeCompleted {
+	if result := children(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("child %+v", result)
 	}
-	if result := <-parents; result.Outcome != OutcomeCompleted {
+	if result := parents(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("parent %+v", result)
 	}
 	before := f.transport.sends()
@@ -293,7 +419,7 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 
 func ExerciseNativeToolControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	t.Helper()
-	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	f := newNativeControlFixture(t)
 	f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{}
 	f.handshake(t)
 	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
@@ -303,11 +429,10 @@ func ExerciseNativeToolControl(t *testing.T, check func(Executor, *runtimepersis
 	defer manuals.Shutdown(context.Background())
 	const wire = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"frozen.txt"},"_meta":{"private":"metadata-sentinel"}}}`
 	call := f.captured(t, "POST", wire, "synthetic-session")
-	results := make(chan Terminal, 1)
-	go func() { results <- f.executor.Serve(context.Background(), call, httptest.NewRecorder()) }()
+	results := startNativeControl(t, f, call)
 	approval := waitNativeQuestion(t, f, call.id)
 	check(f.executor, f.store, manuals, f.capture, approval)
-	if result := <-results; result.Outcome != OutcomeCompleted {
+	if result := results(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("ordinary call %+v", result)
 	}
 	if f.transport.sends() != 4 {
@@ -387,7 +512,7 @@ func ExerciseNativeUnavailableControl(t *testing.T, check func(Executor, *runtim
 
 func exerciseNativeRejectedControl(t *testing.T, known bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	t.Helper()
-	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	f := newNativeControlFixture(t)
 	if known {
 		f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{}
 	}
@@ -398,11 +523,10 @@ func exerciseNativeRejectedControl(t *testing.T, known bool, check func(Executor
 	}
 	defer manuals.Shutdown(context.Background())
 	call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"frozen.txt"}}}`, "synthetic-session")
-	results := make(chan Terminal, 1)
-	go func() { results <- f.executor.Serve(context.Background(), call, httptest.NewRecorder()) }()
+	results := startNativeControl(t, f, call)
 	a := waitNativeQuestion(t, f, call.id)
 	check(f.executor, f.store, manuals, f.capture, a)
-	if result := <-results; result.Outcome != OutcomeRejected || f.transport.sends() != 3 {
+	if result := results(); result.Outcome != OutcomeRejected || f.transport.sends() != 3 {
 		t.Fatalf("expired question sent %+v", result)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,8 +28,9 @@ import (
 )
 
 const (
-	defaultHeartbeatInterval = 30 * time.Second
-	defaultControlTimeout    = 5 * time.Second
+	defaultHeartbeatInterval           = 30 * time.Second
+	defaultControlTimeout              = 5 * time.Second
+	defaultRemoteAuthenticationTimeout = 30 * time.Second
 	// defaultCreateTimeout is the one control call that can contain work
 	// measured in people rather than in milliseconds.
 	//
@@ -77,9 +79,9 @@ type Config struct {
 	Stdout            io.Writer
 	Stderr            io.Writer
 	HeartbeatInterval time.Duration
-	// ControlTimeout bounds every control call except create. None of them can
-	// contain a person, so none of them may be given a budget that would let a
-	// launch hang on one.
+	// ControlTimeout bounds lifecycle control calls (default 5s). When explicitly
+	// supplied it also bounds remote session authentication (default 30s).
+	// Capture creation has its own CreateTimeout (default 90s).
 	ControlTimeout     time.Duration
 	CreateTimeout      time.Duration
 	TerminationTimeout time.Duration
@@ -88,7 +90,8 @@ type Config struct {
 }
 
 type Launcher struct {
-	config Config
+	config                      Config
+	remoteAuthenticationTimeout time.Duration
 }
 
 // LaunchRequest carries an optional explicit initial Environment selection
@@ -113,8 +116,10 @@ func New(config Config) (*Launcher, error) {
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaultHeartbeatInterval
 	}
+	authenticationTimeout := config.ControlTimeout
 	if config.ControlTimeout == 0 {
 		config.ControlTimeout = defaultControlTimeout
+		authenticationTimeout = defaultRemoteAuthenticationTimeout
 	}
 	if config.CreateTimeout == 0 {
 		config.CreateTimeout = defaultCreateTimeout
@@ -153,7 +158,7 @@ func New(config Config) (*Launcher, error) {
 		// Other writers receive both child output and supervisor diagnostics.
 		config.Stderr = &lockedWriter{writer: config.Stderr}
 	}
-	return &Launcher{config: config}, nil
+	return &Launcher{config: config, remoteAuthenticationTimeout: authenticationTimeout}, nil
 }
 
 type lockedWriter struct {
@@ -194,13 +199,14 @@ func (launcher *Launcher) Run(
 		remote, companion, err = connectRemote(
 			ctx,
 			*launcher.config.Remote,
-			controlTransportTimeout(launcher.config),
+			max(controlTransportTimeout(launcher.config), launcher.remoteAuthenticationTimeout),
+			launcher.remoteAuthenticationTimeout,
 			cwd,
 			command,
 			executable,
 		)
 		if err != nil {
-			return 1, fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+			return 1, classifyRemoteConnectionFailure(err)
 		}
 		defer remote.close()
 		control = remote.control
@@ -239,7 +245,7 @@ func (launcher *Launcher) Run(
 		},
 	)
 	if err != nil {
-		return 1, classifyCreateFailure(err)
+		return 1, classifyCreateFailure(err, launcher.config.Remote != nil)
 	}
 	createdGrant := grant
 	cleanupRoot := func() {}
@@ -292,6 +298,12 @@ func (launcher *Launcher) Run(
 		childArguments, err = prepareCodexCaptureArguments(ctx, grant.ExecutablePath, command[1:], childArguments, launcher.config.BaseEnvironment, legacyIndependent)
 		if err != nil {
 			launcher.finishBestEffort(control, grant)
+			if callerErr := ctx.Err(); callerErr != nil {
+				err = callerErr
+			}
+			if errors.Is(err, context.Canceled) {
+				return 130, err
+			}
 			return 1, err
 		}
 	}
@@ -466,12 +478,22 @@ func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {
 	)
 }
 
-func classifyCreateFailure(err error) error {
+func classifyRemoteConnectionFailure(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, ErrRemoteLoginRequired) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
+}
+
+func classifyCreateFailure(err error, remote bool) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
 	var failure *ControlFailure
 	if errors.As(err, &failure) {
+		if remote && failure.Status == 401 {
+			return fmt.Errorf("%w: %w", ErrRemoteLoginRequired, err)
+		}
 		switch failure.ReasonCode {
 		case capturecontrol.ReasonClientTargetNotConfigured:
 			return fmt.Errorf("%w: %w", ErrClientTargetNotConfigured, failure)
@@ -485,12 +507,22 @@ func classifyCreateFailure(err error) error {
 			return err
 		}
 	}
+	unavailable := ErrRuntimeUnavailable
+	if remote {
+		unavailable = ErrRemoteRuntimeUnavailable
+	}
+	// A TCP dial deadline also matches context.DeadlineExceeded even when
+	// the Capture operation is still live. Preserve that establishment failure.
+	var networkFailure *net.OpError
+	if errors.As(err, &networkFailure) && networkFailure.Op == "dial" {
+		return fmt.Errorf("%w: %w", unavailable, err)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: %w", ErrCapturePreparationTimedOut, err)
 	}
 	var transportFailure *url.Error
 	if errors.As(err, &transportFailure) {
-		return fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+		return fmt.Errorf("%w: %w", unavailable, err)
 	}
 	return err
 }

@@ -25,7 +25,7 @@ func TestClientTargetMismatchIsActionableAndDoesNotWriteAssignment(t *testing.T)
 	policy.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://api.openai.com")
 	policy.ClientEndpoints[0].ProtocolPlans[0].ClientProtocol = environment.ClientProtocolOpenAIResponses
 	policy.ClientEndpoints[0].ProtocolPlans[0].Destination = environment.DestinationPlan{Kind: environment.DestinationKindOriginal}
-	profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{})
+	profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://chatgpt.com/backend-api/codex"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,4 +942,74 @@ func (repository *memoryRepository) Write(
 		Assignment: candidate,
 		Actual:     candidate.Revision,
 	}, nil
+}
+
+func TestNativeCodexUnknownTargetKeepsDeclaredAdmissionBoundary(t *testing.T) {
+	policy := environmentFixture(t, "inspect-native", "adapter.shared")
+	policy.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://api.openai.com")
+	policy.ClientEndpoints[0].ProtocolPlans[0].ClientProtocol = environment.ClientProtocolOpenAIResponses
+	policy.ClientEndpoints[0].ProtocolPlans[0].Destination = environment.DestinationPlan{Kind: environment.DestinationKindOriginal}
+	for _, facts := range []clienttarget.EnvironmentFacts{{}, {OpenAIAPIKeyPresent: true}, {CodexAPIKeyPresent: true}} {
+		profile, err := clienttarget.NewProfile("codex-cli", facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := newTestManager(t, newMemoryRepository(), newRevisionResolver(t, policy))
+		assignment, _, err := manager.CreateForLaunch(context.Background(), CreateCommand{Capture: testCapture(), EnvironmentID: policy.ID, Source: SourceLaunch, ClientProfile: profile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if assignment.ClientTarget.Available() {
+			t.Fatal("native login inferred a target")
+		}
+		if got := assignment.LaunchAuthority.ProtectedAuthorities(); len(got) != 1 || got[0] != "api.openai.com:443" {
+			t.Fatalf("declared boundary changed: %v", got)
+		}
+		if got := assignment.LaunchAuthority.ManagedCredentialAuthorities(); len(got) != 0 {
+			t.Fatalf("native target manufactured account authority: %v", got)
+		}
+		for _, test := range []struct {
+			origin string
+			mode   environment.ConnectionMode
+		}{
+			{"https://api.openai.com", environment.ConnectionModeSemantic},
+			{"https://chatgpt.com", environment.ConnectionModeBlind},
+			{"https://custom.invalid", environment.ConnectionModeBlind},
+		} {
+			origin, err := originidentity.ParseProviderOrigin(test.origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection, err := manager.RegisterProviderConnection(context.Background(), testCapture(), "native-observed", origin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := connection.Binding().Mode; got != test.mode {
+				t.Fatalf("observed %s admitted as %s, want %s", test.origin, got, test.mode)
+			}
+			connection.Close()
+		}
+	}
+}
+
+func TestNativeCodexUnknownTargetKeepsDeclaredManagedAuthority(t *testing.T) {
+	policy := environmentFixture(t, "managed-native", "adapter.shared")
+	profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newTestManager(t, newMemoryRepository(), newRevisionResolver(t, policy))
+	assignment, _, err := manager.CreateForLaunch(context.Background(), CreateCommand{Capture: testCapture(), EnvironmentID: policy.ID, Source: SourceLaunch, ClientProfile: profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := assignment.LaunchAuthority.ManagedCredentialAuthorities(); len(got) != 1 || got[0] != "api.example:443" {
+		t.Fatalf("declared managed authority changed: %v", got)
+	}
+	connection, err := manager.RegisterConnection(context.Background(), testCapture(), "declared-managed", semanticOrigin(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	assertRequestRoute(t, manager, testCapture(), "declared-managed", 1, "route.default")
 }

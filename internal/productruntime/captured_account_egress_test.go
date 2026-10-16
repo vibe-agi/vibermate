@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -234,7 +235,7 @@ func TestActualRuntimeCapturedAccountReadHoldAndFailure(t *testing.T) {
 			flight := startCapturedRead(t, f, row.path)
 			targets := f.waitQueue(t)
 			t.Logf("captured queued target=%+v", targets)
-			if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].NetworkOrigin != "https://chatgpt.com" || targets[0].TargetRef != "https://chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" {
+			if len(targets) != 1 || targets[0].Kind != offlinehold.EgressAuxiliary || targets[0].NetworkOrigin != "https://chatgpt.com" || targets[0].TargetRef != "https://chatgpt.com" || targets[0].PlanRevision != 0 || targets[0].PlanDigest != "" || targets[0].TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
 				t.Fatal("closed held target changed", targets)
 			}
 			assertCapturedPhysical(t, f, 0, 0, 0, 0)

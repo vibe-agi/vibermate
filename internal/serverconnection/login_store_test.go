@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -227,4 +228,184 @@ func loginStoreTestCredential(
 		t.Fatal(err)
 	}
 	return credential
+}
+
+func TestLoginStoreMigrationPreservesCompleteDocumentAndLogout(t *testing.T) {
+	now := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	legacyDirectory := filepath.Join(t.TempDir(), "legacy")
+	legacy, err := OpenLoginStore(legacyDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := loginStoreTestCredential(t, "first.test:9666", "alice", 1, now)
+	expired := loginStoreTestCredential(t, "expired.test:9666", "bob", 2, now.Add(-24*time.Hour))
+	for _, login := range []LoginCredential{first, expired} {
+		if err := legacy.Save(login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourcePath := filepath.Join(legacyDirectory, loginStoreFileName)
+	before, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(t.TempDir(), "canonical")
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			store, err := OpenLoginStoreMigrating(directory, legacyDirectory)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := store.Load(first.Target(), now); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	store, err := OpenLoginStoreMigrating(directory, legacyDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(expired.Target(), now); !errors.Is(err, ErrLoginRequired) {
+		t.Fatalf("migrated expiry bypassed: %v", err)
+	}
+	// The expired record is preserved for backwards-readable complete migration.
+	payload, err := os.ReadFile(filepath.Join(directory, loginStoreFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := decodeLoginSessions(payload)
+	if err != nil || len(records) != 2 {
+		t.Fatalf("records lost: %v", err)
+	}
+	if err := store.Remove(first.Target()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenLoginStoreMigrating(directory, legacyDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Load(first.Target(), now); !errors.Is(err, ErrLoginRequired) {
+		t.Fatalf("logout resurrected: %v", err)
+	}
+	after, err := os.ReadFile(sourcePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("source changed")
+	}
+	info, err := os.Stat(filepath.Join(directory, loginStoreFileName))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("migration permissions")
+	}
+}
+
+func TestLoginStoreMigrationCanonicalAlwaysWins(t *testing.T) {
+	now := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	for _, scenario := range []string{"empty", "different-server", "expired", "malformed"} {
+		t.Run(scenario, func(t *testing.T) {
+			legacyDirectory := filepath.Join(t.TempDir(), "legacy")
+			legacy, err := OpenLoginStore(legacyDirectory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			login := loginStoreTestCredential(t, "runtime.test:9666", "alice", 1, now)
+			if err := legacy.Save(login); err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(t.TempDir(), "canonical")
+			canonical, err := OpenLoginStore(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "empty":
+				if err := canonical.Save(login); err != nil {
+					t.Fatal(err)
+				}
+				if err := canonical.Remove(login.Target()); err != nil {
+					t.Fatal(err)
+				}
+			case "different-server":
+				if err := canonical.Save(loginStoreTestCredential(t, "other.test:9666", "bob", 2, now)); err != nil {
+					t.Fatal(err)
+				}
+			case "expired":
+				if err := canonical.Save(loginStoreTestCredential(t, "runtime.test:9666", "alice", 2, now.Add(-24*time.Hour))); err != nil {
+					t.Fatal(err)
+				}
+			case "malformed":
+				if err := os.WriteFile(filepath.Join(directory, loginStoreFileName), []byte(`{"schema":"broken"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Existing valid canonical data must ignore even an incompatible source.
+			// A malformed canonical document must fail even with a valid source.
+			if scenario != "malformed" {
+				if err := os.WriteFile(filepath.Join(legacyDirectory, loginStoreFileName), []byte("invalid legacy data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			migrated, err := OpenLoginStoreMigrating(directory, legacyDirectory)
+			if scenario == "malformed" {
+				if err == nil {
+					t.Fatal("corrupt canonical hidden")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := migrated.Load(login.Target(), now); !errors.Is(err, ErrLoginRequired) {
+				t.Fatalf("canonical did not win: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoginStoreMigrationRejectsMalformedCompatibilityDocuments(t *testing.T) {
+	for _, payload := range []string{"garbage", `{"schema":"old","sessions":{}}`, `{"schema":"vibermate-runtime-server-logins-v1","sessions":null}`, `{"schema":"vibermate-runtime-server-logins-v1","sessions":{},"extra":true}`, `{"schema":"vibermate-runtime-server-logins-v1","sessions":{"http://bad:80":{}}}`} {
+		t.Run(payload, func(t *testing.T) {
+			legacy := t.TempDir()
+			if err := os.WriteFile(filepath.Join(legacy, loginStoreFileName), []byte(payload), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			canonical := filepath.Join(t.TempDir(), "canonical")
+			if _, err := OpenLoginStoreMigrating(canonical, legacy); err == nil {
+				t.Fatal("incompatible document accepted")
+			}
+			if _, err := os.Stat(filepath.Join(canonical, loginStoreFileName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed migration published a document: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoginStoreMigrationCanImportSourcePlacedAfterAbsentSourceOpen(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "canonical")
+	legacyDirectory := filepath.Join(t.TempDir(), "legacy")
+	if _, err := OpenLoginStoreMigrating(directory, legacyDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, loginStoreFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ordinary missing-source open initialized canonical document: %v", err)
+	}
+	now := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	legacy, err := OpenLoginStore(legacyDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := loginStoreTestCredential(t, "runtime.test:9666", "alice", 1, now)
+	if err := legacy.Save(login); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenLoginStoreMigrating(directory, legacyDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Load(login.Target(), now); err != nil {
+		t.Fatalf("source placed after ordinary open was not imported: %v", err)
+	}
 }

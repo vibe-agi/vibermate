@@ -311,11 +311,13 @@ func startWithBuilders(
 	if err != nil {
 		return fail("egress defaults", err)
 	}
+	nativeRevoker := &nativeRevocation{}
 	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
-		Repository:      storageResult.store.RuntimeUserRepository(),
-		Clock:           options.Clock,
-		Random:          securityRandom,
-		SessionLifetime: 30 * 24 * time.Hour,
+		AuthorityChanges: nativeRevoker,
+		Repository:       storageResult.store.RuntimeUserRepository(),
+		Clock:            options.Clock,
+		Random:           securityRandom,
+		SessionLifetime:  30 * 24 * time.Hour,
 	})
 	if err != nil {
 		return fail("Runtime User authority", err)
@@ -443,7 +445,6 @@ func startWithBuilders(
 		return fail("Capture activity projection", err)
 	}
 
-	nativeRevoker := &nativeRevocation{}
 	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
 		egressDefaults:       egressDefaults,
 		nativeRevocation:     nativeRevoker,
@@ -808,6 +809,22 @@ func startWithBuilders(
 		return fail("capture admission", err)
 	}
 
+	currentAuthority, ok := captureAdmissions.(captureadmission.CurrentAuthority)
+	if !ok {
+		return fail("retained capture authority", errors.New("current Capture authority unavailable"))
+	}
+	retained := captureadmission.NewRetained(ownerContext, currentAuthority, options.Clock.Now)
+	captureAdmissions = retained
+	nativeRevoker.installRetained(retained)
+	shutdownRetained := func(ctx context.Context) error {
+		err := retained.Shutdown(ctx)
+		if err != nil {
+			return errors.Join(err, retained.Shutdown(context.WithoutCancel(ctx)))
+		}
+		return nil
+	}
+	pending.register("retained capture authority", shutdownRetained)
+
 	// A blind tunnel dials through the same egress admission as every other
 	// outbound, so it cannot become the one path that ignores a planned hold.
 	blindTunnels, err := selectBlindTunnels(options, network)
@@ -905,11 +922,15 @@ func startWithBuilders(
 	}
 	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("Capture assignment drain", assignments.Drain)
+	cleanups.register("retained capture authority drain", shutdownRetained)
 	cleanups.register("loopback proxy drain", proxy.Drain)
 	cleanups.register("UDP finalization drain", udp.Drain)
 	cleanups.register("SOCKS proxy drain", socks.Drain)
 	cleanups.register("native MCP module", nativeTools.Close)
 	cleanups.register("provider transport", provider.Shutdown)
+	// LIFO: settle admitted rotations and their pending CAS before closing the
+	// provider transport; login shutdown first prevents further credential work.
+	cleanups.register("Codex OAuth credential manager", codexOAuth.Shutdown)
 	cleanups.register("Codex OAuth login manager", codexLogins.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)
@@ -949,6 +970,7 @@ func startWithBuilders(
 		udp.BeginShutdown()
 		return nil
 	})
+	cleanups.register("retained capture authority admission", func(context.Context) error { retained.BeginShutdown(); return nil })
 	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPObservations(), captureRuns, assignments, environments, options.Clock)
 	if err != nil {
 		return fail("ACP observations", err)

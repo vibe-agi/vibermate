@@ -6,15 +6,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestGitLaunchSnapshot(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
 		t.Skip("Git is not installed")
+	}
+	if runtime.GOOS == "darwin" {
+		// A fresh HOME makes Apple's /usr/bin/git shim initialize xcrun state,
+		// which can exceed the production optional-metadata budget. Exercise
+		// real Git directly, including the launcher's PATH lookup below.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "xcrun", "--find", "git").Output()
+		if err != nil {
+			t.Fatalf("resolve active developer Git: %v", err)
+		}
+		gitExecutable = strings.TrimSpace(string(output))
+		if !filepath.IsAbs(gitExecutable) {
+			t.Fatal("active developer Git path is not absolute")
+		}
+		t.Setenv("PATH", filepath.Dir(gitExecutable)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	root := filepath.Join(t.TempDir(), "example repo")
 	if err := os.MkdirAll(filepath.Join(root, "nested"), 0700); err != nil {
@@ -22,7 +41,7 @@ func TestGitLaunchSnapshot(t *testing.T) {
 	}
 	git := func(args ...string) {
 		t.Helper()
-		command := exec.Command("git", append([]string{"-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath=" + t.TempDir()}, args...)...)
+		command := exec.Command(gitExecutable, append([]string{"-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath=" + t.TempDir()}, args...)...)
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, output)
 		}

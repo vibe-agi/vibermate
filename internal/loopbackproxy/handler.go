@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -212,7 +213,10 @@ type rawEvidenceFailureReporter interface {
 }
 
 type operation struct {
-	connection net.Conn
+	retainedRelease func()
+	connection      net.Conn
+	cancel          context.CancelFunc
+	withdrawn       bool
 }
 
 type Handler struct {
@@ -332,6 +336,13 @@ func (handler *Handler) ServeHTTP(
 	defer handler.finish(active)
 	if request == nil {
 		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
+		return
+	}
+	// Every opening phase and attached transport has the same cancel owner.
+	operationContext, cancelOperation := context.WithCancel(request.Context())
+	defer cancelOperation()
+	request = request.WithContext(operationContext)
+	if !handler.attachCancellation(active, cancelOperation) {
 		return
 	}
 	// The host and the port are separate facts on the record. Writing the
@@ -472,6 +483,20 @@ func (handler *Handler) ServeHTTP(
 		terminal = true
 		writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 		return
+	}
+	if authority, ok := handler.admissions.(interface {
+		Retain(context.Context, captureadmission.Admission, func()) (func(), error)
+	}); ok {
+		release, retainErr := authority.Retain(request.Context(), admission, func() { handler.withdraw(active) })
+		// A failed final read may still own a registered subscription. Its
+		// rejection audit belongs to the same outer operation as successful ingress.
+		handler.mu.Lock()
+		active.retainedRelease = release
+		handler.mu.Unlock()
+		if retainErr != nil {
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
 	}
 	source := connectionSource(admission)
 	capture, err := admission.CaptureReference()
@@ -697,7 +722,7 @@ func (handler *Handler) ServeHTTP(
 	if err != nil {
 		return
 	}
-	counted = &countingConnection{Conn: connection}
+	counted = &countingConnection{Conn: &hijackedConnection{Conn: connection, reader: buffered.Reader}}
 	if !handler.attachConnection(active, counted) {
 		terminalEvidence.Outcome = connectionevent.OutcomeCanceled
 		terminalEvidence.ErrorClass = string(ReasonProxyStopping)
@@ -820,6 +845,21 @@ func (handler *Handler) serveTLS(
 	); err != nil {
 		return fmt.Errorf("record connected ConnectionEvent: %w", err)
 	}
+	// Serve/ServeConn can return while an inner HTTP handler is still unwinding.
+	// Close handler admission before waiting, so late server dispatch cannot race
+	// WaitGroup.Add. Connection/request leases and audit finish only after this join.
+	parent, cancelInner := context.WithCancel(parent)
+	var innerMu sync.Mutex
+	var innerClosing bool
+	var innerHandlers sync.WaitGroup
+	defer func() {
+		innerMu.Lock()
+		innerClosing = true
+		innerMu.Unlock()
+		cancelInner()
+		_ = secured.Close()
+		innerHandlers.Wait()
+	}()
 	listener := newSingleConnListener(secured)
 	inner := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return parent },
@@ -827,6 +867,14 @@ func (handler *Handler) serveTLS(
 			writer http.ResponseWriter,
 			request *http.Request,
 		) {
+			innerMu.Lock()
+			if innerClosing {
+				innerMu.Unlock()
+				return
+			}
+			innerHandlers.Add(1)
+			innerMu.Unlock()
+			defer innerHandlers.Done()
 			state := connectionState
 			request.TLS = &state
 			handler.serveInner(
@@ -880,6 +928,14 @@ func (handler *Handler) serveInner(
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
 ) {
+	if authority, ok := handler.admissions.(interface {
+		Revalidate(context.Context, captureadmission.Admission) (captureauthority.Validity, error)
+	}); ok {
+		if _, err := authority.Revalidate(request.Context(), admission); err != nil {
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
+	}
 	if connectionLease == nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
 		return
@@ -888,7 +944,8 @@ func (handler *Handler) serveInner(
 	secureRequest := request != nil && request.URL != nil &&
 		!request.URL.IsAbs() && request.TLS != nil
 	cleartextRequest := request != nil && request.URL != nil &&
-		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+		request.URL.IsAbs() && request.URL.Scheme == "http" &&
+		request.URL.Scheme == binding.ProviderOrigin.Scheme()
 	observed := &observedResponseWriter{ResponseWriter: writer}
 	reason := "rejected"
 	if handler.targetObserver != nil {
@@ -1637,6 +1694,29 @@ func protocolReasonCode(err error) string {
 	}
 }
 
+// hijackedConnection preserves bytes the HTTP server read past CONNECT.
+// Writes and deadlines still belong to the underlying connection.
+type hijackedConnection struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (connection *hijackedConnection) Read(destination []byte) (int, error) {
+	if connection.reader.Buffered() > 0 {
+		return connection.reader.Read(destination)
+	}
+	// Subsequent reads must bypass the HTTP server's reader: inner HTTP
+	// deadline cancellation must not cancel the outer CONNECT context.
+	return connection.Conn.Read(destination)
+}
+
+func (connection *hijackedConnection) CloseWrite() error {
+	if closer, ok := connection.Conn.(interface{ CloseWrite() error }); ok {
+		return closer.CloseWrite()
+	}
+	return nil
+}
+
 type countingConnection struct {
 	net.Conn
 	bytesRead    atomic.Uint64
@@ -1773,13 +1853,18 @@ func (handler *Handler) forwardToOriginalOrigin(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonOriginalEgressFailed, "")
 		return
 	}
+	origin, valid := plan.OriginalOperationOrigin()
+	if !valid {
+		writeReason(writer, http.StatusUnprocessableEntity, ReasonEnvironmentOperationUnsupported, "")
+		return
+	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
 		ResolvedEgress: resolved,
 		RequestID:      egressID,
 		ConnectionID:   connectionID,
 		ParentID:       requestID,
 		Kind:           kind,
-		Origin:         plan.Endpoint().ClientOrigin(),
+		Origin:         origin,
 		Method:         request.Method,
 		Path:           request.URL.Path,
 		RawQuery:       request.URL.RawQuery,
@@ -1818,8 +1903,14 @@ func (handler *Handler) begin() (*operation, error) {
 func (handler *Handler) finish(active *operation) {
 	handler.mu.Lock()
 	delete(handler.active, active)
+	release := active.retainedRelease
 	handler.signalLocked()
 	handler.mu.Unlock()
+	// This is the last ServeHTTP defer: socket, inner handlers, leases, and the
+	// connection terminal have all finished before an authority change can join.
+	if release != nil {
+		release()
+	}
 }
 
 func (handler *Handler) attachConnection(
@@ -1828,7 +1919,7 @@ func (handler *Handler) attachConnection(
 ) bool {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if !handler.accepting {
+	if !handler.accepting || active.withdrawn {
 		return false
 	}
 	if _, exists := handler.active[active]; !exists {
@@ -1836,6 +1927,35 @@ func (handler *Handler) attachConnection(
 	}
 	active.connection = connection
 	return true
+}
+
+// attachCancellation gives a raw HTTP forward the same shutdown owner as an
+// attached connection, including while it waits for an upload or a dial.
+func (handler *Handler) attachCancellation(active *operation, cancel context.CancelFunc) bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if !handler.accepting || active.withdrawn {
+		return false
+	}
+	if _, exists := handler.active[active]; !exists {
+		return false
+	}
+	active.cancel = cancel
+	return true
+}
+
+// withdraw fences later attachment under the same mutex used by shutdown.
+func (handler *Handler) withdraw(active *operation) {
+	handler.mu.Lock()
+	active.withdrawn = true
+	cancel, connection := active.cancel, active.connection
+	handler.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if connection != nil {
+		_ = connection.Close()
+	}
 }
 
 func (handler *Handler) BeginShutdown() {
@@ -1849,13 +1969,20 @@ func (handler *Handler) BeginShutdown() {
 	}
 	handler.accepting = false
 	connections := make([]net.Conn, 0, len(handler.active))
+	cancellations := make([]context.CancelFunc, 0, len(handler.active))
 	for active := range handler.active {
+		if active.cancel != nil {
+			cancellations = append(cancellations, active.cancel)
+		}
 		if active.connection != nil {
 			connections = append(connections, active.connection)
 		}
 	}
 	handler.signalLocked()
 	handler.mu.Unlock()
+	for _, cancel := range cancellations {
+		cancel()
+	}
 	for _, connection := range connections {
 		_ = connection.Close()
 	}
@@ -2023,14 +2150,34 @@ func canonicalCONNECTHost(host string) string {
 func authorityMatches(authority string, origin originidentity.ProviderOrigin) bool {
 	host, port, err := splitAuthority(authority)
 	if err != nil {
-		// HTTP/1.1 Host may omit the default HTTPS port after MITM.
-		host = strings.ToLower(authority)
-		port = 443
+		// Host may omit the destination scheme's default port, independently
+		// of whether the client reached the Runtime Server over TLS.
+		defaultPort := "443"
+		if origin.Scheme() == "http" {
+			defaultPort = "80"
+		}
+		host = authority
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = host[1 : len(host)-1]
+			address, parseErr := netip.ParseAddr(host)
+			if parseErr != nil || !address.Is6() {
+				return false
+			}
+		} else if strings.ContainsAny(host, ":[]") {
+			return false
+		}
+		host, port, err = splitAuthority(net.JoinHostPort(host, defaultPort))
+		if err != nil {
+			return false
+		}
 	}
 	return host == origin.Host() && port == origin.Port()
 }
 
 func requestScheme(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.IsAbs() {
+		return request.URL.Scheme
+	}
 	if request != nil && request.TLS != nil {
 		return "https"
 	}
@@ -2079,8 +2226,12 @@ func joinBodyCancellation(ctx context.Context, body io.Closer) func() {
 	if body == nil {
 		return func() {}
 	}
+	return joinCancellation(ctx, func() { _ = body.Close() })
+}
+
+func joinCancellation(ctx context.Context, cancel func()) func() {
 	closed := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { defer close(closed); _ = body.Close() })
+	stop := context.AfterFunc(ctx, func() { defer close(closed); cancel() })
 	return func() {
 		if !stop() {
 			<-closed
@@ -2598,6 +2749,7 @@ func (handler *Handler) serveBlindTunnel(
 		connectionTerminal.ErrorClass = egressErrorClass
 		return true
 	}
+	client = &hijackedConnection{Conn: client, reader: buffered.Reader}
 	if !handler.attachConnection(active, client) {
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 			blindTunnelTerminal(context.Canceled)
@@ -2613,7 +2765,7 @@ func (handler *Handler) serveBlindTunnel(
 		return true
 	}
 
-	result, err = blindtunnel.Copy(handler.ownerContext, client, upstream)
+	result, err = blindtunnel.Copy(request.Context(), client, upstream)
 	egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 		blindTunnelTerminal(err)
 	connectionTerminal.ErrorClass = egressErrorClass
@@ -2819,6 +2971,14 @@ func (handler *Handler) serveCleartextForward(
 	}
 	defer func() { handler.finishConnectionAudit(audit, connectionTerminal) }()
 
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	request = request.WithContext(ctx)
+	if !handler.attachCancellation(active, cancel) {
+		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass = blindTunnelTerminal(context.Canceled)
+		return true
+	}
+
 	resolved, err := handler.resolveBlindEgress(request.Context())
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2859,6 +3019,31 @@ func (handler *Handler) serveCleartextForward(
 		connectionTerminal.BytesUp = uint64(result.BytesOut)
 		connectionTerminal.BytesDown = uint64(result.BytesIn)
 	}()
+	var lease offlinehold.Lease
+	defer func() {
+		if lease != nil {
+			lease.Release()
+		}
+	}()
+	// Closing the upstream cannot unblock a read of an incomplete downstream
+	// upload, or a blocked downstream response write. Interrupt both directions
+	// before closing the body, whose Close can itself wait for a read to finish.
+	controller := http.NewResponseController(writer)
+	joinRequest := joinCancellation(ctx, func() {
+		_ = controller.SetReadDeadline(time.Now())
+		_ = controller.SetWriteDeadline(time.Now())
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+	})
+	defer func() {
+		// A server upload Close may drain unread bytes even after a dial
+		// failure. Keep cancellation armed until that synchronous I/O returns.
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+		joinRequest()
+	}()
 	upstream, lease, err := handler.blindTunnels.Dial(
 		request.Context(),
 		blindtunnel.DialRequest{
@@ -2880,11 +3065,28 @@ func (handler *Handler) serveCleartextForward(
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
-	defer lease.Release()
-	defer upstream.Close()
-	_ = active
+	joinUpstream := joinBodyCancellation(request.Context(), upstream)
+	defer func() {
+		_ = upstream.Close()
+		joinUpstream()
+	}()
 	// Count transport bytes, including HTTP framing, without retaining the body.
 	countedUpstream = &countingConnection{Conn: upstream}
+	if !handler.attachConnection(active, countedUpstream) {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(context.Canceled)
+		connectionTerminal.ErrorClass = egressErrorClass
+		return true
+	}
+	forwardFailure := func(err error, errorClass string) {
+		if request.Context().Err() != nil {
+			err = request.Context().Err()
+		}
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(err)
+		if egressErrorClass == blindTunnelFailureClass {
+			egressErrorClass = errorClass
+		}
+		connectionTerminal.ErrorClass = egressErrorClass
+	}
 
 	// Write in origin form and without hop-by-hop or proxy headers, so the
 	// origin sees an ordinary request and never a proxy credential.
@@ -2893,15 +3095,13 @@ func (handler *Handler) serveCleartextForward(
 	forwarded.Header = forwardableHeaders(request.Header)
 	forwarded.Host = request.URL.Host
 	if err := forwarded.Write(countedUpstream); err != nil {
-		egressErrorClass = "forward_write_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_write_failed")
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	response, err := http.ReadResponse(bufio.NewReader(countedUpstream), forwarded)
 	if err != nil {
-		egressErrorClass = "forward_read_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_read_failed")
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
@@ -2909,8 +3109,7 @@ func (handler *Handler) serveCleartextForward(
 	copyResponseHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
 	if _, err := io.Copy(writer, response.Body); err != nil {
-		egressErrorClass = "forward_response_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_response_failed")
 		return true
 	}
 	egressOutcome = egressaudit.OutcomeCompleted

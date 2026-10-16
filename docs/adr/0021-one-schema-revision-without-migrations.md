@@ -1,5 +1,13 @@
 # One schema revision, without migrations
 
+Current status (2026-10-16): the no-migrations restriction below is historical.
+The supported revision-1-to-revision-2 startup upgrade now preserves existing
+data through a verified private snapshot and a transactional database upgrade.
+See the current [upgrade and private rollback contract](../deployment.md#private-rollback-snapshots).
+Unsupported or unrecognized schemas still fail closed. This clarification
+records the implemented behavior; it introduces no new schema or migration.
+The original decision follows unchanged.
+
 The Runtime database has one schema, `internal/runtimepersistence/schema.sql`,
 identified by the integer `schemaRevision`. A new data directory is created
 at that revision. A file with any other revision, or one that is not a

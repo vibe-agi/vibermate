@@ -137,9 +137,11 @@ func TestLaunchReviewChecksClientDestinationBeforeAssignment(t *testing.T) {
 		facts  clienttarget.EnvironmentFacts
 		want   error
 	}{
-		{"ChatGPT login needs its own flow", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{}, captureassignment.ErrClientTargetNotConfigured},
-		{"API key matches OpenAI API", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{OpenAIAPIKeyPresent: true}, nil},
-		{"ChatGPT login matches ChatGPT", "https://chatgpt.com", "codex-cli", clienttarget.EnvironmentFacts{}, nil},
+		{"explicit ChatGPT target needs its own flow", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://chatgpt.com/backend-api/codex"}, captureassignment.ErrClientTargetNotConfigured},
+		{"explicit OpenAI API target matches flow", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{OpenAIBaseURL: "https://api.openai.com", OpenAIAPIKeyPresent: true}, nil},
+		{"explicit ChatGPT target matches flow", "https://chatgpt.com", "codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://chatgpt.com/backend-api/codex"}, nil},
+		{"unknown native target retains API authority", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{}, nil},
+		{"exported API key leaves native target unknown", "https://chatgpt.com", "codex-cli", clienttarget.EnvironmentFacts{OpenAIAPIKeyPresent: true}, nil},
 		{"invalid base URL", "https://api.openai.com", "codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://user:password@example.invalid"}, clienttarget.ErrInvalidTarget},
 		{"generic client has no inferred target", "https://api.openai.com", "", clienttarget.EnvironmentFacts{}, nil},
 	} {

@@ -22,14 +22,13 @@ const (
 	codexClientID  = "codex-cli"
 
 	defaultAnthropicOrigin = "https://api.anthropic.com"
-	defaultOpenAIOrigin    = "https://api.openai.com/v1"
 	defaultChatGPTOrigin   = "https://chatgpt.com/backend-api/codex"
 )
 
-// EnvironmentFacts is the complete allowlist of ambient values that can
-// affect where a supported client sends model traffic. Credential values are
-// intentionally absent; only the presence bits needed for Codex's documented
-// default-origin choice cross the control seam.
+// EnvironmentFacts contains the supported non-secret ambient target inputs.
+// Native persisted provider and login choices are not inspected. Credentials are
+// intentionally absent. Key-presence bits are retained for wire compatibility;
+// they do not establish Codex's native authentication or destination selection.
 type EnvironmentFacts struct {
 	AnthropicBaseURL    string
 	CodexBaseURL        string
@@ -103,9 +102,9 @@ func NewProfile(clientID string, facts EnvironmentFacts) (Profile, error) {
 
 func (profile Profile) Empty() bool { return profile.clientID == "" }
 
-// Resolve applies the frozen Environment launch overlay and returns the one
-// actual origin the verified client will use plus the canonical Client Flow
-// whose protocol contract parses it.
+// Resolve applies the frozen Environment launch overlay and returns an
+// established target plus its canonical Client Flow. Native Codex defaults
+// remain unavailable because persisted login and provider choices are opaque.
 func (profile Profile) Resolve(
 	set map[string]string,
 	deleteKeys []string,
@@ -132,11 +131,9 @@ func (profile Profile) Resolve(
 			actualRaw = facts.OpenAIBaseURL
 		}
 		if actualRaw == "" {
-			if facts.CodexAPIKeyPresent || facts.OpenAIAPIKeyPresent {
-				actualRaw = defaultOpenAIOrigin
-			} else {
-				actualRaw = defaultChatGPTOrigin
-			}
+			// Stored login and provider configuration remain native-client owned.
+			// Keep the Environment's declared boundary until a request arrives.
+			return Target{}, false, nil
 		}
 		canonicalRaw = "https://api.openai.com"
 		normalized, err := parseActual(actualRaw)

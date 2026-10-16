@@ -14,6 +14,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -296,7 +297,7 @@ func runFirstLoginAuxCase(t *testing.T, choice, edge string) {
 		targets := f.gate.PendingProbeTargets()
 		want := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS,
 			TargetRef: "https://auth.openai.com", NetworkOrigin: "https://auth.openai.com", HTTPAuthority: "auth.openai.com",
-			TLSServerName: "auth.openai.com", EgressPolicy: expected.Profile().Policy}
+			TLSServerName: "auth.openai.com", EgressPolicy: expected.Profile().Policy, TargetAccess: egressnetwork.TargetAccessOwnerConfigured}
 		if err != nil || status.State != "exchanging" || len(targets) != 1 || targets[0] != want || f.network.dns.Load() != 0 {
 			t.Fatalf("actual Login frozen queue status=%s err=%v targets=%+v want=%+v", status.State, err, targets, want)
 		}

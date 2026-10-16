@@ -17,9 +17,10 @@ type probeDialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
 }
 
-// TLSProber performs the sole no-prompt connectivity check for frozen
+// TLSProber performs the no-prompt connectivity check for frozen
 // original-origin opaque and auxiliary requests while normal admission stays
-// closed. It sends no HTTP request and uses no credential.
+// closed. HTTPS verifies TLS; supported HTTP verifies only a private TCP peer.
+// It sends no HTTP request and uses no credential.
 type TLSProber struct {
 	dialers egressDialerBuilder
 	roots   *x509.CertPool
@@ -96,8 +97,13 @@ func (prober *TLSProber) Probe(
 		)
 	}
 	for _, reference := range request.Targets {
+		probeContext := ctx
 		switch reference.Kind {
 		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
+			if reference.TargetAccess != egressnetwork.TargetAccessPublicOnly && reference.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("original probe target access is missing or invalid"))
+			}
+			probeContext = egressnetwork.WithTargetAccess(ctx, reference.TargetAccess)
 		case offlinehold.EgressUpdate:
 			if reference.NetworkOrigin != "https://api.github.com" {
 				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("update probe origin is not the closed release source"))
@@ -120,20 +126,27 @@ func (prober *TLSProber) Probe(
 				errors.New("original-origin probe unexpectedly contains a routed plan identity"),
 			)
 		}
-		origin, err := originidentity.ParseClientOrigin(reference.NetworkOrigin)
-		if err != nil {
-			return offlinehold.NewProbeFailure(
-				offlinehold.ProbeReasonFailed,
-				err,
-			)
+		origin, err := originidentity.ParseProviderOrigin(reference.NetworkOrigin)
+		if err != nil || origin.BasePath() != "" {
+			return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("original probe origin is invalid"))
 		}
 		if origin.HTTPAuthority() != reference.HTTPAuthority ||
-			origin.Host() != reference.TLSServerName ||
 			origin.String() != reference.TargetRef {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
 				errors.New("original-origin probe network identities disagree"),
 			)
+		}
+		expectedTransport := offlinehold.ProbeTransportStrictTLS
+		expectedServerName := origin.Host()
+		switch origin.Transport() {
+		case originidentity.ProviderTransportLoopbackCleartext:
+			expectedTransport, expectedServerName = offlinehold.ProbeTransportLoopbackCleartext, ""
+		case originidentity.ProviderTransportPrivateCleartext:
+			expectedTransport, expectedServerName = offlinehold.ProbeTransportPrivateCleartext, ""
+		}
+		if reference.Transport != expectedTransport || reference.TLSServerName != expectedServerName {
+			return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("original probe transport identities disagree"))
 		}
 		egressPolicy, err := reference.EgressPolicy.Normalize()
 		if err != nil {
@@ -142,6 +155,9 @@ func (prober *TLSProber) Probe(
 				err,
 			)
 		}
+		if origin.Scheme() == "http" && egressPolicy.Proxy.Kind != egressnetwork.ProxyDirect {
+			return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("cleartext original probe cannot use a secondary proxy"))
+		}
 		dialer, err := prober.dialers.Dialer(egressPolicy)
 		if err != nil {
 			return offlinehold.NewProbeFailure(
@@ -149,7 +165,7 @@ func (prober *TLSProber) Probe(
 				err,
 			)
 		}
-		targetContext, cancel := context.WithTimeout(ctx, prober.timeout)
+		targetContext, cancel := context.WithTimeout(probeContext, prober.timeout)
 		raw, err := dialer.DialContext(
 			targetContext,
 			"tcp",
@@ -161,6 +177,18 @@ func (prober *TLSProber) Probe(
 				probeFailureReason(err),
 				err,
 			)
+		}
+		if origin.Scheme() == "http" {
+			peerErr := validateCleartextPeer(raw.RemoteAddr(), origin)
+			closeErr := raw.Close()
+			cancel()
+			if peerErr != nil {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, peerErr)
+			}
+			if closeErr != nil {
+				return offlinehold.NewProbeFailure(probeFailureReason(closeErr), closeErr)
+			}
+			continue
 		}
 		deadline, available := targetContext.Deadline()
 		if !available {

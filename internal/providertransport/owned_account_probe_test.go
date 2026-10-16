@@ -103,7 +103,7 @@ func TestOwnedAccountProbeClosedProducerAndConcreteTLSReachability(t *testing.T)
 		for _, operation := range []string{upstreamservice.CodexRateLimits, upstreamservice.CodexUsageHistory, upstreamservice.CodexResetCreditDetails, "reset"} {
 			t.Run(origin+"/"+operation, func(t *testing.T) {
 				spec := newSpec(origin, operation)
-				target, err := client.runtimeProbeTarget(spec)
+				target, err := client.runtimeProbeTarget(t.Context(), spec)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -111,9 +111,18 @@ func TestOwnedAccountProbeClosedProducerAndConcreteTLSReachability(t *testing.T)
 				if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}}); err != nil {
 					t.Fatalf("closed owned producer cannot reach concrete TLS probe: %v target=%+v", err, target)
 				}
-				if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://chatgpt.com" || target.NetworkOrigin != "https://chatgpt.com" || target.HTTPAuthority != "chatgpt.com" || target.TLSServerName != "chatgpt.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != 0 || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
+				if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://chatgpt.com" || target.NetworkOrigin != "https://chatgpt.com" || target.HTTPAuthority != "chatgpt.com" || target.TLSServerName != "chatgpt.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
 					t.Fatal("owned probe changed exit/identity or sent application bytes", target)
 				}
+				restricted, err := client.runtimeProbeTarget(egressnetwork.WithTargetAccess(t.Context(), egressnetwork.TargetAccessPublicOnly), spec)
+				if err != nil || restricted.TargetAccess != egressnetwork.TargetAccessPublicOnly {
+					t.Fatalf("restricted producer lost access: %+v %v", restricted, err)
+				}
+				physicalBefore := calls.Load()
+				if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{restricted}}); err == nil || calls.Load() != physicalBefore || network.direct.Load() != 0 || httpCalls.Load() != 0 {
+					t.Fatalf("restricted auxiliary probe escaped: err=%v proxy_dials=%d", err, calls.Load()-physicalBefore)
+				}
+
 			})
 		}
 	}
@@ -183,7 +192,7 @@ func TestOwnedAccountProbeClosedProducerAndConcreteTLSReachability(t *testing.T)
 					spec.body = []byte(`{"credit_id":"credit-probe","redeem_request_id":"8a4e4309-657f-543e-bd9a-673f797a0fa8","extra":true}`)
 				}
 				before := calls.Load()
-				target, producerErr := client.runtimeProbeTarget(spec)
+				target, producerErr := client.runtimeProbeTarget(t.Context(), spec)
 				if edge == "route-purpose" {
 					if producerErr == nil && (target.PlanRevision == 0 || target.PlanDigest == "" || prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}}) == nil) {
 						t.Error("captured route purpose gained owned reachability exception")

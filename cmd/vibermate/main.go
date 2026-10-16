@@ -126,13 +126,16 @@ func executeContext(
 		if err != nil {
 			return 2, keyUsage
 		}
+		if status.doctor {
+			return executeDoctor(ctx, status, environment, stdout)
+		}
 		if status.server.Valid() {
 			stateDirectory, pathErr := clientpath.DefaultRemoteStateDirectory()
 			if pathErr != nil {
 				return 1, keyRuntimePath
 			}
 			return executeRemoteStatus(
-				ctx, status.doctor, environment, stdout,
+				ctx, environment, stdout,
 				status.server, stateDirectory, commandClock{},
 			)
 		}
@@ -278,6 +281,20 @@ func executeContext(
 	if errors.Is(err, context.Canceled) {
 		return 130, ""
 	}
+	var probeFailure *runlauncher.CodexProbeFailure
+	if errors.As(err, &probeFailure) {
+		_ = renderCLIMessage(environment, stderr, "cli.error.codexProbeFailureDetail", map[string]string{"details": probeFailure.SafeSummary()})
+	}
+	var controlFailure *runlauncher.ControlFailure
+	if errors.As(err, &controlFailure) {
+		catalogs, catalogErr := locales.New()
+		if catalogErr == nil {
+			message, renderErr := catalogs.Render(locales.Detect(environment), "cli.error.controlFailureDetail", map[string]string{"details": controlFailure.SafeSummary()})
+			if renderErr == nil {
+				_, _ = fmt.Fprintln(stderr, message)
+			}
+		}
+	}
 	if acp != nil {
 		if errors.Is(err, runlauncher.ErrACPUnavailable) {
 			return max(code, 1), "cli.error.acpUnavailable"
@@ -290,6 +307,10 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	var probeFailure *runlauncher.CodexProbeFailure
+	if errors.As(err, &probeFailure) {
+		return "cli.error.codexProbeFailed"
+	}
 	if errors.Is(err, runlauncher.ErrCodexIsolationUnsupported) {
 		return "cli.error.codexIsolationUnsupported"
 	}

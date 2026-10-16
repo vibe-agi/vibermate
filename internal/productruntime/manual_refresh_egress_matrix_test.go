@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -205,7 +206,7 @@ func runManualAuxCase(t *testing.T, choice, edge string) {
 		targets := f.gate.PendingProbeTargets()
 		want := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS,
 			TargetRef: "https://auth.openai.com", NetworkOrigin: "https://auth.openai.com", HTTPAuthority: "auth.openai.com",
-			TLSServerName: "auth.openai.com", EgressPolicy: expected.Profile().Policy}
+			TLSServerName: "auth.openai.com", EgressPolicy: expected.Profile().Policy, TargetAccess: egressnetwork.TargetAccessOwnerConfigured}
 		if len(targets) != 1 || targets[0] != want {
 			t.Fatalf("manual frozen queue got=%+v want=%+v", targets, want)
 		}

@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
 
 const maxControlResponseBytes = 128 << 10
@@ -60,14 +61,45 @@ func (client *controlClient) checkLocalRootTrust(ctx context.Context) error {
 type ControlFailure struct {
 	Status     int
 	ReasonCode capturecontrol.ReasonCode
+	Stage      string
+}
+
+// SafeSummary contains only bounded protocol metadata and locally chosen stages.
+// Never interpolate server titles, unknown codes, headers or transport errors.
+func (failure *ControlFailure) SafeSummary() string {
+	status := failure.Status
+	if status < 100 || status > 599 {
+		status = 0
+	}
+	stage := "control"
+	switch failure.Stage {
+	case "capture_create", "session_check":
+		stage = failure.Stage
+	}
+	return fmt.Sprintf("stage=%s status=%d reason=%s", stage, status, safeControlReason(failure.ReasonCode))
 }
 
 func (failure *ControlFailure) Error() string {
-	return fmt.Sprintf(
-		"local control request failed with status %d and reason %s",
-		failure.Status,
-		failure.ReasonCode,
-	)
+	return "control request failed: " + failure.SafeSummary()
+}
+
+func safeControlReason(reason capturecontrol.ReasonCode) capturecontrol.ReasonCode {
+	switch reason {
+	case capturecontrol.ReasonControlPrincipalUnauthorized,
+		capturecontrol.ReasonCaptureGrantNotAllowed, capturecontrol.ReasonInvalidCaptureRun,
+		capturecontrol.ReasonAdapterVerification, capturecontrol.ReasonEnvironmentNotFound,
+		capturecontrol.ReasonEnvironmentUnavailable, capturecontrol.ReasonEnvironmentNotAllowed,
+		capturecontrol.ReasonProjectionUnavailable, capturecontrol.ReasonCaptureRunCreate,
+		capturecontrol.ReasonWorkspaceUnavailable, capturecontrol.ReasonInvalidManualCapture,
+		capturecontrol.ReasonManualCaptureNotFound, capturecontrol.ReasonManualCaptureConflict,
+		capturecontrol.ReasonManualCaptureUnavailable, capturecontrol.ReasonRunCapabilityRejected,
+		capturecontrol.ReasonRunControlUnavailable, capturecontrol.ReasonInvalidProcess,
+		capturecontrol.ReasonInvalidRoute, capturecontrol.ReasonClientTargetNotConfigured,
+		capturecontrol.ReasonClientTargetInvalid:
+		return reason
+	default:
+		return "unknown"
+	}
 }
 
 type controlClient struct {
@@ -338,14 +370,27 @@ func (client *controlClient) jsonRequest(
 		response.Body,
 		maxControlResponseBytes+1,
 	))
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("read %s control response: %w", client.description, ctx.Err())
+	}
+	if response.StatusCode != wantStatus {
+		if err != nil || len(payload) > maxControlResponseBytes {
+			payload = nil
+		}
+		failure := decodeControlFailure(response.StatusCode, payload).(*ControlFailure)
+		switch {
+		case method == http.MethodPost && path == "/api/v1/capture-runs":
+			failure.Stage = "capture_create"
+		case method == http.MethodGet && path == servercontrol.RuntimeUserCurrentSessionPath:
+			failure.Stage = "session_check"
+		}
+		return failure
+	}
 	if err != nil {
 		return fmt.Errorf("read %s control response: %w", client.description, err)
 	}
 	if len(payload) > maxControlResponseBytes {
 		return fmt.Errorf("%s control response exceeds the size limit", client.description)
-	}
-	if response.StatusCode != wantStatus {
-		return decodeControlFailure(response.StatusCode, payload)
 	}
 	if output == nil {
 		if len(bytes.TrimSpace(payload)) != 0 {
@@ -385,10 +430,11 @@ func decodeControlFailure(status int, payload []byte) error {
 		// incomplete body. No untrusted error content is copied into diagnostics.
 		return &ControlFailure{Status: status, ReasonCode: "invalid_control_error_response"}
 	}
-	return &ControlFailure{
-		Status:     status,
-		ReasonCode: problem.Code,
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return &ControlFailure{Status: status, ReasonCode: "unknown"}
 	}
+	return &ControlFailure{Status: status, ReasonCode: safeControlReason(problem.Code)}
 }
 
 func retryableControlFailure(err error) bool {

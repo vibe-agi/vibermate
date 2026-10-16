@@ -328,3 +328,24 @@ func TestIndependentPinStoresMergeFirstUseForDifferentServers(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyTrustAcceptsSystemRootsWithoutEnrolling(t *testing.T) {
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	root, key := newTestCertificateAuthority(t, now)
+	leaf := newTestServerCertificate(t, root, key, now, "runtime.example.test", 12)
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	directory := filepath.Join(t.TempDir(), "trust")
+	store, err := OpenPinStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, _ := ParseAddress("runtime.example.test:9666")
+	result, err := store.VerifyPeerReadOnly(address, [][]byte{leaf.Raw}, now, roots)
+	if err != nil || result.Mode != TrustModeSystemRoots || result.FirstUse {
+		t.Fatalf("read-only public PKI: result=%+v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, pinFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only verification enrolled trust: %v", err)
+	}
+}

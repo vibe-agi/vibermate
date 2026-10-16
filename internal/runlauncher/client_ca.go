@@ -3,6 +3,7 @@ package runlauncher
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -12,7 +13,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/servertransport"
 )
@@ -24,13 +24,21 @@ func RemoteRootCertificate(ctx context.Context, config RemoteConfig, timeout tim
 	if ctx == nil || !config.Target.Valid() || config.Clock == nil || timeout <= 0 || !filepath.IsAbs(config.StateDirectory) || filepath.Clean(config.StateDirectory) != config.StateDirectory {
 		return material, errors.New("CA connection is incomplete")
 	}
-	store, err := serverconnection.OpenLoginStore(filepath.Join(config.StateDirectory, "login"))
+	store, err := openRemoteLoginStore(config.StateDirectory)
 	if err != nil {
 		return material, err
 	}
 	login, err := store.Load(config.Target, config.Clock.Now().UTC())
 	if err != nil {
 		return material, errors.Join(ErrRemoteLoginRequired, err)
+	}
+	random := config.Random
+	if random == nil {
+		random = rand.Reader
+	}
+	machineID, err := remoteLoginMachine(ctx, config.StateDirectory, random, config.Clock.Now())
+	if err != nil {
+		return material, err
 	}
 	transport, err := servertransport.Open(servertransport.Options{Target: config.Target, TrustDirectory: filepath.Join(config.StateDirectory, "trust"), Clock: config.Clock, Timeout: timeout})
 	if err != nil {
@@ -42,6 +50,9 @@ func RemoteRootCertificate(ctx context.Context, config RemoteConfig, timeout tim
 		return material, err
 	}
 	defer client.close()
+	if _, err := authenticateRemoteLogin(ctx, client, login, machineID); err != nil {
+		return material, err
+	}
 	if err := client.jsonRequest(ctx, http.MethodGet, servercontrol.RuntimeRootCAPath, client.credential, "", nil, http.StatusOK, &material); err != nil {
 		return material, err
 	}

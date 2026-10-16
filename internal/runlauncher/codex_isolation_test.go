@@ -217,8 +217,7 @@ func TestCodexCaptureIsolationPreparesArguments(t *testing.T) {
 func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 	client := codexHelpFixture(t, "printf 'codex-cli 0.145.0\\nOptions:\\n'\n")
 	original := []string{"resume", "thread"}
-	prepared := []string{"--config", `model_provider="openai"`, "--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
-		"--config", "features.responses_websockets=false", "--disable", "enable_request_compression", "resume", "thread"}
+	prepared := []string{"--config", "features.responses_websockets=false", "--disable", "enable_request_compression", "resume", "thread"}
 	got, err := prepareCodexCaptureArguments(context.Background(), "/not/executed", original, prepared, nil, true)
 	if err != nil || !slices.Equal(got, prepared) {
 		t.Fatalf("verified legacy recipe rejected: %v %v", got, err)
@@ -228,7 +227,7 @@ func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 		legacy   bool
 	}{
 		{prepared, false}, {original, true}, {append([]string{"--config", "foo=bar"}, original...), true},
-		{prepared[2:], true}, {append(slices.Clone(prepared[:8]), "fork", "thread"), true},
+		{prepared[2:], true}, {append(slices.Clone(prepared[:4]), "fork", "thread"), true},
 	} {
 		if _, err := prepareCodexCaptureArguments(context.Background(), client, original, test.prepared, nil, test.legacy); !errors.Is(err, ErrCodexIsolationUnsupported) {
 			t.Errorf("legacy precondition missing: %v legacy=%v err=%v", test.prepared, test.legacy, err)
@@ -238,17 +237,16 @@ func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 
 func TestCodexHelpBound(t *testing.T) {
 	for _, script := range []string{
-		"sleep 5\n",
-		"trap '' TERM\nwhile :; do printf '012345678901234567890123456789\\n'; done\n",
+		"sleep 3\ntrap '' TERM\nwhile :; do printf '012345678901234567890123456789\\n'; done\n",
 		"(trap '' TERM; sleep 5) &\nprintf '      --no-daemon\\n'\nexit 0\n",
 		"printf '      --no-daemon\\n'; exit 7\n",
 		"printf 'example prompt contains --no-daemon but no option declaration\\n'\n",
 	} {
-		client := codexHelpFixture(t, script)
-		start := time.Now()
-		_, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, nil, false)
-		if !errors.Is(err, ErrCodexIsolationUnsupported) || time.Since(start) > 2500*time.Millisecond {
-			t.Errorf("unbounded/accepted help: elapsed=%v err=%v", time.Since(start), err)
+		err := runReadyCodexHelp(t, script, nil)
+		var failure *CodexProbeFailure
+		wantUnsupported := strings.HasPrefix(script, "printf 'example prompt")
+		if (wantUnsupported && !errors.Is(err, ErrCodexIsolationUnsupported)) || (!wantUnsupported && !errors.As(err, &failure)) {
+			t.Errorf("accepted/incorrect help outcome: err=%v", err)
 		}
 		if err != nil && strings.Contains(err.Error(), "example prompt") {
 			t.Fatal("raw help leaked into error")
@@ -271,7 +269,8 @@ printf '      --no-daemon\n'
 	}
 	// Each stream is under 64 KiB; together they exceed the shared cap.
 	client = codexHelpFixture(t, "printf '      --no-daemon\\n'\nhead -c 40000 /dev/zero\nhead -c 40000 /dev/zero >&2\n")
-	if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.Is(err, ErrCodexIsolationUnsupported) {
+	var failure *CodexProbeFailure
+	if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.As(err, &failure) || failure.Reason != "output_limit" {
 		t.Fatalf("combined output limit ignored: %v", err)
 	}
 }
@@ -289,13 +288,9 @@ func TestCodexHelpBoundReapsProbeAndPipeHoldingDescendants(t *testing.T) {
 		} else {
 			script += "printf '      --no-daemon\\n'\nexit 0\n"
 		}
-		client := codexHelpFixture(t, script)
-		start := time.Now()
-		if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.Is(err, ErrCodexIsolationUnsupported) {
+		var failure *CodexProbeFailure
+		if err := runReadyCodexHelp(t, script, []string{"PATH=/usr/bin:/bin"}); !errors.As(err, &failure) {
 			t.Fatalf("unbounded probe accepted: %v", err)
-		}
-		if time.Since(start) > 2500*time.Millisecond {
-			t.Fatal("probe cleanup exceeded its bound")
 		}
 		for _, path := range []string{parentPath, descendantPath} {
 			data, err := os.ReadFile(path)
@@ -320,4 +315,48 @@ func TestCodexHelpBoundReapsProbeAndPipeHoldingDescendants(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Startup has the production 30s allowance. Once the shell is ready to emit
+// help/overflow or exit, pipe/process cleanup must still finish promptly.
+func runReadyCodexHelp(t *testing.T, script string, environment []string) error {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "probe-ready")
+	startup := ""
+	if rest, ok := strings.CutPrefix(script, "sleep 3\n"); ok {
+		startup, script = "sleep 3\n", rest
+	}
+	client := codexHelpFixture(t, startup+"printf ready > "+strconv.Quote(ready)+"\n"+script)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := prepareCodexCaptureArguments(ctx, client, nil, nil, environment, false); done <- err }()
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			if _, statErr := os.Stat(ready); statErr != nil {
+				t.Fatalf("probe never became ready: %v", err)
+			}
+			return err
+		case <-ctx.Done():
+			t.Fatal("probe startup exceeded 30s")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2500 * time.Millisecond):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("probe did not join after cancellation")
+		}
+		t.Fatal("probe cleanup exceeded 2.5s after readiness")
+	}
+	return nil
 }

@@ -149,9 +149,6 @@ func buildEnvironment(
 			grant.ProxyDelivery != capturecontrol.ProxyDeliveryLocalListener {
 			preserved["CODEX_CA_CERTIFICATE"] = grant.RootPEMPath
 		}
-		if managedClientCredential && grant.NativeToolLogin == nil {
-			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
-		}
 	default:
 		return nil, errors.New("CaptureRun launch recipe is unsupported")
 	}
@@ -186,12 +183,18 @@ func environmentManaged(
 	if _, managed := managedEnvironment[normalizedKey]; managed {
 		return true
 	}
-	if !managedClientCredential {
+	if recipe == clientadapter.LaunchCodexResponsesHTTP {
+		// Transport trust belongs to the verified recipe, independently of
+		// whether native auth and provider configuration establish a target.
+		// Credentials, provider routing and account inputs remain Codex-owned.
+		switch normalizedKey {
+		case "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE":
+			return true
+		}
 		return false
 	}
-	if recipe == clientadapter.LaunchCodexResponsesHTTP {
-		_, managed := codexManagedEnvironment[normalizedKey]
-		return managed
+	if !managedClientCredential {
+		return false
 	}
 	if recipe == clientadapter.LaunchNodeEnvProxy {
 		_, managed := claudeManagedEnvironment[normalizedKey]
@@ -234,9 +237,8 @@ func clientTargetAuthority(base []string, clientID string) (string, bool) {
 			rawOrigin = "https://api.anthropic.com"
 		}
 	case "codex-cli":
-		// The same answer the launch recipe writes into the child's provider
-		// configuration, so the managed-credential decision cannot be made for a
-		// host the child never contacts.
+		// Only explicit supported base URLs establish a target here. Native
+		// login and provider defaults remain unknown to the launcher.
 		origin, err := codexOrigin(base)
 		if err != nil {
 			return "", false

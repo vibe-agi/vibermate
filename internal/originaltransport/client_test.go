@@ -38,7 +38,7 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		t.Fatal(err)
 	}
 	defer shutdownClient(t, client)
-	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseProviderOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func originalRequest(
 	kind offlinehold.EgressKind,
 ) originaltransport.Request {
 	t.Helper()
-	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseProviderOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}

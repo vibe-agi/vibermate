@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -103,4 +104,14 @@ func (client *Client) Close() {
 	if client != nil && client.transport != nil {
 		client.transport.CloseIdleConnections()
 	}
+}
+
+// Dial opens a raw stream to this client's pinned literal IPv4 loopback origin.
+// It uses the same direct dial policy as Do. The caller owns and must close the
+// returned stream; Client.Close only releases pooled HTTP connections.
+func (client *Client) Dial(ctx context.Context) (net.Conn, error) {
+	if client == nil || client.transport == nil || ctx == nil {
+		return nil, errors.New("loopback client and context are required")
+	}
+	return client.transport.DialContext(ctx, "tcp4", strings.TrimPrefix(client.origin, "http://"))
 }

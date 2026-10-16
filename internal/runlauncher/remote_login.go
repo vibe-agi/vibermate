@@ -3,6 +3,7 @@ package runlauncher
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,12 +95,16 @@ func InspectRemote(
 	clock RemoteClock,
 	timeout time.Duration,
 ) (RemoteInspection, error) {
+	return inspectRemote(ctx, target, stateDirectory, clock, timeout, false)
+}
+
+func inspectRemote(ctx context.Context, target serverconnection.Target, stateDirectory string, clock RemoteClock, timeout time.Duration, readOnlyTrust bool) (RemoteInspection, error) {
 	if ctx == nil || !target.Valid() || stateDirectory == "" ||
 		!filepath.IsAbs(stateDirectory) || filepath.Clean(stateDirectory) != stateDirectory ||
 		clock == nil || timeout <= 0 {
 		return RemoteInspection{}, errors.New("remote Runtime inspection is incomplete")
 	}
-	loginStore, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
+	loginStore, err := openRemoteLoginStore(stateDirectory)
 	if err != nil {
 		return RemoteInspection{}, err
 	}
@@ -110,12 +115,16 @@ func InspectRemote(
 		}
 		return RemoteInspection{}, err
 	}
+	machineID, err := remoteLoginMachine(ctx, stateDirectory, rand.Reader, clock.Now())
+	if err != nil {
+		return RemoteInspection{}, err
+	}
 	transport, err := servertransport.Open(servertransport.Options{
 		Target: target, TrustDirectory: filepath.Join(stateDirectory, "trust"),
-		Clock: clock, Timeout: timeout,
+		Clock: clock, Timeout: timeout, ReadOnlyTrust: readOnlyTrust,
 	})
 	if err != nil {
-		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+		return RemoteInspection{}, fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
 	}
 	client, err := newRemoteControlClient(
 		target.Origin(), login.SessionToken().Value(), transport, transport.Close,
@@ -125,23 +134,12 @@ func InspectRemote(
 		return RemoteInspection{}, err
 	}
 	defer client.close()
-	var current servercontrol.RuntimeUserCurrentSession
-	if err := client.jsonRequest(
-		ctx, http.MethodGet, servercontrol.RuntimeUserCurrentSessionPath,
-		client.credential, "", nil, http.StatusOK, &current,
-	); err != nil {
-		var failure *ControlFailure
-		if errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
-			return RemoteInspection{}, ErrRemoteLoginRequired
+	current, err := authenticateRemoteLogin(ctx, client, login, machineID)
+	if err != nil {
+		if errors.Is(err, ErrRemoteLoginRequired) {
+			return RemoteInspection{}, err
 		}
-		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
-	}
-	if current.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
-		current.APIVersion != "v1" || current.InstanceID != login.InstanceID() ||
-		!productbuild.Valid(current.ProductBuild) ||
-		current.User.ID != login.UserID() || current.User.Username != login.Username() ||
-		current.SessionID != login.SessionID() {
-		return RemoteInspection{}, ErrRemoteLoginRequired
+		return RemoteInspection{}, fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
 	}
 	return RemoteInspection{
 		Origin: target.Origin(), InstanceID: current.InstanceID, APIVersion: current.APIVersion,
@@ -208,7 +206,7 @@ func LoginRemote(
 	if err != nil {
 		return RemoteLoginResult{}, errors.New("Runtime Server login response is invalid")
 	}
-	store, err := serverconnection.OpenLoginStore(filepath.Join(config.StateDirectory, "login"))
+	store, err := openRemoteLoginStore(config.StateDirectory)
 	if err != nil {
 		return RemoteLoginResult{}, err
 	}

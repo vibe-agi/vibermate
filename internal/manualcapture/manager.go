@@ -226,11 +226,12 @@ func (manager *Manager) Rotate(
 		credentialDigest(credentialValue),
 		manager.now(),
 	)
+	changeErr := manager.notifyAuthorityChange(operation, command.ID.String())
 	if err != nil {
-		return Grant{}, err
+		return Grant{}, errors.Join(err, changeErr)
 	}
 	credential, _ := NewProxyCredential(credentialValue)
-	return Grant{Capture: ViewOf(record), Credential: credential}, nil
+	return Grant{Capture: ViewOf(record), Credential: credential}, changeErr
 }
 
 func (manager *Manager) Revoke(

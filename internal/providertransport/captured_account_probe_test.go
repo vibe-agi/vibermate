@@ -79,7 +79,7 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 			t.Run(origin+path, func(t *testing.T) {
 				spec := newSpec(t, origin, path, "captured-b", true)
 				plan := spec.captured.plan
-				target, err := client.runtimeProbeTarget(spec)
+				target, err := client.runtimeProbeTarget(t.Context(), spec)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -87,9 +87,18 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 				if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}}); err != nil {
 					t.Fatal("concrete captured TLS probe", target, err)
 				}
-				if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://chatgpt.com" || target.NetworkOrigin != "https://chatgpt.com" || target.HTTPAuthority != "chatgpt.com" || target.TLSServerName != "chatgpt.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != 0 || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
+				if target.Kind != offlinehold.EgressAuxiliary || target.Transport != offlinehold.ProbeTransportStrictTLS || target.TargetRef != "https://chatgpt.com" || target.NetworkOrigin != "https://chatgpt.com" || target.HTTPAuthority != "chatgpt.com" || target.TLSServerName != "chatgpt.com" || target.PlanRevision != 0 || target.PlanDigest != "" || target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured || target.EgressPolicy != policy || calls.Load() != before+1 || httpCalls.Load() != 0 || network.direct.Load() != 0 {
 					t.Fatal("captured probe lost closed reachability", target)
 				}
+				restricted, err := client.runtimeProbeTarget(egressnetwork.WithTargetAccess(t.Context(), egressnetwork.TargetAccessPublicOnly), spec)
+				if err != nil || restricted.TargetAccess != egressnetwork.TargetAccessPublicOnly {
+					t.Fatalf("restricted producer lost access: %+v %v", restricted, err)
+				}
+				physicalBefore := calls.Load()
+				if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{restricted}}); err == nil || calls.Load() != physicalBefore || network.direct.Load() != 0 || httpCalls.Load() != 0 {
+					t.Fatalf("restricted auxiliary probe escaped: err=%v proxy_dials=%d", err, calls.Load()-physicalBefore)
+				}
+
 				if spec.target.Origin().String() != origin || spec.captured.plan.EnvironmentRevision() == 0 || spec.captured.plan.EnvironmentDigest().String() == "" || spec.captured.plan.EnvironmentDigest() != plan.EnvironmentDigest() || spec.captured.plan.EnvironmentRevision() != plan.EnvironmentRevision() {
 					t.Fatal("captured producer erased original send authority")
 				}
@@ -171,7 +180,7 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 				t.Fatal("altered captured producer accepted", edge)
 			}
 			if edge != "nil_capture" {
-				if _, err := client.runtimeProbeTarget(spec); err == nil {
+				if _, err := client.runtimeProbeTarget(t.Context(), spec); err == nil {
 					t.Fatal("captured dispatch accepted altered closed operation", edge)
 				}
 			}
@@ -183,7 +192,7 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 	t.Run("generic_routed_auxiliary_stays_rejected", func(t *testing.T) {
 		spec := newSpec(t, "https://chatgpt.com", "/backend-api/wham/usage", "captured-b", true)
 		spec.captured = nil
-		target, err := client.runtimeProbeTarget(spec)
+		target, err := client.runtimeProbeTarget(t.Context(), spec)
 		if err != nil {
 			t.Fatal(err)
 		}

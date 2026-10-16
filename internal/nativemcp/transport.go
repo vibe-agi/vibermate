@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -88,7 +89,7 @@ func outbound(ctx context.Context, incoming *http.Request, body []byte, plan env
 	}
 	return r, nil
 }
-func nativeProbe(plan environment.ClientToolPlan) offlinehold.ProbeTarget {
+func nativeProbe(call context.Context, plan environment.ClientToolPlan) offlinehold.ProbeTarget {
 	resolved, err := plan.ResolvedEgress()
 	if err != nil {
 		return offlinehold.ProbeTarget{}
@@ -96,7 +97,8 @@ func nativeProbe(plan environment.ClientToolPlan) offlinehold.ProbeTarget {
 	route := plan.Route()
 	// The caller supplies binding.Plan(), already frozen for this exact operation.
 	// Probe identity describes reachability; native authority stays on the binding.
-	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.TargetOrigin.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), EgressPolicy: resolved.Profile().Policy}
+	// Freeze the same call context used by outbound and the eventual send.
+	return offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, TargetAccess: egressnetwork.EffectiveTargetAccess(call), Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: route.TargetOrigin.String(), NetworkOrigin: route.TargetOrigin.String(), HTTPAuthority: route.TargetOrigin.HTTPAuthority(), TLSServerName: route.TargetOrigin.Host(), EgressPolicy: resolved.Profile().Policy}
 }
 
 // A receipt is consumed once in this executor even when verification fails.

@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -852,4 +854,43 @@ func testWorkspaceScope(t *testing.T) workspaceidentity.Scope {
 		t.Fatal(err)
 	}
 	return scope
+}
+
+func TestCaptureRunPreservesValidPathWhitespaceAndRejectsInvalidPaths(t *testing.T) {
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	manager := newManager(t, store, newClock(time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)))
+	root := t.TempDir()
+	for _, suffix := range []string{" project ", "   ", "project\u2003"} {
+		t.Run(suffix, func(t *testing.T) {
+			cwd := filepath.Join(root, suffix)
+			executable := filepath.Join(root, " agent ")
+			grant, err := manager.Create(context.Background(), capturerun.CreateCommand{CWD: cwd, CanonicalExecutablePath: executable, ExecutableLabel: "agent", Lifetime: time.Minute, CatalogRevision: 1, Workspace: testWorkspaceScope(t)})
+			if err != nil {
+				t.Fatalf("valid whitespace path rejected: %v", err)
+			}
+			if grant.Run.CWD != cwd || grant.Run.CanonicalExecutablePath != executable {
+				t.Fatalf("exact cwd changed: %q -> %q", cwd, grant.Run.CWD)
+			}
+		})
+	}
+	for i, path := range []string{"", "relative", root + "/./project", root + "/project/../other", "/" + strings.Repeat("x", capturerun.MaxPathBytes), root + "/invalid\xff", root + "/end\n", root + "/end\t", root + "/nul\x00"} {
+		t.Run(fmt.Sprintf("invalid-%d", i), func(t *testing.T) {
+			for _, field := range []string{"cwd", "executable"} {
+				command := capturerun.CreateCommand{CWD: filepath.Join(root, "project"), CanonicalExecutablePath: filepath.Join(root, "agent"), ExecutableLabel: "agent", Lifetime: time.Minute, CatalogRevision: 1, Workspace: testWorkspaceScope(t)}
+				if field == "cwd" {
+					command.CWD = path
+				} else {
+					command.CanonicalExecutablePath = path
+				}
+				if _, err := manager.Create(context.Background(), command); !errors.Is(err, capturerun.ErrInvalidRequest) {
+					t.Fatalf("invalid %s path accepted: %v", field, err)
+				}
+			}
+		})
+	}
+	command := capturerun.CreateCommand{CWD: filepath.Join(root, "project"), CanonicalExecutablePath: filepath.Join(root, "agent"), ExecutableLabel: " agent ", Lifetime: time.Minute, CatalogRevision: 1, Workspace: testWorkspaceScope(t)}
+	if _, err := manager.Create(context.Background(), command); !errors.Is(err, capturerun.ErrInvalidRequest) {
+		t.Fatalf("generic text whitespace validation weakened: %v", err)
+	}
 }

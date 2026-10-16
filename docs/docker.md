@@ -140,6 +140,30 @@ vibermate doctor --server https://runtime.example.com:443
 vibermate run --server https://runtime.example.com:443 -- codex
 ```
 
+`vibermate doctor --server https://runtime.example.com:443 --env <environment-id>`
+checks the saved Login Session and local MachineID, then sends one credential-free
+CONNECT through the production Client Relay and Runtime transport. A PASS for
+proxy entry means the listener returned the expected `407` with
+`proxy_authentication_required`. It catches ingress that serves control requests
+but rejects same-port CONNECT (for example with `405`). It does not establish
+full proxy readiness. No Capture is created and no upstream/model request is sent;
+the Server may record the normal connection audit for the rejected probe.
+
+Doctor does not enroll or change TLS trust. Existing saved trust remains
+authoritative; without a saved decision, platform-root verification may pass
+read-only. An unknown private issuer requires an explicit login/trust decision
+before retrying doctor.
+
+`--env` is optional and checks only that the explicit ID is in this login's active,
+authorized catalog. Without it, Environment selection is NOT CHECKED. Tool access
+being off does not make a Capture Environment unavailable. Capture creation,
+authorized forwarding, native client login/startup and upstream/model inference
+are always NOT CHECKED. Control and entry operations each have a 30s budget;
+a shorter caller deadline still applies. Failures return nonzero with a known
+reason and next action; cancellation returns 130. `status` keeps its existing
+control-only behavior and does not accept `--env`.
+
+
 In private-CA mode, install the CA first (see above). Public and company
 certificates are verified directly by the system roots. If the CLI already
 saved a leaf-certificate fingerprint for this Server, you can switch it to

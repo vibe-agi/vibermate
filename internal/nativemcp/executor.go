@@ -553,7 +553,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		return reject(w, c.id, ReasonRevoked)
 	}
 	defer action.Release()
-	lease, err := e.dependencies.Offline.Acquire(call, offlinehold.AcquireRequest{RequestID: "native:" + c.id.String(), Action: action, Target: nativeProbe(plan), SizeBytes: int64(len(r.raw))})
+	lease, err := e.dependencies.Offline.Acquire(call, offlinehold.AcquireRequest{RequestID: "native:" + c.id.String(), Action: action, Target: nativeProbe(call, plan), SizeBytes: int64(len(r.raw))})
 	if err != nil {
 		return reject(w, c.id, ReasonRevoked)
 	}

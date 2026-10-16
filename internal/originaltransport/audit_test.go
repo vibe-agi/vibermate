@@ -56,7 +56,7 @@ func (recorder *auditRecorder) snapshot() (
 func auditedRequest(t *testing.T) originaltransport.Request {
 	t.Helper()
 
-	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseProviderOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestOriginalEgressRecordsOneAttemptPerOutbound(t *testing.T) {
 
 func originidentityMustString(t *testing.T, raw string) string {
 	t.Helper()
-	origin, err := originidentity.ParseClientOrigin(raw)
+	origin, err := originidentity.ParseProviderOrigin(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

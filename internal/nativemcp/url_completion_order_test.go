@@ -2,6 +2,7 @@ package nativemcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,11 +19,12 @@ import (
 // Close also unblocks the read on an actual executor cancellation.
 type gatedURLBody struct {
 	*strings.Reader
-	after      string
-	returnedAt time.Time
-	fail       chan error
-	closed     chan struct{}
-	once       sync.Once
+	after           string
+	requestContext  context.Context
+	requestDeadline time.Time
+	fail            chan error
+	closed          chan struct{}
+	once            sync.Once
 }
 
 func (b *gatedURLBody) Read(p []byte) (int, error) {
@@ -76,7 +78,6 @@ func TestNativeAcceptedGETURLSurvivesLaterDisconnect(t *testing.T) {
 	done := make(chan Terminal, 1)
 	go func() {
 		got := f.executor.Serve(context.Background(), get, httptest.NewRecorder())
-		body.returnedAt = time.Now()
 		done <- got
 	}()
 	deadline := time.Now().Add(3 * time.Second)
@@ -178,7 +179,6 @@ func startReviewedURL(t *testing.T, f *nativeFixture, s *session, bodies chan io
 	done := make(chan Terminal, 1)
 	go func() {
 		got := f.executor.Serve(context.Background(), get, httptest.NewRecorder())
-		body.returnedAt = time.Now()
 		done <- got
 	}()
 	deadline := time.Now().Add(3 * time.Second)
@@ -236,6 +236,9 @@ func TestNativeAcceptedGETURLDisconnectTerminalBoundaries(t *testing.T) {
 				if r.Method == "GET" {
 					select {
 					case body := <-bodies:
+						gated := body.(*gatedURLBody)
+						gated.requestContext = r.Context()
+						gated.requestDeadline, _ = r.Context().Deadline()
 						return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
 					case <-r.Context().Done():
 						return nil, r.Context().Err()
@@ -289,10 +292,14 @@ func TestNativeAcceptedGETURLDisconnectTerminalBoundaries(t *testing.T) {
 			}
 			select {
 			case got := <-done:
-				// The physical request deadline may precede the Store's original
-				// claim-based observation deadline. Prove its eventual retirement
-				// and full charge release below instead of equating the clocks.
-				if got.Outcome == OutcomeCompleted || got.Reason == ReasonStreamDetached && (edge != "deadline" || got.Outcome != OutcomeFailed || !body.returnedAt.Before(stream.expires)) {
+				// The physical request deadline can precede the Store's logical
+				// expiry. Check that deadline and its actual cancellation cause;
+				// observing Serve's return can be scheduled after either clock.
+				// Retirement and complete charge release remain required below.
+				physicalDeadline := edge == "deadline" && got.Outcome == OutcomeFailed &&
+					!body.requestDeadline.IsZero() && body.requestDeadline.Before(stream.expires) &&
+					errors.Is(body.requestContext.Err(), context.DeadlineExceeded)
+				if got.Outcome == OutcomeCompleted || got.Reason == ReasonStreamDetached && !physicalDeadline {
 					t.Fatal("terminal or unrelated URL retained GET", got)
 				}
 			case <-time.After(5 * time.Second):

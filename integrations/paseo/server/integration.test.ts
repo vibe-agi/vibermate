@@ -10,11 +10,15 @@ import { Bindings } from "./bindings.ts";
 import { Selections } from "./selections.ts";
 import { profiles } from "./vibermate.ts";
 import contribute from "../index.server.ts";
-import { connectionSettings, serverSchema, type Connection } from "../shared/contracts.ts";
+import { chooseRpc, connectionSettings, pendingRpc, profilesRpc, serverSchema, type Connection } from "../shared/contracts.ts";
+import type { PluginRpcContract } from "@getpaseo/plugin";
 import type { PluginServerContext, PluginSessionOpenRequest } from "@getpaseo/plugin/server";
 
 const run = promisify(execFile);
 const choices = [{ id: "work", name: "Work" }, { id: "personal", name: "Personal" }];
+// CaptureEnvironments/CaptureEnvironment in internal/capturecontrol/environments.go
+// are encoded unchanged by cmd/vibermate/profiles.go, including false booleans.
+const currentCatalog = '{"schema":"vibermate-capture-environments/v1","items":[{"id":"work","name":"Work","clientToolAccessEnabled":true},{"id":"personal","name":"Personal","clientToolAccessEnabled":false}]}';
 
 test("server origins retain HTTPS and normalize ports for the native CLI without credentials or paths", () => {
   assert.equal(serverSchema.parse("https://runtime.example.com/"), "https://runtime.example.com:443");
@@ -141,9 +145,67 @@ test("profile queries use the CLI login and reject malformed, duplicate or secre
     { schema: "old-version", items: choices },
     { schema: "vibermate-capture-environments/v1", items: [choices[0], choices[0]] },
     { schema: "vibermate-capture-environments/v1", items: [{ ...choices[0], credential: "private" }] },
+    { schema: "vibermate-capture-environments/v1", items: [{ ...choices[0], clientToolAccessEnabled: false, credential: "private" }] },
+    { schema: "vibermate-capture-environments/v1", items: [{ ...choices[0], clientToolAccessEnabled: true }, { ...choices[0], clientToolAccessEnabled: false }] },
+    ...["false", 0, null].map((clientToolAccessEnabled) => ({
+      schema: "vibermate-capture-environments/v1", items: [{ ...choices[0], clientToolAccessEnabled }],
+    })),
   ]) {
     await writeFile(fake, `#!${process.execPath}\nif(JSON.stringify(process.argv.slice(2))!==JSON.stringify(["profiles","--json"]))process.exit(1);\nprocess.stdout.write(${JSON.stringify(JSON.stringify(page))});\n`, { mode: 0o700 });
     if (page.items === choices && page.schema === "vibermate-capture-environments/v1") assert.deepEqual(await profiles(connection), choices);
     else await assert.rejects(profiles(connection));
   }
+});
+
+test("profile queries accept the current Go catalog with tool access enabled or disabled", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "vibermate-paseo-current-catalog-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fake = join(directory, "vibermate");
+  await writeFile(fake, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(currentCatalog)});\n`, { mode: 0o700 });
+  assert.deepEqual(await profiles({ enabled: true, cli: fake, server: "", stateDirectory: directory }), [
+    { id: "work", name: "Work", clientToolAccessEnabled: true },
+    { id: "personal", name: "Personal", clientToolAccessEnabled: false },
+  ]);
+});
+
+test("a first binding can select a current catalog Environment with tool access disabled", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "vibermate-paseo-first-binding-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const fake = join(directory, "vibermate");
+  await writeFile(fake, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(currentCatalog)});\n`, { mode: 0o700 });
+  const config = connectionSettings.schema.parse({ enabled: true, cli: fake, stateDirectory: directory });
+  let hook!: (input: { request: PluginSessionOpenRequest }, context: { signal: AbortSignal }) => Promise<PluginSessionOpenRequest>;
+  const handlers = new Map<string, (input: unknown) => unknown>();
+  const server = {
+    registerSettings: () => ({ read: async () => ({ status: "ready", revision: "1", values: config }) }),
+    handle(contract: PluginRpcContract, handler: (input: unknown) => unknown) { handlers.set(contract.name, handler); },
+    before(_name: string, callback: typeof hook) { hook = callback; return () => {}; },
+  };
+  const close = contribute(server as unknown as PluginServerContext);
+  t.after(close);
+  const catalog = profilesRpc.output.parse(await handlers.get(profilesRpc.name)!({}));
+  assert.deepEqual(catalog.items, [
+    { id: "work", name: "Work", clientToolAccessEnabled: true },
+    { id: "personal", name: "Personal", clientToolAccessEnabled: false },
+  ]);
+  const lifetime = new AbortController();
+  t.after(() => lifetime.abort());
+  const request: PluginSessionOpenRequest = { agentId: "new-conversation", workspaceId: "w", provider: "codex", cwd: directory, reason: "create", purpose: "interactive", env: {} };
+  const opening = hook({ request }, { signal: lifetime.signal });
+  // Poll the same pending RPC as the picker while the real CLI subprocess runs.
+  let pending = pendingRpc.output.parse(await handlers.get(pendingRpc.name)!({}));
+  const deadline = Date.now() + 3000;
+  while (pending.items.length === 0 && Date.now() < deadline) {
+    await Promise.race([new Promise((resolve) => setTimeout(resolve, 5)), opening]);
+    pending = pendingRpc.output.parse(await handlers.get(pendingRpc.name)!({}));
+  }
+  assert.equal(pending.items.length, 1);
+  assert.deepEqual(pending.items[0].profiles, catalog.items);
+  await handlers.get(chooseRpc.name)!({ id: pending.items[0].id, environmentId: "personal" });
+  const started = await opening;
+  assert.equal(started.env.VIBERMATE_PASEO_ENVIRONMENT_ID, "personal");
+  assert.deepEqual(await new Bindings(directory).get("new-conversation"), {
+    agentId: "new-conversation", environmentId: "personal", server: "",
+  });
+  assert.deepEqual(pendingRpc.output.parse(await handlers.get(pendingRpc.name)!({})), { items: [] });
 });

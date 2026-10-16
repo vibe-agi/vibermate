@@ -123,6 +123,24 @@ vibermate doctor --server https://runtime.example.com:443
 vibermate run --server https://runtime.example.com:443 -- codex
 ```
 
+`vibermate doctor --server https://runtime.example.com:443 --env <环境 ID>`
+先检查保存的 Login Session 和本地 MachineID，再通过生产 Client Relay 和 Runtime
+传输发送一次不带凭据的 CONNECT。代理入口 PASS 只表示监听返回预期的 `407` 和
+`proxy_authentication_required`。它能发现控制请求正常、同端口 CONNECT 却被拒绝
+（如 `405`）的入口；不代表完整代理可用。它不创建 Capture，也不发送上游/模型请求；
+Server 可以记录该拒绝探测的常规连接审计。
+
+Doctor 不登记或更改 TLS 信任。已有信任决定仍然具有权威性；没有保存的决定时，
+平台根证书验证可以只读通过。未知私有签发者需要先显式登录或确认信任，再重试 doctor。
+
+`--env` 可选，只验证明确指定的 ID 是否位于当前登录已授权的有效目录中。未指定时，
+Environment 选择标记为未检查。工具服务关闭不代表 Capture Environment 不可用。
+Capture 创建、已授权转发、原生客户端登录/启动、上游/模型推理始终未检查。
+控制与入口操作各有 30 秒预算，调用方更短的截止时间仍然生效。失败返回非零退出码并给出
+已知原因和下一步操作；取消返回 130。`status` 保持原有只检查控制接口的行为，
+不接受 `--env`。
+
+
 私有 CA 模式下，应先安装 CA（见上文）。公共/企业证书由系统根证书直接验证。如果 CLI
 已为该 Server 保存了叶证书指纹，可以在系统根验证已经成功后，显式改用系统根验证：
 

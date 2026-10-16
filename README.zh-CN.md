@@ -60,7 +60,11 @@ Caddy。在 **设置 → 接入与启动 → 使用自有域名部署** 中生�
 - [Paseo 集成](integrations/paseo/README.md)：每个对话独立选择流量策略，桌面与手机共用
 - [安全策略](SECURITY.md) · [参与贡献](CONTRIBUTING.md)
 
-安装或启动遇到问题时，运行 `vibermate doctor`。
+安装或启动遇到问题时，运行 `vibermate doctor`。 远程 Runtime 登录后可运行
+`vibermate doctor --server <同一服务端> [--env <环境 ID>]`。
+它验证控制/会话/机器以及不带凭据的 CONNECT 入口认证拒绝；可选 `--env` 检查已授权的
+有效目录。它不创建 Capture，并明确标记已授权转发、原生客户端登录/启动、模型推理
+未检查。本地 doctor 检查运行时、存储及支持平台上的根证书信任，并说明相同范围限制。
 
 ## 许可证
 
