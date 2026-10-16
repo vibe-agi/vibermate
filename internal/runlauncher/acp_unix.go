@@ -54,7 +54,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	if launcher.config.Remote != nil {
 		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, controlTransportTimeout(launcher.config), cwd, request.Command, executable)
 		if connectErr != nil {
-			return 1, connectErr
+			return 1, classifyRemoteConnectionFailure(connectErr)
 		}
 		defer connection.close()
 		control = connection.control
@@ -74,7 +74,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	var grant capturecontrol.LaunchGrant
 	err = launcher.callWithin(ctx, launcher.config.CreateTimeout, func(call context.Context) error { var err error; grant, err = control.create(call, create); return err })
 	if err != nil {
-		return 1, classifyCreateFailure(err)
+		return 1, classifyCreateFailure(err, launcher.config.Remote != nil)
 	}
 	captureFinished := false
 	defer func() {

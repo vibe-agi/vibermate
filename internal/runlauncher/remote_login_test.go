@@ -251,7 +251,7 @@ type fixedRemoteClock struct{ now time.Time }
 func (clock fixedRemoteClock) Now() time.Time { return clock.now }
 
 func TestLegacyRemoteSessionAuthenticatedBinding(t *testing.T) {
-	for _, scenario := range []string{"matching", "different-machine", "invalid-machine", "revoked", "logout-during-verification", "login-during-verification", "wrong-session", "expired", "unavailable", "timeout"} {
+	for _, scenario := range []string{"matching", "different-machine", "invalid-machine", "revoked", "logout-during-verification", "login-during-verification", "wrong-session", "expired", "unavailable", "timeout", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			now := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
@@ -271,7 +271,7 @@ func TestLegacyRemoteSessionAuthenticatedBinding(t *testing.T) {
 				if r.URL.Path != servercontrol.RuntimeUserCurrentSessionPath || r.Header.Get("Authorization") != "Bearer "+login.SessionToken().Value() {
 					t.Errorf("incorrect authentication path")
 				}
-				if scenario == "timeout" {
+				if scenario == "timeout" || scenario == "canceled" {
 					<-r.Context().Done()
 					return
 				}
@@ -338,10 +338,30 @@ func TestLegacyRemoteSessionAuthenticatedBinding(t *testing.T) {
 			if scenario == "timeout" {
 				timeout = 30 * time.Millisecond
 			}
+			if scenario == "canceled" {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
 			started := time.Now()
 			_, err = InspectRemote(ctx, target, directory, fixedRemoteClock{now: now}, timeout)
 			if scenario == "timeout" && time.Since(started) > time.Second {
 				t.Fatal("current-session preflight exceeded its timeout")
+			}
+			if scenario == "timeout" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("inspection lost timeout cause: %v", err)
+			}
+			if scenario == "canceled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("inspection lost cancellation: %v", err)
+				}
+				return
+			}
+			if scenario == "unavailable" || scenario == "revoked" {
+				var failure *ControlFailure
+				if !errors.As(err, &failure) {
+					t.Fatalf("inspection lost control failure: %v", err)
+				}
 			}
 			if scenario == "unavailable" || scenario == "timeout" {
 				if !errors.Is(err, ErrRemoteRuntimeUnavailable) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -200,7 +201,7 @@ func (launcher *Launcher) Run(
 			executable,
 		)
 		if err != nil {
-			return 1, fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+			return 1, classifyRemoteConnectionFailure(err)
 		}
 		defer remote.close()
 		control = remote.control
@@ -239,7 +240,7 @@ func (launcher *Launcher) Run(
 		},
 	)
 	if err != nil {
-		return 1, classifyCreateFailure(err)
+		return 1, classifyCreateFailure(err, launcher.config.Remote != nil)
 	}
 	createdGrant := grant
 	cleanupRoot := func() {}
@@ -466,12 +467,22 @@ func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {
 	)
 }
 
-func classifyCreateFailure(err error) error {
+func classifyRemoteConnectionFailure(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, ErrRemoteLoginRequired) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
+}
+
+func classifyCreateFailure(err error, remote bool) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
 	var failure *ControlFailure
 	if errors.As(err, &failure) {
+		if remote && failure.Status == 401 {
+			return fmt.Errorf("%w: %w", ErrRemoteLoginRequired, err)
+		}
 		switch failure.ReasonCode {
 		case capturecontrol.ReasonClientTargetNotConfigured:
 			return fmt.Errorf("%w: %w", ErrClientTargetNotConfigured, failure)
@@ -485,12 +496,22 @@ func classifyCreateFailure(err error) error {
 			return err
 		}
 	}
+	unavailable := ErrRuntimeUnavailable
+	if remote {
+		unavailable = ErrRemoteRuntimeUnavailable
+	}
+	// A TCP dial deadline also matches context.DeadlineExceeded even when
+	// the Capture operation is still live. Preserve that establishment failure.
+	var networkFailure *net.OpError
+	if errors.As(err, &networkFailure) && networkFailure.Op == "dial" {
+		return fmt.Errorf("%w: %w", unavailable, err)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: %w", ErrCapturePreparationTimedOut, err)
 	}
 	var transportFailure *url.Error
 	if errors.As(err, &transportFailure) {
-		return fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+		return fmt.Errorf("%w: %w", unavailable, err)
 	}
 	return err
 }

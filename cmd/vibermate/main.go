@@ -278,6 +278,16 @@ func executeContext(
 	if errors.Is(err, context.Canceled) {
 		return 130, ""
 	}
+	var controlFailure *runlauncher.ControlFailure
+	if errors.As(err, &controlFailure) {
+		catalogs, catalogErr := locales.New()
+		if catalogErr == nil {
+			message, renderErr := catalogs.Render(locales.Detect(environment), "cli.error.controlFailureDetail", map[string]string{"details": controlFailure.SafeSummary()})
+			if renderErr == nil {
+				_, _ = fmt.Fprintln(stderr, message)
+			}
+		}
+	}
 	if acp != nil {
 		if errors.Is(err, runlauncher.ErrACPUnavailable) {
 			return max(code, 1), "cli.error.acpUnavailable"

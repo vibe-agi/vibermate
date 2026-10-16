@@ -32,7 +32,7 @@ func authenticateRemoteLogin(ctx context.Context, client *controlClient, login s
 	if err := client.jsonRequest(ctx, http.MethodGet, servercontrol.RuntimeUserCurrentSessionPath, client.credential, "", nil, http.StatusOK, &current); err != nil {
 		var failure *ControlFailure
 		if errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
-			return current, ErrRemoteLoginRequired
+			return current, errors.Join(ErrRemoteLoginRequired, err)
 		}
 		return current, err
 	}

@@ -1,6 +1,7 @@
 package locales_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/locales"
@@ -32,5 +33,21 @@ func TestLocaleDetectionUsesOnlySupportedCatalogs(t *testing.T) {
 	}
 	if got := locales.Detect([]string{"LANG=fr_FR.UTF-8"}); got != locales.EnglishUS {
 		t.Fatalf("Detect(fr_FR) = %s", got)
+	}
+}
+
+func TestCapturePreparationTimeoutSupportsLocalAndRemoteRuntime(t *testing.T) {
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, locale := range []locales.Locale{locales.EnglishUS, locales.SimplifiedChinese} {
+		message, err := catalogs.Render(locale, "cli.error.capturePreparationTimedOut", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(message, "Runtime") {
+			t.Fatalf("%s timeout does not refer to selected Runtime: %q", locale, message)
+		}
 	}
 }

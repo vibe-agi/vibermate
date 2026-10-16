@@ -120,7 +120,7 @@ func InspectRemote(
 		Clock: clock, Timeout: timeout,
 	})
 	if err != nil {
-		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+		return RemoteInspection{}, fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
 	}
 	client, err := newRemoteControlClient(
 		target.Origin(), login.SessionToken().Value(), transport, transport.Close,
@@ -135,7 +135,7 @@ func InspectRemote(
 		if errors.Is(err, ErrRemoteLoginRequired) {
 			return RemoteInspection{}, err
 		}
-		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+		return RemoteInspection{}, fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)
 	}
 	return RemoteInspection{
 		Origin: target.Origin(), InstanceID: current.InstanceID, APIVersion: current.APIVersion,
