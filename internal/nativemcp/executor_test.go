@@ -118,6 +118,11 @@ func newNativeFixtureStoreLifetime(t *testing.T, mode environment.ToolPolicyMode
 
 func newNativeFixtureWithChoice(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, custom ...Limits) *nativeFixture {
 	t.Helper()
+	return newNativeFixtureWithApprovalConfig(t, mode, recording, lifetime, choice, toolapproval.Config{DecisionTimeout: 3 * time.Second}, custom...)
+}
+
+func newNativeFixtureWithApprovalConfig(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, approvalConfig toolapproval.Config, custom ...Limits) *nativeFixture {
+	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout, NativeStreamLifetime: lifetime})
@@ -207,7 +212,7 @@ func newNativeFixtureWithChoice(t *testing.T, mode environment.ToolPolicyMode, r
 	t.Cleanup(connection.Close)
 	options := toolapproval.DefaultOptions(store.ToolApprovalRepository())
 	options.NativeRepository = store.NativeToolRepository()
-	options.Config.DecisionTimeout = 3 * time.Second
+	options.Config = approvalConfig
 	authority, err := toolapproval.New(ctx, options)
 	if err != nil {
 		t.Fatal(err)

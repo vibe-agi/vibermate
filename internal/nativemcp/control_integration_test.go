@@ -22,7 +22,12 @@ import (
 type manualHandler struct{}
 type decisionClock struct{ now time.Time }
 
-func (c *decisionClock) Now() time.Time { return c.now }
+func (c *decisionClock) Now() time.Time {
+	if c.now.IsZero() {
+		return time.Now().UTC()
+	}
+	return c.now
+}
 func (manualHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, p controlprincipal.Principal) {
 	w.WriteHeader(404)
 }
@@ -32,20 +37,26 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 	for _, scenario := range []struct {
 		name string
 		run  func(*testing.T, func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval))
-	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
+	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"callback_delayed_start", nil}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var complete func()
 			run := scenario.run
 			if run == nil {
 				run = func(t *testing.T, check func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
-					nativemcp.ExerciseNativeHistoricalControl(t, scenario.name == "callback_history_parent", func(e nativemcp.Executor, s *runtimepersistence.Store, m manualcapture.Controller, c captureidentity.Reference, a nativetool.Approval, barrier func()) {
+					historical := func(t *testing.T, check func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval, func())) {
+						nativemcp.ExerciseNativeHistoricalControl(t, scenario.name == "callback_history_parent", check)
+					}
+					if scenario.name == "callback_delayed_start" {
+						historical = nativemcp.ExerciseNativeDelayedStartControl
+					}
+					historical(t, func(e nativemcp.Executor, s *runtimepersistence.Store, m manualcapture.Controller, c captureidentity.Reference, a nativetool.Approval, barrier func()) {
 						complete = barrier
 						check(e, s, m, c, a)
 					})
 				}
 			}
 			run(t, func(executor nativemcp.Executor, store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, a nativetool.Approval) {
-				clock := &decisionClock{time.Now().UTC()}
+				clock := &decisionClock{}
 				app, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: clock, ManualCaptures: manuals, NativeTools: store.NativeToolRepository(), NativePreviews: executor})
 				if err != nil {
 					t.Fatal(err)
