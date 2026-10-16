@@ -213,6 +213,7 @@ type rawEvidenceFailureReporter interface {
 
 type operation struct {
 	connection net.Conn
+	cancel     context.CancelFunc
 }
 
 type Handler struct {
@@ -1867,6 +1868,21 @@ func (handler *Handler) attachConnection(
 	return true
 }
 
+// attachCancellation gives a raw HTTP forward the same shutdown owner as an
+// attached connection, including while it waits for an upload or a dial.
+func (handler *Handler) attachCancellation(active *operation, cancel context.CancelFunc) bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if !handler.accepting {
+		return false
+	}
+	if _, exists := handler.active[active]; !exists {
+		return false
+	}
+	active.cancel = cancel
+	return true
+}
+
 func (handler *Handler) BeginShutdown() {
 	if handler == nil {
 		return
@@ -1878,13 +1894,20 @@ func (handler *Handler) BeginShutdown() {
 	}
 	handler.accepting = false
 	connections := make([]net.Conn, 0, len(handler.active))
+	cancellations := make([]context.CancelFunc, 0, len(handler.active))
 	for active := range handler.active {
+		if active.cancel != nil {
+			cancellations = append(cancellations, active.cancel)
+		}
 		if active.connection != nil {
 			connections = append(connections, active.connection)
 		}
 	}
 	handler.signalLocked()
 	handler.mu.Unlock()
+	for _, cancel := range cancellations {
+		cancel()
+	}
 	for _, connection := range connections {
 		_ = connection.Close()
 	}
@@ -2128,8 +2151,12 @@ func joinBodyCancellation(ctx context.Context, body io.Closer) func() {
 	if body == nil {
 		return func() {}
 	}
+	return joinCancellation(ctx, func() { _ = body.Close() })
+}
+
+func joinCancellation(ctx context.Context, cancel func()) func() {
 	closed := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { defer close(closed); _ = body.Close() })
+	stop := context.AfterFunc(ctx, func() { defer close(closed); cancel() })
 	return func() {
 		if !stop() {
 			<-closed
@@ -2869,6 +2896,14 @@ func (handler *Handler) serveCleartextForward(
 	}
 	defer func() { handler.finishConnectionAudit(audit, connectionTerminal) }()
 
+	ctx, cancel := context.WithCancel(request.Context())
+	defer cancel()
+	request = request.WithContext(ctx)
+	if !handler.attachCancellation(active, cancel) {
+		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass = blindTunnelTerminal(context.Canceled)
+		return true
+	}
+
 	resolved, err := handler.resolveBlindEgress(request.Context())
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2909,6 +2944,29 @@ func (handler *Handler) serveCleartextForward(
 		connectionTerminal.BytesUp = uint64(result.BytesOut)
 		connectionTerminal.BytesDown = uint64(result.BytesIn)
 	}()
+	var lease offlinehold.Lease
+	defer func() {
+		if lease != nil {
+			lease.Release()
+		}
+	}()
+	// Closing the upstream cannot unblock a read of an incomplete downstream
+	// upload, or a blocked downstream response write. Interrupt both directions
+	// before closing the body, whose Close can itself wait for a read to finish.
+	controller := http.NewResponseController(writer)
+	joinRequest := joinCancellation(ctx, func() {
+		_ = controller.SetReadDeadline(time.Now())
+		_ = controller.SetWriteDeadline(time.Now())
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+	})
+	defer func() {
+		joinRequest()
+		if request.Body != nil {
+			_ = request.Body.Close()
+		}
+	}()
 	upstream, lease, err := handler.blindTunnels.Dial(
 		request.Context(),
 		blindtunnel.DialRequest{
@@ -2930,11 +2988,28 @@ func (handler *Handler) serveCleartextForward(
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
-	defer lease.Release()
-	defer upstream.Close()
-	_ = active
+	joinUpstream := joinBodyCancellation(request.Context(), upstream)
+	defer func() {
+		_ = upstream.Close()
+		joinUpstream()
+	}()
 	// Count transport bytes, including HTTP framing, without retaining the body.
 	countedUpstream = &countingConnection{Conn: upstream}
+	if !handler.attachConnection(active, countedUpstream) {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(context.Canceled)
+		connectionTerminal.ErrorClass = egressErrorClass
+		return true
+	}
+	forwardFailure := func(err error, errorClass string) {
+		if request.Context().Err() != nil {
+			err = request.Context().Err()
+		}
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass = blindTunnelTerminal(err)
+		if egressErrorClass == blindTunnelFailureClass {
+			egressErrorClass = errorClass
+		}
+		connectionTerminal.ErrorClass = egressErrorClass
+	}
 
 	// Write in origin form and without hop-by-hop or proxy headers, so the
 	// origin sees an ordinary request and never a proxy credential.
@@ -2943,15 +3018,13 @@ func (handler *Handler) serveCleartextForward(
 	forwarded.Header = forwardableHeaders(request.Header)
 	forwarded.Host = request.URL.Host
 	if err := forwarded.Write(countedUpstream); err != nil {
-		egressErrorClass = "forward_write_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_write_failed")
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	response, err := http.ReadResponse(bufio.NewReader(countedUpstream), forwarded)
 	if err != nil {
-		egressErrorClass = "forward_read_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_read_failed")
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
@@ -2959,8 +3032,7 @@ func (handler *Handler) serveCleartextForward(
 	copyResponseHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
 	if _, err := io.Copy(writer, response.Body); err != nil {
-		egressErrorClass = "forward_response_failed"
-		connectionTerminal.ErrorClass = egressErrorClass
+		forwardFailure(err, "forward_response_failed")
 		return true
 	}
 	egressOutcome = egressaudit.OutcomeCompleted

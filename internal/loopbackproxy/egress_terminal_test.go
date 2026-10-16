@@ -134,10 +134,18 @@ func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
 		exchangeIDs:    fixedBlindExchangeIDSource{},
 		ownerContext:   context.Background(),
 		clock:          time.Now,
+		accepting:      true,
+		active:         make(map[*operation]struct{}),
+		changed:        make(chan struct{}),
 	}
+	active, err := handler.begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handler.finish(active)
 	request := httptest.NewRequest(http.MethodPost, "http://target.example/upload", strings.NewReader("canary"))
 	writer := httptest.NewRecorder()
-	terminal := handler.serveCleartextForward(writer, request, &operation{}, audit,
+	terminal := handler.serveCleartextForward(writer, request, active, audit,
 		connectionevent.Source{IngressID: "run-ordering", Label: "fixture", Confidence: connectionevent.SourceConfidenceConfigured},
 		"allow-target")
 	if !terminal || egress.appendCalls != 1 || tunnels.dialCalls != 0 || writer.Code != http.StatusServiceUnavailable {
