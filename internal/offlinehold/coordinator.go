@@ -779,7 +779,10 @@ func validateProbeTarget(target ProbeTarget) error {
 			return err
 		}
 	case ProbeTransportLoopbackCleartext, ProbeTransportPrivateCleartext:
-		if target.Kind != EgressProvider || target.TLSServerName != "" {
+		// Frozen original-operation aliases may use supported private HTTP, just
+		// like provider targets. Their prober verifies the exact private peer;
+		// updates, blind tunnels and other egress kinds gain no cleartext authority.
+		if (target.Kind != EgressProvider && target.Kind != EgressAuxiliary && target.Kind != EgressOpaque) || target.TLSServerName != "" {
 			return ErrInvalidRequest
 		}
 	case ProbeTransportTCP:

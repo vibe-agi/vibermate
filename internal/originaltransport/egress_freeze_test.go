@@ -39,7 +39,7 @@ func TestOriginalTransportRecordsAndSendsSameFrozenGlobalExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin, _ := originidentity.ParseClientOrigin("https://original.synthetic")
+	origin, _ := originidentity.ParseProviderOrigin("https://original.synthetic")
 	request, err := originaltransport.NewRequest(originaltransport.RequestOptions{RequestID: "original-egress", ConnectionID: "original-connection", ParentID: "original-parent", Kind: offlinehold.EgressAuxiliary, Origin: origin, Method: http.MethodGet, Path: "/models", PayloadClass: protocolspec.OperationPayloadNone, EgressPolicy: profile.Policy, ResolvedEgress: selected})
 	if err != nil {
 		t.Fatal(err)

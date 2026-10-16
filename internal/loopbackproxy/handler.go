@@ -1797,13 +1797,18 @@ func (handler *Handler) forwardToOriginalOrigin(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonOriginalEgressFailed, "")
 		return
 	}
+	origin, valid := plan.OriginalOperationOrigin()
+	if !valid {
+		writeReason(writer, http.StatusUnprocessableEntity, ReasonEnvironmentOperationUnsupported, "")
+		return
+	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
 		ResolvedEgress: resolved,
 		RequestID:      egressID,
 		ConnectionID:   connectionID,
 		ParentID:       requestID,
 		Kind:           kind,
-		Origin:         plan.Endpoint().ClientOrigin(),
+		Origin:         origin,
 		Method:         request.Method,
 		Path:           request.URL.Path,
 		RawQuery:       request.URL.RawQuery,

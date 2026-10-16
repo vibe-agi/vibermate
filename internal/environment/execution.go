@@ -380,6 +380,25 @@ func (plan RequestPlan) AccountReadTarget() (CompiledRoutePlan, CompiledAccountR
 func (plan RequestPlan) WireVariant() wireprofile.CompiledUpstreamWireVariant {
 	return plan.wireVariant
 }
+
+// OriginalOperationOrigin returns the frozen inbound authority for catalogued,
+// payload-free auxiliary and opaque operations, including beside managed Routes.
+// It is separate from OriginalOrigin, which authorizes semantic/account use.
+func (plan RequestPlan) OriginalOperationOrigin() (originidentity.ProviderOrigin, bool) {
+	if plan.originalOrigin.Validate() != nil || plan.originalOrigin.BasePath() != "" ||
+		plan.operation.Validate() != nil || !plan.operation.PayloadClass().AllowsOriginalOrigin() {
+		return originidentity.ProviderOrigin{}, false
+	}
+	switch plan.operation.Kind() {
+	case protocolspec.ClientOperationAuxiliary, protocolspec.ClientOperationOpaque:
+		return plan.originalOrigin, true
+	case protocolspec.ClientOperationAccountRead:
+		return plan.OriginalOrigin()
+	default:
+		return originidentity.ProviderOrigin{}, false
+	}
+}
+
 func (plan RequestPlan) OriginalOrigin() (originidentity.ProviderOrigin, bool) {
 	if (!plan.PreservesOriginalDestination() && !plan.UsesOriginalAccount()) || plan.originalOrigin.Validate() != nil ||
 		(plan.UsesOriginalAccount() && plan.originalOrigin != plan.upstreamRoute.target.Origin) {

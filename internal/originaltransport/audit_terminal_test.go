@@ -209,7 +209,7 @@ var _ terminalFailureReporter = (*originalTerminalAuditDouble)(nil)
 
 func originalAuditRequest(t *testing.T) Request {
 	t.Helper()
-	origin, err := originidentity.ParseClientOrigin("https://origin.example:443")
+	origin, err := originidentity.ParseProviderOrigin("https://origin.example:443")
 	if err != nil {
 		t.Fatal(err)
 	}

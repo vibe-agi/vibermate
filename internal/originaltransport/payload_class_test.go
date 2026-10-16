@@ -16,7 +16,7 @@ func payloadClassRequestOptions(
 ) originaltransport.RequestOptions {
 	t.Helper()
 
-	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseProviderOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,5 +102,30 @@ func TestOriginalRequestAllowsAControlBody(t *testing.T) {
 	options.Body = []byte(`{"acknowledged":true}`)
 	if _, err := originaltransport.NewRequest(options); err != nil {
 		t.Fatalf("catalogued control body was rejected: %v", err)
+	}
+}
+
+func TestOriginalRequestRejectsBasePathAuthorityAndFreezesActualOrigin(t *testing.T) {
+	for _, raw := range []string{"https://alias.example:8443", "http://127.0.0.1:8080"} {
+		options := payloadClassRequestOptions(t)
+		origin, err := originidentity.ParseProviderOrigin(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Origin = origin
+		options.Path = "/base/models"
+		options.RawQuery = "client_version=synthetic%2Balias"
+		request, err := originaltransport.NewRequest(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Origin, _ = originidentity.ParseProviderOrigin("https://mutated.example")
+		if request.Origin().String() != raw || request.Path() != "/base/models" || request.RawQuery() != "client_version=synthetic%2Balias" {
+			t.Fatalf("original target changed: %s %s?%s", request.Origin(), request.Path(), request.RawQuery())
+		}
+		options.Origin, _ = originidentity.ParseProviderOrigin(raw + "/base")
+		if _, err := originaltransport.NewRequest(options); err == nil {
+			t.Fatal("accepted base path with already complete original path")
+		}
 	}
 }
