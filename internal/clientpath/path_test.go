@@ -14,3 +14,12 @@ func TestDefaultRemoteStateDirectoryIsAbsoluteAndClientScoped(t *testing.T) {
 		t.Fatalf("directory = %q", directory)
 	}
 }
+
+func TestCustomRemoteStateNeverRequiresAHomeFallback(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	directory, err := LegacyRemoteLoginDirectory(filepath.Join(t.TempDir(), "custom"))
+	if err != nil || directory != "" {
+		t.Fatalf("custom state consulted unavailable home fallback: %q %v", directory, err)
+	}
+}

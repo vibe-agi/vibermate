@@ -743,14 +743,19 @@ func validateAbsolutePath(label, value string) error {
 		filepath.Clean(value) != value {
 		return fmt.Errorf("%w: %s is not a clean absolute path", ErrInvalidRequest, label)
 	}
-	return validateText(label, value, MaxPathBytes)
+	// Filesystem whitespace is significant and must remain exact.
+	return validateTextContent(label, value, MaxPathBytes)
 }
 
 func validateText(label, value string, limit int) error {
-	if value == "" ||
-		len(value) > limit ||
-		!utf8.ValidString(value) ||
-		strings.TrimSpace(value) != value {
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, label)
+	}
+	return validateTextContent(label, value, limit)
+}
+
+func validateTextContent(label, value string, limit int) error {
+	if value == "" || len(value) > limit || !utf8.ValidString(value) {
 		return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, label)
 	}
 	for _, character := range value {

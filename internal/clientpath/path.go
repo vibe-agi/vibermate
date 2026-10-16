@@ -17,3 +17,20 @@ func DefaultRemoteStateDirectory() (string, error) {
 	}
 	return filepath.Join(root, runtimepath.ApplicationID, "remote-client"), nil
 }
+
+// LegacyRemoteLoginDirectory enables the requested home-file compatibility only
+// for the canonical default state directory. Custom state never reads home data.
+func LegacyRemoteLoginDirectory(stateDirectory string) (string, error) {
+	canonical, err := DefaultRemoteStateDirectory()
+	if err != nil {
+		return "", nil
+	}
+	if stateDirectory != canonical {
+		return "", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || !filepath.IsAbs(home) {
+		return "", errors.New("ViberMate client home directory is unavailable")
+	}
+	return filepath.Join(home, ".vibermate"), nil
+}

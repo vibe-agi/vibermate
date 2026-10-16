@@ -9,7 +9,6 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servertransport"
 )
 
@@ -22,13 +21,17 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 	var client *controlClient
 	var err error
 	if remote := launcher.config.Remote; remote != nil {
-		store, openErr := serverconnection.OpenLoginStore(filepath.Join(remote.StateDirectory, "login"))
+		store, openErr := openRemoteLoginStore(remote.StateDirectory)
 		if openErr != nil {
 			return capturecontrol.CaptureEnvironments{}, openErr
 		}
 		login, loadErr := store.Load(remote.Target, remote.Clock.Now().UTC())
 		if loadErr != nil {
 			return capturecontrol.CaptureEnvironments{}, errors.Join(ErrRemoteLoginRequired, loadErr)
+		}
+		machineID, identityErr := remoteLoginMachine(ctx, remote.StateDirectory, remote.Random, remote.Clock.Now())
+		if identityErr != nil {
+			return capturecontrol.CaptureEnvironments{}, identityErr
 		}
 		transport, openErr := servertransport.Open(servertransport.Options{
 			Target: remote.Target, TrustDirectory: filepath.Join(remote.StateDirectory, "trust"),
@@ -40,6 +43,12 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 		client, err = newRemoteControlClient(remote.Target.Origin(), login.SessionToken().Value(), transport, transport.Close)
 		if err != nil {
 			transport.Close()
+		} else {
+			_, err = authenticateRemoteLogin(ctx, client, login, machineID)
+			if err != nil {
+				client.close()
+				return capturecontrol.CaptureEnvironments{}, err
+			}
 		}
 	} else {
 		session, loadErr := launcher.config.Discovery.Load()

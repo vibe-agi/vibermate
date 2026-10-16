@@ -244,7 +244,14 @@ func (manager *Manager) ResolveLocal(
 	_, _ = mac.Write([]byte{0})
 	_, _ = mac.Write([]byte(canonical))
 	workspaceID := WorkspaceID(base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
-	label := filepath.Base(canonical)
+	label := strings.TrimSpace(filepath.Base(canonical))
+	if len(label) > maxWorkspaceLabelBytes {
+		label = label[:maxWorkspaceLabelBytes]
+		for !utf8.ValidString(label) {
+			label = label[:len(label)-1]
+		}
+		label = strings.TrimSpace(label)
+	}
 	if label == "." || label == string(filepath.Separator) || label == "" {
 		label = "workspace"
 	}

@@ -134,6 +134,54 @@ func OpenLoginStore(directory string) (*LoginStore, error) {
 	return store, nil
 }
 
+// OpenLoginStoreMigrating initializes an absent canonical store from one
+// explicitly selected compatibility directory. Canonical data always wins;
+// an empty document retained after logout prevents later session resurrection.
+func OpenLoginStoreMigrating(directory, legacyDirectory string) (*LoginStore, error) {
+	store, err := OpenLoginStore(directory)
+	if err != nil || legacyDirectory == "" {
+		return store, err
+	}
+	if !filepath.IsAbs(legacyDirectory) || filepath.Clean(legacyDirectory) != legacyDirectory || legacyDirectory == directory {
+		return nil, errors.New("Runtime Server Login migration directory is invalid")
+	}
+	err = filetransaction.Update(store.transactionOptions(), func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+		if snapshot.Exists {
+			_, err := decodeLoginSessions(snapshot.Payload)
+			return filetransaction.Mutation{}, err
+		}
+		path := filepath.Join(legacyDirectory, loginStoreFileName)
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return filetransaction.Mutation{}, nil
+		}
+		if err != nil {
+			return filetransaction.Mutation{}, err
+		}
+		if !info.Mode().IsRegular() || info.Size() > maxLoginStoreBytes {
+			return filetransaction.Mutation{}, errors.New("Runtime Server Login migration document is invalid")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return filetransaction.Mutation{}, err
+		}
+		defer file.Close()
+		payload, err := io.ReadAll(io.LimitReader(file, maxLoginStoreBytes+1))
+		if err != nil {
+			return filetransaction.Mutation{}, err
+		}
+		sessions, err := decodeLoginSessions(payload)
+		if err != nil {
+			return filetransaction.Mutation{}, err
+		}
+		return encodeLoginSessions(sessions)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("migrate Runtime Server Login store: %w", err)
+	}
+	return store, nil
+}
+
 func decodeLoginSessions(payload []byte) (map[string]loginRecord, error) {
 	if len(payload) == 0 || len(payload) > maxLoginStoreBytes {
 		return nil, errors.New("Runtime Server Login store is invalid")

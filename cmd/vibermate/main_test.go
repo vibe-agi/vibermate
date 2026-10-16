@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 	"github.com/vibe-agi/vibermate/locales"
 )
 
@@ -267,6 +268,11 @@ func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identity, err := workspaceidentity.Open(context.Background(), filepath.Join(stateDirectory, "identity"), bytes.NewReader(bytes.Repeat([]byte{0x36}, 64)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identity.Shutdown(context.Background())
 	store, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
 	if err != nil {
 		t.Fatal(err)

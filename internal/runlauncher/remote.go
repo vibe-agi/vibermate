@@ -102,9 +102,7 @@ func connectRemote(
 			transport.Close()
 		}
 	}()
-	loginStore, err := serverconnection.OpenLoginStore(
-		filepath.Join(config.StateDirectory, "login"),
-	)
+	loginStore, err := openRemoteLoginStore(config.StateDirectory)
 	if err != nil {
 		return fail(err)
 	}
@@ -124,6 +122,10 @@ func connectRemote(
 		transport, transport.Close,
 	)
 	if err != nil {
+		return fail(err)
+	}
+	if _, err := authenticateRemoteLogin(ctx, control, login, workspace.MachineID().String()); err != nil {
+		control.close()
 		return fail(err)
 	}
 	observedFirstUse, observedFingerprint := transport.Trust()

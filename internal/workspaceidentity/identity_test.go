@@ -3,13 +3,18 @@ package workspaceidentity
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 var identityTestTime = time.Date(2026, time.August, 3, 8, 0, 0, 0, time.UTC)
@@ -216,4 +221,43 @@ func (random *gatedIdentityRandom) Read(destination []byte) (int, error) {
 		destination[index] = random.value
 	}
 	return len(destination), nil
+}
+
+func TestWorkspaceDisplayLabelsDoNotAlterExactPathIdentity(t *testing.T) {
+	key := bytes.Repeat([]byte{0x51}, identityBytes)
+	manager, err := Open(context.Background(), t.TempDir(), bytes.NewReader(bytes.Repeat([]byte{0x51}, identityBytes*2)), identityTestTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+	for _, test := range []struct{ name, label string }{
+		{strings.Repeat("a", 121), strings.Repeat("a", 120)},
+		{strings.Repeat("a", 119) + "é", strings.Repeat("a", 119)},
+		{strings.Repeat("界", 41), strings.Repeat("界", 40)},
+		{" project ", "project"}, {"   ", "workspace"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := filepath.Join(t.TempDir(), test.name)
+			if err := os.Mkdir(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			scope, err := manager.ResolveLocal(context.Background(), directory)
+			if err != nil {
+				t.Fatalf("valid cwd rejected by display label: %v", err)
+			}
+			if scope.WorkspaceLabel() != test.label || !utf8.ValidString(scope.WorkspaceLabel()) {
+				t.Fatalf("display label=%q; want %q", scope.WorkspaceLabel(), test.label)
+			}
+			canonical, err := filepath.EvalSymlinks(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mac := hmac.New(sha256.New, key)
+			_, _ = mac.Write([]byte("vibermate.workspace/v1\x00" + runtime.GOOS + "\x00" + canonical))
+			expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+			if scope.WorkspaceID().String() != expected {
+				t.Fatal("display normalization altered exact canonical-path HMAC")
+			}
+		})
+	}
 }
