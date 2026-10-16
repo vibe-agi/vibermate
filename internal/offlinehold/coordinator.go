@@ -763,6 +763,15 @@ func validateProbeTarget(target ProbeTarget) error {
 		if target.TargetAccess != egressnetwork.TargetAccessPublicOnly && target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
 			return ErrInvalidRequest
 		}
+	} else if (target.Kind == EgressOpaque || target.Kind == EgressAuxiliary) &&
+		(target.Transport == ProbeTransportStrictTLS || target.Transport == ProbeTransportLoopbackCleartext || target.Transport == ProbeTransportPrivateCleartext) {
+		// TLS identity builders also serve closed provider-owned auxiliary producers.
+		// They may validate an incomplete identity here; the Original prober requires
+		// explicit access on every emitted target. New cleartext targets require it here too.
+		if target.TargetAccess != egressnetwork.TargetAccessPublicOnly && target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured &&
+			!(target.TargetAccess == 0 && target.Transport == ProbeTransportStrictTLS) {
+			return ErrInvalidRequest
+		}
 	} else if target.TargetAccess != 0 {
 		return ErrInvalidRequest
 	}

@@ -97,8 +97,13 @@ func (prober *TLSProber) Probe(
 		)
 	}
 	for _, reference := range request.Targets {
+		probeContext := ctx
 		switch reference.Kind {
 		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
+			if reference.TargetAccess != egressnetwork.TargetAccessPublicOnly && reference.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
+				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("original probe target access is missing or invalid"))
+			}
+			probeContext = egressnetwork.WithTargetAccess(ctx, reference.TargetAccess)
 		case offlinehold.EgressUpdate:
 			if reference.NetworkOrigin != "https://api.github.com" {
 				return offlinehold.NewProbeFailure(offlinehold.ProbeReasonFailed, errors.New("update probe origin is not the closed release source"))
@@ -160,7 +165,7 @@ func (prober *TLSProber) Probe(
 				err,
 			)
 		}
-		targetContext, cancel := context.WithTimeout(ctx, prober.timeout)
+		targetContext, cancel := context.WithTimeout(probeContext, prober.timeout)
 		raw, err := dialer.DialContext(
 			targetContext,
 			"tcp",

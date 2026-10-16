@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -228,6 +229,7 @@ func frozenOriginalProbeTarget(
 	}
 	return offlinehold.ProbeTarget{
 		Kind:          kind,
+		TargetAccess:  egressnetwork.TargetAccessOwnerConfigured,
 		Transport:     offlinehold.ProbeTransportStrictTLS,
 		TargetRef:     origin.String(),
 		NetworkOrigin: origin.String(),

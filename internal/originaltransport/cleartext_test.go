@@ -128,7 +128,7 @@ func TestOriginalCleartextProbeUsesPrivatePeerWithoutHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := offlinehold.ProbeTarget{Kind: offlinehold.EgressOpaque, Transport: offlinehold.ProbeTransportPrivateCleartext, TargetRef: "http://alias.test:8080", NetworkOrigin: "http://alias.test:8080", HTTPAuthority: "alias.test:8080", EgressPolicy: egressnetwork.DefaultPolicy()}
+	target := offlinehold.ProbeTarget{Kind: offlinehold.EgressOpaque, TargetAccess: egressnetwork.TargetAccessOwnerConfigured, Transport: offlinehold.ProbeTransportPrivateCleartext, TargetRef: "http://alias.test:8080", NetworkOrigin: "http://alias.test:8080", HTTPAuthority: "alias.test:8080", EgressPolicy: egressnetwork.DefaultPolicy()}
 	if err := prober.Probe(t.Context(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{target}}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +147,17 @@ func TestOriginalCleartextProbeRejectsAlteredIdentityBeforeDial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := offlinehold.ProbeTarget{Kind: offlinehold.EgressOpaque, Transport: offlinehold.ProbeTransportPrivateCleartext, TargetRef: "http://alias.test:8080", NetworkOrigin: "http://alias.test:8080", HTTPAuthority: "alias.test:8080", EgressPolicy: egressnetwork.DefaultPolicy()}
+	base := offlinehold.ProbeTarget{Kind: offlinehold.EgressOpaque, TargetAccess: egressnetwork.TargetAccessOwnerConfigured, Transport: offlinehold.ProbeTransportPrivateCleartext, TargetRef: "http://alias.test:8080", NetworkOrigin: "http://alias.test:8080", HTTPAuthority: "alias.test:8080", EgressPolicy: egressnetwork.DefaultPolicy()}
 	for _, mutate := range []func(*offlinehold.ProbeTarget){
+		func(t *offlinehold.ProbeTarget) { t.TargetAccess = 0 },
+		func(t *offlinehold.ProbeTarget) { t.TargetAccess = 99 },
+		func(t *offlinehold.ProbeTarget) {
+			t.NetworkOrigin = "https://alias.test:8080"
+			t.TargetRef = t.NetworkOrigin
+			t.Transport = offlinehold.ProbeTransportStrictTLS
+			t.TLSServerName = "alias.test"
+			t.TargetAccess = 0
+		},
 		func(t *offlinehold.ProbeTarget) {
 			t.Transport = offlinehold.ProbeTransportStrictTLS
 			t.TLSServerName = "alias.test"

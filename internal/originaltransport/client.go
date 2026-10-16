@@ -167,7 +167,7 @@ func (client *Client) Do(
 			client.finish(active)
 		}
 	}()
-	target := frozen.probeTarget()
+	target := frozen.probeTarget(egressnetwork.EffectiveTargetAccess(activeContext))
 	if err := target.Validate(); err != nil {
 		return nil, fmt.Errorf("freeze original-origin probe target: %w", err)
 	}

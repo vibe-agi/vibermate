@@ -118,6 +118,7 @@ func TestTrustedProbeBuildersKeepStrictTLSAndPrivateNetworkContainment(t *testin
 			target := frozenOriginalProbeTarget(t, offlinehold.EgressOpaque, "https://example.com")
 			if kind == "provider" {
 				target.Kind = offlinehold.EgressProvider
+				target.TargetAccess = 0
 				target.TargetRef = "private-provider"
 				target.PlanRevision = 1
 				target.PlanDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -175,6 +176,7 @@ func TestTrustedProbeBuildersRejectNilAndDoNotBorrowMutableRootPool(t *testing.T
 			target := frozenOriginalProbeTarget(t, offlinehold.EgressOpaque, "https://example.com")
 			if kind == "provider" {
 				target.Kind = offlinehold.EgressProvider
+				target.TargetAccess = 0
 				target.TargetRef = "private-provider"
 				target.PlanRevision = 1
 				target.PlanDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

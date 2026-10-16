@@ -189,7 +189,7 @@ func (request Request) Body() []byte {
 	return bytes.Clone(request.body)
 }
 
-func (request Request) probeTarget() offlinehold.ProbeTarget {
+func (request Request) probeTarget(access egressnetwork.TargetAccess) offlinehold.ProbeTarget {
 	transport := offlinehold.ProbeTransportStrictTLS
 	serverName := request.origin.Host()
 	switch request.origin.Transport() {
@@ -200,6 +200,7 @@ func (request Request) probeTarget() offlinehold.ProbeTarget {
 	}
 	return offlinehold.ProbeTarget{
 		Kind:          request.kind,
+		TargetAccess:  access,
 		Transport:     transport,
 		TargetRef:     request.origin.String(),
 		NetworkOrigin: request.origin.String(),
