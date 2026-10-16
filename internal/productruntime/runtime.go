@@ -910,6 +910,9 @@ func startWithBuilders(
 	cleanups.register("SOCKS proxy drain", socks.Drain)
 	cleanups.register("native MCP module", nativeTools.Close)
 	cleanups.register("provider transport", provider.Shutdown)
+	// LIFO: settle admitted rotations and their pending CAS before closing the
+	// provider transport; login shutdown first prevents further credential work.
+	cleanups.register("Codex OAuth credential manager", codexOAuth.Shutdown)
 	cleanups.register("Codex OAuth login manager", codexLogins.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)
