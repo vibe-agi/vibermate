@@ -25,6 +25,7 @@ check-workflows:
 	node --test .github/check-action-pins.test.mjs
 	node .github/check-action-pins.mjs
 	node --test .github/packaged-acceptance-contract.test.mjs
+	node --test tool/test-race-shard.test.mjs
 
 check-release-tooling:
 	node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
