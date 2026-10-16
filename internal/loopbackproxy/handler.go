@@ -697,7 +697,7 @@ func (handler *Handler) ServeHTTP(
 	if err != nil {
 		return
 	}
-	counted = &countingConnection{Conn: connection}
+	counted = &countingConnection{Conn: &hijackedConnection{Conn: connection, reader: buffered.Reader}}
 	if !handler.attachConnection(active, counted) {
 		terminalEvidence.Outcome = connectionevent.OutcomeCanceled
 		terminalEvidence.ErrorClass = string(ReasonProxyStopping)
@@ -888,7 +888,7 @@ func (handler *Handler) serveInner(
 	secureRequest := request != nil && request.URL != nil &&
 		!request.URL.IsAbs() && request.TLS != nil
 	cleartextRequest := request != nil && request.URL != nil &&
-		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+		request.URL.IsAbs() && request.URL.Scheme == "http"
 	observed := &observedResponseWriter{ResponseWriter: writer}
 	reason := "rejected"
 	if handler.targetObserver != nil {
@@ -1637,6 +1637,29 @@ func protocolReasonCode(err error) string {
 	}
 }
 
+// hijackedConnection preserves bytes the HTTP server read past CONNECT.
+// Writes and deadlines still belong to the underlying connection.
+type hijackedConnection struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (connection *hijackedConnection) Read(destination []byte) (int, error) {
+	if connection.reader.Buffered() > 0 {
+		return connection.reader.Read(destination)
+	}
+	// Subsequent reads must bypass the HTTP server's reader: inner HTTP
+	// deadline cancellation must not cancel the outer CONNECT context.
+	return connection.Conn.Read(destination)
+}
+
+func (connection *hijackedConnection) CloseWrite() error {
+	if closer, ok := connection.Conn.(interface{ CloseWrite() error }); ok {
+		return closer.CloseWrite()
+	}
+	return nil
+}
+
 type countingConnection struct {
 	net.Conn
 	bytesRead    atomic.Uint64
@@ -2023,14 +2046,34 @@ func canonicalCONNECTHost(host string) string {
 func authorityMatches(authority string, origin originidentity.ProviderOrigin) bool {
 	host, port, err := splitAuthority(authority)
 	if err != nil {
-		// HTTP/1.1 Host may omit the default HTTPS port after MITM.
-		host = strings.ToLower(authority)
-		port = 443
+		// Host may omit the destination scheme's default port, independently
+		// of whether the client reached the Runtime Server over TLS.
+		defaultPort := "443"
+		if origin.Scheme() == "http" {
+			defaultPort = "80"
+		}
+		host = authority
+		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+			host = host[1 : len(host)-1]
+			address, parseErr := netip.ParseAddr(host)
+			if parseErr != nil || !address.Is6() {
+				return false
+			}
+		} else if strings.ContainsAny(host, ":[]") {
+			return false
+		}
+		host, port, err = splitAuthority(net.JoinHostPort(host, defaultPort))
+		if err != nil {
+			return false
+		}
 	}
 	return host == origin.Host() && port == origin.Port()
 }
 
 func requestScheme(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.IsAbs() {
+		return request.URL.Scheme
+	}
 	if request != nil && request.TLS != nil {
 		return "https"
 	}
@@ -2598,6 +2641,7 @@ func (handler *Handler) serveBlindTunnel(
 		connectionTerminal.ErrorClass = egressErrorClass
 		return true
 	}
+	client = &hijackedConnection{Conn: client, reader: buffered.Reader}
 	if !handler.attachConnection(active, client) {
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 			blindTunnelTerminal(context.Canceled)
