@@ -4,6 +4,7 @@ import { z } from "zod";
 export const profileSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().min(1).max(1024),
+  clientToolAccessEnabled: z.boolean().optional(),
 }).strict();
 export type Profile = z.infer<typeof profileSchema>;
 
