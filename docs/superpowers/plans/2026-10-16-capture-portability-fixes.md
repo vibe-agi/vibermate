@@ -108,4 +108,3 @@
 - [ ] Run broader go test ./... once after targeted checks pass, investigate failures introduced by this change, and report unrelated environmental limits precisely.
 - [ ] Request independent whole-branch review, fix confirmed findings via TDD, reverify affected checks.
 - [ ] Make the finished changes available in the user's working checkout without overwriting unrelated edits; retain reviewable commits/worktree evidence. No push/deploy.
-

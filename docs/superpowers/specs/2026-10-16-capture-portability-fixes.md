@@ -33,4 +33,3 @@ Review reproductions:
 - /tmp/vibermate-origin-review.py and /tmp/vibermate-auth-tui-review.py: isolated native Codex 0.163.0 evidence; no inference request left the rejecting local proxy.
 
 Baseline run: servertransport, clienttarget, capturecontrol, clientadapter and cmd/vibermate passed. runlauncher failed in capability probes and Git snapshot; probe cases passed a serial rerun while Git snapshot still failed. Do not report a green baseline.
-
