@@ -183,16 +183,17 @@ func environmentManaged(
 	if _, managed := managedEnvironment[normalizedKey]; managed {
 		return true
 	}
-	if !managedClientCredential {
-		return false
-	}
 	if recipe == clientadapter.LaunchCodexResponsesHTTP {
-		// Native credentials, provider routing and account inputs stay Codex
-		// owned, even when Core replaces authentication at the final boundary.
+		// Transport trust belongs to the verified recipe, independently of
+		// whether native auth and provider configuration establish a target.
+		// Credentials, provider routing and account inputs remain Codex-owned.
 		switch normalizedKey {
 		case "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE":
 			return true
 		}
+		return false
+	}
+	if !managedClientCredential {
 		return false
 	}
 	if recipe == clientadapter.LaunchNodeEnvProxy {

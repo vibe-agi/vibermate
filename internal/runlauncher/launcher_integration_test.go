@@ -1171,7 +1171,7 @@ func TestLauncherPreservesCodexNativeProviderSelection(t *testing.T) {
 			}))
 			defer server.Close()
 			var output bytes.Buffer
-			launcher, err := runlauncher.New(runlauncher.Config{Discovery: fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}}, BaseEnvironment: append([]string{"PATH=/usr/bin:/bin", "CODEX_HOME=" + directory, "CODEX_CONNECTORS_TOKEN=synthetic-connectors", "OPENAI_ORGANIZATION=synthetic-org"}, test.extra...), Stdin: strings.NewReader(""), Stdout: &output, Stderr: io.Discard, Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil }})
+			launcher, err := runlauncher.New(runlauncher.Config{Discovery: fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}}, BaseEnvironment: append([]string{"PATH=/usr/bin:/bin", "CODEX_HOME=" + directory, "CODEX_CONNECTORS_TOKEN=synthetic-connectors", "OPENAI_ORGANIZATION=synthetic-org", "CODEX_CA_CERTIFICATE=/stale/codex-ca.pem", "SSL_CERT_FILE=/stale/ssl.pem", "REQUESTS_CA_BUNDLE=/stale/requests.pem", "CURL_CA_BUNDLE=/stale/curl.pem"}, test.extra...), Stdin: strings.NewReader(""), Stdout: &output, Stderr: io.Discard, Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil }})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1186,6 +1186,20 @@ func TestLauncherPreservesCodexNativeProviderSelection(t *testing.T) {
 				t.Fatal("child environment missing")
 			}
 			values := parseLines(childEnv)
+			// Transport trust belongs to the recipe even when native auth and
+			// provider selection leave the launch target unknown.
+			wantCA := control.rootPath
+			if runtime.GOOS == "darwin" {
+				wantCA = ""
+			}
+			if got := values["CODEX_CA_CERTIFICATE"]; got != wantCA {
+				t.Errorf("Codex transport CA = %q, want %q", got, wantCA)
+			}
+			for _, key := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"} {
+				if _, exists := values[key]; exists {
+					t.Errorf("ambient transport override survived: %s", key)
+				}
+			}
 			wantEnv := parseLines(strings.Join(append([]string{"CODEX_HOME=" + directory, "CODEX_CONNECTORS_TOKEN=synthetic-connectors", "OPENAI_ORGANIZATION=synthetic-org", "CODEX_API_KEY=", "OPENAI_API_KEY="}, test.extra...), "\n"))
 			for key, value := range wantEnv {
 				if values[key] != value {
