@@ -888,7 +888,8 @@ func (handler *Handler) serveInner(
 	secureRequest := request != nil && request.URL != nil &&
 		!request.URL.IsAbs() && request.TLS != nil
 	cleartextRequest := request != nil && request.URL != nil &&
-		request.URL.IsAbs() && request.URL.Scheme == "http"
+		request.URL.IsAbs() && request.URL.Scheme == "http" &&
+		request.URL.Scheme == binding.ProviderOrigin.Scheme()
 	observed := &observedResponseWriter{ResponseWriter: writer}
 	reason := "rejected"
 	if handler.targetObserver != nil {

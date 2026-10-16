@@ -309,3 +309,32 @@ func TestDefaultPortMatchingRejectsMalformedAuthorities(t *testing.T) {
 		t.Errorf("invalid authorities reached exchange executor: %d requests", len(requests))
 	}
 }
+
+func TestRejectsHTTPTargetInHTTPSBinding(t *testing.T) {
+	f := newProxyFixture(t)
+	defer f.Close(t)
+	connection := f.ConnectTLS(t, f.grant.ProxyCapability.Value(), "api.anthropic.com:443", "api.anthropic.com")
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	const body = `{"model":"client"}`
+	if _, err := fmt.Fprintf(connection, "POST http://api.anthropic.com:443/v1/messages HTTP/1.1\r\nHost: api.anthropic.com:443\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusMisdirectedRequest {
+		t.Errorf("absolute HTTP target inside frozen HTTPS tunnel status=%d body=%s, want 421", response.StatusCode, payload)
+	}
+	if requests := f.exchanges.Requests(); len(requests) != 0 {
+		t.Errorf("HTTP target reached HTTPS exchange executor: %d requests", len(requests))
+	}
+}
