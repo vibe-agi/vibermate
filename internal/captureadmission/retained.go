@@ -18,6 +18,7 @@ type retainedKey struct {
 	revision  uint64
 }
 type subscription struct {
+	entry     *retainedEntry
 	receipt   *retainedReceipt
 	cancel    func()
 	done      chan struct{}
@@ -26,6 +27,7 @@ type subscription struct {
 type retainedEntry struct {
 	admission        Admission
 	validity         captureauthority.Validity
+	validityKnown    bool
 	version, checked uint64
 	dirty            bool
 	reading          context.CancelFunc
@@ -79,11 +81,16 @@ func keyOf(a Admission) retainedKey { return retainedKey{a.AdmissionRef(), a.Cre
 
 // Retain registers BEFORE the final source read. Changes fence every running
 // read and also match pending entries whose identity indexes are not known yet.
+// Once inserted, the returned cleanup handle is non-nil even on admission error.
+// The caller must release it only after its outer operation cleanup has finished.
 func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func()) (func(), error) {
 	// Attribution constructors are public; only authenticated receipts may join
 	// an existing generation. Never borrow the first subscriber's permission.
 	if admission.receipt == nil || admission.receipt.issuer == nil || admission.receipt.withdrawn.Load() || cancel == nil || ctx == nil {
 		return nil, ErrCredentialRejected
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	key := keyOf(admission)
 	sub := &subscription{receipt: admission.receipt, cancel: cancel, done: make(chan struct{})}
@@ -101,6 +108,7 @@ func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func(
 		entry = &retainedEntry{admission: admission, subscribers: make(map[*subscription]struct{})}
 		r.entries[key] = entry
 	}
+	sub.entry = entry
 	entry.subscribers[sub] = struct{}{}
 	r.subscriptions[sub] = struct{}{}
 	r.markLocked(entry)
@@ -127,8 +135,7 @@ func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func(
 		r.mu.Lock()
 		if sub.withdrawn || !r.accepting {
 			r.mu.Unlock()
-			release()
-			return nil, ErrCredentialRejected
+			return release, ErrCredentialRejected
 		}
 		if entry.checked >= version && !entry.dirty {
 			r.mu.Unlock()
@@ -139,8 +146,20 @@ func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func(
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			release()
-			return nil, ctx.Err()
+			r.mu.Lock()
+			// This request can no longer become active, but its outer cleanup is still
+			// owned. Remove it from validity scheduling, not from subscriptions.
+			sub.withdrawn = true
+			delete(entry.subscribers, sub)
+			if r.entries[key] == entry && len(entry.subscribers) == 0 {
+				delete(r.entries, key)
+				if entry.reading != nil {
+					entry.reading()
+				}
+			}
+			r.signalLocked()
+			r.mu.Unlock()
+			return release, ctx.Err()
 		}
 	}
 }
@@ -153,10 +172,20 @@ func (r *Retained) markLocked(entry *retainedEntry) {
 	r.signalLocked()
 }
 func matches(change captureauthority.Change, entry *retainedEntry) bool {
-	if entry.checked == 0 {
+	// The sealed admission always identifies its Capture/generation, including
+	// when the first validity read failed. User/Session indexes require a
+	// successful source read; checked also counts failures and is not that proof.
+	capture, _ := entry.admission.CaptureReference()
+	if change.Capture.ID != "" && capture == change.Capture {
 		return true
 	}
-	return change.Capture.ID != "" && entry.validity.Capture == change.Capture || change.UserID != "" && entry.validity.UserID == change.UserID || change.SessionDigest != ([32]byte{}) && entry.validity.SessionDigest == change.SessionDigest
+	if change.UserID == "" && change.SessionDigest == ([32]byte{}) {
+		return false
+	}
+	if !entry.validityKnown {
+		return true
+	}
+	return change.UserID != "" && entry.validity.UserID == change.UserID || change.SessionDigest != ([32]byte{}) && entry.validity.SessionDigest == change.SessionDigest
 }
 
 // BeginChange fences work immediately. Its wait joins withdrawn subscriptions
@@ -170,7 +199,7 @@ func (r *Retained) BeginChange(change captureauthority.Change) func(context.Cont
 	var targets []target
 	r.mu.Lock()
 	for _, entry := range r.entries {
-		if matches(change, entry) {
+		if r.accepting && matches(change, entry) {
 			r.markLocked(entry)
 			t := target{entry: entry, version: entry.version}
 			for sub := range entry.subscribers {
@@ -179,10 +208,22 @@ func (r *Retained) BeginChange(change captureauthority.Change) func(context.Cont
 			targets = append(targets, t)
 		}
 	}
+	// Retired entries no longer participate in validity scheduling, but their
+	// subscriptions still own cleanup. Join those exact owners without reading
+	// again, reviving them, or borrowing a replacement generation's facts.
+	var retired []*subscription
+	for sub := range r.subscriptions {
+		if sub.withdrawn && matches(change, sub.entry) {
+			retired = append(retired, sub)
+		}
+	}
+	if len(retired) != 0 {
+		targets = append(targets, target{subs: retired})
+	}
 	r.mu.Unlock()
 	return func(ctx context.Context) error {
 		for _, target := range targets {
-			for {
+			for target.entry != nil {
 				r.mu.Lock()
 				complete := target.entry.checked >= target.version || len(target.entry.subscribers) == 0 || !r.accepting
 				changed := r.changed
@@ -281,6 +322,7 @@ func (r *Retained) run() {
 				}
 			} else {
 				selected.validity = validity
+				selected.validityKnown = true
 			}
 			r.signalLocked()
 		}

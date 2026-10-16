@@ -540,3 +540,57 @@ func TestRetainedRevocationJoinsConnectionTerminal(t *testing.T) {
 		t.Fatal("revocation did not persist connection terminal")
 	}
 }
+
+func TestRetainedFinishJoinsPreviouslyExpiredConnectionTerminal(t *testing.T) {
+	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
+	defer block.unblock()
+	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
+		block.Repository = request.repository
+		request.repository = block
+		return buildConnectionEvent(ctx, request)
+	}})
+	f.transport.DisableKeepAlives = false
+	dir := t.TempDir()
+	grant, err := f.r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", Lifetime: time.Second, CatalogRevision: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, _ := captureidentity.New(captureidentity.KindManagedRun, grant.Run.ID)
+	if _, err = f.r.CaptureAssignments().Create(t.Context(), captureassignment.CreateCommand{Capture: capture, EnvironmentID: f.aggregate.ID, Source: captureassignment.SourceLaunch}); err != nil {
+		t.Fatal(err)
+	}
+	proxy, _ := url.Parse(f.listener.URL)
+	proxy.User = url.UserPassword("capture", grant.ProxyCapability.Value())
+	f.transport.Proxy = http.ProxyURL(proxy)
+	if reply := f.send(t.Context(), "POST", semanticOriginalPath, semanticOriginalBody); reply.Err != nil || reply.Status != 200 {
+		t.Fatalf("baseline=%+v", reply)
+	}
+	select {
+	case <-block.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expiry did not enter connection terminal")
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- f.r.captureRuns.Finish(t.Context(), grant.Run.ID, grant.ControlCapability) }()
+	returned := false
+	select {
+	case err := <-finished:
+		returned = true
+		if err != nil {
+			t.Error(err)
+		}
+		t.Error("Finish missed previously expired connection's held terminal")
+	case <-time.After(30 * time.Millisecond):
+	}
+	block.unblock()
+	if !returned {
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Finish did not join released expired connection")
+		}
+	}
+}

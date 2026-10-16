@@ -488,13 +488,15 @@ func (handler *Handler) ServeHTTP(
 		Retain(context.Context, captureadmission.Admission, func()) (func(), error)
 	}); ok {
 		release, retainErr := authority.Retain(request.Context(), admission, func() { handler.withdraw(active) })
+		// A failed final read may still own a registered subscription. Its
+		// rejection audit belongs to the same outer operation as successful ingress.
+		handler.mu.Lock()
+		active.retainedRelease = release
+		handler.mu.Unlock()
 		if retainErr != nil {
 			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 			return
 		}
-		handler.mu.Lock()
-		active.retainedRelease = release
-		handler.mu.Unlock()
 	}
 	source := connectionSource(admission)
 	capture, err := admission.CaptureReference()
