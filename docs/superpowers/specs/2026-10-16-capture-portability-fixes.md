@@ -11,7 +11,8 @@ The user approved fixing the 2026-10-16 review findings, test first.
 - HTTP target scheme/default port must be independent of TLS on the Runtime Server connection. CONNECT must preserve already-buffered tunnel bytes.
 - Client Relay termination must cancel pending dials and join both copy directions without stranded writes.
 - Network establishment, Capture preparation, remote authentication, client capability-probe failure and unsupported capability are distinct errors. Public diagnostics must not expose secrets or arbitrary server response content.
-- Capability probing remains bounded and preserves process isolation; a slow probe is not evidence of unsupported flags.
+- Capability probing has a bounded30s budget (explicit user steering) and preserves process isolation and caller cancellation; a slow probe is not evidence of unsupported flags.
+- Runtime Server connection establishment permits up to30s rather than the hidden5s cap, bounded by any shorter caller deadline. Doctor uses30s diagnostic checks; heartbeat, attach, finish and Capture creation retain their distinct operation budgets.
 - Investigate and resolve the existing Git launch snapshot test failure without removing its useful metadata/secret-redaction coverage.
 - User added that doctor is misleading. Make it a truthful staged diagnostic, including a real credential-free CONNECT authentication-rejection probe through the production Client Relay/Runtime transport. Validate optional explicit Environment availability; report failures with actionable known reasons and clearly mark untested Capture creation, authorized forwarding, native client behavior and upstream inference. Do not equate healthy control/session checks or an expected407 entry probe with end-to-end readiness. No Capture/policy/model action is part of doctor; ordinary connection audit of the probe is permitted.
 
