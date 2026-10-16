@@ -97,7 +97,7 @@ func probeTLS(ctx context.Context, options SystemTrustProbeOptions, config *tls.
 		return nil, serverconnection.ErrInvalidAddress
 	}
 	networkDialer := &net.Dialer{
-		Timeout: min(options.Timeout, 5*time.Second), KeepAlive: 15 * time.Second,
+		Timeout: min(options.Timeout, 30*time.Second), KeepAlive: 15 * time.Second,
 	}
 	config.MinVersion = tls.VersionTLS13
 	config.NextProtos = []string{"http/1.1"}
@@ -140,7 +140,7 @@ func Open(options Options) (*Transport, error) {
 	result := &Transport{
 		target: options.Target,
 		dialer: &net.Dialer{
-			Timeout:   min(options.Timeout, 5*time.Second),
+			Timeout:   min(options.Timeout, 30*time.Second),
 			KeepAlive: 15 * time.Second,
 		},
 	}

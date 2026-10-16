@@ -1,4 +1,6 @@
 {
+  "cli.error.codexProbeFailed": "无法检查 Codex 是否能在本次捕获中独立运行。请确认 codex --help 能成功完成后重试。",
+  "cli.error.codexProbeFailureDetail": "Codex 能力检查失败：{{details}}。",
   "cli.profiles.off": "{{name}} · 工具服务：关闭",
   "cli.profiles.on": "{{name}} · 工具服务：开启",
   "cli.usage.ca": "用法：vibermate ca install|status --server <http(s)://host:port> [--fingerprint <SHA-256>] [--yes]\n      vibermate ca download --server <http(s)://host:port> --out <certificate.crt>\n请先通过 vibermate login --server 登录。自动识别本机平台；HTTP 连接下使用 --yes 必须指定独立核对的证书指纹。",

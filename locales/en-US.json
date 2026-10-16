@@ -1,4 +1,6 @@
 {
+  "cli.error.codexProbeFailed": "Could not check whether Codex can run inside this Capture. Check that codex --help completes successfully, then retry.",
+  "cli.error.codexProbeFailureDetail": "Codex capability check failed: {{details}}.",
   "cli.profiles.off": "{{name}} · Tool services: Off",
   "cli.profiles.on": "{{name}} · Tool services: On",
   "cli.usage.ca": "Usage: vibermate ca install|status --server <http(s)://host:port> [--fingerprint <SHA-256>] [--yes]\n       vibermate ca download --server <http(s)://host:port> --out <certificate.crt>\nLog in first with vibermate login --server. The local platform is detected automatically. HTTP installation with --yes requires an independently checked fingerprint.",

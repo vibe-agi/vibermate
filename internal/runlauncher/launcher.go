@@ -293,6 +293,12 @@ func (launcher *Launcher) Run(
 		childArguments, err = prepareCodexCaptureArguments(ctx, grant.ExecutablePath, command[1:], childArguments, launcher.config.BaseEnvironment, legacyIndependent)
 		if err != nil {
 			launcher.finishBestEffort(control, grant)
+			if callerErr := ctx.Err(); callerErr != nil {
+				err = callerErr
+			}
+			if errors.Is(err, context.Canceled) {
+				return 130, err
+			}
 			return 1, err
 		}
 	}

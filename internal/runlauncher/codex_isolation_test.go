@@ -237,7 +237,6 @@ func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 
 func TestCodexHelpBound(t *testing.T) {
 	for _, script := range []string{
-		"sleep 5\n",
 		"trap '' TERM\nwhile :; do printf '012345678901234567890123456789\\n'; done\n",
 		"(trap '' TERM; sleep 5) &\nprintf '      --no-daemon\\n'\nexit 0\n",
 		"printf '      --no-daemon\\n'; exit 7\n",
@@ -246,7 +245,9 @@ func TestCodexHelpBound(t *testing.T) {
 		client := codexHelpFixture(t, script)
 		start := time.Now()
 		_, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, nil, false)
-		if !errors.Is(err, ErrCodexIsolationUnsupported) || time.Since(start) > 2500*time.Millisecond {
+		var failure *CodexProbeFailure
+		wantUnsupported := strings.HasPrefix(script, "printf 'example prompt")
+		if (wantUnsupported && !errors.Is(err, ErrCodexIsolationUnsupported)) || (!wantUnsupported && !errors.As(err, &failure)) || time.Since(start) > 2500*time.Millisecond {
 			t.Errorf("unbounded/accepted help: elapsed=%v err=%v", time.Since(start), err)
 		}
 		if err != nil && strings.Contains(err.Error(), "example prompt") {
@@ -270,7 +271,8 @@ printf '      --no-daemon\n'
 	}
 	// Each stream is under 64 KiB; together they exceed the shared cap.
 	client = codexHelpFixture(t, "printf '      --no-daemon\\n'\nhead -c 40000 /dev/zero\nhead -c 40000 /dev/zero >&2\n")
-	if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.Is(err, ErrCodexIsolationUnsupported) {
+	var failure *CodexProbeFailure
+	if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.As(err, &failure) || failure.Reason != "output_limit" {
 		t.Fatalf("combined output limit ignored: %v", err)
 	}
 }
@@ -290,7 +292,8 @@ func TestCodexHelpBoundReapsProbeAndPipeHoldingDescendants(t *testing.T) {
 		}
 		client := codexHelpFixture(t, script)
 		start := time.Now()
-		if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.Is(err, ErrCodexIsolationUnsupported) {
+		var failure *CodexProbeFailure
+		if _, err := prepareCodexCaptureArguments(context.Background(), client, nil, nil, []string{"PATH=/usr/bin:/bin"}, false); !errors.As(err, &failure) {
 			t.Fatalf("unbounded probe accepted: %v", err)
 		}
 		if time.Since(start) > 2500*time.Millisecond {

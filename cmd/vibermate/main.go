@@ -278,6 +278,10 @@ func executeContext(
 	if errors.Is(err, context.Canceled) {
 		return 130, ""
 	}
+	var probeFailure *runlauncher.CodexProbeFailure
+	if errors.As(err, &probeFailure) {
+		_ = renderCLIMessage(environment, stderr, "cli.error.codexProbeFailureDetail", map[string]string{"details": probeFailure.SafeSummary()})
+	}
 	var controlFailure *runlauncher.ControlFailure
 	if errors.As(err, &controlFailure) {
 		catalogs, catalogErr := locales.New()
@@ -300,6 +304,10 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	var probeFailure *runlauncher.CodexProbeFailure
+	if errors.As(err, &probeFailure) {
+		return "cli.error.codexProbeFailed"
+	}
 	if errors.Is(err, runlauncher.ErrCodexIsolationUnsupported) {
 		return "cli.error.codexIsolationUnsupported"
 	}

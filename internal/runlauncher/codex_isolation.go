@@ -14,6 +14,25 @@ import (
 // Isolation is a launch compatibility fact, never release or Root evidence.
 var ErrCodexIsolationUnsupported = errors.New("this Codex invocation cannot be isolated within the current Capture")
 
+// CodexProbeFailure reports only a locally selected reason, never executable
+// paths, child output, environment values or operating-system error text.
+type CodexProbeFailure struct {
+	Reason string
+}
+
+func (failure *CodexProbeFailure) SafeSummary() string {
+	reason := "unknown"
+	switch failure.Reason {
+	case "start_failed", "exit_failed", "output_limit", "timed_out":
+		reason = failure.Reason
+	}
+	return "reason=" + reason
+}
+
+func (failure *CodexProbeFailure) Error() string {
+	return "Codex capability probe failed: " + failure.SafeSummary()
+}
+
 type codexInvocationKind uint8
 
 const (
@@ -197,7 +216,11 @@ func prepareCodexCaptureArguments(ctx context.Context, executable string, origin
 	if legacyIndependent && hasVerifiedRecipeConfigPrefix(prepared, original) {
 		return slices.Clone(prepared), nil
 	}
-	if codexSupportsNoDaemon(ctx, executable, environment) {
+	supported, err := codexSupportsNoDaemon(ctx, executable, environment)
+	if err != nil {
+		return nil, err
+	}
+	if supported {
 		return append([]string{"--no-daemon"}, prepared...), nil
 	}
 	return nil, ErrCodexIsolationUnsupported
@@ -252,11 +275,14 @@ func (output *codexHelpOutput) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func codexSupportsNoDaemon(ctx context.Context, executable string, environment []string) bool {
+func codexSupportsNoDaemon(ctx context.Context, executable string, environment []string) (bool, error) {
 	if ctx == nil || executable == "" {
-		return false
+		return false, &CodexProbeFailure{Reason: "start_failed"}
 	}
-	probeContext, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	output := &codexHelpOutput{cancel: cancel}
 	command := exec.CommandContext(probeContext, executable, "--help")
@@ -280,17 +306,31 @@ func codexSupportsNoDaemon(ctx context.Context, executable string, environment [
 	restore := configureChild(command, 100*time.Millisecond, nil)
 	defer restore()
 	if err := command.Start(); err != nil {
-		return false
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		return false, &CodexProbeFailure{Reason: "start_failed"}
 	}
 	err := waitChild(command, 100*time.Millisecond)
-	if err != nil || probeContext.Err() != nil || output.overflow {
-		return false
+	// Caller cancellation wins even if overflow or the internal deadline also
+	// canceled the probe while its owned process group was being cleaned up.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if output.overflow {
+		return false, &CodexProbeFailure{Reason: "output_limit"}
+	}
+	if errors.Is(probeContext.Err(), context.DeadlineExceeded) {
+		return false, &CodexProbeFailure{Reason: "timed_out"}
+	}
+	if err != nil {
+		return false, &CodexProbeFailure{Reason: "exit_failed"}
 	}
 	for _, line := range strings.Split(string(output.data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) > 0 && fields[0] == "--no-daemon" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
