@@ -62,11 +62,12 @@
 
 ### Task 6: Freeze release identity and review report
 
-**Files:** existing pubspec/product_version/distribution-policy/workflow version consumers and corresponding identity fixtures; docs/releases/v0.1.29.md; docs/reviews/2026-10-16-codebase-release.md.
+**Files:** existing pubspec/product_version/distribution-policy/workflow version consumers and corresponding identity fixtures; docs/releases/v0.1.29.md; docs/reviews/2026-10-16-codebase-release.md; docs/module-map.md only for the new retained-authority ownership.
 **Interfaces:** coherent candidate version0.1.29+31 and existing identity-binding test; release notes and source-bound audit coverage.
 - [ ] Root rechecks latest main/tag/release/tap; settle identity before edits.
 - [ ] Existing identity test RED with intermediate pubspec change, then complete exact consumers and GREEN. No unrelated numeric/schema changes.
 - [ ] Record user-visible fixes, all audit findings and dispositions, qualification limits and actual source identity without claiming publication early. Run release-tooling/workflow contracts on pinned tools; review/commit.
+- [ ] Update the existing module map to distinguish shared validity/change facts, live admission/retained lifetime ownership, and immutable Capture routing assignment. Preserve the existing terminology and unrelated module entries.
 
 ### Task 7: Qualify and integrate the frozen candidate
 
