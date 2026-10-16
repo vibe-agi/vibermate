@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,8 +20,11 @@ import (
 )
 
 type heldOriginalNetwork struct {
-	address      string
-	dials, bytes atomic.Int64
+	address       string
+	dials, bytes  atomic.Int64
+	beforeRecord  func()
+	writeRecorded chan struct{}
+	recordOnce    sync.Once
 }
 
 func (n *heldOriginalNetwork) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -45,7 +49,13 @@ type heldOriginalConnection struct {
 
 func (c *heldOriginalConnection) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
+	if c.network.beforeRecord != nil {
+		c.network.beforeRecord()
+	}
 	c.network.bytes.Add(int64(n))
+	if n > 0 {
+		c.network.recordOnce.Do(func() { close(c.network.writeRecorded) })
+	}
 	return n, err
 }
 
@@ -73,7 +83,7 @@ func newHeldOriginalFixture(t *testing.T) *heldOriginalFixture {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(server.Close)
-	f.network = &heldOriginalNetwork{address: server.Listener.Addr().String()}
+	f.network = &heldOriginalNetwork{address: server.Listener.Addr().String(), writeRecorded: make(chan struct{})}
 	var err error
 	f.origin, err = originidentity.ParseProviderOrigin(server.URL)
 	if err != nil {
@@ -182,6 +192,22 @@ func TestOriginalHTTPHoldResumePreservesTargetAccess(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newHeldOriginalFixture(t)
+			var releaseWrite func()
+			if access == egressnetwork.TargetAccessOwnerConfigured {
+				// The peer may reply before the transport's Write goroutine records
+				// its bytes. Force that ordering without delaying the actual write.
+				record := make(chan struct{})
+				var once sync.Once
+				releaseWrite = func() { once.Do(func() { close(record) }) }
+				t.Cleanup(releaseWrite)
+				f.network.beforeRecord = func() {
+					select {
+					case <-record:
+					case <-time.After(3 * time.Second):
+						t.Error("owner write-accounting barrier was not released")
+					}
+				}
+			}
 			f.queue(t, "held-original", access)
 			pending := f.pending(t, 1)
 			if len(pending) != 1 {
@@ -208,6 +234,12 @@ func TestOriginalHTTPHoldResumePreservesTargetAccess(t *testing.T) {
 					}
 				case <-time.After(3 * time.Second):
 					t.Fatal("owner request did not finish")
+				}
+				releaseWrite()
+				select {
+				case <-f.network.writeRecorded:
+				case <-time.After(3 * time.Second):
+					t.Fatal("owner transport did not record its completed write")
 				}
 				if f.network.dials.Load() != 2 || f.httpCalls.Load() != 1 || f.network.bytes.Load() == 0 {
 					t.Errorf("owner resume missing probe/send: dials=%d HTTP=%d bytes=%d", f.network.dials.Load(), f.httpCalls.Load(), f.network.bytes.Load())

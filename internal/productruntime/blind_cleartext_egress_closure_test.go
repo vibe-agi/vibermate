@@ -107,7 +107,7 @@ func (n *b4Network) counts(address string) (int, int) {
 type b4Listener struct {
 	l                 net.Listener
 	mu                sync.Mutex
-	sockets           map[net.Conn]bool
+	sockets           map[net.Conn]bool // true only when stop explicitly closes this socket
 	wg                sync.WaitGroup
 	done              chan struct{}
 	once              sync.Once
@@ -126,7 +126,12 @@ func b4Listen(t *testing.T) *b4Listener {
 	t.Cleanup(func() { p.stop(); b4Join(t, p.done, "listener") })
 	return p
 }
-func (p *b4Listener) track(c net.Conn) { p.mu.Lock(); p.sockets[c] = true; p.mu.Unlock() }
+func (p *b4Listener) track(c net.Conn) { p.mu.Lock(); p.sockets[c] = false; p.mu.Unlock() }
+func (p *b4Listener) closedByStop(c net.Conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sockets[c]
+}
 func (p *b4Listener) serve(handle func(net.Conn)) {
 	p.mu.Lock()
 	p.started = true
@@ -158,6 +163,7 @@ func (p *b4Listener) stop() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		for c := range p.sockets {
+			p.sockets[c] = true
 			c.Close()
 		}
 		if !p.started {
@@ -296,7 +302,9 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 		if port == 443 {
 			n, err := io.Copy(c, reader)
 			f.bytes.Add(n)
-			if err != nil {
+			// stop closes this fixture's socket before joining its copy worker.
+			// Only that exact local close is an expected teardown interruption.
+			if err != nil && !(errors.Is(err, net.ErrClosed) && f.origin.closedByStop(c)) {
 				f.bad("opaque echo: %v", err)
 			}
 			return
@@ -720,6 +728,34 @@ func (f *b4Fixture) queued() {
 		f.t.Fatalf("queued target=%+v want=%+v err=%v", targets, want, err)
 	}
 }
+
+// Keep a real echo copy active when fixture cleanup closes its own socket.
+// This forces the teardown ordering seen after retained-authority cancellation.
+func TestBlindEchoFixtureShutdownJoinsActiveCopy(t *testing.T) {
+	f := newB4Fixture(t, 443)
+	conn, err := net.DialTimeout("tcp4", f.origin.l.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	const payload = "fixture-echo"
+	if _, err := io.WriteString(conn, payload); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, len(payload))
+	if _, err := io.ReadFull(conn, reply); err != nil || string(reply) != payload {
+		t.Fatalf("fixture echo=%q err=%v", reply, err)
+	}
+	f.origin.stop()
+	b4Join(t, f.origin.done, "active origin echo")
+	if got := f.bytes.Load(); got != int64(len(payload)) {
+		t.Errorf("fixture echoed bytes=%d want=%d", got, len(payload))
+	}
+}
+
 func TestActualRuntimeBlindBuiltinUnset(t *testing.T)     { runB4Unset(t, 443) }
 func TestActualRuntimeCleartextBuiltinUnset(t *testing.T) { runB4Unset(t, 80) }
 func runB4Unset(t *testing.T, port uint16) {
