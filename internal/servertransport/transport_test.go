@@ -1,15 +1,19 @@
 package servertransport
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,3 +175,61 @@ func TestTransportConfinesHTTPAndStreamsToTheSelectedRuntimeServer(t *testing.T)
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }
+
+func TestReadOnlyTransportDoesNotReenrollTrustRemovedAfterOpen(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1); w.WriteHeader(204) }))
+	defer server.Close()
+	target, err := serverconnection.ParseTarget(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(t.TempDir(), "trust")
+	options := Options{Target: target, TrustDirectory: directory, Clock: fixedClock{now: time.Now()}, Timeout: time.Second}
+	normal, err := Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := normal.Dial(t.Context())
+	normal.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.Close()
+	options.ReadOnlyTrust = true
+	diagnostic, err := Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer diagnostic.Close()
+	// Existing private trust still verifies and does not change the decision.
+	before, err := os.ReadFile(filepath.Join(directory, "server-pins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err = diagnostic.Dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.Close()
+	after, err := os.ReadFile(filepath.Join(directory, "server-pins.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("existing trust mutated")
+	}
+	// Removal between Open and peer verification must never trigger enrollment.
+	if err := os.Remove(filepath.Join(directory, "server-pins.json")); err != nil {
+		t.Fatal(err)
+	}
+	if peer, err = diagnostic.Dial(t.Context()); !errors.Is(err, serverconnection.ErrTrustNotConfigured) {
+		if peer != nil {
+			peer.Close()
+		}
+		t.Fatalf("removed trust accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "server-pins.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("removed decision recreated")
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("sent %d requests", requests.Load())
+	}
+}

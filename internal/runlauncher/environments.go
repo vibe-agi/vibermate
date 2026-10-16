@@ -15,6 +15,10 @@ import (
 // Environments reads only the launch choices allowed to the CLI's existing
 // local principal or saved Runtime User login. No management token is needed.
 func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.CaptureEnvironments, error) {
+	return launcher.environments(ctx, false)
+}
+
+func (launcher *Launcher) environments(ctx context.Context, readOnlyTrust bool) (capturecontrol.CaptureEnvironments, error) {
 	if launcher == nil || ctx == nil {
 		return capturecontrol.CaptureEnvironments{}, errors.New("launcher and context are required")
 	}
@@ -35,7 +39,7 @@ func (launcher *Launcher) Environments(ctx context.Context) (capturecontrol.Capt
 		}
 		transport, openErr := servertransport.Open(servertransport.Options{
 			Target: remote.Target, TrustDirectory: filepath.Join(remote.StateDirectory, "trust"),
-			Clock: remote.Clock, Timeout: launcher.config.ControlTimeout,
+			Clock: remote.Clock, Timeout: launcher.config.ControlTimeout, ReadOnlyTrust: readOnlyTrust,
 		})
 		if openErr != nil {
 			return capturecontrol.CaptureEnvironments{}, openErr

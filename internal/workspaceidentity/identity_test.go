@@ -232,8 +232,8 @@ func TestWorkspaceDisplayLabelsDoNotAlterExactPathIdentity(t *testing.T) {
 	defer manager.Shutdown(context.Background())
 	for _, test := range []struct{ name, label string }{
 		{strings.Repeat("a", 121), strings.Repeat("a", 120)},
-		{strings.Repeat("a", 119) + "é", strings.Repeat("a", 119)},
-		{strings.Repeat("界", 41), strings.Repeat("界", 40)},
+		{strings.Repeat("a", 119) + "\u00e9", strings.Repeat("a", 119)},
+		{strings.Repeat("\u754c", 41), strings.Repeat("\u754c", 40)},
 		{" project ", "project"}, {"   ", "workspace"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

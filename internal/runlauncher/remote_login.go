@@ -95,6 +95,10 @@ func InspectRemote(
 	clock RemoteClock,
 	timeout time.Duration,
 ) (RemoteInspection, error) {
+	return inspectRemote(ctx, target, stateDirectory, clock, timeout, false)
+}
+
+func inspectRemote(ctx context.Context, target serverconnection.Target, stateDirectory string, clock RemoteClock, timeout time.Duration, readOnlyTrust bool) (RemoteInspection, error) {
 	if ctx == nil || !target.Valid() || stateDirectory == "" ||
 		!filepath.IsAbs(stateDirectory) || filepath.Clean(stateDirectory) != stateDirectory ||
 		clock == nil || timeout <= 0 {
@@ -117,7 +121,7 @@ func InspectRemote(
 	}
 	transport, err := servertransport.Open(servertransport.Options{
 		Target: target, TrustDirectory: filepath.Join(stateDirectory, "trust"),
-		Clock: clock, Timeout: timeout,
+		Clock: clock, Timeout: timeout, ReadOnlyTrust: readOnlyTrust,
 	})
 	if err != nil {
 		return RemoteInspection{}, fmt.Errorf("%w: %w", ErrRemoteRuntimeUnavailable, err)

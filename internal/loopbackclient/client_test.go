@@ -2,6 +2,8 @@ package loopbackclient_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -106,5 +108,68 @@ func TestClientRejectsAliasesAndEscapedRequests(t *testing.T) {
 	request.Host = "127.0.0.1:43128"
 	if _, err := client.Do(request); err == nil {
 		t.Fatal("Client accepted a confused Host authority")
+	}
+}
+
+func TestClientDialsOnlyItsPinnedRawLoopbackStream(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("ALL_PROXY", "http://127.0.0.1:1")
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		peer, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer peer.Close()
+		_ = peer.SetDeadline(time.Now().Add(time.Second))
+		_, _ = io.Copy(peer, peer)
+	}()
+	client, err := loopbackclient.New("http://"+listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	stream, ok := any(client).(interface {
+		Dial(context.Context) (net.Conn, error)
+	})
+	if !ok {
+		t.Fatal("pinned loopback raw stream is unavailable")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if peer, err := stream.Dial(ctx); !errors.Is(err, context.Canceled) {
+		if peer != nil {
+			peer.Close()
+		}
+		t.Fatalf("canceled dial: %v", err)
+	}
+	peer, err := stream.Dial(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	_ = peer.SetDeadline(time.Now().Add(time.Second))
+	if peer.RemoteAddr().String() != listener.Addr().String() {
+		t.Fatal("dial escaped pinned origin")
+	}
+	if _, err := io.WriteString(peer, "synthetic raw stream"); err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, len("synthetic raw stream"))
+	if _, err := io.ReadFull(peer, data); err != nil || string(data) != "synthetic raw stream" {
+		t.Fatalf("stream echo=%q err=%v", data, err)
+	}
+	_ = peer.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("raw stream was not caller-closeable")
 	}
 }

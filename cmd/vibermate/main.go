@@ -126,13 +126,16 @@ func executeContext(
 		if err != nil {
 			return 2, keyUsage
 		}
+		if status.doctor {
+			return executeDoctor(ctx, status, environment, stdout)
+		}
 		if status.server.Valid() {
 			stateDirectory, pathErr := clientpath.DefaultRemoteStateDirectory()
 			if pathErr != nil {
 				return 1, keyRuntimePath
 			}
 			return executeRemoteStatus(
-				ctx, status.doctor, environment, stdout,
+				ctx, environment, stdout,
 				status.server, stateDirectory, commandClock{},
 			)
 		}

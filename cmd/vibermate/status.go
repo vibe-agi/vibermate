@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -17,8 +18,9 @@ import (
 )
 
 type statusConfig struct {
-	doctor bool
-	server serverconnection.Target
+	doctor        bool
+	server        serverconnection.Target
+	environmentID environment.EnvironmentID
 }
 
 func parseStatus(arguments []string) (statusConfig, error) {
@@ -26,6 +28,9 @@ func parseStatus(arguments []string) (statusConfig, error) {
 		return statusConfig{}, errors.New("status or doctor command is required")
 	}
 	config := statusConfig{doctor: arguments[0] == "doctor"}
+	if config.doctor {
+		return parseDoctor(arguments[1:])
+	}
 	if len(arguments) == 1 {
 		return config, nil
 	}
@@ -79,7 +84,11 @@ func executeLocalStatus(
 	if err != nil {
 		return 1, keyRuntimePath
 	}
-	inspection, err := runlauncher.InspectLocal(ctx, discovery, 5*time.Second)
+	timeout := 5 * time.Second
+	if doctor {
+		timeout = runlauncher.DoctorTimeout
+	}
+	inspection, err := runlauncher.InspectLocal(ctx, discovery, timeout)
 	if err != nil {
 		return 1, keyRuntimeUnavailable
 	}
@@ -87,7 +96,7 @@ func executeLocalStatus(
 	healthy := inspection.Ready && inspection.Storage == "healthy" && inspection.State == "initialized"
 	var trustErr error
 	if doctor && healthy && runtime.GOOS == "darwin" {
-		trustErr = runlauncher.CheckLocalRootTrust(ctx, discovery, 10*time.Second)
+		trustErr = runlauncher.CheckLocalRootTrust(ctx, discovery, runlauncher.DoctorTimeout)
 	}
 	if doctor && healthy && inspection.RecordingFailure == nil && trustErr == nil {
 		key = "cli.doctor.local"
@@ -107,6 +116,15 @@ func executeLocalStatus(
 	if trustErr != nil {
 		return 1, "cli.error.localRootUntrusted"
 	}
+	if doctor && healthy && inspection.RecordingFailure == nil {
+		trustKey := "cli.doctor.root.skip"
+		if runtime.GOOS == "darwin" {
+			trustKey = "cli.doctor.root.pass"
+		}
+		if renderCLIMessage(environment, stdout, trustKey, nil) != nil {
+			return 1, reasonRenderFailed
+		}
+	}
 	for _, diagnostic := range []struct {
 		key     string
 		failure *productruntime.PersistenceFailure
@@ -123,7 +141,7 @@ func executeLocalStatus(
 			return 1, reasonRenderFailed
 		}
 	}
-	if !healthy {
+	if !healthy || (doctor && (inspection.RecordingFailure != nil || inspection.StorageFailure != nil)) {
 		if doctor {
 			if err := renderCLIMessage(environment, stdout, "cli.doctor.unhealthy", nil); err != nil {
 				return 1, reasonRenderFailed
@@ -136,7 +154,6 @@ func executeLocalStatus(
 
 func executeRemoteStatus(
 	ctx context.Context,
-	doctor bool,
 	environment []string,
 	stdout io.Writer,
 	target serverconnection.Target,
@@ -166,9 +183,6 @@ func executeRemoteStatus(
 		return 1, reasonRenderFailed
 	}
 	key := "cli.status.remote"
-	if doctor {
-		key = "cli.doctor.remote"
-	}
 	if err := renderCLIMessage(environment, stdout, key, map[string]string{
 		"origin": inspection.Origin, "instance": inspection.InstanceID,
 		"api": inspection.APIVersion, "username": inspection.Username,

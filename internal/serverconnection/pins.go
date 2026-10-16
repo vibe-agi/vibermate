@@ -25,6 +25,7 @@ const (
 )
 
 var (
+	ErrTrustNotConfigured    = errors.New("Runtime Server trust is not configured")
 	ErrInvalidCertificate    = errors.New("ViberMate Server certificate is invalid")
 	ErrServerIdentityChanged = errors.New("ViberMate Server identity changed")
 	ErrPinnedIdentityMissing = errors.New("ViberMate Server has no pinned identity to migrate")
@@ -175,7 +176,7 @@ func (store *PinStore) Verify(
 		fingerprint,
 		errors.New("leaf pin explicitly requested"),
 		true,
-		"",
+		"", false,
 	)
 }
 
@@ -190,6 +191,16 @@ func (store *PinStore) VerifyPeer(
 	now time.Time,
 	roots *x509.CertPool,
 ) (PinResult, error) {
+	return store.verifyPeer(address, rawCertificates, now, roots, false)
+}
+
+// VerifyPeerReadOnly honors existing trust atomically. Without a saved decision,
+// only platform-root verification may pass; no trust decision is enrolled.
+func (store *PinStore) VerifyPeerReadOnly(address Address, rawCertificates [][]byte, now time.Time, roots *x509.CertPool) (PinResult, error) {
+	return store.verifyPeer(address, rawCertificates, now, roots, true)
+}
+
+func (store *PinStore) verifyPeer(address Address, rawCertificates [][]byte, now time.Time, roots *x509.CertPool, readOnly bool) (PinResult, error) {
 	leaf, fingerprint, err := parsePeerCertificate(address, rawCertificates, now)
 	if err != nil {
 		return PinResult{}, err
@@ -201,7 +212,7 @@ func (store *PinStore) VerifyPeer(
 		digest := sha256.Sum256(issuer.Raw)
 		issuerFingerprint = hex.EncodeToString(digest[:])
 	}
-	return store.verify(address, fingerprint, publicErr, chainErr == nil, issuerFingerprint)
+	return store.verify(address, fingerprint, publicErr, chainErr == nil, issuerFingerprint, readOnly)
 }
 
 func parsePeerCertificate(
@@ -285,6 +296,7 @@ func (store *PinStore) verify(
 	publicErr error,
 	unknownIssuer bool,
 	issuerFingerprint string,
+	readOnly bool,
 ) (PinResult, error) {
 	if store == nil || address.String() == "" || fingerprint == "" {
 		return PinResult{}, ErrInvalidCertificate
@@ -323,6 +335,13 @@ func (store *PinStore) verify(
 					return filetransaction.Mutation{}, ErrInvalidCertificate
 				}
 				return filetransaction.Mutation{}, nil
+			}
+			if readOnly {
+				if publicErr == nil {
+					result.Mode = TrustModeSystemRoots
+					return filetransaction.Mutation{}, nil
+				}
+				return filetransaction.Mutation{}, ErrTrustNotConfigured
 			}
 			if publicErr == nil {
 				result.Mode = TrustModeSystemRoots

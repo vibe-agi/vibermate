@@ -113,7 +113,7 @@ func testRemoteSessionBoundary(t *testing.T, scenario string) {
 	}
 
 	if scenario == "labels" {
-		for _, label := range []string{strings.Repeat("a", 121), strings.Repeat("a", 119) + "é", strings.Repeat("界", 41), " project ", "   "} {
+		for _, label := range []string{strings.Repeat("a", 121), strings.Repeat("a", 119) + "\u00e9", strings.Repeat("\u754c", 41), " project ", "   "} {
 			t.Run(label, func(t *testing.T) {
 				cwd = filepath.Join(root, label)
 				if err := os.Mkdir(cwd, 0o700); err != nil {

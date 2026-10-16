@@ -195,6 +195,9 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		if command == "doctor" && !strings.Contains(stdout.String(), "vibermate run -- codex") {
 			t.Fatalf("doctor output lacks next action: %s", stdout.String())
 		}
+		if command == "doctor" && runtime.GOOS == "darwin" && !strings.Contains(stdout.String(), "PASS Local root trust") {
+			t.Fatalf("root trust outcome absent: %s", stdout.String())
+		}
 	}
 	if runtime.GOOS == "darwin" {
 		rootTrusted.Store(false)
@@ -226,7 +229,11 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 			var stdout, stderr strings.Builder
 			code, key := execute([]string{command}, []string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr)
 			output := stdout.String()
-			if code != wantCode || key != "" || stderr.Len() != 0 ||
+			expectedCode := wantCode
+			if command == "doctor" {
+				expectedCode = 1
+			}
+			if code != expectedCode || key != "" || stderr.Len() != 0 ||
 				!strings.Contains(output, "WARN") || !strings.Contains(output, "usage / write_failed") ||
 				strings.Contains(output, "PASS") || strings.Contains(output, "vibermate run -- codex") {
 				t.Fatalf("%s stopped=%t: code=%d key=%q output=%s stderr=%s", command, stopped, code, key, output, stderr.String())
@@ -238,12 +245,16 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 	}
 }
 
-func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
+func TestDoctorRejectsBrokenCONNECTDespiteValidRemoteSession(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x53}, 32))
 	machineID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x36}, 32))
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodConnect {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if request.Method != http.MethodGet ||
 			request.URL.Path != servercontrol.RuntimeUserCurrentSessionPath ||
 			request.Header.Get("Authorization") != "Bearer "+token {
@@ -293,7 +304,11 @@ func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
 			[]string{command, "--server", server.URL},
 			[]string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr,
 		)
-		if code != 0 || key != "" || stderr.Len() != 0 {
+		wantCode := 0
+		if command == "doctor" {
+			wantCode = 1
+		}
+		if code != wantCode || key != "" || stderr.Len() != 0 {
 			t.Fatalf(
 				"%s code=%d key=%q stdout=%q stderr=%q",
 				command, code, key, stdout.String(), stderr.String(),
@@ -304,9 +319,8 @@ func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
 				t.Fatalf("%s output lacks %q: %s", command, expected, stdout.String())
 			}
 		}
-		if command == "doctor" &&
-			!strings.Contains(stdout.String(), "vibermate run --server "+server.URL+" -- codex") {
-			t.Fatalf("doctor output lacks next action: %s", stdout.String())
+		if command == "doctor" && (!strings.Contains(stdout.String(), "FAIL Proxy entry") || !strings.Contains(stdout.String(), "CONNECT")) {
+			t.Fatalf("doctor hides broken CONNECT: %s", stdout.String())
 		}
 	}
 }

@@ -76,7 +76,13 @@ reverse proxy cannot replace the Agent CONNECT path.
 - [Paseo integration](integrations/paseo/README.md): choose a traffic profile per conversation
 - [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
-Run `vibermate doctor` if setup fails.
+Run `vibermate doctor` if setup fails. For a remote Runtime, use
+`vibermate doctor --server <same-server> [--env <environment-id>]` after login.
+It verifies control/session/machine and the credential-free CONNECT entry rejection;
+optional `--env` checks the authorized active catalog. It creates no Capture and
+leaves authorized forwarding, native client login/startup and model inference
+explicitly NOT CHECKED. Local doctor checks runtime/storage/root trust where
+supported and states the same limits.
 
 ## License
 
