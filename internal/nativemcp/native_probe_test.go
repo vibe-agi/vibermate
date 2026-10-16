@@ -57,13 +57,20 @@ func TestNativeProbeRetainsFrozenPolicyAndOriginOnlyIdentity(t *testing.T) {
 	if _, e = defaults.SetDefault(t.Context(), egressprofile.SetDefaultCommand{ExpectedRevision: 2}); e != nil {
 		t.Fatal(e)
 	}
-	got := nativeProbe(binding.Plan())
-	want := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: "https://native.example", NetworkOrigin: "https://native.example", HTTPAuthority: "native.example", TLSServerName: "native.example", EgressPolicy: policy}
+	got := nativeProbe(t.Context(), binding.Plan())
+	want := offlinehold.ProbeTarget{Kind: offlinehold.EgressAuxiliary, Transport: offlinehold.ProbeTransportStrictTLS, TargetRef: "https://native.example", NetworkOrigin: "https://native.example", HTTPAuthority: "native.example", TLSServerName: "native.example", EgressPolicy: policy, TargetAccess: egressnetwork.TargetAccessOwnerConfigured}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("native frozen reachability target got=%+v want=%+v", got, want)
 	}
 	if e = got.Validate(); e != nil {
 		t.Fatal(e)
+	}
+	for _, access := range []egressnetwork.TargetAccess{egressnetwork.TargetAccessPublicOnly, egressnetwork.TargetAccessOwnerConfigured} {
+		call := egressnetwork.WithTargetAccess(t.Context(), access)
+		frozen := nativeProbe(call, binding.Plan())
+		if frozen.TargetAccess != access || frozen.EgressPolicy != policy || frozen.Validate() != nil {
+			t.Fatalf("native call authority changed: %+v", frozen)
+		}
 	}
 }
 
@@ -73,7 +80,7 @@ func TestNativeProbeRejectsUnresolvedPlan(t *testing.T) {
 	defer c.lease.Release()
 	unresolved, _ := c.lease.Plan().ClientToolPlan()
 	for _, plan := range []environment.ClientToolPlan{{}, unresolved} {
-		got := nativeProbe(plan)
+		got := nativeProbe(t.Context(), plan)
 		if !reflect.DeepEqual(got, offlinehold.ProbeTarget{}) || got.Validate() == nil {
 			t.Fatalf("unresolved native plan produced valid reachability %+v", got)
 		}

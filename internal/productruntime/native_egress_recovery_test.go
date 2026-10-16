@@ -2,10 +2,12 @@ package productruntime
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -20,12 +22,15 @@ func TestRuntimeNativeEgressHoldUsesFrozenConcreteProbe(t *testing.T) {
 	call := f.begin(t, "POST", `{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "")
 	f.allow(t, call.ID)
 	target := f.waitQueued(t)
+	if target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured {
+		t.Fatalf("owner native allowance not frozen: %+v", target)
+	}
 	f.assertNoStart(t, call.ID)
 	if revision := f.setDefault(t, &f.profileB); revision != 3 {
 		t.Fatalf("native edited default revision=%d", revision)
 	}
 	t.Logf("native actual queued target=%+v currentGate=%+v", target, f.r.OfflineHoldSnapshot())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(egressnetwork.WithTargetAccess(context.Background(), egressnetwork.TargetAccessPublicOnly), 10*time.Second)
 	defer cancel()
 	_, e := f.r.ResumeOfflineHold(ctx, f.r.OfflineHoldSnapshot().Revision)
 	if e != nil {
@@ -69,7 +74,7 @@ func TestRuntimeNativeEgressHoldFailuresBeforeStart(t *testing.T) {
 			f.allow(t, call.ID)
 			target := f.waitQueued(t)
 			f.assertNoStart(t, call.ID)
-			if target.TargetRef != "https://native.example" || target.EgressPolicy.Proxy.Endpoint != f.network.a || target.PlanRevision != 0 || target.PlanDigest != "" {
+			if target.TargetAccess != egressnetwork.TargetAccessOwnerConfigured || target.TargetRef != "https://native.example" || target.EgressPolicy.Proxy.Endpoint != f.network.a || target.PlanRevision != 0 || target.PlanDigest != "" {
 				t.Fatalf("native negative frozen target %+v", target)
 			}
 			approvedOp, e := f.r.NativeToolRepository().Get(t.Context(), call.ID)
@@ -100,6 +105,15 @@ func TestRuntimeNativeEgressHoldFailuresBeforeStart(t *testing.T) {
 				if e == nil {
 					t.Fatal("native failed reachability unexpectedly resumed")
 				}
+				wantReason := offlinehold.ProbeReasonTransportUnavailable
+				if edge == "probe_wrong_name" {
+					wantReason = offlinehold.ProbeReasonTLSRejected
+				}
+				var failure *offlinehold.ProbeFailure
+				if !errors.As(e, &failure) || failure.Reason != wantReason {
+					t.Fatalf("native failure did not exercise intended reachability: %v", e)
+				}
+
 				t.Logf("native contained failed probe edge=%s error=%v target=%+v", edge, e, target)
 				if f.gate.Snapshot().State != offlinehold.StateHeld || f.gate.Snapshot().QueuedRequests != 1 {
 					t.Fatalf("native failed probe released held call %+v", f.gate.Snapshot())
@@ -179,4 +193,40 @@ func TestRuntimeNativeEgressHoldFailuresBeforeStart(t *testing.T) {
 			t.Logf("native empty-queue Resume edge=%s state=%s counts=%+v gate=%+v", edge, resumed.State, f.counts(), f.gate.Snapshot())
 		})
 	}
+}
+
+// A native call's own access allowance, not the resume caller's context, must
+// govern the concrete TLS probe before any private connection can be made.
+func TestRuntimeNativeEgressHoldPreservesRestrictedTargetAccess(t *testing.T) {
+	f := newRuntimeNativeEgressFixture(t, runtimeNativeEgressConfig{choice: "global", edge: "hold"})
+	f.handshake(t)
+	if _, err := f.r.EnterOfflineHold(t.Context(), f.r.OfflineHoldSnapshot().Revision); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	expected := f.current
+	f.mu.Unlock()
+	ctx := egressnetwork.WithTargetAccess(t.Context(), egressnetwork.TargetAccessPublicOnly)
+	call := f.beginPhaseContext(t, ctx, "POST", `{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "", expected, nil)
+	f.allow(t, call.ID)
+	target := f.waitQueued(t)
+	f.assertNoStart(t, call.ID)
+	before := f.counts()
+	resume, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	snapshot, err := f.r.ResumeOfflineHold(resume, f.r.OfflineHoldSnapshot().Revision)
+	cancel()
+	if !errors.Is(err, egressnetwork.ErrPrivateTarget) || snapshot.State != offlinehold.StateHeld || f.counts() != before {
+		t.Errorf("restricted native resume: err=%v state=%s before=%+v after=%+v", err, snapshot.State, before, f.counts())
+	}
+	if target.TargetAccess != egressnetwork.TargetAccessPublicOnly {
+		t.Errorf("native allowance was not frozen: %+v", target)
+	}
+	call.Cancel()
+	terminal := f.join(t, call)
+	if terminal.Outcome != nativemcp.OutcomeCanceled {
+		t.Fatalf("restricted native terminal=%+v", terminal)
+	}
+	f.assertNoStart(t, call.ID)
+	f.assertDrained(t)
+	t.Logf("native restricted probe access=%d unchanged_physical=%v error=%v", target.TargetAccess, f.counts() == before, err)
 }
