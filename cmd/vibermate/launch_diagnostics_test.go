@@ -86,7 +86,7 @@ func diagnosticRemoteServerWithPreflight(t *testing.T, create, preflight http.Ha
 				return
 			}
 			_ = json.NewEncoder(w).Encode(servercontrol.RuntimeUserCurrentSession{Schema: servercontrol.RuntimeUserCurrentSessionSchema, InstanceID: "instance.test", APIVersion: "v1", ProductBuild: "test-build", SessionID: "login.test", MachineID: machineID, DeviceName: "fixture", User: servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"}})
-		case "/api/v1/capture-runs":
+		case "/api/v1/capture-runs", servercontrol.RuntimeRootCAPath:
 			create(w, r)
 		default:
 			t.Errorf("unexpected route %s", r.URL.Path)

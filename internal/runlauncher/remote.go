@@ -54,6 +54,7 @@ func connectRemote(
 	ctx context.Context,
 	config RemoteConfig,
 	timeout time.Duration,
+	authenticationTimeout time.Duration,
 	cwd string,
 	command []string,
 	executable string,
@@ -124,9 +125,12 @@ func connectRemote(
 	if err != nil {
 		return fail(err)
 	}
-	if _, err := authenticateRemoteLogin(ctx, control, login, workspace.MachineID().String()); err != nil {
+	authenticationContext, cancelAuthentication := context.WithTimeout(ctx, authenticationTimeout)
+	_, authenticationErr := authenticateRemoteLogin(authenticationContext, control, login, workspace.MachineID().String())
+	cancelAuthentication()
+	if authenticationErr != nil {
 		control.close()
-		return fail(err)
+		return fail(authenticationErr)
 	}
 	observedFirstUse, observedFingerprint := transport.Trust()
 	cleanupTransport = false

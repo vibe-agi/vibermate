@@ -85,8 +85,8 @@ func TestTheControlTransportCoversTheWidestOperation(t *testing.T) {
 	}
 }
 
-// Create is the only control call that can contain a person. Every other one
-// keeps the short budget, and must: giving them the create budget would let a
+// Create is the only control call that can contain a person. Lifecycle calls
+// keep the short budget, and must: giving them the create budget would let a
 // hung runtime hold an attach or a heartbeat for a minute and a half.
 func TestOnlyCreateCarriesTheWideBudget(t *testing.T) {
 	t.Parallel()

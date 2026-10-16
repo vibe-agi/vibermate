@@ -3,6 +3,7 @@ package runlauncher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,5 +53,19 @@ func TestLauncherReadsScopedCatalogWithoutProxyOrManagementAuthority(t *testing.
 				t.Fatalf("catalog=%+v err=%v", page, err)
 			}
 		})
+	}
+}
+
+func TestLocalCatalogUnauthorizedRetainsLocalFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }))
+	defer server.Close()
+	launcher, err := New(Config{Discovery: catalogDiscovery{url: server.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = launcher.Environments(context.Background())
+	var failure *ControlFailure
+	if errors.Is(err, ErrRemoteLoginRequired) || !errors.As(err, &failure) || failure.Status != 401 {
+		t.Fatalf("local catalog semantics changed: %v", err)
 	}
 }

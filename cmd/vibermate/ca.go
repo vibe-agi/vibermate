@@ -69,10 +69,12 @@ func executeCA(ctx context.Context, arguments []string, stdin io.Reader, stdout,
 	}
 	material, err := runlauncher.RemoteRootCertificate(ctx, runlauncher.RemoteConfig{Target: target, StateDirectory: directory, Clock: commandClock{}, Random: rand.Reader, DisplayName: "vibermate-client"}, 15*time.Second)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
 		var failure *runlauncher.ControlFailure
-		if errors.As(err, &failure) && failure.Status == 401 {
-			return 1, "cli.error.caDownloadDenied"
+		if errors.As(err, &failure) {
+			fmt.Fprintln(stderr, failure.SafeSummary())
+			if failure.Status == 401 {
+				return 1, "cli.error.caDownloadDenied"
+			}
 		}
 		key := launchFailureKey(err)
 		if key == keyLaunchFailed {

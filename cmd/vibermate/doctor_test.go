@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientpath"
+	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
@@ -243,5 +245,41 @@ func TestDoctorNeverPrintsUntrustedResponseContent(t *testing.T) {
 		if code != 1 || key != "" || strings.Contains(out.String(), secret) || !strings.Contains(out.String(), "connect_ingress") || !strings.Contains(out.String(), "permission") {
 			t.Fatalf("code=%d key=%s out=%s", code, key, &out)
 		}
+	}
+}
+
+func TestLateRemoteCatalogRejectionRequestsLogin(t *testing.T) {
+	origin := doctorFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			w.WriteHeader(407)
+			io.WriteString(w, `{"reasonCode":"proxy_authentication_required"}`)
+			return
+		}
+		if r.URL.Path != capturecontrol.EnvironmentsPath {
+			t.Errorf("unexpected action %s", r.URL.Path)
+		}
+		w.WriteHeader(401)
+		io.WriteString(w, `{"type":"urn:vibermate:error:control-principal-unauthorized","title":"SECRET","status":401,"code":"control_principal_unauthorized"}`)
+	})
+	var out strings.Builder
+	code, key := execute([]string{"profiles", "--server", origin}, nil, strings.NewReader(""), &out, io.Discard)
+	if code != 1 || key != keyRemoteLoginRequired {
+		t.Fatalf("profiles code=%d key=%s", code, key)
+	}
+	target, _ := serverconnection.ParseTarget(origin)
+	directory, _ := clientpath.DefaultRemoteStateDirectory()
+	launcher, err := runlauncher.New(runlauncher.Config{Remote: &runlauncher.RemoteConfig{Target: target, StateDirectory: directory, DisplayName: "fixture", Clock: commandClock{}, Random: strings.NewReader(strings.Repeat("x", 4096))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = launcher.Environments(context.Background())
+	var failure *runlauncher.ControlFailure
+	if !errors.Is(err, runlauncher.ErrRemoteLoginRequired) || !errors.As(err, &failure) || failure.Status != 401 || failure.ReasonCode != "control_principal_unauthorized" {
+		t.Fatalf("catalog lost login classification or metadata: %v", err)
+	}
+	out.Reset()
+	code, key = execute([]string{"doctor", "--server", origin, "--env", "work"}, []string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &out, io.Discard)
+	if code != 1 || key != "" || !strings.Contains(out.String(), "login_or_machine") {
+		t.Fatalf("doctor code=%d key=%s out=%s", code, key, &out)
 	}
 }

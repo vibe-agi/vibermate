@@ -68,6 +68,10 @@ func (launcher *Launcher) environments(ctx context.Context, readOnlyTrust bool) 
 	var page capturecontrol.CaptureEnvironments
 	if err := client.jsonRequest(ctx, http.MethodGet, capturecontrol.EnvironmentsPath,
 		client.credential, "", nil, http.StatusOK, &page); err != nil {
+		var failure *ControlFailure
+		if launcher.config.Remote != nil && errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
+			err = errors.Join(ErrRemoteLoginRequired, err)
+		}
 		return capturecontrol.CaptureEnvironments{}, err
 	}
 	if page.Schema != capturecontrol.EnvironmentsSchema || page.Items == nil {

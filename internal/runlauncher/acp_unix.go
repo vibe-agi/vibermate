@@ -52,7 +52,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	create := launcher.captureCreateRequest(ctx, cwd, executable, request.Command, environment.SystemTransparentID)
 	var control *controlClient
 	if launcher.config.Remote != nil {
-		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, controlTransportTimeout(launcher.config), cwd, request.Command, executable)
+		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, max(controlTransportTimeout(launcher.config), launcher.remoteAuthenticationTimeout), launcher.remoteAuthenticationTimeout, cwd, request.Command, executable)
 		if connectErr != nil {
 			return 1, classifyRemoteConnectionFailure(connectErr)
 		}

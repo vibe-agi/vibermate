@@ -500,7 +500,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		if err != nil {
 			t.Fatal(err)
 		}
-		profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{})
+		profile, err := clienttarget.NewProfile("codex-cli", clienttarget.EnvironmentFacts{CodexBaseURL: "https://chatgpt.com/backend-api/codex"})
 		if err != nil {
 			t.Fatal(err)
 		}

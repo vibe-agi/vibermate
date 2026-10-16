@@ -238,8 +238,8 @@ func TestModelGenericPrelaunchFactsRequireCanonicalFlow(t *testing.T) {
 		}
 	}
 	late, _ := clienttarget.NewProfile("codex-cli", clienttarget.FromEnvironment([]string{"VIBERMATE_SYNTHETIC_MODEL_API_KEY=synthetic-original-model-api-key"}))
-	target, ok, err := late.Resolve(nil, nil)
-	if err != nil || !ok || target.ContainsPath("/v1/responses") {
+	_, ok, err := late.Resolve(nil, nil)
+	if err != nil || ok {
 		t.Fatal("postlaunch provider setting implicitly widened native target")
 	}
 }
