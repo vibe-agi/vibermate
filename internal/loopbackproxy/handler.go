@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -212,8 +213,10 @@ type rawEvidenceFailureReporter interface {
 }
 
 type operation struct {
-	connection net.Conn
-	cancel     context.CancelFunc
+	retainedRelease func()
+	connection      net.Conn
+	cancel          context.CancelFunc
+	withdrawn       bool
 }
 
 type Handler struct {
@@ -333,6 +336,13 @@ func (handler *Handler) ServeHTTP(
 	defer handler.finish(active)
 	if request == nil {
 		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
+		return
+	}
+	// Every opening phase and attached transport has the same cancel owner.
+	operationContext, cancelOperation := context.WithCancel(request.Context())
+	defer cancelOperation()
+	request = request.WithContext(operationContext)
+	if !handler.attachCancellation(active, cancelOperation) {
 		return
 	}
 	// The host and the port are separate facts on the record. Writing the
@@ -473,6 +483,18 @@ func (handler *Handler) ServeHTTP(
 		terminal = true
 		writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 		return
+	}
+	if authority, ok := handler.admissions.(interface {
+		Retain(context.Context, captureadmission.Admission, func()) (func(), error)
+	}); ok {
+		release, retainErr := authority.Retain(request.Context(), admission, func() { handler.withdraw(active) })
+		if retainErr != nil {
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
+		handler.mu.Lock()
+		active.retainedRelease = release
+		handler.mu.Unlock()
 	}
 	source := connectionSource(admission)
 	capture, err := admission.CaptureReference()
@@ -821,6 +843,21 @@ func (handler *Handler) serveTLS(
 	); err != nil {
 		return fmt.Errorf("record connected ConnectionEvent: %w", err)
 	}
+	// Serve/ServeConn can return while an inner HTTP handler is still unwinding.
+	// Close handler admission before waiting, so late server dispatch cannot race
+	// WaitGroup.Add. Connection/request leases and audit finish only after this join.
+	parent, cancelInner := context.WithCancel(parent)
+	var innerMu sync.Mutex
+	var innerClosing bool
+	var innerHandlers sync.WaitGroup
+	defer func() {
+		innerMu.Lock()
+		innerClosing = true
+		innerMu.Unlock()
+		cancelInner()
+		_ = secured.Close()
+		innerHandlers.Wait()
+	}()
 	listener := newSingleConnListener(secured)
 	inner := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return parent },
@@ -828,6 +865,14 @@ func (handler *Handler) serveTLS(
 			writer http.ResponseWriter,
 			request *http.Request,
 		) {
+			innerMu.Lock()
+			if innerClosing {
+				innerMu.Unlock()
+				return
+			}
+			innerHandlers.Add(1)
+			innerMu.Unlock()
+			defer innerHandlers.Done()
 			state := connectionState
 			request.TLS = &state
 			handler.serveInner(
@@ -881,6 +926,14 @@ func (handler *Handler) serveInner(
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
 ) {
+	if authority, ok := handler.admissions.(interface {
+		Revalidate(context.Context, captureadmission.Admission) (captureauthority.Validity, error)
+	}); ok {
+		if _, err := authority.Revalidate(request.Context(), admission); err != nil {
+			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
+			return
+		}
+	}
 	if connectionLease == nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
 		return
@@ -1848,8 +1901,14 @@ func (handler *Handler) begin() (*operation, error) {
 func (handler *Handler) finish(active *operation) {
 	handler.mu.Lock()
 	delete(handler.active, active)
+	release := active.retainedRelease
 	handler.signalLocked()
 	handler.mu.Unlock()
+	// This is the last ServeHTTP defer: socket, inner handlers, leases, and the
+	// connection terminal have all finished before an authority change can join.
+	if release != nil {
+		release()
+	}
 }
 
 func (handler *Handler) attachConnection(
@@ -1858,7 +1917,7 @@ func (handler *Handler) attachConnection(
 ) bool {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if !handler.accepting {
+	if !handler.accepting || active.withdrawn {
 		return false
 	}
 	if _, exists := handler.active[active]; !exists {
@@ -1873,7 +1932,7 @@ func (handler *Handler) attachConnection(
 func (handler *Handler) attachCancellation(active *operation, cancel context.CancelFunc) bool {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if !handler.accepting {
+	if !handler.accepting || active.withdrawn {
 		return false
 	}
 	if _, exists := handler.active[active]; !exists {
@@ -1881,6 +1940,20 @@ func (handler *Handler) attachCancellation(active *operation, cancel context.Can
 	}
 	active.cancel = cancel
 	return true
+}
+
+// withdraw fences later attachment under the same mutex used by shutdown.
+func (handler *Handler) withdraw(active *operation) {
+	handler.mu.Lock()
+	active.withdrawn = true
+	cancel, connection := active.cancel, active.connection
+	handler.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if connection != nil {
+		_ = connection.Close()
+	}
 }
 
 func (handler *Handler) BeginShutdown() {
@@ -2690,7 +2763,7 @@ func (handler *Handler) serveBlindTunnel(
 		return true
 	}
 
-	result, err = blindtunnel.Copy(handler.ownerContext, client, upstream)
+	result, err = blindtunnel.Copy(request.Context(), client, upstream)
 	egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 		blindTunnelTerminal(err)
 	connectionTerminal.ErrorClass = egressErrorClass

@@ -54,6 +54,7 @@ import (
 )
 
 type capturedOriginalConfig struct {
+	connectionEvent      func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
 	family, choice, edge string
 	history, oauth       bool
 }
@@ -341,6 +342,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	f.options.Secrets = f.secrets
 	f.options.OriginalTransport = wire
 	f.r, err = startWithBuilders(t.Context(), f.options, runtimeBuildOverrides{
+		connectionEvent: cfg.connectionEvent,
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
 		},

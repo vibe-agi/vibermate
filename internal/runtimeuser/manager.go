@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 )
 
 const (
@@ -19,18 +21,20 @@ const (
 type Clock interface{ Now() time.Time }
 
 type Options struct {
-	Repository      Repository
-	Clock           Clock
-	Random          io.Reader
-	SessionLifetime time.Duration
+	AuthorityChanges captureauthority.Observer
+	Repository       Repository
+	Clock            Clock
+	Random           io.Reader
+	SessionLifetime  time.Duration
 }
 
 type Manager struct {
-	repository Repository
-	clock      Clock
-	random     io.Reader
-	lifetime   time.Duration
-	randomMu   sync.Mutex
+	authorityChanges captureauthority.Observer
+	repository       Repository
+	clock            Clock
+	random           io.Reader
+	lifetime         time.Duration
+	randomMu         sync.Mutex
 }
 
 func New(options Options) (*Manager, error) {
@@ -39,10 +43,11 @@ func New(options Options) (*Manager, error) {
 		return nil, ErrInvalidOptions
 	}
 	return &Manager{
-		repository: options.Repository,
-		clock:      options.Clock,
-		random:     options.Random,
-		lifetime:   options.SessionLifetime,
+		repository:       options.Repository,
+		authorityChanges: options.AuthorityChanges,
+		clock:            options.Clock,
+		random:           options.Random,
+		lifetime:         options.SessionLifetime,
 	}, nil
 }
 
@@ -226,6 +231,7 @@ func (manager *Manager) replacePassword(ctx context.Context, id UserID, password
 		canonicalTime(manager.clock.Now()),
 		expected,
 	)
+	err = errors.Join(err, manager.notifyAuthorityChange(ctx, captureauthority.Change{UserID: string(id)}))
 	if err != nil {
 		return User{}, fmt.Errorf("replace Runtime User password: %w", err)
 	}
@@ -288,6 +294,7 @@ func (manager *Manager) setState(ctx context.Context, id UserID, state State) (U
 		state,
 		canonicalTime(manager.clock.Now()),
 	)
+	err = errors.Join(err, manager.notifyAuthorityChange(ctx, captureauthority.Change{UserID: string(id)}))
 	if err != nil {
 		return User{}, fmt.Errorf("update Runtime User state: %w", err)
 	}
@@ -326,6 +333,7 @@ func (manager *Manager) Logout(ctx context.Context, token string) error {
 		digestToken(token),
 		canonicalTime(manager.clock.Now()),
 	)
+	err = errors.Join(err, manager.notifyAuthorityChange(ctx, captureauthority.Change{SessionDigest: digestToken(token)}))
 	if err != nil {
 		return fmt.Errorf("revoke Runtime User Login Session: %w", err)
 	}
@@ -383,4 +391,11 @@ func digestToken(value string) SessionDigest {
 
 func canonicalTime(value time.Time) time.Time {
 	return value.UTC().Truncate(time.Millisecond)
+}
+
+func (manager *Manager) notifyAuthorityChange(ctx context.Context, change captureauthority.Change) error {
+	if manager.authorityChanges == nil {
+		return nil
+	}
+	return manager.authorityChanges.Changed(ctx, change)
 }

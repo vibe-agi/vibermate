@@ -324,10 +324,11 @@ func (manager *Manager) Heartbeat(
 		now,
 		now.Add(lifetime),
 	)
+	changeErr := manager.notifyAuthorityChange(operation, runID)
 	if err != nil {
-		return View{}, err
+		return View{}, errors.Join(err, changeErr)
 	}
-	return ViewOf(record), record.Validate()
+	return ViewOf(record), errors.Join(record.Validate(), changeErr)
 }
 
 func (manager *Manager) Finish(

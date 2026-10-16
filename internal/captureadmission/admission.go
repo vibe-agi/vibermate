@@ -88,6 +88,7 @@ func (ProxyCredential) GoString() string {
 // connection. Optional identities stay private and are exposed through typed
 // accessors so a caller cannot confuse an absent identity with an empty one.
 type Admission struct {
+	receipt            *retainedReceipt
 	kind               Kind
 	admissionRef       string
 	captureRunID       string

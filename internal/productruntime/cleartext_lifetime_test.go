@@ -42,7 +42,11 @@ func TestRuntimeCleartextCancellationJoinsBodyClose(t *testing.T) {
 	runRuntimeCleartextCancellation(t, false, true)
 }
 
-func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool) {
+func TestRuntimeCleartextCaptureRevokeJoinsUpstream(t *testing.T) {
+	runRuntimeCleartextCancellation(t, true, false, true)
+}
+
+func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool, revokeCapture ...bool) {
 	t.Helper()
 	r, gate, credential := newCleartextLifetimeRuntime(t)
 
@@ -139,7 +143,19 @@ func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool)
 	if holdClose {
 		barrier.block.Store(true)
 	}
-	cancel()
+	withdrawn := len(revokeCapture) != 0 && revokeCapture[0]
+	if withdrawn {
+		page, err := r.ManualCaptures().List(t.Context(), manualcapture.PageRequest{Owner: manualcapture.NewLocalOwnerScope()})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("capture lookup: %v count=%d", err, len(page.Items))
+		}
+		id, _ := manualcapture.ParseID(page.Items[0].ID)
+		if _, err := r.ManualCaptures().Revoke(t.Context(), manualcapture.RevokeCommand{Owner: manualcapture.NewLocalOwnerScope(), ID: id, ExpectedCredentialRevision: 1}); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		cancel()
+	}
 	if holdClose {
 		select {
 		case <-barrier.entered:
@@ -165,7 +181,11 @@ func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool)
 	}
 	select {
 	case err = <-clientDone:
-		if !errors.Is(err, context.Canceled) {
+		if withdrawn {
+			if err == nil {
+				t.Fatal("revoked response body completed successfully")
+			}
+		} else if !errors.Is(err, context.Canceled) {
 			t.Fatalf("client cancellation = %v", err)
 		}
 	case <-time.After(time.Second):
