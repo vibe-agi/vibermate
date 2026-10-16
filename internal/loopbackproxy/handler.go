@@ -2962,10 +2962,12 @@ func (handler *Handler) serveCleartextForward(
 		}
 	})
 	defer func() {
-		joinRequest()
+		// A server upload Close may drain unread bytes even after a dial
+		// failure. Keep cancellation armed until that synchronous I/O returns.
 		if request.Body != nil {
 			_ = request.Body.Close()
 		}
+		joinRequest()
 	}()
 	upstream, lease, err := handler.blindTunnels.Dial(
 		request.Context(),

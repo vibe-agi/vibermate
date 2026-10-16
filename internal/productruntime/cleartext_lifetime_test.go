@@ -490,3 +490,116 @@ func TestRuntimeCleartextHealthyKeepAlive(t *testing.T) {
 		}
 	}
 }
+
+// A normal dial failure leaves the context live. The final server upload Close
+// can still drain a small incomplete body, so cancellation must remain armed
+// until that synchronous Close returns.
+func TestRuntimeCleartextShutdownInterruptsFailedDialBodyClose(t *testing.T) {
+	r, gate, credential := newCleartextLifetimeRuntime(t)
+	refused, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := refused.Addr().String()
+	if err = refused.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body := &cleartextCloseObserver{entered: make(chan struct{}), returned: make(chan struct{})}
+	handlerDone := make(chan struct{})
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer close(handlerDone)
+		body.ReadCloser = req.Body
+		req.Body = body
+		r.ProxyHandler().ServeHTTP(w, req)
+	}))
+	defer proxy.Close()
+	client, err := net.DialTimeout("tcp4", proxy.Listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	credentials := base64.StdEncoding.EncodeToString([]byte("capture:" + credential))
+	if _, err = fmt.Fprintf(client, "POST http://%s/upload HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\nContent-Length: 16384\r\n\r\n%s", target, target, credentials, strings.Repeat("x", 8192)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-body.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("failed dial never entered synchronous upload Close")
+	}
+	select {
+	case <-body.returned:
+		t.Fatal("incomplete server upload Close returned before shutdown")
+	default:
+	}
+	if s := gate.Snapshot(); s.ActiveActions != 1 || s.ActiveEgress != 0 {
+		t.Fatalf("failed dial upload Close action/egress = %d/%d", s.ActiveActions, s.ActiveEgress)
+	}
+	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Attempt.Terminal() {
+		t.Fatalf("failed dial terminal preceded upload Close: %+v", page.Items)
+	}
+	var auditChecked bool
+	for i := range r.cleanups.entries {
+		if r.cleanups.entries[i].name == "sqlite" {
+			closeStore := r.cleanups.entries[i].run
+			r.cleanups.entries[i].run = func(ctx context.Context) (result error) {
+				defer func() { result = errors.Join(result, closeStore(ctx)) }()
+				page, err := r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10})
+				if err != nil {
+					return err
+				}
+				if len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() || page.Items[0].Attempt.Outcome() != egressaudit.OutcomeFailed || page.Items[0].Attempt.ErrorClass() != "tunnel_failed" {
+					return fmt.Errorf("cleanup cancellation replaced failed dial terminal: %+v", page.Items)
+				}
+				timeline, err := r.storage.ConnectionEventRepository().Timeline(ctx, page.Items[0].Attempt.ConnectionID())
+				if err != nil {
+					return err
+				}
+				if len(timeline.Events) != 3 || timeline.Events[2].Outcome != connectionevent.OutcomeFailed || timeline.Events[2].ErrorClass != "tunnel_failed" {
+					return fmt.Errorf("cleanup cancellation replaced failed dial connection terminal: %+v", timeline.Events)
+				}
+				auditChecked = true
+				return nil
+			}
+		}
+	}
+	stop, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err = r.Shutdown(stop); err != nil {
+		t.Fatalf("Runtime shutdown retained failed-dial upload Close: %v; gate=%+v", err, gate.Snapshot())
+	}
+	select {
+	case <-handlerDone:
+	default:
+		t.Fatal("Runtime shutdown completed before failed-dial handler joined")
+	}
+	select {
+	case <-body.returned:
+	default:
+		t.Fatal("Runtime shutdown completed before synchronous upload Close returned")
+	}
+	if !auditChecked {
+		t.Fatal("failed dial terminal was not checked before Store disposal")
+	}
+	if s := gate.Snapshot(); s.ActiveActions != 0 || s.ActiveEgress != 0 {
+		t.Fatalf("Runtime shutdown retained failed-dial action/egress = %d/%d", s.ActiveActions, s.ActiveEgress)
+	}
+}
+
+// Observe actual net/http body Close entry/return without replacing its drain.
+type cleartextCloseObserver struct {
+	io.ReadCloser
+	entered, returned         chan struct{}
+	enteredOnce, returnedOnce sync.Once
+}
+
+func (b *cleartextCloseObserver) Close() error {
+	b.enteredOnce.Do(func() { close(b.entered) })
+	err := b.ReadCloser.Close()
+	b.returnedOnce.Do(func() { close(b.returned) })
+	return err
+}
