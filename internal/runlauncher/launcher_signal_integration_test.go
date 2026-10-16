@@ -154,8 +154,8 @@ while :; do sleep 1; done
 	}
 	lines := parseLines(string(output))
 	if lines["ssl"] != "" ||
-		lines["credential"] != "vibermate-local-proxy" ||
-		lines["base"] != "" {
+		lines["credential"] != "ambient-secret" ||
+		lines["base"] != "https://ambient.invalid/v1" {
 		t.Fatalf("fixed Codex child environment = %+v", lines)
 	}
 	if runtime.GOOS == "darwin" {

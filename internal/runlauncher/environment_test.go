@@ -356,7 +356,11 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := environmentMap(environment)[testCase.placeholderKey]; got != "vibermate-local-proxy" {
+			want := "vibermate-local-proxy"
+			if testCase.recipe == clientadapter.LaunchCodexResponsesHTTP {
+				want = "client-api-key"
+			}
+			if got := environmentMap(environment)[testCase.placeholderKey]; got != want {
 				t.Fatalf("%s = %q", testCase.placeholderKey, got)
 			}
 		})
@@ -415,7 +419,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := environmentMap(environment)
-	if values["CODEX_API_KEY"] != "vibermate-local-proxy" ||
+	if values["CODEX_API_KEY"] != "ambient-codex-secret" ||
 		values["VST_PLANE_TOKEN"] != "private-plane-token" ||
 		values["UNRELATED"] != "value" ||
 		values["NO_PROXY"] != "localhost" {
@@ -428,6 +432,11 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 	} else if values["CODEX_CA_CERTIFICATE"] != "/tmp/root.pem" {
 		t.Fatalf("fixed Codex CA = %+v", values)
 	}
+	for _, key := range []string{"OPENAI_BASE_URL", "CODEX_BASE_URL", "OPENAI_API_KEY", "OPENAI_ORGANIZATION", "OPENAI_PROJECT"} {
+		if values[key] != environmentMap(base)[key] {
+			t.Fatalf("native %s was replaced", key)
+		}
+	}
 	for _, forbidden := range []string{
 		"ALL_PROXY",
 		"all_proxy",
@@ -436,11 +445,6 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 		"CURL_CA_BUNDLE",
 		"NODE_EXTRA_CA_CERTS",
 		"NODE_USE_ENV_PROXY",
-		"OPENAI_BASE_URL",
-		"CODEX_BASE_URL",
-		"OPENAI_API_KEY",
-		"OPENAI_ORGANIZATION",
-		"OPENAI_PROJECT",
 	} {
 		if _, exists := values[forbidden]; exists {
 			t.Fatalf(

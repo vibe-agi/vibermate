@@ -9,12 +9,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const (
-	codexBuiltInProvider = "openai"
-	codexChatGPTBaseURL  = "https://chatgpt.com/backend-api/codex"
-	codexAPIBaseURL      = "https://api.openai.com/v1"
-)
-
 // buildChildArguments is the launch-invocation seam. CaptureRun creation keeps
 // the command the person entered as launch evidence; this function derives the
 // actual child arguments required by a verified client recipe without leaking
@@ -35,16 +29,15 @@ func buildChildArguments(
 	if err != nil {
 		return nil, err
 	}
-	settings := []string{
-		// Persist Codex's built-in provider identity in new rollouts. A private
-		// launch-only provider made those sessions impossible to resume outside
-		// ViberMate because session_meta outlived its temporary definition.
-		"model_provider=" + strconv.Quote(codexBuiltInProvider),
-		"openai_base_url=" + strconv.Quote(baseURL),
-		// Older clients honor this switch. Current built-in providers still
-		// negotiate WebSockets; the proxy returns 426 and Codex falls back to HTTP.
-		"features.responses_websockets=false",
+	// Preserve native provider and stored-login selection. Only explicit base
+	// inputs are translated; transport compatibility does not select auth.
+	var settings []string
+	if baseURL != "" {
+		settings = append(settings, "openai_base_url="+strconv.Quote(baseURL))
 	}
+	// Older clients honor this switch. Current built-in providers still
+	// negotiate WebSockets; the proxy returns 426 and Codex falls back to HTTP.
+	settings = append(settings, "features.responses_websockets=false")
 	// Preserve the client's retry policy. Each new HTTP request is a new
 	// Exchange; the Runtime's commit ledger still bounds its own resends.
 	result := make([]string, 0, len(settings)*2+2+len(arguments))
@@ -76,23 +69,15 @@ func environmentValue(environment []string, name string) string {
 	return ""
 }
 
-// codexOrigin resolves where a Codex child will send traffic.
-//
-// It is the single answer for both the launch recipe and the managed-credential
-// decision. Deriving it twice with different fallbacks pointed the child at
-// chatgpt.com while the credential decision was made for api.openai.com — the
-// ChatGPT-login case, and the common one.
+// codexOrigin returns only an explicit supported base URL. Native defaults
+// depend on Codex-owned persisted login and provider configuration.
 func codexOrigin(environment []string) (string, error) {
 	configured := environmentValue(environment, "CODEX_BASE_URL")
 	if configured == "" {
 		configured = environmentValue(environment, "OPENAI_BASE_URL")
 	}
 	if configured == "" {
-		if environmentValue(environment, "CODEX_API_KEY") != "" ||
-			environmentValue(environment, "OPENAI_API_KEY") != "" {
-			return codexAPIBaseURL, nil
-		}
-		return codexChatGPTBaseURL, nil
+		return "", nil
 	}
 	parsed, err := url.Parse(configured)
 	if err != nil ||

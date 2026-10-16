@@ -204,22 +204,29 @@ func prepareCodexCaptureArguments(ctx context.Context, executable string, origin
 }
 
 func hasVerifiedRecipeConfigPrefix(prepared, original []string) bool {
-	if len(prepared) != 8+len(original) || !slices.Equal(prepared[8:], original) ||
-		prepared[0] != "--config" || prepared[1] != `model_provider="openai"` ||
-		prepared[2] != "--config" || prepared[4] != "--config" || prepared[5] != "features.responses_websockets=false" ||
-		prepared[6] != "--disable" || prepared[7] != "enable_request_compression" {
+	prefixLength := len(prepared) - len(original)
+	if prefixLength != 4 && prefixLength != 6 || !slices.Equal(prepared[prefixLength:], original) {
 		return false
 	}
-	base, ok := strings.CutPrefix(prepared[3], "openai_base_url=")
-	if !ok {
-		return false
+	prefix := prepared[:prefixLength]
+	if prefixLength == 6 {
+		if prefix[0] != "--config" {
+			return false
+		}
+		base, ok := strings.CutPrefix(prefix[1], "openai_base_url=")
+		if !ok {
+			return false
+		}
+		base, err := strconv.Unquote(base)
+		if err != nil || base == "" {
+			return false
+		}
+		if _, err = codexOrigin([]string{"CODEX_BASE_URL=" + base}); err != nil {
+			return false
+		}
+		prefix = prefix[2:]
 	}
-	base, err := strconv.Unquote(base)
-	if err != nil || base == "" {
-		return false
-	}
-	_, err = codexOrigin([]string{"CODEX_BASE_URL=" + base})
-	return err == nil
+	return slices.Equal(prefix, []string{"--config", "features.responses_websockets=false", "--disable", "enable_request_compression"})
 }
 
 const codexHelpLimit = 64 * 1024

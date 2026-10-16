@@ -80,8 +80,6 @@ func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrefix := []string{
-		"--config", `model_provider="openai"`,
-		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
 		"--config", `features.responses_websockets=false`,
 		"--disable", "enable_request_compression",
 	}
@@ -92,9 +90,7 @@ func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 	}
 }
 
-// A Codex rollout persists its provider ID in session_meta. New rollouts must
-// therefore persist Codex's built-in provider so a later plain `codex resume`
-// can load them without ViberMate's launch-time configuration.
+// A Codex rollout must retain its native provider so plain resume can load it.
 func TestBuildChildArgumentsMakesNewCodexSessionsPortable(t *testing.T) {
 	t.Parallel()
 
@@ -108,8 +104,6 @@ func TestBuildChildArgumentsMakesNewCodexSessionsPortable(t *testing.T) {
 	}
 
 	want := []string{
-		"--config", `model_provider="openai"`,
-		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
 		"--config", `features.responses_websockets=false`,
 		"--disable", "enable_request_compression",
 		"resume", "old-session-id",
@@ -119,7 +113,7 @@ func TestBuildChildArgumentsMakesNewCodexSessionsPortable(t *testing.T) {
 	}
 }
 
-func TestCodexResponsesBaseURLFollowsExplicitOriginThenAuthMode(t *testing.T) {
+func TestCodexResponsesBaseURLFollowsOnlyExplicitOrigin(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -128,13 +122,13 @@ func TestCodexResponsesBaseURLFollowsExplicitOriginThenAuthMode(t *testing.T) {
 		want        string
 	}{
 		{
-			name: "ChatGPT login by default",
-			want: codexChatGPTBaseURL,
+			name: "native login is unknown",
+			want: "",
 		},
 		{
 			name:        "API key",
 			environment: []string{"OPENAI_API_KEY=secret"},
-			want:        codexAPIBaseURL,
+			want:        "",
 		},
 		{
 			name: "explicit Codex origin wins",
@@ -168,11 +162,7 @@ func TestCodexResponsesBaseURLRejectsCredentialBearingOrigin(t *testing.T) {
 	}
 }
 
-// The launch recipe and the managed-credential decision must agree about where
-// a Codex child sends traffic. They derived it twice from the same environment
-// with different fallbacks, so in the ChatGPT-login case — no base URL, no API
-// key, the common one — the child was pointed at chatgpt.com while the
-// credential decision was made for api.openai.com.
+// Only an explicit base URL establishes both recipe and credential authority.
 func TestCodexOriginIsOneAnswerForRecipeAndAuthority(t *testing.T) {
 	t.Parallel()
 
@@ -186,8 +176,14 @@ func TestCodexOriginIsOneAnswerForRecipeAndAuthority(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		authority, ok := clientTargetAuthority(environment, "codex-cli")
+		if origin == "" {
+			if ok || authority != "" {
+				t.Fatalf("%s: native authority was guessed: %q", name, authority)
+			}
+			continue
+		}
 		if !ok {
-			t.Fatalf("%s: authority was not resolved", name)
+			t.Fatalf("%s: explicit authority was not resolved", name)
 		}
 		parsed, err := url.Parse(origin)
 		if err != nil {
@@ -216,7 +212,7 @@ func TestCodexOriginIgnoresEnvironmentNamesCodexItselfIgnores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if origin != codexChatGPTBaseURL {
+	if origin != "" {
 		t.Fatalf(
 			"origin = %q; a name Codex does not read decided the launch recipe",
 			origin,
@@ -225,7 +221,7 @@ func TestCodexOriginIgnoresEnvironmentNamesCodexItselfIgnores(t *testing.T) {
 	authority, ok := clientTargetAuthority([]string{
 		"openai_base_url=https://not-read-by-codex.example.com",
 	}, "codex-cli")
-	if !ok || strings.HasPrefix(authority, "not-read-by-codex") {
+	if ok || authority != "" {
 		t.Fatalf("authority = %q, resolved = %v", authority, ok)
 	}
 }

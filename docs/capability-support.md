@@ -86,6 +86,15 @@ preview normalization, all response stop reasons and empty terminals. Local
 macOS Codex capture and `vibermate doctor` check the current Root's trust status
 before recommending or starting a native-trust capture.
 
+Codex keeps its native provider and persisted login selection. The launcher
+preserves authentication inputs and translates only explicit `CODEX_BASE_URL`
+or `OPENAI_BASE_URL` settings; exported-key presence does not establish the
+native destination. With no explicit target, Capture retains the selected
+Environment's declared origin boundary and admits observed requests against it.
+A custom native provider does not automatically gain managed origin or Account
+authority. Native TUI login requirements remain Codex-owned; Capture does not
+supply a placeholder key or promise login-free startup.
+
 Interactive Codex captures, including resume and fork, must own their request
 backend. For a catalog-known Codex family, the launcher reads native help with a
 1500 ms deadline and a combined 64 KiB output limit, without Capture credentials

@@ -55,8 +55,8 @@ func TestNativeLaunchPreservesOriginalLoginWithoutModelPlaceholder(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Contains(args, `openai_base_url="https://chatgpt.com/backend-api/codex"`) {
-				t.Fatal("native login changed frozen model destination selection")
+			if slices.Contains(args, `openai_base_url="https://chatgpt.com/backend-api/codex"`) {
+				t.Fatal("native login destination was overridden")
 			}
 		})
 	}
@@ -90,7 +90,7 @@ func TestNativeLaunchPreservesOriginalLoginWithoutModelPlaceholder(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if environmentMap(original)["CODEX_API_KEY"] != "vibermate-local-proxy" {
-		t.Fatal("OFF managed model launch lost original placeholder behavior")
+	if environmentMap(original)["CODEX_API_KEY"] != "" {
+		t.Fatal("OFF managed model launch injected a credential placeholder")
 	}
 }

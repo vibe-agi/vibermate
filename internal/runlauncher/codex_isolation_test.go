@@ -217,8 +217,7 @@ func TestCodexCaptureIsolationPreparesArguments(t *testing.T) {
 func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 	client := codexHelpFixture(t, "printf 'codex-cli 0.145.0\\nOptions:\\n'\n")
 	original := []string{"resume", "thread"}
-	prepared := []string{"--config", `model_provider="openai"`, "--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
-		"--config", "features.responses_websockets=false", "--disable", "enable_request_compression", "resume", "thread"}
+	prepared := []string{"--config", "features.responses_websockets=false", "--disable", "enable_request_compression", "resume", "thread"}
 	got, err := prepareCodexCaptureArguments(context.Background(), "/not/executed", original, prepared, nil, true)
 	if err != nil || !slices.Equal(got, prepared) {
 		t.Fatalf("verified legacy recipe rejected: %v %v", got, err)
@@ -228,7 +227,7 @@ func TestCodexCaptureIsolationLegacyRequiresPreparedRecipe(t *testing.T) {
 		legacy   bool
 	}{
 		{prepared, false}, {original, true}, {append([]string{"--config", "foo=bar"}, original...), true},
-		{prepared[2:], true}, {append(slices.Clone(prepared[:8]), "fork", "thread"), true},
+		{prepared[2:], true}, {append(slices.Clone(prepared[:4]), "fork", "thread"), true},
 	} {
 		if _, err := prepareCodexCaptureArguments(context.Background(), client, original, test.prepared, nil, test.legacy); !errors.Is(err, ErrCodexIsolationUnsupported) {
 			t.Errorf("legacy precondition missing: %v legacy=%v err=%v", test.prepared, test.legacy, err)

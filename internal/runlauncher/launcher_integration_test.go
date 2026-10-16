@@ -285,8 +285,7 @@ func TestCodexCaptureIsolationImageAndAliasArgumentsAtLauncherBoundary(t *testin
 				code, err := launcher.Run(context.Background(), runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: command})
 				data, startedErr := os.ReadFile(started)
 				if test.wantLaunch {
-					want := []string{"--config", `model_provider="openai"`, "--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
-						"--config", "features.responses_websockets=false", "--disable", "enable_request_compression"}
+					want := []string{"--config", "features.responses_websockets=false", "--disable", "enable_request_compression"}
 					if test.interactive && version != "0.145.0" {
 						want = append([]string{"--no-daemon"}, want...)
 					}
@@ -1131,4 +1130,71 @@ func parseLines(input string) map[string]string {
 		}
 	}
 	return result
+}
+
+func TestLauncherPreservesCodexNativeProviderSelection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX child fixture")
+	}
+	for _, test := range []struct {
+		name  string
+		extra []string
+		args  []string
+		want  []string
+	}{
+		{name: "stored login without exported key"},
+		{name: "exported key is not a provider selector", extra: []string{"OPENAI_API_KEY=synthetic-key"}},
+		{name: "custom provider", args: []string{"--config", `model_provider="custom"`, "--config", `model_providers.custom.base_url="https://custom.invalid/v1"`}},
+		{name: "explicit base", extra: []string{"CODEX_BASE_URL=https://explicit.invalid/v1/", "CODEX_API_KEY=synthetic-codex", "OPENAI_API_KEY=synthetic-openai"}, want: []string{"--config", `openai_base_url="https://explicit.invalid/v1"`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "codex")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\nprintf '%s\\n' '---ENV---'\n/usr/bin/env\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			command := append([]string{"codex", "exec", "synthetic"}, test.args...)
+			control := &controlFixture{t: t, executable: executable, workspace: directory, rootPath: filepath.Join(directory, "root.pem"), credential: capability(0x11), proxy: capability(0x22), run: capability(0x33), expectedCommand: command, authorities: []string{"api.openai.com:443", "chatgpt.com:443", "explicit.invalid:443"}, recipe: clientadapter.LaunchCodexResponsesHTTP, recognition: clientadapter.RecognitionVerified,
+				adapter: &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: capturecontrol.ClientAdapterView{ID: "codex-cli", Revision: 1, Version: "0.145.0", CatalogRevision: 7, Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary, LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP}, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault}}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				for _, secret := range []string{"synthetic-connectors", "synthetic-key", "synthetic-codex", "synthetic-openai", "synthetic-org"} {
+					if bytes.Contains(body, []byte(secret)) {
+						t.Error("native credential or account value crossed control")
+					}
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				control.ServeHTTP(w, r)
+			}))
+			defer server.Close()
+			var output bytes.Buffer
+			launcher, err := runlauncher.New(runlauncher.Config{Discovery: fixedDiscovery{session: localdiscovery.Session{BaseURL: server.URL, ControlCredential: control.credential}}, BaseEnvironment: append([]string{"PATH=/usr/bin:/bin", "CODEX_HOME=" + directory, "CODEX_CONNECTORS_TOKEN=synthetic-connectors", "OPENAI_ORGANIZATION=synthetic-org"}, test.extra...), Stdin: strings.NewReader(""), Stdout: &output, Stderr: io.Discard, Getwd: func() (string, error) { return directory, nil }, LookPath: func(string) (string, error) { return executable, nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, err := launcher.Run(context.Background(), runlauncher.LaunchRequest{EnvironmentID: environment.SystemTransparentID, Command: command})
+			if err != nil || code != 0 {
+				t.Fatalf("launch: %d %v", code, err)
+			}
+			want := append(slices.Clone(test.want), "--config", "features.responses_websockets=false", "--disable", "enable_request_compression")
+			want = append(want, command[1:]...)
+			arguments, childEnv, found := strings.Cut(output.String(), "---ENV---\n")
+			if !found {
+				t.Fatal("child environment missing")
+			}
+			values := parseLines(childEnv)
+			wantEnv := parseLines(strings.Join(append([]string{"CODEX_HOME=" + directory, "CODEX_CONNECTORS_TOKEN=synthetic-connectors", "OPENAI_ORGANIZATION=synthetic-org", "CODEX_API_KEY=", "OPENAI_API_KEY="}, test.extra...), "\n"))
+			for key, value := range wantEnv {
+				if values[key] != value {
+					t.Errorf("native input %s changed: got %q want %q", key, values[key], value)
+				}
+			}
+			if got := strings.Split(strings.TrimSuffix(arguments, "\n"), "\n"); !slices.Equal(got, want) {
+				t.Fatalf("native provider choices overwritten: got %q want %q", got, want)
+			}
+		})
+	}
 }
