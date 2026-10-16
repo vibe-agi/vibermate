@@ -204,6 +204,8 @@ func (connection *remoteConnection) close() {
 type localServerRelay struct {
 	listener net.Listener
 	dialer   serverStreamDialer
+	ctx      context.Context
+	cancel   context.CancelFunc
 	done     chan struct{}
 	mu       sync.Mutex
 	active   map[net.Conn]struct{}
@@ -224,8 +226,10 @@ func startLocalServerRelay(dialer serverStreamDialer) (*localServerRelay, error)
 	if err != nil {
 		return nil, fmt.Errorf("listen for local remote-proxy relay: %w", err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	relay := &localServerRelay{
 		listener: listener, dialer: dialer,
+		ctx: ctx, cancel: cancel,
 		done: make(chan struct{}), active: make(map[net.Conn]struct{}),
 	}
 	go relay.accept()
@@ -258,7 +262,7 @@ func (relay *localServerRelay) forward(client net.Conn) {
 	defer relay.wg.Done()
 	defer relay.remove(client)
 	defer client.Close()
-	server, err := relay.dialer.Dial(context.Background())
+	server, err := relay.dialer.Dial(relay.ctx)
 	if err != nil {
 		return
 	}
@@ -281,6 +285,9 @@ func (relay *localServerRelay) forward(client net.Conn) {
 	// direction, close the local side so a client that kept its write half open
 	// cannot strand the reverse copier and the relay forever.
 	_ = client.Close()
+	// The reverse copier may already be blocked writing to the server. Close
+	// both endpoints before joining it so that write can finish as well.
+	_ = server.Close()
 	<-copyDone
 }
 
@@ -316,6 +323,7 @@ func (relay *localServerRelay) Close() {
 		return
 	}
 	relay.once.Do(func() {
+		relay.cancel()
 		relay.mu.Lock()
 		relay.closed = true
 		relay.mu.Unlock()
