@@ -17,6 +17,82 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'Activity inspection invalidation rejects a late detail response',
+    () async {
+      final delegate = PreviewControlApi();
+      final api = _ActivityInspectionApi(delegate, 409);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: delegate.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-2');
+      final id = controller.selectedCapturePage!.items.first.id;
+      api.exchangeGate = Completer<ExchangeDetail>();
+      final load = controller.loadExchangeDetail(id);
+      await expectLater(
+        controller.loadToolResults(id, 'call', cursor: 'old'),
+        throwsA(isA<ControlProblem>()),
+      );
+      api.exchangeGate!.complete(await delegate.exchange(id));
+      expect(await load, isNull);
+      expect(controller.exchangeDetail(id), isNull);
+    },
+  );
+
+  for (final status in [409, 422]) {
+    for (final domain in ['activities', 'content', 'tool']) {
+      test(
+        'Activity inspection clears stale pages and nested caches $domain $status',
+        () async {
+          final delegate = PreviewControlApi();
+          final api = _ActivityInspectionApi(delegate, status);
+          final controller = WorkbenchController(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: true,
+            closeRuntime: delegate.close,
+          );
+          addTearDown(controller.dispose);
+          await controller.initialize();
+          await controller.selectCapture('managed_run:run-2');
+          final current = controller.selectedCapturePage!;
+          expect(current.items, isNotEmpty);
+          final id = current.items.first.id;
+          await controller.loadExchangeDetail(id);
+          expect(controller.exchangeDetail(id), isNotNull);
+          final capture = controller.selectedCapture;
+          final assignment = controller.selectedAssignment;
+          final approvals = controller.pendingApprovals;
+          if (domain == 'activities') {
+            await controller.loadMoreSelectedCapture();
+          } else if (domain == 'content') {
+            await expectLater(
+              controller.loadExchangeContentPage(id, 'old-source-content'),
+              throwsA(isA<ControlProblem>()),
+            );
+          } else {
+            await expectLater(
+              controller.loadToolResults(id, 'call', cursor: 'old-source-tool'),
+              throwsA(isA<ControlProblem>()),
+            );
+          }
+          expect(controller.selectedCapturePage?.items, isEmpty);
+          expect(controller.selectedCapturePage?.nextCursor, isNull);
+          expect(controller.selectedCaptureConversations?.items, isEmpty);
+          expect(controller.exchangeDetail(id), isNull);
+          expect(controller.selectedCapture, same(capture));
+          expect(controller.selectedAssignment, same(assignment));
+          expect(controller.pendingApprovals, same(approvals));
+        },
+      );
+    }
+  }
+
   for (final domain in ['connections', 'egress']) {
     for (final status in [409, 422]) {
       test(
@@ -2567,4 +2643,53 @@ final class _NetworkInspectionApi extends _UsageTrackingApi {
     check();
     return const EgressAttemptPage(items: [], nextCursor: 'egress-tail');
   }
+}
+
+final class _ActivityInspectionApi extends _UsageTrackingApi {
+  Completer<ExchangeDetail>? exchangeGate;
+  _ActivityInspectionApi(super.delegate, this.status);
+  final int status;
+  Never fail() => throw ControlProblem(
+    status: status,
+    reasonCode: status == 409
+        ? 'inspection_changed'
+        : 'invalid_control_request',
+    messageKey: 'error.inspection_changed',
+  );
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    if (cursor != null) fail();
+    final page = await super.activities(
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    return ActivityPage(items: page.items, nextCursor: 'source-bound-next');
+  }
+
+  @override
+  Future<ExchangeDetail> exchange(
+    String id, {
+    String contentView = 'incremental',
+  }) => exchangeGate?.future ?? delegate.exchange(id, contentView: contentView);
+  @override
+  Future<ExchangeContentPage> exchangeContentPage(
+    String id,
+    String cursor,
+  ) async => fail();
+  @override
+  Future<ToolResultPage> toolResults(
+    String id,
+    String callId, {
+    String? cursor,
+  }) async => fail();
 }

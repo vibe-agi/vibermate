@@ -25,6 +25,9 @@ func inspectionResponseBoundary(ctx context.Context, readers ...any) (func() err
 			if err != nil {
 				return nil, err
 			}
+			if len(checks) > 0 && checks[0].token != token {
+				return nil, recording.ErrInspectionChanged
+			}
 			checks = append(checks, check{reader, token})
 		}
 	}

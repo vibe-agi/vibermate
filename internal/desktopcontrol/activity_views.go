@@ -53,16 +53,17 @@ func (ref FrozenEnvironmentRef) Validate() error {
 }
 
 type ActivitySummary struct {
-	ID           string                  `json:"id"`
-	OccurredAt   time.Time               `json:"occurredAt"`
-	Kind         string                  `json:"kind"`
-	Title        string                  `json:"title"`
-	Status       string                  `json:"status"`
-	ReasonCode   string                  `json:"reasonCode,omitempty"`
-	Source       ActivitySourceRef       `json:"source"`
-	Conversation ActivityConversationRef `json:"conversation"`
-	Environment  FrozenEnvironmentRef    `json:"environment"`
-	ParentRefs   ActivityParentRefs      `json:"parentRefs"`
+	inspectionExpiresAt time.Time
+	ID                  string                  `json:"id"`
+	OccurredAt          time.Time               `json:"occurredAt"`
+	Kind                string                  `json:"kind"`
+	Title               string                  `json:"title"`
+	Status              string                  `json:"status"`
+	ReasonCode          string                  `json:"reasonCode,omitempty"`
+	Source              ActivitySourceRef       `json:"source"`
+	Conversation        ActivityConversationRef `json:"conversation"`
+	Environment         FrozenEnvironmentRef    `json:"environment"`
+	ParentRefs          ActivityParentRefs      `json:"parentRefs"`
 	// RequestPreview is a bounded read projection from retained Exchange
 	// content. It is not copied into the body-free Activity journal and is
 	// absent when content recording did not retain a visible request block.
@@ -156,8 +157,9 @@ func (summary ActivitySummary) Validate() error {
 }
 
 type ActivityPage struct {
-	Items      []ActivitySummary `json:"items"`
-	NextCursor string            `json:"nextCursor,omitempty"`
+	inspectionExpiresAt time.Time
+	Items               []ActivitySummary `json:"items"`
+	NextCursor          string            `json:"nextCursor,omitempty"`
 }
 
 type ConversationSummary struct {
@@ -168,12 +170,13 @@ type ConversationSummary struct {
 }
 
 type ConversationPage struct {
-	Items      []ConversationSummary `json:"items"`
-	NextCursor string                `json:"nextCursor,omitempty"`
+	inspectionExpiresAt time.Time
+	Items               []ConversationSummary `json:"items"`
+	NextCursor          string                `json:"nextCursor,omitempty"`
 }
 
 func conversationPageOf(page activity.ConversationPage) (ConversationPage, error) {
-	view := ConversationPage{Items: make([]ConversationSummary, 0, len(page.Items))}
+	view := ConversationPage{NextCursor: page.NextCursor, Items: make([]ConversationSummary, 0, len(page.Items))}
 	for _, item := range page.Items {
 		activities, err := activityPageOf(activity.Page{Items: []activity.Record{item.Latest}})
 		if err != nil || len(activities.Items) != 1 || item.Validate() != nil {
@@ -299,6 +302,7 @@ type ExchangeProcessingTrace struct {
 }
 
 type activityListQuery struct {
+	cursor          string
 	beforeSequence  int64
 	limit           int
 	captureRunID    string
@@ -307,7 +311,7 @@ type activityListQuery struct {
 	conversationID  string
 }
 
-func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
+func parseActivityListQuery(rawQuery string, inspection ...bool) (activityListQuery, error) {
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return activityListQuery{}, errInvalidActivityQuery
@@ -325,7 +329,14 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 		}
 	}
 	if entries, present := values["cursor"]; present {
-		query.beforeSequence, err = parseActivityCursor(entries[0])
+		if len(inspection) > 0 && inspection[0] {
+			query.cursor = entries[0]
+			if query.cursor == "" {
+				err = errInvalidActivityQuery
+			}
+		} else {
+			query.beforeSequence, err = parseActivityCursor(entries[0])
+		}
 		if err != nil {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
@@ -362,6 +373,7 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 	}
 	if (activity.PageRequest{
 		BeforeSequence:           query.beforeSequence,
+		Cursor:                   query.cursor,
 		Limit:                    query.limit,
 		CaptureRunID:             query.captureRunID,
 		ManualCaptureID:          query.manualCaptureID,
@@ -391,7 +403,7 @@ func parentRefsOf(record activity.Record) ActivityParentRefs {
 }
 
 func activityPageOf(page activity.Page) (ActivityPage, error) {
-	view := ActivityPage{Items: make([]ActivitySummary, 0, len(page.Items))}
+	view := ActivityPage{NextCursor: page.NextCursor, Items: make([]ActivitySummary, 0, len(page.Items))}
 	for _, record := range page.Items {
 		if !isExchangeActivity(record.Kind) || record.Validate() != nil {
 			return ActivityPage{}, errors.New("Activity Exchange projection is invalid")
@@ -758,6 +770,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeInspectionProblem(writer, err)
 		return
 	}
+	var expiry time.Time
 	exchangeID := request.PathValue("exchangeId")
 	record, err := handler.activities.GetExchange(request.Context(), exchangeID)
 	switch {
@@ -768,7 +781,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	case err != nil:
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	if cursor := request.URL.Query().Get("contentCursor"); cursor != "" {
@@ -781,10 +794,12 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 			writeProblem(writer, http.StatusNotFound, ReasonExchangeNotFound)
 		case errors.Is(pageErr, exchangecontent.ErrInvalidEvidence):
 			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
-		case pageErr != nil || !contentReferencesMatch(record, page.ExchangeID, page.Parent, page.Frozen):
+		case pageErr != nil:
+			writeInspectionProblem(writer, pageErr)
+		case !contentReferencesMatch(record, page.ExchangeID, page.Parent, page.Frozen):
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		default:
-			writeInspectionJSON(writer, page, check)
+			writeInspectionJSON(writer, page, handler.activityExpiryCheck(check, page.InspectionExpiresAt))
 		}
 		return
 	}
@@ -807,9 +822,10 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 	switch {
 	case contentErr == nil:
 		content = &contentProjection
+		includeInspectionExpiry(&expiry, contentProjection.ExpiresAt)
 	case errors.Is(contentErr, exchangecontent.ErrNotFound):
 	default:
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, contentErr)
 		return
 	}
 	detail, err := exchangeDetailWithin(request.Context(), handler.contentLimits, record, egressPage, content, contentView)
@@ -817,21 +833,22 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	if handler.conversationIndexer != nil {
+	if handler.conversationIndexer != nil || handler.conversationIdentityInspection != nil {
 		// Detail is a point read, not a request to rescan a whole Capture (or
 		// the entire archive for an unassigned Exchange). Identity can return
 		// persisted or exact wire evidence without visiting client-local logs.
-		identity, identityErr := handler.conversationIndexer.Identity(
+		identityResult, identityErr := handler.inspectConversationIdentity(
 			request.Context(),
 			record.SubjectID,
 		)
 		switch {
 		case identityErr == nil:
-			cloned := identity.Clone()
+			cloned := identityResult.Identity.Clone()
+			includeInspectionExpiry(&expiry, identityResult.InspectionExpiresAt)
 			detail.ClientIdentity = &cloned
 		case errors.Is(identityErr, activity.ErrExchangeNotFound):
 		default:
-			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			writeInspectionProblem(writer, identityErr)
 			return
 		}
 	}
@@ -841,7 +858,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 			return
 		}
-		if err = check(); err != nil {
+		if err = handler.activityExpiryCheck(check, expiry)(); err != nil {
 			writeInspectionProblem(writer, err)
 			return
 		}
@@ -853,7 +870,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		}
 		return
 	}
-	writeInspectionJSON(writer, detail, check)
+	writeInspectionJSON(writer, detail, handler.activityExpiryCheck(check, expiry))
 }
 
 func contentReferencesMatch(record activity.Record, id string, parent exchangecontent.ParentRef, frozen exchangecontent.FrozenRef) bool {

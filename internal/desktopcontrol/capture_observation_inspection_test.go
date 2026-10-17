@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/conversationprojection"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -31,7 +32,7 @@ func (r *captureHTTPReader) ReadCaptureObservation(ctx context.Context, ref capt
 	}
 	return value, err
 }
-func captureObservationHTTPFixture(t *testing.T) (*auditFixture, *captureHTTPReader, captureidentity.Reference, func()) {
+func captureObservationHTTPFixture(t *testing.T, configure ...func(*desktopcontrol.Options, activityHTTPRoles)) (*auditFixture, *captureHTTPReader, captureidentity.Reference, func()) {
 	t.Helper()
 	ctx := context.Background()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -68,12 +69,35 @@ func captureObservationHTTPFixture(t *testing.T) (*auditFixture, *captureHTTPRea
 	}
 	t.Cleanup(func() { catalog.Close(ctx) })
 	reader := &captureHTTPReader{CaptureInspectionReader: runtimepersistence.NewCaptureInspectionReader(catalog, control)}
-	activities, err := activity.New(activity.DefaultOptions(current.ActivityRepository()))
+	limits, err := exchangecontent.DefaultSourceLimits()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { activities.Shutdown(ctx) })
-	fixture := newAuditFixtureConfigured(t, nil, func(o *desktopcontrol.Options) { o.Activities = activities; o.CaptureObservations = reader })
+	activities, err := runtimepersistence.NewActivityInspectionReader(catalog, control, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := runtimepersistence.NewContentInspectionReader(catalog, control, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedHTTPInspectionMirror(t, current, control, filepath.Join(root, "observations.db"), []captureidentity.Reference{ref})
+	fixture := newAuditFixtureConfigured(t, nil, func(o *desktopcontrol.Options) {
+		o.Activities = nil
+		o.ConversationIndexer = nil
+		indexer, err := conversationprojection.New(conversationprojection.Options{Activities: activities, Contents: contents, IdentityInspection: activities, CaptureRuns: o.CaptureRuns})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.ConversationIdentityInspection = indexer
+		o.ActivityInspection = activities
+		o.Contents = contents
+		o.CaptureObservations = reader
+		o.Egress = runtimepersistence.NewEgressInspectionReader(catalog, control)
+		for _, setup := range configure {
+			setup(o, activityHTTPRoles{root: root, current: current, control: control, catalog: catalog, ref: ref})
+		}
+	})
 	rotate := func() {
 		id, err := manualcapture.ParseID(ref.ID)
 		if err != nil {
@@ -91,7 +115,7 @@ func captureObservationHTTPFixture(t *testing.T) (*auditFixture, *captureHTTPRea
 	}
 	defer db.Close()
 	var count int
-	if err = db.QueryRow(`SELECT count(*) FROM runtime_activities`).Scan(&count); err != nil || count != 0 {
+	if err = db.QueryRow(`SELECT count(*) FROM runtime_activities`).Scan(&count); err != nil || (len(configure) == 0 && count != 0) {
 		t.Fatalf("unexpected request roots: %d %v", count, err)
 	}
 	return fixture, reader, ref, rotate

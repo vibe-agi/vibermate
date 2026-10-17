@@ -1014,6 +1014,7 @@ final class WorkbenchController extends ChangeNotifier
   final Map<String, int> _exchangeLoadGenerations = {};
   final Map<String, String> _exchangeErrors = {};
   int _exchangeLoadGeneration = 0;
+  int _activityInspectionGeneration = 0;
   final LinkedHashMap<String, RawEvidencePage> _rawEvidencePages =
       LinkedHashMap<String, RawEvidencePage>();
   final Set<String> _loadingRawEvidence = {};
@@ -1150,7 +1151,7 @@ final class WorkbenchController extends ChangeNotifier
       _api.dryRunEnvironment(input);
 
   Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request) =>
-      _api.searchEvidence(request);
+      _inspectionRead(() => _api.searchEvidence(request));
 
   Future<EnvironmentDraft> environmentDraft(String environmentId) =>
       _api.environmentDraft(environmentId);
@@ -1351,7 +1352,7 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<ExchangeSummary> loadActivitySummary(ActivitySummaryScope scope) =>
-      _api.activitySummary(scope);
+      _inspectionRead(() => _api.activitySummary(scope));
 
   Future<RuntimeUsageReport> loadCaptureUsage(
     ActivitySummaryScope scope,
@@ -2695,6 +2696,7 @@ final class WorkbenchController extends ChangeNotifier
       exchangeId,
       contentView: contentView,
       generation: generation,
+      inspectionGeneration: _activityInspectionGeneration,
     );
     _exchangeLoads[key] = load;
     notifyListeners();
@@ -2706,22 +2708,28 @@ final class WorkbenchController extends ChangeNotifier
   Future<ExchangeContentPage> loadExchangeContentPage(
     String exchangeId,
     String cursor,
-  ) => _api.exchangeContentPage(exchangeId, cursor);
+  ) => _inspectionRead(() => _api.exchangeContentPage(exchangeId, cursor));
 
   Future<ToolResultPage> loadToolResults(
     String exchangeId,
     String callId, {
     String? cursor,
-  }) => _api.toolResults(exchangeId, callId, cursor: cursor);
+  }) => _inspectionRead(
+    () => _api.toolResults(exchangeId, callId, cursor: cursor),
+  );
 
   Future<ExchangeDetail?> _fetchExchangeDetail(
     String key,
     String exchangeId, {
     required String contentView,
     required int generation,
+    required int inspectionGeneration,
   }) async {
     try {
       final detail = await _api.exchange(exchangeId, contentView: contentView);
+      if (_disposed || inspectionGeneration != _activityInspectionGeneration) {
+        return null;
+      }
       if (_disposed || _exchangeLoadGenerations[key] != generation) {
         return detail;
       }
@@ -2733,6 +2741,7 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed || _exchangeLoadGenerations[key] != generation) {
         return null;
       }
+      _invalidateActivityInspection(error);
       _exchangeErrors[key] = _describeError(error);
       return null;
     } finally {
@@ -3738,6 +3747,52 @@ final class WorkbenchController extends ChangeNotifier
     captureActivitiesLoading = false;
   }
 
+  Future<T> _inspectionRead<T>(Future<T> Function() read) async {
+    final generation = _activityInspectionGeneration;
+    try {
+      final result = await read();
+      if (_disposed || generation != _activityInspectionGeneration) {
+        throw const ControlProblem(
+          status: 409,
+          reasonCode: 'inspection_changed',
+          messageKey: 'error.inspection_changed',
+        );
+      }
+      return result;
+    } catch (error) {
+      _invalidateActivityInspection(error);
+      rethrow;
+    }
+  }
+
+  void _invalidateActivityInspection(Object error) {
+    if (_disposed) return;
+    if (error is! ControlProblem ||
+        (error.status != 409 && error.status != 422)) {
+      return;
+    }
+    _activityInspectionGeneration++;
+    // These are optional projections of one source/visibility view. Required
+    // Capture selection, assignments, and approvals retain their own owners.
+    _selectionGeneration++;
+    _exchangeLoadGeneration++;
+    _exchangeDetails.clear();
+    _exchangeLoads.clear();
+    _exchangeLoadGenerations.clear();
+    _exchangeErrors.clear();
+    _captureConversationPages.clear();
+    selectedCapturePage = const ActivityPage(items: [], nextCursor: null);
+    selectedCaptureConversations = const ConversationPage(
+      items: [],
+      nextCursor: null,
+    );
+    _summaryBodiesAbsent = false;
+    captureActivitiesLoading = false;
+    detailLoading = false;
+    errorMessage = _describeError(error);
+    notifyListeners();
+  }
+
   void _invalidateEvidenceCaches() {
     _discardNativeReader();
     _discardNativeApprovals();
@@ -4387,6 +4442,7 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
       detailLoading = false;
+      _invalidateActivityInspection(error);
       captureDetailError = _describeError(error);
       errorMessage = captureDetailError;
       notifyListeners();
@@ -4501,6 +4557,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
+      _invalidateActivityInspection(error);
       errorMessage = _describeError(error);
       notifyListeners();
     }
@@ -4560,6 +4617,7 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       captureActivitiesLoading = false;
+      _invalidateActivityInspection(error);
       errorMessage = _describeError(error);
       notifyListeners();
     }

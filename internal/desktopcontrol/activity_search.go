@@ -25,41 +25,48 @@ type EvidenceSearchHit struct {
 }
 
 type EvidenceSearchPage struct {
-	Items      []EvidenceSearchHit `json:"items"`
-	NextCursor string              `json:"nextCursor,omitempty"`
+	inspectionExpiresAt time.Time
+	Items               []EvidenceSearchHit `json:"items"`
+	NextCursor          string              `json:"nextCursor,omitempty"`
 }
 
 func (handler *Handler) searchActivities(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	query, err := parseActivitySearchQuery(request.URL.RawQuery)
+	query, err := parseActivitySearchQuery(request.URL.RawQuery, handler.activityInspection)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.activities, handler.contents)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	page, err := handler.activities.Search(request.Context(), query)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	view, err := evidenceSearchPageOf(page)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	if err := handler.enrichSearchActivities(request.Context(), page, &view); err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	if page.NextBeforeSequence != 0 {
 		view.NextCursor, err = activitySearchCursor(page.NextBeforeSequence, query)
 		if err != nil {
-			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			writeInspectionProblem(writer, err)
 			return
 		}
 	}
-	writeJSON(writer, http.StatusOK, view)
+	includeInspectionExpiry(&view.inspectionExpiresAt, page.InspectionExpiresAt)
+	writeInspectionJSON(writer, view, handler.activityExpiryCheck(check, view.inspectionExpiresAt))
 }
 
 func (handler *Handler) enrichSearchActivities(
@@ -76,14 +83,18 @@ func (handler *Handler) enrichSearchActivities(
 	if err := handler.attachActivityIdentities(ctx, records, &projected); err != nil {
 		return err
 	}
-	_ = handler.attachActivityRequestPreviews(ctx, &projected)
+	if err := handler.attachActivityRequestPreviews(ctx, &projected); err != nil && handler.activityInspection {
+		return err
+	}
+	includeInspectionExpiry(&view.inspectionExpiresAt, projected.inspectionExpiresAt)
 	for index := range view.Items {
 		view.Items[index].Activity = projected.Items[index]
+		includeInspectionExpiry(&view.inspectionExpiresAt, projected.Items[index].inspectionExpiresAt)
 	}
 	return nil
 }
 
-func parseActivitySearchQuery(rawQuery string) (activity.SearchQuery, error) {
+func parseActivitySearchQuery(rawQuery string, inspection ...bool) (activity.SearchQuery, error) {
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return activity.SearchQuery{}, errInvalidActivityQuery
@@ -129,7 +140,14 @@ func parseActivitySearchQuery(rawQuery string) (activity.SearchQuery, error) {
 		query.OccurredBefore = query.OccurredBefore.UTC().Truncate(time.Millisecond)
 	}
 	if values.Has("cursor") {
-		query.BeforeSequence, err = parseActivitySearchCursor(values.Get("cursor"), query)
+		if len(inspection) > 0 && inspection[0] {
+			query.Cursor = values.Get("cursor")
+			if query.Cursor == "" {
+				err = errInvalidActivityQuery
+			}
+		} else {
+			query.BeforeSequence, err = parseActivitySearchCursor(values.Get("cursor"), query)
+		}
 		if err != nil {
 			return activity.SearchQuery{}, errInvalidActivityQuery
 		}
@@ -204,7 +222,7 @@ func evidenceSearchPageOf(page activity.SearchPage) (EvidenceSearchPage, error) 
 	if err != nil {
 		return EvidenceSearchPage{}, err
 	}
-	view := EvidenceSearchPage{Items: make([]EvidenceSearchHit, len(page.Items))}
+	view := EvidenceSearchPage{NextCursor: page.NextCursor, Items: make([]EvidenceSearchHit, len(page.Items))}
 	for index, hit := range page.Items {
 		view.Items[index] = EvidenceSearchHit{
 			Activity: activities.Items[index],

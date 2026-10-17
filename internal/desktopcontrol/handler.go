@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/conversationprojection"
 	"github.com/vibe-agi/vibermate/internal/desktoptrust"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -159,46 +160,53 @@ type ConversationIndexer interface {
 	Identity(context.Context, string) (agentconversation.ClientIdentity, error)
 }
 
+type ConversationIdentityInspector interface {
+	InspectIdentity(context.Context, string) (conversationprojection.IdentityInspection, error)
+}
+
 type Options struct {
-	CaptureObservations recording.CaptureObservationReader
-	NetworkAccess       *NetworkAccess
-	ProductUpdates      ProductUpdateReader
-	NativeContentKey    [32]byte
-	NativeTools         nativetool.Repository
-	NativeInspection    nativetool.InspectionReader
-	NativeAuthority     nativetool.AuthorityRepository
-	NativePreviews      PendingPreviewReader
-	ContentLimits       *exchangecontent.SourceLimits
-	LaunchSnapshots     *launchsnapshot.Store
-	Storage             StorageLocationReader
-	ACP                 *acpobservation.Manager
-	ACPInspection       acpobservation.InspectionReader
-	ACPMarkers          acpobservation.MarkerReader
-	Readiness           ReadinessReader
-	Status              StatusReader
-	Environments        environment.Controller
-	ClientToolAccess    ClientToolAccessBuilder
-	DryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
-	Assignments         captureassignment.Controller
-	Activities          activity.Runtime
-	ConversationIndexer ConversationIndexer
-	Contents            exchangecontent.Reader
-	Connections         connectionevent.Reader
-	Egress              egressaudit.Reader
-	Approvals           toolapproval.Controller
-	Endpoints           upstreamendpoint.Controller
-	Accounts            provideraccount.Controller
-	AccountReads        OwnedAccountReader
-	CodexOAuth          codexoauth.Inspector
-	CodexLogins         codexoauth.LoginController
-	CodeLibrary         codelibrary.Controller
-	EgressProfiles      egressprofile.Controller
-	VLESSProfiles       vlessprofile.Importer
-	EgressDefaults      egressprofile.Defaults
-	Models              modelcatalog.Reader
-	ClientModels        modelcatalog.ProviderMetadataReader
-	RawEvidence         rawevidence.Reader
-	Offline             OfflineActions
+	ConversationIdentityInspection ConversationIdentityInspector
+	ActivityInspection             activity.InspectionReader
+	ActivityRecorder               activity.Recorder
+	CaptureObservations            recording.CaptureObservationReader
+	NetworkAccess                  *NetworkAccess
+	ProductUpdates                 ProductUpdateReader
+	NativeContentKey               [32]byte
+	NativeTools                    nativetool.Repository
+	NativeInspection               nativetool.InspectionReader
+	NativeAuthority                nativetool.AuthorityRepository
+	NativePreviews                 PendingPreviewReader
+	ContentLimits                  *exchangecontent.SourceLimits
+	LaunchSnapshots                *launchsnapshot.Store
+	Storage                        StorageLocationReader
+	ACP                            *acpobservation.Manager
+	ACPInspection                  acpobservation.InspectionReader
+	ACPMarkers                     acpobservation.MarkerReader
+	Readiness                      ReadinessReader
+	Status                         StatusReader
+	Environments                   environment.Controller
+	ClientToolAccess               ClientToolAccessBuilder
+	DryRun                         func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
+	Assignments                    captureassignment.Controller
+	Activities                     activity.Runtime
+	ConversationIndexer            ConversationIndexer
+	Contents                       exchangecontent.Reader
+	Connections                    connectionevent.Reader
+	Egress                         egressaudit.Reader
+	Approvals                      toolapproval.Controller
+	Endpoints                      upstreamendpoint.Controller
+	Accounts                       provideraccount.Controller
+	AccountReads                   OwnedAccountReader
+	CodexOAuth                     codexoauth.Inspector
+	CodexLogins                    codexoauth.LoginController
+	CodeLibrary                    codelibrary.Controller
+	EgressProfiles                 egressprofile.Controller
+	VLESSProfiles                  vlessprofile.Importer
+	EgressDefaults                 egressprofile.Defaults
+	Models                         modelcatalog.Reader
+	ClientModels                   modelcatalog.ProviderMetadataReader
+	RawEvidence                    rawevidence.Reader
+	Offline                        OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
 	ConnectionRules ConnectionRuleController
@@ -218,43 +226,46 @@ type NetworkAccess struct {
 }
 
 type Handler struct {
-	captureObservations recording.CaptureObservationReader
-	networkAccess       *NetworkAccess
-	productUpdates      ProductUpdateReader
-	nativeContentKey    [32]byte
-	nativeInspection    nativetool.InspectionReader
-	nativeTools         nativetool.Repository
-	nativeAuthority     nativetool.AuthorityRepository
-	nativePreviews      PendingPreviewReader
-	contentLimits       *exchangecontent.SourceLimits
-	launchSnapshots     *launchsnapshot.Store
-	storage             StorageLocationReader
-	acp                 acpobservation.MarkerReader
-	readiness           ReadinessReader
-	status              StatusReader
-	environments        environment.Controller
-	clientToolAccess    ClientToolAccessBuilder
-	dryRun              func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
-	assignments         captureassignment.Controller
-	activities          activity.Runtime
-	conversationIndexer ConversationIndexer
-	contents            exchangecontent.Reader
-	connections         connectionevent.Reader
-	egress              egressaudit.Reader
-	approvals           toolapproval.Controller
-	endpoints           upstreamendpoint.Controller
-	accounts            provideraccount.Controller
-	accountReads        OwnedAccountReader
-	codexOAuth          codexoauth.Inspector
-	codexLogins         codexoauth.LoginController
-	codeLibrary         codelibrary.Controller
-	egressProfiles      egressprofile.Controller
-	vlessProfiles       vlessprofile.Importer
-	egressDefaults      egressprofile.Defaults
-	models              modelcatalog.Reader
-	clientModels        modelcatalog.ProviderMetadataReader
-	rawEvidence         rawevidence.Reader
-	offline             OfflineActions
+	captureObservations            recording.CaptureObservationReader
+	networkAccess                  *NetworkAccess
+	productUpdates                 ProductUpdateReader
+	nativeContentKey               [32]byte
+	nativeInspection               nativetool.InspectionReader
+	nativeTools                    nativetool.Repository
+	nativeAuthority                nativetool.AuthorityRepository
+	nativePreviews                 PendingPreviewReader
+	contentLimits                  *exchangecontent.SourceLimits
+	launchSnapshots                *launchsnapshot.Store
+	storage                        StorageLocationReader
+	acp                            acpobservation.MarkerReader
+	readiness                      ReadinessReader
+	status                         StatusReader
+	environments                   environment.Controller
+	clientToolAccess               ClientToolAccessBuilder
+	dryRun                         func(context.Context, exchange.ClientRequest) (exchange.DryRunResult, error)
+	assignments                    captureassignment.Controller
+	activities                     activity.Reader
+	activityRecorder               activity.Recorder
+	activityInspection             bool
+	conversationIndexer            ConversationIndexer
+	conversationIdentityInspection ConversationIdentityInspector
+	contents                       exchangecontent.Reader
+	connections                    connectionevent.Reader
+	egress                         egressaudit.Reader
+	approvals                      toolapproval.Controller
+	endpoints                      upstreamendpoint.Controller
+	accounts                       provideraccount.Controller
+	accountReads                   OwnedAccountReader
+	codexOAuth                     codexoauth.Inspector
+	codexLogins                    codexoauth.LoginController
+	codeLibrary                    codelibrary.Controller
+	egressProfiles                 egressprofile.Controller
+	vlessProfiles                  vlessprofile.Importer
+	egressDefaults                 egressprofile.Defaults
+	models                         modelcatalog.Reader
+	clientModels                   modelcatalog.ProviderMetadataReader
+	rawEvidence                    rawevidence.Reader
+	offline                        OfflineActions
 
 	connectionRules ConnectionRuleController
 	archive         resourcedeletion.Archive
@@ -273,7 +284,7 @@ type Handler struct {
 	// After a successful enrichment, an unchanged Capture activity watermark
 	// must not re-arm the 10k repair budget on directory polls.
 	indexIdleScope     string
-	indexIdleWatermark int64
+	indexIdleWatermark string
 }
 
 type StatusResponse struct {
@@ -330,7 +341,7 @@ func New(options Options) (*Handler, error) {
 		options.Status == nil ||
 		options.Environments == nil ||
 		options.Assignments == nil ||
-		options.Activities == nil ||
+		(options.Activities == nil && options.ActivityInspection == nil) ||
 		options.Contents == nil ||
 		options.Connections == nil ||
 		options.Egress == nil ||
@@ -341,57 +352,70 @@ func New(options Options) (*Handler, error) {
 		options.Clock == nil {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
+	var activities activity.Reader = options.Activities
+	recorder := options.ActivityRecorder
+	if options.ActivityInspection != nil {
+		activities = options.ActivityInspection
+		if _, ok := options.Contents.(exchangecontent.InspectionReader); !ok {
+			return nil, errors.New("Activity inspection requires independent content reader")
+		}
+	} else if recorder == nil {
+		recorder = options.Activities
+	}
 	markers := options.ACPMarkers
 	if markers == nil && options.ACP != nil {
 		markers = options.ACP
 	}
 	handler := &Handler{
-		networkAccess:       networkAccess,
-		productUpdates:      options.ProductUpdates,
-		nativeContentKey:    options.NativeContentKey,
-		contentLimits:       options.ContentLimits,
-		launchSnapshots:     options.LaunchSnapshots,
-		storage:             options.Storage,
-		acp:                 markers,
-		readiness:           options.Readiness,
-		status:              options.Status,
-		environments:        options.Environments,
-		dryRun:              options.DryRun,
-		assignments:         options.Assignments,
-		clientToolAccess:    options.ClientToolAccess,
-		activities:          options.Activities,
-		captureObservations: options.CaptureObservations,
-		conversationIndexer: options.ConversationIndexer,
-		contents:            options.Contents,
-		connections:         options.Connections,
-		egress:              options.Egress,
-		approvals:           options.Approvals,
-		nativeTools:         options.NativeTools,
-		nativeInspection:    options.NativeInspection,
-		nativeAuthority:     nativeAuthorityDependency(options),
-		nativePreviews:      options.NativePreviews,
-		endpoints:           options.Endpoints,
-		accounts:            options.Accounts,
-		accountReads:        options.AccountReads,
-		codexOAuth:          options.CodexOAuth,
-		codexLogins:         options.CodexLogins,
-		codeLibrary:         options.CodeLibrary,
-		egressProfiles:      options.EgressProfiles,
-		vlessProfiles:       options.VLESSProfiles,
-		egressDefaults:      options.EgressDefaults,
-		models:              options.Models,
-		clientModels:        options.ClientModels,
-		rawEvidence:         options.RawEvidence,
-		offline:             options.Offline,
-		connectionRules:     options.ConnectionRules,
-		archive:             options.Archive,
-		archiveBarrier:      options.ArchiveBarrier,
-		rootTrust:           options.RootTrust,
-		captureRuns:         options.CaptureRuns,
-		manualCaptures:      options.ManualCaptures,
-		clock:               options.Clock,
-		idempotent:          newIdempotencyCache(),
-		mux:                 http.NewServeMux(),
+		networkAccess:                  networkAccess,
+		productUpdates:                 options.ProductUpdates,
+		nativeContentKey:               options.NativeContentKey,
+		contentLimits:                  options.ContentLimits,
+		launchSnapshots:                options.LaunchSnapshots,
+		storage:                        options.Storage,
+		acp:                            markers,
+		readiness:                      options.Readiness,
+		status:                         options.Status,
+		environments:                   options.Environments,
+		dryRun:                         options.DryRun,
+		assignments:                    options.Assignments,
+		clientToolAccess:               options.ClientToolAccess,
+		activities:                     activities,
+		activityRecorder:               recorder,
+		activityInspection:             options.ActivityInspection != nil,
+		captureObservations:            options.CaptureObservations,
+		conversationIndexer:            options.ConversationIndexer,
+		conversationIdentityInspection: options.ConversationIdentityInspection,
+		contents:                       options.Contents,
+		connections:                    options.Connections,
+		egress:                         options.Egress,
+		approvals:                      options.Approvals,
+		nativeTools:                    options.NativeTools,
+		nativeInspection:               options.NativeInspection,
+		nativeAuthority:                nativeAuthorityDependency(options),
+		nativePreviews:                 options.NativePreviews,
+		endpoints:                      options.Endpoints,
+		accounts:                       options.Accounts,
+		accountReads:                   options.AccountReads,
+		codexOAuth:                     options.CodexOAuth,
+		codexLogins:                    options.CodexLogins,
+		codeLibrary:                    options.CodeLibrary,
+		egressProfiles:                 options.EgressProfiles,
+		vlessProfiles:                  options.VLESSProfiles,
+		egressDefaults:                 options.EgressDefaults,
+		models:                         options.Models,
+		clientModels:                   options.ClientModels,
+		rawEvidence:                    options.RawEvidence,
+		offline:                        options.Offline,
+		connectionRules:                options.ConnectionRules,
+		archive:                        options.Archive,
+		archiveBarrier:                 options.ArchiveBarrier,
+		rootTrust:                      options.RootTrust,
+		captureRuns:                    options.CaptureRuns,
+		manualCaptures:                 options.ManualCaptures,
+		clock:                          options.Clock,
+		idempotent:                     newIdempotencyCache(),
+		mux:                            http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("POST /api/v1/product-update/check", handler.checkProductUpdate)
@@ -769,9 +793,14 @@ func (handler *Handler) listActivities(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	query, err := parseActivityListQuery(request.URL.RawQuery)
+	query, err := parseActivityListQuery(request.URL.RawQuery, handler.activityInspection)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.activities, handler.contents)
+	if err != nil {
+		writeInspectionProblem(writer, err)
 		return
 	}
 	// An exact Conversation already has a durable projection. Refreshing it
@@ -782,6 +811,7 @@ func (handler *Handler) listActivities(
 		request.Context(),
 		activity.PageRequest{
 			BeforeSequence:           query.beforeSequence,
+			Cursor:                   query.cursor,
 			Limit:                    query.limit,
 			CaptureRunID:             query.captureRunID,
 			ManualCaptureID:          query.manualCaptureID,
@@ -790,24 +820,26 @@ func (handler *Handler) listActivities(
 		},
 	)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	view, err := activityPageOf(page)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	if err := handler.attachActivityIdentities(request.Context(), page, &view); err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
-	// A request preview is additive list chrome, not Activity authority. One
-	// damaged or temporarily unreadable retained transcript must not hide the
-	// rest of a Capture. The Exchange detail endpoint still performs the full
-	// integrity check and reports the exact evidence failure when it is opened.
-	_ = handler.attachActivityRequestPreviews(request.Context(), &view)
-	writeJSON(writer, http.StatusOK, view)
+	if err := handler.attachActivityRequestPreviews(request.Context(), &view); err != nil && handler.activityInspection {
+		writeInspectionProblem(writer, err)
+		return
+	}
+	for _, item := range view.Items {
+		includeInspectionExpiry(&view.inspectionExpiresAt, item.inspectionExpiresAt)
+	}
+	writeInspectionJSON(writer, view, handler.activityExpiryCheck(check, view.inspectionExpiresAt))
 	if query.conversationID == "" {
 		handler.scheduleConversationIndex(activity.ConversationIndexRequest{
 			Limit:           1,
@@ -828,8 +860,13 @@ func (handler *Handler) listConversations(
 		limit, err = strconv.Atoi(values.Get("limit"))
 	}
 	before := int64(0)
+	cursor := ""
 	if values.Has("cursor") {
-		before, err = parseConversationCursor(values.Get("cursor"))
+		if handler.activityInspection {
+			cursor = values.Get("cursor")
+		} else {
+			before, err = parseConversationCursor(values.Get("cursor"))
+		}
 	}
 	if err != nil || limit < 1 || limit > activity.MaxPageSize ||
 		!onlyQueryKeys(
@@ -844,6 +881,7 @@ func (handler *Handler) listConversations(
 	}
 	indexRequest := activity.ConversationIndexRequest{
 		BeforeFirstSequence: before,
+		Cursor:              cursor,
 		Limit:               limit,
 		CaptureRunID:        values.Get("captureRunId"),
 		ManualCaptureID:     values.Get("manualCaptureId"),
@@ -852,21 +890,26 @@ func (handler *Handler) listConversations(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.activities, handler.contents)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	page, err := handler.activities.ListConversations(
 		request.Context(),
 		indexRequest,
 	)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	view, err := conversationPageOf(page)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	if err := handler.attachConversationIdentities(request.Context(), page, &view); err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	// The directory and selected request page must agree about retained bodies.
@@ -876,7 +919,13 @@ func (handler *Handler) listConversations(
 		for index := range view.Items {
 			ids[index] = view.Items[index].Latest.ID
 		}
-		if available, err := handler.contents.AvailableBodies(request.Context(), ids); err == nil {
+		available, expiry, err := handler.activityBodyAvailability(request.Context(), ids)
+		if err != nil && handler.activityInspection {
+			writeInspectionProblem(writer, err)
+			return
+		}
+		includeInspectionExpiry(&view.inspectionExpiresAt, expiry)
+		if err == nil {
 			for index := range view.Items {
 				if exists, known := available[ids[index]]; known {
 					view.Items[index].Latest.ContentAvailable = &exists
@@ -884,7 +933,10 @@ func (handler *Handler) listConversations(
 			}
 		}
 	}
-	writeJSON(writer, http.StatusOK, view)
+	for _, item := range view.Items {
+		includeInspectionExpiry(&view.inspectionExpiresAt, item.Latest.inspectionExpiresAt)
+	}
+	writeInspectionJSON(writer, view, handler.activityExpiryCheck(check, view.inspectionExpiresAt))
 	handler.scheduleConversationIndex(indexRequest)
 }
 
@@ -925,7 +977,7 @@ func (handler *Handler) scheduleConversationIndex(
 			return
 		}
 		handler.indexMu.Lock()
-		idle := scope == handler.indexIdleScope && watermark <= handler.indexIdleWatermark
+		idle := scope == handler.indexIdleScope && watermark == handler.indexIdleWatermark
 		handler.indexMu.Unlock()
 		if idle {
 			return
@@ -950,24 +1002,45 @@ func (handler *Handler) scheduleConversationIndex(
 	}()
 }
 
-// conversationIndexWatermark is the newest retained Activity sequence for a
-// Capture Run. Directory polls compare it to the last successful enrichment so
-// an idle Capture does not pay the repair budget again.
-func (handler *Handler) conversationIndexWatermark(
-	ctx context.Context,
-	captureRunID string,
-) (int64, error) {
-	page, err := handler.activities.ListExchanges(ctx, activity.PageRequest{
-		Limit:        1,
-		CaptureRunID: captureRunID,
-	})
+// conversationIndexWatermark binds the newest retained publication to its
+// inspection version, including an empty or filtered page. Legacy composition
+// keeps its local sequence watermark.
+func (handler *Handler) conversationIndexWatermark(ctx context.Context, captureRunID string) (string, error) {
+	var token recording.InspectionToken
+	var boundary recording.InspectionBoundary
+	if handler.activityInspection {
+		boundary = handler.activities.(recording.InspectionBoundary)
+		var err error
+		token, err = boundary.Begin(ctx)
+		if err != nil {
+			return "", err
+		}
+	}
+	page, err := handler.activities.ListExchanges(ctx, activity.PageRequest{Limit: 1, CaptureRunID: captureRunID})
 	if err != nil {
-		return 0, err
+		return "", err
+	}
+	if boundary != nil {
+		if err := boundary.Check(ctx, token); err != nil {
+			return "", err
+		}
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			return "", err
+		}
+		position := page.NextCursor
+		if len(page.Items) > 0 {
+			position = page.Items[0].InspectionCursor
+			if position == "" {
+				return "", recording.ErrInspectionCursor
+			}
+		}
+		return string(encoded) + "\x00" + position, nil
 	}
 	if len(page.Items) == 0 {
-		return 0, nil
+		return "", nil
 	}
-	return page.Items[0].Sequence, nil
+	return strconv.FormatInt(page.Items[0].Sequence, 10), nil
 }
 
 func (handler *Handler) attachActivityIdentities(
@@ -975,18 +1048,22 @@ func (handler *Handler) attachActivityIdentities(
 	page activity.Page,
 	view *ActivityPage,
 ) error {
-	if handler.conversationIndexer == nil || view == nil {
+	if (handler.conversationIndexer == nil && handler.conversationIdentityInspection == nil) || view == nil {
 		return nil
 	}
 	if len(page.Items) != len(view.Items) {
 		return errors.New("Activity identity projection length does not match")
 	}
 	for index, record := range page.Items {
-		identity, err := handler.conversationIndexer.Identity(ctx, record.SubjectID)
+		identityResult, err := handler.inspectConversationIdentity(ctx, record.SubjectID)
+		identity := identityResult.Identity
 		switch {
 		case err == nil:
 			if err := view.Items[index].Conversation.attachIdentity(identity); err != nil {
 				return err
+			}
+			if view.Items[index].Conversation.ClientIdentity != nil {
+				includeInspectionExpiry(&view.Items[index].inspectionExpiresAt, identityResult.InspectionExpiresAt)
 			}
 			if err := view.Items[index].Validate(); err != nil {
 				return err
@@ -1011,7 +1088,12 @@ func (handler *Handler) attachActivityRequestPreviews(
 	for index := range view.Items {
 		exchangeIDs[index] = view.Items[index].ID
 	}
-	if available, err := handler.contents.AvailableBodies(ctx, exchangeIDs); err == nil {
+	available, expiry, err := handler.activityBodyAvailability(ctx, exchangeIDs)
+	if err != nil && handler.activityInspection {
+		return err
+	}
+	includeInspectionExpiry(&view.inspectionExpiresAt, expiry)
+	if err == nil {
 		for index := range view.Items {
 			if exists, known := available[view.Items[index].ID]; known {
 				view.Items[index].ContentAvailable = &exists
@@ -1031,6 +1113,7 @@ func (handler *Handler) attachActivityRequestPreviews(
 			continue
 		}
 		view.Items[index].RequestPreview = &preview
+		includeInspectionExpiry(&view.Items[index].inspectionExpiresAt, preview.InspectionExpiresAt)
 	}
 	return nil
 }
@@ -1040,14 +1123,15 @@ func (handler *Handler) attachConversationIdentities(
 	page activity.ConversationPage,
 	view *ConversationPage,
 ) error {
-	if handler.conversationIndexer == nil || view == nil {
+	if (handler.conversationIndexer == nil && handler.conversationIdentityInspection == nil) || view == nil {
 		return nil
 	}
 	if len(page.Items) != len(view.Items) {
 		return errors.New("Conversation identity projection length does not match")
 	}
 	for index, item := range page.Items {
-		identity, err := handler.conversationIndexer.Identity(ctx, item.Latest.SubjectID)
+		identityResult, err := handler.inspectConversationIdentity(ctx, item.Latest.SubjectID)
+		identity := identityResult.Identity
 		switch {
 		case err == nil:
 			if err := view.Items[index].Conversation.attachIdentity(identity); err != nil {
@@ -1055,6 +1139,9 @@ func (handler *Handler) attachConversationIdentities(
 			}
 			if err := view.Items[index].Latest.Conversation.attachIdentity(identity); err != nil {
 				return err
+			}
+			if view.Items[index].Latest.Conversation.ClientIdentity != nil {
+				includeInspectionExpiry(&view.Items[index].Latest.inspectionExpiresAt, identityResult.InspectionExpiresAt)
 			}
 			if err := view.Items[index].Latest.Validate(); err != nil {
 				return err
@@ -1295,7 +1382,9 @@ func (handler *Handler) recordActivity(
 		time.Second,
 	)
 	defer cancel()
-	_, _ = handler.activities.Record(ctx, event)
+	if handler.activityRecorder != nil {
+		_, _ = handler.activityRecorder.Record(ctx, event)
+	}
 }
 
 func (runtime *RuntimeOfflineAdapter) OfflineHoldSnapshot() offlinehold.Snapshot {

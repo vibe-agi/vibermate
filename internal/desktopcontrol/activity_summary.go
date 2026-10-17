@@ -58,7 +58,7 @@ func (handler *Handler) summarizeActivities(writer http.ResponseWriter, request 
 		}
 		observation = &value
 	}
-	writeInspectionJSON(writer, result, func() error {
+	writeInspectionJSON(writer, result, handler.activityExpiryCheck(func() error {
 		if err := check(); err != nil {
 			return err
 		}
@@ -66,7 +66,7 @@ func (handler *Handler) summarizeActivities(writer http.ResponseWriter, request 
 			return handler.captureObservations.CheckCaptureObservation(request.Context(), *observation)
 		}
 		return nil
-	})
+	}, result.InspectionExpiresAt))
 }
 
 func captureSummaryObservation(ref captureidentity.Reference, value recording.CaptureObservationView) (*activity.CaptureObservationSummary, error) {
