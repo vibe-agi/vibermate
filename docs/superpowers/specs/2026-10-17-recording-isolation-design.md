@@ -80,6 +80,8 @@ The one-time verified upgrade may take time proportional to the source snapshot.
 
 Missing or corrupt observation storage disables recording/inspection for that role while execution continues. Missing, unknown or corrupt control state must never silently initialize a fresh authority. Existing bad observation files are retained for recovery rather than automatically overwritten.
 
+Conversation identity lookup is read-only and independent from optional client-local reindexing. Reindex may conditionally repair an existing current-source Activity root using the original scope and source/row identity returned by inspection. It must not stamp old work with current authority, copy archived Activities, or create an archive enrichment overlay. Archived identities and protocol evidence remain readable, but archive-only Conversations do not gain new local-client grouping. The actual optional owner accounts for repair writes during cleanup and shutdown; its unavailability never gates Agent readiness.
+
 ## Deletion, retention, backup and restore
 
 Data loss under load does not authorize silently deleting existing history. Preserve user-authored retention and explicit deletion behavior.
@@ -89,6 +91,10 @@ Removing data must publish a reliable control tombstone/generation before acknow
 A write already executing in observation storage may finish after a tombstone is published. Apply visibility filtering to both current and legacy readers in addition to queue admission/worker checks. Bind connection observations to their trusted scope before offering them; pre-authorization display events cannot escape a later scope deletion merely because their scope was unknown at creation.
 
 Retention shortening must take effect immediately for existing observations; later lengthening must not resurrect or extend them. Legacy archive-local sequence caps cannot be treated as a single global sequence. Define archive/generation-aware caps and carry the original consent, observation time and publication generation in queued records.
+
+Cleanup preserves every Usage source copy that still contributes to a live logical Exchange, including its applicable retention caps. It must not erase a stricter copy merely because another copy is canonical. Once the logical Exchange expires or is deleted, deny its identity before purging every copy. Audit association roots require a similar ordering: deny and purge the affected whole Attempt/Connection identities before removing roots needed to establish their scope. This can discard affected optional audit history and late observations for those identities; unrelated history, shared payloads and execution facts remain intact.
+
+The payload-free denial membership stays in observation storage and is checked atomically by optional writers and readers. Reliable control stores only bounded source/completeness obligations, never a per-observation registry. Missing required denial coverage makes dependent recording/inspection unavailable while Agent execution continues. A cleanup completion claim covers the managed payload/root/WAL/work files actually removed; it does not claim to erase privacy-enforcement identifiers. Those identifiers cannot expire on an arbitrary timer and may remain indefinitely without a demonstrated non-reintroduction boundary. Bounded maintenance batches are not a bound on total retained history metadata.
 
 Version backup manifests to describe control, observation and legacy roles, their schemas/identities and the WAL files needed to recover them. Keep old backup formats readable. Preserve current private snapshot/rollback guarantees and provider-secret/keychain exclusions for public backups. Optional data problems must be disclosed accurately, not masquerade as a fully verified history backup. A restore cannot replace missing control with empty state or open legacy data as authority.
 
