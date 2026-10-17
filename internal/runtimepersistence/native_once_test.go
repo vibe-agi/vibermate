@@ -135,7 +135,7 @@ func TestNativeExecutionHandshakeWithoutCatalog(t *testing.T) {
 	if got := countRows(t, store, "native_tool_approvals"); got != 0 {
 		t.Fatalf("handshake approvals: %d", got)
 	}
-	if got := countRows(t, store, "runtime_egress_attempts"); got != 3 {
+	if got := countRows(t, store, "native_tool_deliveries"); got != 3 {
 		t.Fatalf("actual handshake audits: %d", got)
 	}
 }
@@ -205,7 +205,7 @@ func TestNativeReceiptRevokedFinishedRecoveredAndReopened(t *testing.T) {
 					t.Fatalf("recovery unknown bytes: %+v", got)
 				}
 				var known bool
-				if err := store.database.QueryRow(`SELECT byte_counts_known FROM runtime_egress_attempts WHERE attempt_id='receipt-start'`).Scan(&known); err != nil || known {
+				if err := store.database.QueryRow(`SELECT byte_counts_known FROM native_tool_deliveries WHERE attempt_id='receipt-start'`).Scan(&known); err != nil || known {
 					t.Fatalf("audit known: %v %v", known, err)
 				}
 			case "foreign":
@@ -225,12 +225,12 @@ func TestNativeReceiptRevokedFinishedRecoveredAndReopened(t *testing.T) {
 				defer shutdownTestStore(t, other)
 				repo = nativeFullRepository(t, other)
 			case "corrupt-audit":
-				original, e := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='receipt-start'`))
+				original, e := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='receipt-start'`))
 				if e != nil {
 					t.Fatal(e)
 				}
-				defer appendEgressAttempt(ctx, store.database, original.Attempt)
-				_, err = store.database.Exec(`DELETE FROM runtime_egress_attempts WHERE attempt_id='receipt-start'`)
+				defer appendNativeDelivery(ctx, store.database, original.Attempt)
+				_, err = store.database.Exec(`DELETE FROM native_tool_deliveries WHERE attempt_id='receipt-start'`)
 			case "expired":
 				now = now.Add(2 * time.Hour)
 			}
@@ -372,7 +372,7 @@ func TestNativeRevokeRacesStartFailClosed(t *testing.T) {
 				if err := store.database.QueryRow(`SELECT COUNT(*) FROM native_tool_once`).Scan(&once); err != nil || once > 1 {
 					t.Fatalf("competing once: %d %v", once, err)
 				}
-				if got := countRows(t, store, "runtime_egress_attempts"); got != once {
+				if got := countRows(t, store, "native_tool_deliveries"); got != once {
 					t.Fatalf("split audit: %d once %d", got, once)
 				}
 			})
@@ -381,7 +381,7 @@ func TestNativeRevokeRacesStartFailClosed(t *testing.T) {
 }
 
 func TestNativeReceiptRejectsMismatchedAuditCoordinates(t *testing.T) {
-	for _, change := range []string{`target_origin='https://foreign.example'`, `rule_id='foreign.route'`, `proxy_id='foreign.proxy'`, `proxy_revision=7`, `policy_id='foreign'`, `policy_revision=2`, `account_id='foreign-account',account_settings_revision=1`, `parent_id='99999999999999999999999999999999'`, `connection_id='foreign-connection'`} {
+	for _, change := range []string{`target_origin='https://foreign.example'`, `rule_id='foreign.route'`, `proxy_id='foreign.proxy'`, `proxy_revision=7`, `policy_id='foreign'`, `policy_revision=2`, `account_id='foreign-account',account_settings_revision=1`, `operation_id='99999999999999999999999999999999'`, `connection_id='foreign-connection'`} {
 		t.Run(change, func(t *testing.T) {
 			store, id, rev := nativeStoreFixture(t, environment.ToolPolicyReview)
 			repo := nativeFullRepository(t, store)
@@ -392,12 +392,12 @@ func TestNativeReceiptRejectsMismatchedAuditCoordinates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			original, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='coordinate-start'`))
+			original, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='coordinate-start'`))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.database.Exec(`UPDATE runtime_egress_attempts SET ` + change + ` WHERE attempt_id='coordinate-start'`); err != nil {
-				if change == `account_id='foreign-account',account_settings_revision=1` {
+			if _, err := store.database.Exec(`UPDATE native_tool_deliveries SET ` + change + ` WHERE attempt_id='coordinate-start'`); err != nil {
+				if change == `operation_id='99999999999999999999999999999999'` || change == `account_id='foreign-account',account_settings_revision=1` {
 					if err := repo.VerifyStartReceipt(ctx, receipt, now); err != nil {
 						t.Fatal(err)
 					}
@@ -408,10 +408,10 @@ func TestNativeReceiptRejectsMismatchedAuditCoordinates(t *testing.T) {
 			if repo.VerifyStartReceipt(ctx, receipt, now) == nil {
 				t.Fatal("mismatched committed audit accepted")
 			}
-			if _, err := store.database.Exec(`DELETE FROM runtime_egress_attempts WHERE attempt_id='coordinate-start'`); err != nil {
+			if _, err := store.database.Exec(`DELETE FROM native_tool_deliveries WHERE attempt_id='coordinate-start'`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := appendEgressAttempt(ctx, store.database, original.Attempt); err != nil {
+			if _, err := appendNativeDelivery(ctx, store.database, original.Attempt); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -660,7 +660,7 @@ func TestNativeNewOwnerGenerationNeverResurrectsOldReceipt(t *testing.T) {
 	if r, err := repo.Start(ctx, replacementID, "owner-generation-repeat", newRev, now); !errors.Is(err, nativetool.ErrReplay) || r.OperationID() != "" {
 		t.Fatalf("observed identity replayed across owner/session: %s %v", r.OperationID(), err)
 	}
-	if countRows(t, store, "native_tool_once") != 4 || countRows(t, store, "runtime_egress_attempts") != 4 {
+	if countRows(t, store, "native_tool_once") != 4 || countRows(t, store, "native_tool_deliveries") != 4 {
 		t.Fatal("replacement erased/duplicated once evidence")
 	}
 }
@@ -711,7 +711,7 @@ func TestNativeReceiptRequiresExactConsumedApprovalAndRealStartRows(t *testing.T
 				if err := repo.Recover(ctx, now); !errors.Is(err, nativetool.ErrInvalid) {
 					t.Fatalf("corrupt start recovery: %v", err)
 				}
-				if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
+				if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "native_tool_deliveries") != 0 {
 					t.Fatal("recovery fabricated missing execution evidence")
 				}
 			}
@@ -1039,7 +1039,7 @@ func TestNativeStartConsumesApprovalAndClaimsOnceAtomically(t *testing.T) {
 	queries := []string{
 		`SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND state='allowed' AND consumed_at_unix_ms IS NOT NULL`,
 		`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=? AND attempt_id='native-attempt-1'`,
-		`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=? AND purpose='client_tool_service' AND parent_kind='client_operation' AND parent_exchange_id='' AND account_id='' AND outcome=''`,
+		`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=? AND outcome=''`,
 		`SELECT COUNT(*) FROM native_tool_operations WHERE operation_id=? AND state='started' AND decision_source='user'`,
 		`SELECT COUNT(*) FROM native_tool_events WHERE operation_id=? AND kind='started'`,
 	}

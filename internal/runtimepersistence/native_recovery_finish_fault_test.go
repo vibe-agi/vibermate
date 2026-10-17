@@ -73,7 +73,7 @@ func (f *recoveryFinishFault) Commit(tx *sql.Tx) error {
 	if !f.armed.Load() {
 		return tx.Commit()
 	}
-	audit, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.child))
+	audit, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.child))
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
@@ -179,7 +179,7 @@ func TestNativeRecoveryGETAmbiguousFinishCleansBothAttempts(t *testing.T) {
 					}
 					call, origin := capture("POST", `{"jsonrpc":"2.0","id":40,"method":"ping","params":{"_meta":{"progressToken":9}}}`, "session", "")
 					executor.Serve(ctx, call, httptest.NewRecorder())
-					original, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, origin))
+					original, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, origin))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -257,7 +257,7 @@ func TestNativeRecoveryGETAmbiguousFinishCleansBothAttempts(t *testing.T) {
 							time.Sleep(time.Millisecond)
 						}
 						f.store.nativeTools.issuerMu.Lock()
-						existing, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, child))
+						existing, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, child))
 						if err != nil {
 							f.store.nativeTools.issuerMu.Unlock()
 							t.Fatal(err)
@@ -334,11 +334,11 @@ func TestNativeRecoveryGETAmbiguousFinishCleansBothAttempts(t *testing.T) {
 					if err != nil || scope.ReplayBarrier != (edge != "known-terminal") {
 						t.Fatalf("barrier %+v %v", scope, err)
 					}
-					after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, origin))
+					after, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, origin))
 					if err != nil || after.Attempt != original.Attempt {
 						t.Fatal("original physical audit changed")
 					}
-					physical, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, child))
+					physical, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, child))
 					if err != nil || !physical.Attempt.Terminal() {
 						t.Fatal("GET audit not closed")
 					}

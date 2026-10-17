@@ -51,7 +51,7 @@ func (f *unsentCommitFault) Commit(tx *sql.Tx) error {
 		}
 		return tx.Commit()
 	}
-	audit, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.target))
+	audit, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.target))
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
@@ -344,7 +344,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				audit, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+				audit, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -388,7 +388,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 					}
 				}
 				var once, audits int
-				if err = f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
+				if err = f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
 					t.Fatal("cleanup changed one-attempt provenance")
 				}
 				if mode == "persistent_late_revoke" {
@@ -401,7 +401,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 						t.Fatal("later real same-owner Revoke failed", err)
 					}
 					settled, err := f.store.NativeToolRepository().Get(ctx, id)
-					closedAudit, auditErr := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					closedAudit, auditErr := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil || auditErr != nil || settled.State != "uncertain" || !closedAudit.Attempt.Terminal() || closedAudit.Attempt.ByteCountsKnown() {
 						t.Fatal("later transaction did not really close unknown physical history")
 					}
@@ -424,7 +424,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 					if !token.IsValid() || token.Elem().FieldByName("physicalTerminal").Bool() || !token.Elem().FieldByName("consumerDone").Bool() {
 						t.Fatal("metadata/early nil manufactured physical proof after ambiguous commits")
 					}
-					after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					after, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil || after.Attempt != fault.physical {
 						t.Fatal("early nil changed committed audit/counts")
 					}
@@ -459,7 +459,7 @@ func TestNativeUnsentFinishFaultsFenceAndReconcile(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				finalAudit, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+				finalAudit, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 				if err != nil {
 					t.Fatal(err)
 				}

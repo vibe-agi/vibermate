@@ -208,7 +208,7 @@ func seedNativeHistoricalCompletion(t *testing.T, store *Store, id nativetool.ID
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET state='completed',revision=revision+1,completed_at_unix_ms=?,terminal_reason='completed' WHERE operation_id=? AND state='validated' AND EXISTS(SELECT 1 FROM native_tool_bindings WHERE operation_id=?)`, now.UnixMilli(), id, id)
+	result, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET state='completed',revision=revision+1,last_event_kind='completed',last_event_at_unix_ms=?,maximum_event_at_unix_ms=MAX(maximum_event_at_unix_ms,?),completed_at_unix_ms=?,terminal_reason='completed' WHERE operation_id=? AND state='validated' AND EXISTS(SELECT 1 FROM native_tool_bindings WHERE operation_id=?)`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli(), id, id)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,7 +52,7 @@ func TestNativeLifecycleAdapterCompleteWithoutExecution(t *testing.T) {
 	if err != nil || len(page.Items) == 0 || page.NextSequence == 0 {
 		t.Fatalf("page %+v %v", page, err)
 	}
-	for _, table := range []string{"native_tool_once", "native_tool_contents", "runtime_egress_attempts", "tool_approvals", "runtime_activities", "runtime_raw_evidence_envelopes"} {
+	for _, table := range []string{"native_tool_once", "native_tool_contents", "native_tool_deliveries", "tool_approvals", "runtime_activities", "runtime_raw_evidence_envelopes"} {
 		var count int
 		err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
 		if err != nil || count != 0 {
@@ -563,7 +563,7 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 			}
 		})
 	}
-	for _, table := range []string{"runtime_egress_attempts", "native_tool_once"} {
+	for _, table := range []string{"native_tool_deliveries", "native_tool_once"} {
 		var count int
 		if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil || count != 2 {
 			t.Fatalf("real parent/list execution %s %d %v", table, count, err)

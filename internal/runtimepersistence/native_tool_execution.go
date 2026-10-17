@@ -240,7 +240,7 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 		if err != nil {
 			return err
 		}
-		if _, err := appendEgressAttempt(ctx, tx, audit); err != nil {
+		if _, err := appendNativeDelivery(ctx, tx, audit); err != nil {
 			return err
 		}
 		source := "policy"
@@ -330,7 +330,7 @@ func (r *nativeToolRepository) VerifyStartReceipt(ctx context.Context, receipt n
 				return nativetool.ErrDenied
 			}
 		}
-		actual, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, attempt))
+		actual, err := scanEgressAttempt(tx.QueryRowContext(ctx, nativeDeliverySelect+` WHERE attempt_id=?`, attempt))
 		if err != nil {
 			return nativetool.ErrDenied
 		}
@@ -368,7 +368,7 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if err := tx.QueryRowContext(ctx, `SELECT attempt_id FROM native_tool_once WHERE operation_id=? AND capture_kind=? AND capture_id=?`, op.ID, op.Capture.Kind, op.Capture.ID).Scan(&attempt); err != nil {
 		return err
 	}
-	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, attempt))
+	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, nativeDeliverySelect+` WHERE attempt_id=?`, attempt))
 	if err != nil {
 		return err
 	}
@@ -385,7 +385,7 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if err != nil {
 		return err
 	}
-	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+	if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 		return err
 	}
 	if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
@@ -428,7 +428,7 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&once); err != nil {
 				return err
 			}
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id).Scan(&audits); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, id).Scan(&audits); err != nil {
 				return err
 			}
 			if once != 0 || audits != 0 {
@@ -547,7 +547,7 @@ func retireNativeWork(ctx context.Context, tx *sql.Tx, c captureidentity.Referen
 		}
 		at := now
 		var last int64
-		if err := tx.QueryRowContext(ctx, `SELECT MAX(occurred_at_unix_ms) FROM native_tool_events WHERE operation_id=?`, id).Scan(&last); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT maximum_event_at_unix_ms FROM native_tool_operations WHERE operation_id=?`, id).Scan(&last); err != nil {
 			return err
 		}
 		if at.UnixMilli() < last {

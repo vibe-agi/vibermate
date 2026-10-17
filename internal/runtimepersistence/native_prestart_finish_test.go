@@ -32,7 +32,7 @@ func nativePrestartAllowed(t *testing.T) (*Store, nativetool.Repository, nativet
 }
 func nativePrestartRows(t *testing.T, store *Store, id nativetool.ID, want int) {
 	t.Helper()
-	for _, query := range []string{`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`} {
+	for _, query := range []string{`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, `SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`} {
 		var got int
 		if e := store.database.QueryRowContext(t.Context(), query, id).Scan(&got); e != nil || got != want {
 			t.Fatalf("native physical rows got=%d want=%d error=%v", got, want, e)

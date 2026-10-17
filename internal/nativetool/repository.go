@@ -120,7 +120,7 @@ type Page struct {
 	Items        []Operation
 	NextSequence int64
 }
-type LifecycleRepository interface {
+type LifecycleAuthority interface {
 	GetScope(context.Context, captureidentity.Reference) (Scope, error)
 	EnsureScope(context.Context, ScopeInput) (uint64, error)
 	RegisterSession(context.Context, SessionInput) error
@@ -136,9 +136,13 @@ type LifecycleRepository interface {
 	CloseApproval(context.Context, ID, uint64, ApprovalClosure, time.Time) (Approval, error)
 	Get(context.Context, ID) (Operation, error)
 	GetApproval(context.Context, ID) (Approval, error)
+}
+
+type LifecycleRepository interface {
+	LifecycleAuthority
 	Page(context.Context, PageRequest) (Page, error)
 }
-type ExecutionRepository interface {
+type ExecutionAuthority interface {
 	StreamRepository
 	Start(context.Context, ID, string, uint64, time.Time) (StartReceipt, error)
 	VerifyStartReceipt(context.Context, StartReceipt, time.Time) error
@@ -146,10 +150,36 @@ type ExecutionRepository interface {
 	Revoke(context.Context, captureidentity.Reference, uint64, string, time.Time) error
 	MarkReplayBarrier(context.Context, captureidentity.Reference, uint64, time.Time) error
 	Recover(context.Context, time.Time) error
+}
+
+type ExecutionRepository interface {
+	ExecutionAuthority
 	PutContent(context.Context, ID, string, []byte, time.Time) error
 	ReadContent(context.Context, captureidentity.Reference, ID, string, int, int) ([]byte, error)
 }
 type Repository interface {
 	LifecycleRepository
 	ExecutionRepository
+}
+
+// AuthorityRepository reads only current control facts. Optional inspection is separate.
+type AuthorityRepository interface {
+	LifecycleAuthority
+	ExecutionAuthority
+	ListPendingApprovals(context.Context, PendingApprovalRequest) (PendingApprovalPage, error)
+}
+type PendingApprovalRequest struct {
+	Capture        captureidentity.Reference
+	AfterCreatedAt time.Time
+	AfterID        ID
+	Limit          int
+}
+type PendingApprovalItem struct {
+	Approval  Approval
+	Operation Operation
+}
+type PendingApprovalPage struct {
+	Items         []PendingApprovalItem
+	NextCreatedAt time.Time
+	NextID        ID
 }

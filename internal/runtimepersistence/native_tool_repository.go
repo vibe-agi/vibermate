@@ -653,7 +653,7 @@ func (r *nativeToolRepository) Receive(ctx context.Context, in nativetool.Receiv
 			return nativetool.ErrDenied
 		}
 		digest := in.EnvironmentDigest
-		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_operations(operation_id,capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,terminal_reason) VALUES(?,?,?,?,?,?,?,?,?,?,1,'received','none',?,?,?,?, '')`, in.ID, in.Capture.Kind, in.Capture.ID, in.EnvironmentID, in.EnvironmentRevision, digest[:], in.ConnectionID, in.TargetOrigin, in.Method, in.Kind, in.Recording.Mode, in.Recording.RetentionDays, in.ObservedAt.UnixMilli(), in.ObservedAt.Add(30*24*time.Hour).UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_operations(operation_id,capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,terminal_reason,last_event_kind,last_event_at_unix_ms,maximum_event_at_unix_ms) VALUES(?,?,?,?,?,?,?,?,?,?,1,'received','none',?,?,?,?, '','received',?,?)`, in.ID, in.Capture.Kind, in.Capture.ID, in.EnvironmentID, in.EnvironmentRevision, digest[:], in.ConnectionID, in.TargetOrigin, in.Method, in.Kind, in.Recording.Mode, in.Recording.RetentionDays, in.ObservedAt.UnixMilli(), in.ObservedAt.Add(30*24*time.Hour).UnixMilli(), in.ObservedAt.UnixMilli(), in.ObservedAt.UnixMilli()); err != nil {
 			return err
 		}
 		if err := appendNativeEvent(ctx, tx, in.ID, 1, "received", in.ObservedAt); err != nil {
@@ -681,7 +681,7 @@ func nativeTransition(ctx context.Context, tx *sql.Tx, op nativetool.Operation, 
 	if state == "denied" || state == "canceled" || state == "failed" || state == "completed" || state == "uncertain" {
 		completed = now.UnixMilli()
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET revision=revision+1,state=?,decision_source=?,terminal_reason=?,completed_at_unix_ms=? WHERE operation_id=? AND revision=?`, state, source, reason, completed, op.ID, op.Revision)
+	result, err := tx.ExecContext(ctx, `UPDATE native_tool_operations SET revision=revision+1,state=?,decision_source=?,terminal_reason=?,completed_at_unix_ms=?,last_event_kind=?,last_event_at_unix_ms=?,maximum_event_at_unix_ms=MAX(maximum_event_at_unix_ms,?) WHERE operation_id=? AND revision=?`, state, source, reason, completed, event, now.UnixMilli(), now.UnixMilli(), op.ID, op.Revision)
 	if err != nil {
 		return err
 	}

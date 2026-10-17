@@ -198,7 +198,7 @@ func (r *nativeToolRepository) verifyRetiredCallback(ctx context.Context, tx *sq
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, c.child).Scan(&claims); err != nil {
 		return err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, c.child).Scan(&audits); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, c.child).Scan(&audits); err != nil {
 		return err
 	}
 	if claims == 0 {

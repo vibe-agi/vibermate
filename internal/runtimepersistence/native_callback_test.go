@@ -182,11 +182,11 @@ func TestNativeObservedCallbackRechecksEveryAuthoritySeam(t *testing.T) {
 					}
 				case "audit":
 					var original string
-					if err := f.store.database.QueryRow(`SELECT connection_id FROM runtime_egress_attempts WHERE attempt_id=?`, f.receipt.AttemptID()).Scan(&original); err != nil {
+					if err := f.store.database.QueryRow(`SELECT connection_id FROM native_tool_deliveries WHERE attempt_id=?`, f.receipt.AttemptID()).Scan(&original); err != nil {
 						t.Fatal(err)
 					}
-					defer f.store.database.Exec(`UPDATE runtime_egress_attempts SET connection_id=? WHERE attempt_id=?`, original, f.receipt.AttemptID())
-					if _, err := f.store.database.Exec(`UPDATE runtime_egress_attempts SET connection_id='foreign' WHERE attempt_id=?`, f.receipt.AttemptID()); err != nil {
+					defer f.store.database.Exec(`UPDATE native_tool_deliveries SET connection_id=? WHERE attempt_id=?`, original, f.receipt.AttemptID())
+					if _, err := f.store.database.Exec(`UPDATE native_tool_deliveries SET connection_id='foreign' WHERE attempt_id=?`, f.receipt.AttemptID()); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -250,7 +250,7 @@ func TestNativeObservedGETCompletesAuditBeforePendingDecision(t *testing.T) {
 	if err := f.repo.FinishAttempt(ctx, f.receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", Counts: &nativetool.ObservedCounts{BytesIn: 21}, ObservedAt: f.now}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
+	before, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
 	if err != nil || !before.Attempt.Terminal() {
 		t.Fatal("GET audit still open", err)
 	}
@@ -273,7 +273,7 @@ func TestNativeObservedGETCompletesAuditBeforePendingDecision(t *testing.T) {
 	if err := f.repo.Finish(ctx, f.child, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: f.now}); err != nil {
 		t.Fatal(err)
 	}
-	after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
+	after, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
 	if err != nil || after.Attempt != before.Attempt {
 		t.Fatal("reply rewrote GET audit", err)
 	}
@@ -379,7 +379,7 @@ func TestNativeObservedCallbackCommitCleanupPreservesKnownGET(t *testing.T) {
 				if err := f.repo.FinishAttempt(ctx, f.receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", Counts: &nativetool.ObservedCounts{BytesIn: 29}, ObservedAt: f.now}); err != nil {
 					t.Fatal(err)
 				}
-				before, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
+				before, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -412,11 +412,11 @@ func TestNativeObservedCallbackCommitCleanupPreservesKnownGET(t *testing.T) {
 				if err != nil || child.CompletedAt == nil {
 					t.Fatal("child cleanup lost", err)
 				}
-				audit, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, childReceipt.AttemptID()))
+				audit, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, childReceipt.AttemptID()))
 				if err != nil || !audit.Attempt.Terminal() {
 					t.Fatal("callback audit left open", err)
 				}
-				after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
+				after, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, f.receipt.AttemptID()))
 				if err != nil || before.Attempt != after.Attempt {
 					t.Fatal("known GET audit rewritten", err)
 				}
@@ -481,7 +481,7 @@ func TestNativeObservedCallbackRetirementSettlesStartedChild(t *testing.T) {
 			if err != nil || op.CompletedAt == nil || op.State != "uncertain" {
 				t.Fatalf("started callback lost uncertainty: %+v %v", op, err)
 			}
-			audit, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, childReceipt.AttemptID()))
+			audit, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, childReceipt.AttemptID()))
 			if err != nil || !audit.Attempt.Terminal() {
 				t.Fatalf("callback physical audit orphaned: %+v %v", audit, err)
 			}
@@ -581,13 +581,13 @@ func TestNativeObservedDeniedRetirementRejectsUnclaimedAudit(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = appendEgressAttempt(ctx, tx, audit)
+		_, err = appendNativeDelivery(ctx, tx, audit)
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.store.database.Exec(`DELETE FROM runtime_egress_attempts WHERE attempt_id='unclaimed-callback-audit'`)
+	defer f.store.database.Exec(`DELETE FROM native_tool_deliveries WHERE attempt_id='unclaimed-callback-audit'`)
 	if _, err := f.repo.RetireObservedCallback(ctx, f.callback, f.now); err == nil {
 		t.Fatal("terminal child concealed an unclaimed physical audit")
 	}

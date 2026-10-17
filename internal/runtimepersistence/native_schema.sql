@@ -51,6 +51,9 @@ CREATE TABLE native_tool_operations(
   recording TEXT NOT NULL  CHECK(recording IN('off','metadata_only','full')),
   retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
   created_at_unix_ms INTEGER NOT NULL,
+  last_event_kind TEXT NOT NULL,
+  last_event_at_unix_ms INTEGER NOT NULL CHECK(last_event_at_unix_ms >= created_at_unix_ms),
+  maximum_event_at_unix_ms INTEGER NOT NULL CHECK(maximum_event_at_unix_ms >= last_event_at_unix_ms),
   metadata_expires_at_unix_ms INTEGER NOT NULL CHECK(metadata_expires_at_unix_ms > created_at_unix_ms),
   completed_at_unix_ms INTEGER,
   bytes_in INTEGER CHECK(bytes_in IS NULL OR bytes_in >= 0),
@@ -176,7 +179,7 @@ ON native_tool_approvals(idempotency_key) WHERE idempotency_key <> '';
 CREATE INDEX native_tool_sessions_scope_state ON native_tool_sessions(capture_kind,capture_id,state);
 CREATE INDEX native_tool_operations_scope_created ON native_tool_operations(capture_kind,capture_id,created_at_unix_ms,operation_id);
 CREATE INDEX native_tool_operations_expiry ON native_tool_operations(metadata_expires_at_unix_ms);
-CREATE INDEX native_tool_approvals_state_created ON native_tool_approvals(state,created_at_unix_ms);
+CREATE INDEX native_tool_approvals_state_created ON native_tool_approvals(state,created_at_unix_ms,approval_id);
 CREATE INDEX native_tool_events_operation_sequence ON native_tool_events(operation_id,sequence);
 CREATE INDEX native_tool_contents_expiry ON native_tool_contents(expires_at_unix_ms);
 CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
@@ -220,3 +223,27 @@ WHEN NOT EXISTS(SELECT 1 FROM native_tool_operations
 BEGIN
   SELECT RAISE(ABORT,'native content requires full tools call recording');
 END;
+
+CREATE TABLE native_tool_deliveries(
+ attempt_id TEXT NOT NULL PRIMARY KEY CHECK(length(CAST(attempt_id AS BLOB)) BETWEEN 1 AND 512),
+ operation_id TEXT NOT NULL UNIQUE REFERENCES native_tool_operations(operation_id) ON DELETE CASCADE,
+ connection_id TEXT NOT NULL CHECK(length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 512),
+ payload_class TEXT NOT NULL CHECK(payload_class IN('none','client_data')),
+ target_origin TEXT NOT NULL CHECK(length(CAST(target_origin AS BLOB)) BETWEEN 1 AND 1024),
+ policy_id TEXT NOT NULL CHECK(length(CAST(policy_id AS BLOB)) BETWEEN 1 AND 128),
+ policy_revision INTEGER NOT NULL CHECK(policy_revision>0),
+ rule_id TEXT NOT NULL CHECK(length(CAST(rule_id AS BLOB)) BETWEEN 1 AND 512),
+ proxy_id TEXT NOT NULL CHECK(length(CAST(proxy_id AS BLOB)) BETWEEN 1 AND 512),
+ proxy_revision INTEGER NOT NULL CHECK(proxy_revision>0),
+ selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
+ default_revision INTEGER NOT NULL CHECK((selection_source='flow' AND default_revision=0) OR (selection_source IN('global','builtin') AND default_revision>0)),
+ started_at_unix_ms INTEGER NOT NULL CHECK(started_at_unix_ms>0),
+ completed_at_unix_ms INTEGER CHECK(completed_at_unix_ms>=started_at_unix_ms),
+ outcome TEXT NOT NULL DEFAULT '' CHECK(outcome IN('','completed','failed','canceled')),
+ error_class TEXT NOT NULL DEFAULT '' CHECK(length(CAST(error_class AS BLOB))<=512),
+ bytes_out INTEGER NOT NULL DEFAULT 0 CHECK(bytes_out>=0),
+ bytes_in INTEGER NOT NULL DEFAULT 0 CHECK(bytes_in>=0),
+ byte_counts_known INTEGER NOT NULL DEFAULT 1 CHECK(byte_counts_known IN(0,1)),
+ CHECK((completed_at_unix_ms IS NULL)=(outcome='')),
+ CHECK(completed_at_unix_ms IS NOT NULL OR (error_class='' AND bytes_out=0 AND bytes_in=0 AND byte_counts_known=1))
+) STRICT;

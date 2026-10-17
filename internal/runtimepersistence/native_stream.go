@@ -82,7 +82,7 @@ func nativeAttemptFacts(ctx context.Context, tx *sql.Tx, op nativetool.Operation
 	} else if op.DecisionSource != "policy" {
 		return facts, egressaudit.Attempt{}, nativetool.ErrDenied
 	}
-	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, facts.AttemptID))
+	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, nativeDeliverySelect+` WHERE attempt_id=?`, facts.AttemptID))
 	if err != nil {
 		return facts, egressaudit.Attempt{}, err
 	}
@@ -333,7 +333,7 @@ func (r *nativeToolRepository) FinishAttempt(ctx context.Context, receipt native
 		if err != nil {
 			return err
 		}
-		if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+		if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 			return err
 		}
 		var bytesIn, bytesOut any
@@ -449,7 +449,7 @@ func (r *nativeToolRepository) FinishObservedRPC(ctx context.Context, receipt na
 		if err != nil {
 			return err
 		}
-		if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+		if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 			return err
 		}
 		if err := finishNativeLogical(ctx, tx, op, logical); err != nil {
@@ -677,7 +677,7 @@ func (r *nativeToolRepository) RetireObservedStream(ctx context.Context, a nativ
 				if err != nil {
 					return err
 				}
-				if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+				if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 					return err
 				}
 				_, err = tx.ExecContext(ctx, `UPDATE native_tool_operations SET bytes_in=NULL,bytes_out=NULL WHERE operation_id=? AND revision=?`, op.ID, op.Revision)
@@ -726,7 +726,7 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&claims); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id).Scan(&audits); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, id).Scan(&audits); err != nil {
 			return err
 		}
 		if claims != 0 || audits != 0 {
@@ -772,7 +772,7 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+	if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 		return err
 	}
 	if err := finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: outcome, Reason: reason, ObservedAt: now}); err != nil {

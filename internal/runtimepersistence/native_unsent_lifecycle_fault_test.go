@@ -38,7 +38,7 @@ func (f *unsentLifecycleCommitFault) Commit(tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	audit, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.target))
+	audit, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.target))
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
@@ -136,7 +136,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					var original egressaudit.Attempt
 					var parentAuthority nativetool.StreamAuthority
 					if h.parent != "" {
-						row, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+						row, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -165,7 +165,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					audit, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					audit, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -221,7 +221,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					finalAudit, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					finalAudit, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -229,7 +229,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						t.Fatal("later Close failed to reconcile/preserve terminal")
 					}
 					if h.parent != "" {
-						after, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+						after, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 						if err != nil || after.Attempt != original {
 							t.Fatal("child cleanup changed original physical audit")
 						}
@@ -241,7 +241,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						}
 					}
 					var once, audits int
-					if err := h.f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
+					if err := h.f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
 						t.Fatal("cleanup changed exactly-once provenance")
 					}
 					if h.f.store.NativeToolRepository().VerifyStartReceipt(ctx, started.receipt, h.now()) == nil || h.transport.calls.Load() != sends {

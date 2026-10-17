@@ -207,7 +207,7 @@ func TestNativeObserveStrictPersistNeutralOffMetadata(t *testing.T) {
 			if err != nil || op.State != state || op.DecisionSource != source || op.ApprovalID != nil || op.Arguments != nil || op.Result != nil {
 				t.Fatalf("neutral native %+v %v", op, err)
 			}
-			for _, table := range []string{"native_tool_approvals", "native_tool_contents", "runtime_raw_evidence_envelopes", "runtime_activities", "tool_approvals", "runtime_egress_attempts"} {
+			for _, table := range []string{"native_tool_approvals", "native_tool_contents", "runtime_raw_evidence_envelopes", "runtime_activities", "tool_approvals", "native_tool_deliveries"} {
 				var count int
 				if err := store.database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("unexpected %s %d %v", table, count, err)

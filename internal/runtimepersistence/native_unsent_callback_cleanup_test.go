@@ -59,7 +59,7 @@ func TestNativeUnsentCallbackCleanupReadFailureFencesKnownFinish(t *testing.T) {
 			if err != nil || approval.ConsumedAt == nil {
 				t.Fatal("actual Allow was not consumed")
 			}
-			parent, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+			parent, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,7 +77,7 @@ func TestNativeUnsentCallbackCleanupReadFailureFencesKnownFinish(t *testing.T) {
 			if _, err := h.f.store.NativeToolRepository().Get(context.Background(), id); err == nil {
 				t.Fatal("actual repository outage did not fire")
 			}
-			physical, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+			physical, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 			if err != nil || !physical.Attempt.Terminal() || !physical.Attempt.ByteCountsKnown() || physical.Attempt.BytesIn() != 0 || physical.Attempt.BytesOut() != 0 {
 				t.Fatal("successful prior Finish was not preserved")
 			}
@@ -99,11 +99,11 @@ func TestNativeUnsentCallbackCleanupReadFailureFencesKnownFinish(t *testing.T) {
 			if err != nil || final.State != "failed" || final.BytesIn == nil || final.BytesOut == nil || *final.BytesIn != 0 || *final.BytesOut != 0 {
 				t.Fatal("Recover rewrote known failed child")
 			}
-			after, err := scanEgressAttempt(reopened.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+			after, err := scanEgressAttempt(reopened.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 			if err != nil || after.Attempt != physical.Attempt {
 				t.Fatal("Recover rewrote immutable child audit")
 			}
-			parentAfter, err := scanEgressAttempt(reopened.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+			parentAfter, err := scanEgressAttempt(reopened.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 			if err != nil || parentAfter.Attempt != parent.Attempt {
 				t.Fatal("Recover rewrote parent audit")
 			}

@@ -47,7 +47,7 @@ func (f *streamFinishFault) Commit(tx *sql.Tx) error {
 		}
 		return tx.Commit()
 	}
-	record, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.operation))
+	record, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.operation))
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -313,7 +313,7 @@ func TestNativeExecutorAmbiguousFinishRetainsCleanupObligation(t *testing.T) {
 			if err := f.store.database.QueryRow(`SELECT state FROM native_tool_approvals WHERE approval_id=?`, question).Scan(&state); err != nil || state != "canceled" {
 				t.Fatalf("question %s %v", state, err)
 			}
-			after, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+			after, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 			if err != nil {
 				t.Fatal(err)
 			}
