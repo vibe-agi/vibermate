@@ -777,7 +777,7 @@ func startWithBuilders(
 		activities:               activities,
 		identities:               storageResult.store.ConversationIdentityRepository(),
 		contents:                 contents,
-		usage:                    storageResult.store.UsageRepository(),
+		usage:                    storageResult.store,
 		recorder:                 recorder,
 		clock:                    options.Clock,
 		hold:                     options.ExchangeHold,

@@ -36,6 +36,9 @@ func scanUsagePolicy(row *sql.Row) (runtimeusage.CollectionPolicy, error) {
 }
 
 func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.CollectionPolicy, now time.Time) (runtimeusage.CollectionPolicy, error) {
+	return store.setUsagePolicy(ctx, policy, now, false)
+}
+func (store *Store) setUsagePolicy(ctx context.Context, policy runtimeusage.CollectionPolicy, now time.Time, controlOnly bool) (runtimeusage.CollectionPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return runtimeusage.CollectionPolicy{}, err
 	}
@@ -71,7 +74,15 @@ func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 	}
 	// Shorter retention applies immediately. Lengthening never resurrects or
 	// extends records collected under a shorter consented retention period.
-	if policy.RetentionDays < current.RetentionDays {
+	if controlOnly && policy.RetentionDays < current.RetentionDays {
+		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_rules WHERE retention_days>=? AND through_policy_revision<=?`, policy.RetentionDays, current.Revision); err != nil {
+			return runtimeusage.CollectionPolicy{}, err
+		}
+		if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_rules(retention_days,through_policy_revision) VALUES(?,?) ON CONFLICT(retention_days) DO UPDATE SET through_policy_revision=MAX(through_policy_revision,excluded.through_policy_revision)`, policy.RetentionDays, current.Revision); err != nil {
+			return runtimeusage.CollectionPolicy{}, err
+		}
+	}
+	if !controlOnly && policy.RetentionDays < current.RetentionDays {
 		// The new cap dominates every longer cap over older sequences. One row
 		// per duration bounds pending work even if settings change repeatedly.
 		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
@@ -133,15 +144,10 @@ func applyUsageRetention(ctx context.Context, tx *sql.Tx, limit int) (bool, erro
 }
 
 func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observation) error {
-	return store.putUsage(ctx, value, nil)
+	return store.putUsage(ctx, value)
 }
-func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation, collected *runtimeusage.CollectedObservation) error {
-	discard := func() error {
-		if collected != nil {
-			return runtimeusage.ErrObservationDiscarded
-		}
-		return nil
-	}
+func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation) error {
+	discard := func() error { return nil }
 	if err := value.Validate(); err != nil {
 		return err
 	}
@@ -162,7 +168,7 @@ func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation
 	if !policy.Enabled || policy.CollectingSince == nil || value.StartedAt.Before(*policy.CollectingSince) {
 		return discard()
 	}
-	if collected == nil {
+	{
 		value.UserID, value.Source = "", "proxy"
 		value.Attribution = &runtimeusage.Attribution{}
 		if value.CaptureRunID != "" {
@@ -208,26 +214,9 @@ func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation
 		if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT display_name FROM provider_accounts WHERE account_id=?),'')`, value.AccountID).Scan(&value.AccountName); err != nil {
 			return err
 		}
-	} else {
-		// Staged bridge: retain required current policy/deletion checks on this
-		// worker transaction, but never recover or replace frozen attribution.
-		if collected.PolicyRevision > policy.Revision || !collected.Stamp.Current() {
-			return discard()
-		}
-		if value.CaptureRunID != "" || value.ManualCaptureID != "" {
-			var exists int
-			if err := tx.QueryRowContext(operation, `SELECT (SELECT count(*) FROM capture_runs WHERE run_id=?)+(SELECT count(*) FROM manual_captures WHERE capture_id=?)`, value.CaptureRunID, value.ManualCaptureID).Scan(&exists); err != nil {
-				return err
-			}
-			if exists == 0 {
-				return discard()
-			}
-		}
 	}
 	expiry := value.OccurredAt.Add(time.Duration(policy.RetentionDays) * 24 * time.Hour)
-	if collected != nil && collected.ExpiresAt.Before(expiry) {
-		expiry = collected.ExpiresAt
-	}
+
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -237,17 +226,4 @@ func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation
 		return err
 	}
 	return tx.Commit()
-}
-
-// PutCollectedUsage is the typed worker-side bridge. The storage-role split
-// replaces this shared control transaction with the observation-only writer
-// and persisted consent/generation overlays; no producer invokes these queries.
-func (store *Store) PutCollectedUsage(ctx context.Context, collected runtimeusage.CollectedObservation) error {
-	if collected.PolicyRevision < 1 || !collected.ExpiresAt.After(collected.Value.OccurredAt) {
-		return errors.New("invalid collected usage")
-	}
-	if !collected.Stamp.Current() {
-		return runtimeusage.ErrObservationDiscarded
-	}
-	return store.putUsage(ctx, collected.Value, &collected)
 }

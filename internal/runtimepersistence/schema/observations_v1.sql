@@ -734,6 +734,11 @@ CREATE INDEX runtime_raw_evidence_writer_state
 ON runtime_raw_evidence_writer_sessions(state, started_at_unix_ms);
 
 CREATE TABLE runtime_usage_observations(
+ policy_revision INTEGER NOT NULL DEFAULT 1 CHECK(policy_revision>0),
+ recording_scope_kind TEXT NOT NULL DEFAULT '',
+ recording_scope_id TEXT NOT NULL DEFAULT '',
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 1 CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   exchange_id TEXT NOT NULL UNIQUE,
   capture_run_id TEXT NOT NULL, manual_capture_id TEXT NOT NULL,

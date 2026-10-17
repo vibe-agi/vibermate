@@ -403,8 +403,11 @@ func TestCollectedUsagePreservesFrozenLabelsAndOriginalExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value.Value.ExchangeID = "disabled"
+	// Current policy is checked in the typed worker, never by this optional
+	// observation writer. Original stamps still reject stale writes.
+	epoch.Advance(2)
+	value.Value.ExchangeID = "stale"
 	if err := store.PutCollectedUsage(ctx, value); !errors.Is(err, runtimeusage.ErrObservationDiscarded) {
-		t.Fatalf("definite policy discard reported as success: %v", err)
+		t.Fatalf("definite stale discard reported as success: %v", err)
 	}
 }

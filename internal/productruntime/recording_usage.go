@@ -51,7 +51,7 @@ func (o activityAttemptObserver) collectUsage(observation exchange.AttemptObserv
 	if policy == nil || !policy.Enabled || policy.CollectingSince == nil || observation.StartedAt.Before(*policy.CollectingSince) {
 		return nil
 	}
-	if _, ok := o.usage.(runtimeusage.CollectedWriter); !ok {
+	if o.usage == nil {
 		return nil
 	}
 	v := runtimeusage.Observation{ExchangeID: observation.ExchangeID, StartedAt: observation.StartedAt, OccurredAt: observation.OccurredAt, Status: status, EnvironmentID: string(observation.EnvironmentID), EnvironmentRevision: uint64(observation.EnvironmentRevision), EnvironmentName: observation.EnvironmentName, AccountID: observation.AccountID, AccountName: observation.AccountName, RequestedModel: observation.RequestedModel, UpstreamModel: observation.UpstreamModel, Usage: observation.Usage, Source: "proxy"}

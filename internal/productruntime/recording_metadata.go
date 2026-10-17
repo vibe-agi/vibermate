@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -174,7 +175,7 @@ func (o activityAttemptObserver) offerPrepared(stamp recording.Stamp, reservatio
 		return nil
 	}
 	cloneSnapshot(reflect.ValueOf(&record).Elem())
-	usageSink, _ := o.usage.(runtimeusage.CollectedWriter)
+	usageSink := o.usage
 	bundle := &recordedMetadata{usage: usage, usageSink: usageSink, usageOutcome: recording.Discarded, activity: record, activitySink: sink, identitySink: o.identities}
 	if identity, found := agentconversation.ClientIdentityFromProtocolEvidence(evidence, providerID, record.OccurredAt); found {
 		cloneSnapshot(reflect.ValueOf(&identity).Elem())
@@ -195,14 +196,15 @@ func (o activityAttemptObserver) offerPrepared(stamp recording.Stamp, reservatio
 	}
 	return nil
 }
-func (m *recordedMetadata) persist(ctx context.Context, report func(string, error)) error {
+func (m *recordedMetadata) persist(ctx context.Context, report func(string, error), policies *atomic.Pointer[runtimeusage.CollectionPolicy]) error {
 	_, activityErr := m.activitySink.RecordPrepared(ctx, m.activity)
 	var identityErr error
 	if m.identity != nil && m.identitySink != nil {
 		identityErr = m.identitySink.PutConversationIdentity(ctx, m.activity.SubjectID, *m.identity)
 	}
 	var usageErr error
-	if m.usage != nil && m.usageSink != nil {
+	policy := policies.Load()
+	if m.usage != nil && m.usageSink != nil && policy != nil && policy.Enabled && policy.Revision == m.usage.PolicyRevision && policy.CollectingSince != nil && !m.usage.Value.StartedAt.Before(*policy.CollectingSince) {
 		usageErr = m.usageSink.PutCollectedUsage(ctx, *m.usage)
 		m.usageOutcome = recording.Persisted
 		if usageErr != nil {

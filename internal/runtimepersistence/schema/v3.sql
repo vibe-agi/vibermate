@@ -954,3 +954,8 @@ CREATE TABLE acp_registrations(
  archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
  capture_generation INTEGER NOT NULL CHECK(capture_generation>0)
 ) STRICT;
+
+CREATE TABLE runtime_usage_retention_rules(
+ retention_days INTEGER PRIMARY KEY CHECK(retention_days BETWEEN 1 AND 365),
+ through_policy_revision INTEGER NOT NULL CHECK(through_policy_revision>0)
+) STRICT;

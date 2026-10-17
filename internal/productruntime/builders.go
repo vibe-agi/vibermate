@@ -595,7 +595,7 @@ type exchangeBuildRequest struct {
 	activities               activity.Recorder
 	identities               activity.ConversationIdentityRepository
 	contents                 exchangecontent.Recorder
-	usage                    runtimeusage.Recorder
+	usage                    runtimeusage.CollectedWriter
 	clock                    Clock
 	hold                     exchange.HoldPolicy
 	annotations              *clientannotation.Signer
@@ -615,7 +615,7 @@ type activityAttemptObserver struct {
 	queue      *observationRecorder
 	recorder   activity.Recorder
 	identities activity.ConversationIdentityRepository
-	usage      runtimeusage.Recorder
+	usage      runtimeusage.CollectedWriter
 }
 
 type exchangeContentObserver struct {

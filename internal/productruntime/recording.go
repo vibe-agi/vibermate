@@ -241,7 +241,7 @@ func (r *observationRecorder) run() {
 				} else if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
 				} else if item.kind == recording.Activity {
-					err = item.metadata.persist(r.ctx, r.reportFailure)
+					err = item.metadata.persist(r.ctx, r.reportFailure, &r.usagePolicy)
 				} else if item.kind == recording.Content {
 					err = item.contentSink.RecordSource(r.ctx, item.content.Source())
 					if err != nil && r.reportFailure != nil {

@@ -109,3 +109,54 @@ func TestCollectedUsagePolicyDiscardHasDistinctSettlement(t *testing.T) {
 		t.Fatalf("policy discard conflated with write failure: %+v", stats)
 	}
 }
+
+type heldUsageActivity struct {
+	failingPreparedActivity
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *heldUsageActivity) RecordPrepared(_ context.Context, r activity.Record) (activity.Record, error) {
+	close(s.entered)
+	<-s.release
+	return r, nil
+}
+func TestDisablingUsageDropsQueuedCollectionWithoutControlLookup(t *testing.T) {
+	b, _ := recording.NewBudget(recording.Limits{Records: 2, Bytes: 64 << 20})
+	q := newObservationRecorder(context.Background(), b, nil, nil)
+	defer q.Shutdown(context.Background())
+	since := time.Now().Add(-time.Hour)
+	p := runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 7, Revision: 1, CollectingSince: &since}
+	q.publishUsagePolicy(p)
+	held := &heldUsageActivity{entered: make(chan struct{}), release: make(chan struct{})}
+	sink := &collectedUsageSink{values: make(chan runtimeusage.CollectedObservation, 1)}
+	observer := activityAttemptObserver{queue: q, recorder: held, usage: sink}
+	now := time.Now()
+	if err := observer.ObserveTerminal(context.Background(), exchange.AttemptObservation{ObservationStamp: q.ScopeStamp(captureidentity.Reference{}), ExchangeID: "queued", Outcome: exchange.AttemptSucceeded, StartedAt: now, OccurredAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	<-held.entered
+	p.Enabled = false
+	p.Revision++
+	q.publishUsagePolicy(p)
+	close(held.release)
+	if err := q.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sink.values:
+		t.Fatal("queued old consent reached usage writer")
+	default:
+	}
+	if b.Snapshot().ByKind[recording.Usage].Settlements[recording.Discarded].Records != 1 {
+		t.Fatal("queued consent discard not settled")
+	}
+	p.Enabled = true
+	p.Revision++
+	fresh := now.Add(time.Hour)
+	p.CollectingSince = &fresh
+	q.publishUsagePolicy(p)
+	if v := observer.collectUsage(exchange.AttemptObservation{StartedAt: now, OccurredAt: fresh, ExchangeID: "late"}, activity.StatusSucceeded); v != nil {
+		t.Fatal("re-enable revived old callback")
+	}
+}
