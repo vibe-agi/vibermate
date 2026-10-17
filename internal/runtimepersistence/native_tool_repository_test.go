@@ -149,55 +149,7 @@ func TestNativeCatalogEvidenceScopeCASAndProjection(t *testing.T) {
 }
 
 func TestNativePageRealDescriptorsNeverLoadBody(t *testing.T) {
-	store, id, _ := nativeLifecycleFixtureRecording(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})
-	repo := store.NativeLifecycleRepository()
-	ctx := context.Background()
-	op, err := repo.Get(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// HISTORICAL SYNTHETIC CONTENT: Task 3 owns production content insertion.
-	tx, err := store.database.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := storeEvidenceBody(ctx, tx, []byte(`{"synthetic":"body"}`))
-	if err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	deadline := op.CreatedAt.Add(time.Hour)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_contents(operation_id,part,body_digest,expires_at_unix_ms) VALUES(?,'tool_arguments',?,?)`, id, digest[:], deadline.UnixMilli()); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	// A corrupt body manifest must not affect body-free descriptor projection.
-	if _, err := store.database.ExecContext(ctx, `UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, digest[:]); err != nil {
-		t.Fatal(err)
-	}
-	projected, err := repo.Get(ctx, id)
-	if err != nil || projected.Arguments == nil || projected.Arguments.Digest != nativetool.Digest(digest) || !projected.Arguments.ExpiresAt.Equal(deadline) || projected.Result != nil || projected.Recording.Mode != environment.ContentRecordingFull {
-		t.Fatalf("descriptor %+v %v", projected, err)
-	}
-	page, err := repo.Page(ctx, nativetool.PageRequest{Capture: op.Capture, Limit: 200})
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, item := range page.Items {
-		if item.ID == id {
-			found = true
-			if item.Arguments == nil || item.Arguments.Digest != projected.Arguments.Digest {
-				t.Fatal("Page/Get descriptor disagreement")
-			}
-		}
-	}
-	if !found {
-		t.Fatal("missing page operation")
-	}
+	testNativeInspectionDescriptorsNeverLoadMalformedBodies(t)
 }
 
 func TestNativeProjectionRejectsForgedApprovalDigest(t *testing.T) {

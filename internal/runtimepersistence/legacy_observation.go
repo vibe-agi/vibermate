@@ -27,7 +27,7 @@ var (
 	ErrInspectionUnavailable = recording.ErrInspectionUnavailable
 	ErrInspectionSourceLimit = errors.New("inspection source inventory exceeds connection limit")
 	ErrInspectionChanged     = recording.ErrInspectionChanged
-	ErrInspectionCursor      = errors.New("invalid inspection cursor")
+	ErrInspectionCursor      = recording.ErrInspectionCursor
 )
 
 // Sources are declared layout metadata, never discovered by scanning history.

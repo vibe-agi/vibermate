@@ -9,6 +9,7 @@ import (
 )
 
 var ErrInspectionUnavailable = errors.New("inspection is unavailable")
+var ErrInspectionCursor = errors.New("invalid inspection cursor")
 var ErrInspectionChanged = errors.New("inspection visibility or source generation changed")
 
 // These are bounded derivative read coordinates, never execution authority.
