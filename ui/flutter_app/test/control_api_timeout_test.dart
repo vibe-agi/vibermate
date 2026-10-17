@@ -13,6 +13,7 @@ import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
@@ -294,6 +295,52 @@ void main() {
 
   for (final language in AppLanguage.values) {
     testWidgets(
+      'mutation timeout presentation leaves the outcome unconfirmed in ${language.name}',
+      (tester) async {
+        final api = _TimeoutPresentationApi();
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          serverManagement: true,
+          closeRuntime: api.preview.close,
+          initialPreferences: WorkbenchPreferences(language: language),
+        );
+        addTearDown(controller.dispose);
+        controller.settingsTab = controller.settingsDestinations.indexWhere(
+          (destination) => destination.name == 'users',
+        );
+        controller.runtimeUsers = const [];
+        expect(
+          await controller.setRuntimeUserEnabled(
+            'synthetic-user',
+            enabled: false,
+          ),
+          isFalse,
+        );
+        expect(controller.runtimeUserMutating, isFalse);
+        final expected = language == AppLanguage.english
+            ? 'The control request timed out. The operation may already have completed. Refresh to check the latest state before deciding whether to retry. When loading records, this timeout alone does not show that Agent work failed.'
+            : '控制请求超时。操作可能已经完成。请先刷新并检查最新状态，再决定是否重试。读取记录时，仅凭此次超时无法判断 Agent 工作是否失败。';
+        expect(controller.serverManagementError, expected);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.light(),
+            home: Scaffold(
+              body: SettingsView(
+                controller: controller,
+                copy: AppCopy.forLanguage(language),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining(expected), findsOneWidget);
+        expect(api.userUpdates, 1);
+        expect(tester.takeException(), isNull);
+      },
+    );
+    testWidgets(
       'Raw HTTP and generic timeout recovery are readable in ${language.name}',
       (tester) async {
         final api = _TimeoutPresentationApi();
@@ -331,8 +378,8 @@ void main() {
         await tester.tap(raw);
         await tester.pumpAndSettle();
         final expected = language == AppLanguage.english
-            ? 'The control request timed out. Refresh to check the latest state. Agent work continues; recorded data may be incomplete.'
-            : '控制请求超时。请刷新以查看最新状态。Agent 工作会继续；记录的数据可能不完整。';
+            ? 'The control request timed out. The operation may already have completed. Refresh to check the latest state before deciding whether to retry. When loading records, this timeout alone does not show that Agent work failed.'
+            : '控制请求超时。操作可能已经完成。请先刷新并检查最新状态，再决定是否重试。读取记录时，仅凭此次超时无法判断 Agent 工作是否失败。';
         expect(find.text(expected), findsOneWidget);
         expect(controller.rawEvidenceError(activity.id), expected);
         await controller.loadExchangeDetail('timeout');
@@ -345,6 +392,16 @@ void main() {
 
 final class _TimeoutPresentationApi implements ControlApi {
   final preview = PreviewControlApi();
+  int userUpdates = 0;
+  @override
+  Future<RuntimeUser> setRuntimeUserEnabled(
+    String userId, {
+    required bool enabled,
+  }) {
+    userUpdates++;
+    throw ControlRequestTimeout(const Duration(seconds: 30));
+  }
+
   @override
   Future<ExchangeDetail> exchange(
     String exchangeId, {
