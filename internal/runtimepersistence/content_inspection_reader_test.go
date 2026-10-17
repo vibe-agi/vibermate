@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,13 @@ func TestContentInspectionNestedCursorsRemainSourceBound(t *testing.T) {
 	}
 	if err = f.current.ExchangeContentRepository().(exchangecontent.ScopedSourceRepository).PutScopedSource(context.Background(), f.scope, source); err != nil {
 		t.Fatal(err)
+	}
+	// Current is the new canonical source, but its deliberately missing graph
+	// cannot redirect an already-issued archive cursor. This discriminates the
+	// decoder route without depending on immutable archive-file rejection.
+	nativeExec(t, f.current.store.database, `PRAGMA foreign_keys=OFF;DELETE FROM runtime_exchange_content_blocks;PRAGMA foreign_keys=ON`)
+	if _, err = reader.GetProjection(context.Background(), record.ExchangeID, exchangecontent.RequestViewFull); err == nil || errors.Is(err, ErrInspectionChanged) {
+		t.Fatalf("fresh current graph did not fail in decoder: %v", err)
 	}
 	older, err := reader.GetContentPage(context.Background(), record.ExchangeID, requestCursor)
 	if err != nil || len(older.Messages) == 0 {
@@ -415,5 +423,39 @@ func TestContentInspectionCarriesOriginalBatchExpiryAndRefusesPartialPreviews(t 
 	nativeExec(t, f.legacy, `UPDATE runtime_exchange_contents SET manifest_json=CAST('{}' AS BLOB) WHERE exchange_id=?`, ids[1])
 	if result, err := reader.RequestPreviews(context.Background(), ids); err == nil || result != nil {
 		t.Fatalf("partial batch escaped: %+v %v", result, err)
+	}
+}
+
+func TestContentInspectionCurrentGraphNeverUsesEqualArchiveBytes(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	record := transcriptContentRecordFixture(t, "current-missing-graph", time.Now().UTC().Truncate(time.Millisecond), exchangecontent.ParentRef{CaptureRunID: f.scope.Capture.ID}, []transcriptMessage{{role: protocolcore.RoleUser, text: "same request"}}, "same response")
+	if err := newExchangeContentRepository(f.legacy, f.legacy, newOperationGate(), nil).Put(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	limits, err := exchangecontent.DefaultSourceLimits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := exchangecontent.SourceFromRecordWithin(limits, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.current.ExchangeContentRepository().(exchangecontent.ScopedSourceRepository).PutScopedSource(context.Background(), f.scope, source); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewContentInspectionReader(f.reader.catalog, f.control, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reader.Get(context.Background(), record.ExchangeID); err != nil {
+		t.Fatal(err)
+	}
+	nativeExec(t, f.current.store.database, `PRAGMA foreign_keys=OFF;DELETE FROM runtime_exchange_content_blocks;PRAGMA foreign_keys=ON`)
+	got, err := reader.Get(context.Background(), record.ExchangeID)
+	if err == nil || errors.Is(err, ErrInspectionChanged) || got.ExchangeID != "" {
+		t.Fatalf("current graph repaired from equal archive bytes: %+v %v", got, err)
+	}
+	if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("expected actual graph decoder refusal, got %v", err)
 	}
 }
