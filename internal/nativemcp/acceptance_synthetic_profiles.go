@@ -21,3 +21,9 @@ func (acceptanceSyntheticProfiles) Resolve(contract environment.ClientToolContra
 	}
 	return ContentProfile{contract: environment.ClientToolContractCodexLegacy, definition: fixed, arguments: []string{"/proof", "/credentialId"}, result: []string{"/credentialId", "/structuredContent/credentialId"}}, true
 }
+
+// AcceptanceSyntheticContentInput is a closed, tagged ownership fixture. It is
+// absent from production builds and never supplies execution authority.
+func AcceptanceSyntheticContentInput(identity nativetool.ContentIdentity, part nativetool.ContentPart, raw []byte) ContentInput {
+	return ContentInput{identity: identity, observedAt: identity.CreatedAt, part: part, raw: raw, profile: ContentProfile{contract: environment.ClientToolContractCodexLegacy, definition: nativetool.Digest{1}}, limits: DefaultLimits()}
+}

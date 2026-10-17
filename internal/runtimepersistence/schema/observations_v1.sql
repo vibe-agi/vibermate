@@ -886,6 +886,7 @@ CREATE TABLE native_tool_contents(
  retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 3650),
  created_at_unix_ms INTEGER NOT NULL CHECK(created_at_unix_ms>0),
  expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>created_at_unix_ms),
+ observed_at_unix_ms INTEGER NOT NULL CHECK(observed_at_unix_ms>=created_at_unix_ms),
  body_digest BLOB NOT NULL CHECK(length(body_digest)=32) REFERENCES runtime_evidence_bodies(digest),
  PRIMARY KEY(operation_id,part)
 ) STRICT;

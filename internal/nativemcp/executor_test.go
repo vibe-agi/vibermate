@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	recordingbudget "github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,8 @@ func (a captureActivity) Active(ctx context.Context, c captureidentity.Reference
 }
 
 type nativeFixture struct {
+	content      *fixtureContent
+	contentDB    *sql.DB
 	store        *runtimepersistence.Store
 	db           *sql.DB
 	assignments  *captureassignment.Manager
@@ -234,12 +237,33 @@ func newNativeFixtureWithApprovalConfig(t *testing.T, mode environment.ToolPolic
 	if len(custom) > 0 {
 		limits = custom[0]
 	}
-	executor, err := New(Dependencies{OwnerContext: ctx, Transport: transport, Store: store.NativeToolRepository(), ToolDecisions: gate, Offline: offline, Clock: time.Now, IDs: ids}, limits)
+	observationsPath := filepath.Join(filepath.Dir(path), "observations.db")
+	observations, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: observationsPath, LayoutID: "native-fixture", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observations.Shutdown(ctx) })
+	contentDB, err := sql.Open("sqlite", observationsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = contentDB.Close() })
+	epoch, _ := recordingbudget.NewEpoch(1)
+	budget, _ := recordingbudget.NewBudget(recordingbudget.Limits{Records: 2048, Bytes: 64 << 20})
+	content := &fixtureContent{epoch: epoch, budget: budget, store: observations}
+	t.Cleanup(func() {
+		content.mu.Lock()
+		defer content.mu.Unlock()
+		for _, item := range content.items {
+			item.reservation.Release()
+		}
+	})
+	executor, err := New(Dependencies{OwnerContext: ctx, Transport: transport, Store: store.NativeToolRepository(), ToolDecisions: gate, Offline: offline, Clock: time.Now, IDs: ids, ContentRecorder: content, RecordingScopes: content}, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = executor.Close(ctx) })
-	return &nativeFixture{store, db, assignments, admission, capture, executor, transport, ids, offline, envs}
+	return &nativeFixture{content: content, contentDB: contentDB, store: store, db: db, assignments: assignments, admission: admission, capture: capture, executor: executor, transport: transport, ids: ids, gate: offline, environments: envs}
 }
 func (f *nativeFixture) captured(t *testing.T, method, body, session string) CapturedRequest {
 	t.Helper()

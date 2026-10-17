@@ -46,8 +46,10 @@ type ReceiveInput struct {
 	ObservedAt                         time.Time
 }
 type ReceiveResult struct {
-	OperationID ID
-	Duplicate   bool
+	RecordingScope recording.Scope
+	CreatedAt      time.Time
+	OperationID    ID
+	Duplicate      bool
 }
 type DecisionInput struct {
 	ApprovalID       ID

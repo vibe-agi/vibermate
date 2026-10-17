@@ -696,7 +696,7 @@ func (r *nativeToolRepository) Receive(ctx context.Context, in nativetool.Receiv
 			}
 		}
 		stageNativeHistory(ctx, nativetool.Operation{ID: in.ID, Capture: in.Capture, RecordingScope: scope.recordingScope, EnvironmentID: in.EnvironmentID, EnvironmentRevision: in.EnvironmentRevision, EnvironmentDigest: in.EnvironmentDigest, Recording: in.Recording, Kind: in.Kind, TargetOrigin: in.TargetOrigin, Revision: 1, State: "received", DecisionSource: "none", CreatedAt: in.ObservedAt, MaximumEventAt: in.ObservedAt, MetadataExpiresAt: in.ObservedAt.Add(30 * 24 * time.Hour)}, "received", in.ObservedAt)
-		result = nativetool.ReceiveResult{OperationID: in.ID}
+		result = nativetool.ReceiveResult{OperationID: in.ID, RecordingScope: scope.recordingScope, CreatedAt: time.UnixMilli(in.ObservedAt.UnixMilli()).UTC()}
 		return nil
 	})
 	if err != nil {

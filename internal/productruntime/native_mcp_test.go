@@ -9,6 +9,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -19,10 +21,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -78,8 +83,17 @@ func TestNativeRuntimeContentProfileComposition(t *testing.T) {
 				options.ContentProfiles = probe
 			}
 			options.OriginalTransport = &runtimeProfileWire{}
+			observations, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(t.TempDir(), "observations.db"), LayoutID: "profile", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer observations.Shutdown(ctx)
 			var adapter *nativeRevocation
-			runtime, err := startWithBuilders(ctx, options, runtimeBuildOverrides{environment: func(ctx context.Context, r environmentBuildRequest) (environmentBuildResult, error) {
+			runtime, err := startWithBuilders(ctx, options, runtimeBuildOverrides{recorder: func(owner context.Context, b *recording.Budget, c connectionevent.ScopedStore, e egressaudit.ScopedAttemptStore) *observationRecorder {
+				q := newObservationRecorder(owner, b, c, e)
+				q.nativeContent = observations
+				return q
+			}, environment: func(ctx context.Context, r environmentBuildRequest) (environmentBuildResult, error) {
 				adapter = r.nativeRevocation.(*nativeRevocation)
 				return buildEnvironment(ctx, r)
 			}})
@@ -150,9 +164,14 @@ func TestNativeRuntimeContentProfileComposition(t *testing.T) {
 					if err != nil || op.Arguments != nil || op.Result != nil {
 						t.Fatal("unknown composition retained content")
 					}
+					for _, part := range []nativetool.ContentPart{nativetool.ContentToolArguments, nativetool.ContentToolResult} {
+						if _, err := observations.GetNativeContent(ctx, id, part); !errors.Is(err, nativetool.ErrNotFound) {
+							t.Fatalf("unknown profile retained optional body: %v", err)
+						}
+					}
 				}
 			}
-			if (probe.calls > 0) != inject {
+			if (probe.calls > 0) != inject || (inject && probe.calls != 1) {
 				t.Fatalf("Runtime resolver calls=%d injected=%t", probe.calls, inject)
 			}
 		})

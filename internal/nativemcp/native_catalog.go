@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"strconv"
 	"strings"
 
@@ -11,8 +12,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
 
-// ContentProfiles is trusted composition for retention only. It cannot grant
-// execution. Unknown profiles preserve metadata and suppress content hashing.
+// ContentProfiles is trusted classification for sensitive binding, approval
+// previews and optional retention. It cannot grant execution. Unknown profiles
+// suppress optional content without manufacturing a trusted classification.
 type ContentProfiles interface {
 	Resolve(environment.ClientToolContract, nativetool.CatalogDefinition) (ContentProfile, bool)
 }
@@ -22,6 +24,8 @@ type ContentProfile struct {
 	arguments, result []string
 }
 type retentionState struct {
+	identity           nativetool.ContentIdentity
+	stamp              recording.Stamp
 	profile            ContentProfile
 	known, unavailable bool
 }

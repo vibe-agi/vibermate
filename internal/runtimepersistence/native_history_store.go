@@ -224,7 +224,8 @@ func (s *ObservationStore) PageNativeInspection(ctx context.Context, q nativetoo
 		return page, err
 	}
 	defer finish()
-	rows, err := s.store.reads.QueryContext(operation, `SELECT `+nativeIndexColumns+` FROM native_inspection_index WHERE capture_kind=? AND capture_id=? AND position>? AND EXISTS(SELECT 1 FROM native_history_snapshots h WHERE h.operation_id=native_inspection_index.operation_id AND h.metadata_expires_at_unix_ms>?) ORDER BY position LIMIT ?`, q.Capture.Kind, q.Capture.ID, q.AfterPosition, time.Now().UTC().UnixMilli(), q.Limit)
+	now := time.Now().UTC().UnixMilli()
+	rows, err := s.store.reads.QueryContext(operation, `SELECT `+nativeIndexColumns+` FROM native_inspection_index WHERE capture_kind=? AND capture_id=? AND position>? AND (EXISTS(SELECT 1 FROM native_history_snapshots h WHERE h.operation_id=native_inspection_index.operation_id AND h.metadata_expires_at_unix_ms>?) OR EXISTS(SELECT 1 FROM native_tool_contents c WHERE c.operation_id=native_inspection_index.operation_id AND c.expires_at_unix_ms>?)) ORDER BY position LIMIT ?`, q.Capture.Kind, q.Capture.ID, q.AfterPosition, now, now, q.Limit)
 	if err != nil {
 		return page, err
 	}

@@ -760,7 +760,7 @@ func startWithBuilders(
 	}
 	pending.register("original-origin transport", original.Shutdown)
 	nativeOperationIDs := nativeIDs{random: securityRandom}
-	nativeTools, err := nativemcp.New(nativemcp.Dependencies{EgressDefaults: egressDefaults, OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs, ContentProfiles: options.ContentProfiles}, nativemcp.DefaultLimits())
+	nativeTools, err := nativemcp.New(nativemcp.Dependencies{EgressDefaults: egressDefaults, OwnerContext: ownerContext, Transport: nativeTransport, Store: storageResult.store.NativeToolRepository(), ToolDecisions: toolDecisions, Offline: options.OfflineHold, Clock: options.Clock.Now, IDs: nativeOperationIDs, ContentProfiles: options.ContentProfiles, ContentRecorder: recorder, RecordingScopes: recorder}, nativemcp.DefaultLimits())
 	if err != nil {
 		return fail("native MCP recovery", err)
 	}

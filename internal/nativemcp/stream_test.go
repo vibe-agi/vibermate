@@ -468,13 +468,17 @@ func TestNativeRecoveredResultIsRetainedUnderOriginalID(t *testing.T) {
 		t.Fatal(got)
 	}
 	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
-	if err != nil || op.State != "completed" || op.Result == nil {
+	if err != nil || op.State != "completed" {
 		t.Fatalf("original retention %+v %v", op, err)
 	}
 	child, err := f.store.NativeToolRepository().Get(context.Background(), get.id)
 	if err != nil || child.Result != nil {
 		t.Fatalf("GET stole result %+v %v", child, err)
 	}
+	if _, err := f.readNativeContent(context.Background(), f.capture, call.id, "tool_result", 0, 128<<10); err != nil {
+		t.Fatalf("original retained result absent: %v", err)
+	}
+	f.requireNoContent(t, get.id, nativetool.ContentToolResult)
 }
 
 func TestNativeStreamExecutorReusesDeliveredTerminalCapacity(t *testing.T) {

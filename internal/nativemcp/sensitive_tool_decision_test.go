@@ -39,8 +39,12 @@ func TestNativeSensitiveToolEvidenceRecheckedByGateAndAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
-	witness := *s.tools[c.id]
+	witnessPointer := s.tools[c.id]
 	s.mu.Unlock()
+	if witnessPointer == nil {
+		t.Fatal("required sensitive binding depended on recording holder")
+	}
+	witness := *witnessPointer
 	policy, _ := exchange.NewToolDecisionContext(plan.PolicySet(), "", false, nil, nil)
 	if _, err = exchange.NewClientToolDecisionRequest(c.id, binding, policy, intents, nil); err == nil {
 		t.Fatal("ordinary constructor admitted known sensitive group")

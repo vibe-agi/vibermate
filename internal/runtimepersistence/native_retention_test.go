@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
@@ -20,46 +21,43 @@ import (
 // TestNativeLongFullRetentionSurvivesMetadataExpiry asserted that optional
 // content retains control rows; Task2 supplies independent body/expiry coverage.
 func TestNativeContentAuthorizedBudgetAndIntegrity(t *testing.T) {
-	store, id, rev := nativeLifecycleFixtureRecording(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})
-	repo := nativeFullRepository(t, store)
+	store, value := nativeRetiredContentFixture(t)
 	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	nativeAllow(t, repo, id, now)
-	if _, err := repo.Start(ctx, id, "content-start", rev, now); err != nil {
-		t.Fatal(err)
-	}
+	id := value.Identity.OperationID
+	capture := value.Identity.Scope.Capture
 	body := bytes.Repeat([]byte(`{"path":"a"}`), 20000)
-	if err := repo.PutContent(ctx, id, "tool_arguments", body, now); err != nil {
+	value.Part = nativetool.ContentToolArguments
+	value.Body = body
+	if err := store.PutNativeContent(ctx, value); err != nil {
 		t.Fatal(err)
 	}
-	op, err := repo.Get(ctx, id)
-	if err != nil || op.Arguments == nil {
-		t.Fatalf("descriptor: %+v %v", op, err)
-	}
-	got, err := repo.ReadContent(ctx, op.Capture, id, "tool_arguments", 5, 128<<10)
+	got, err := store.ReadNativeContent(ctx, capture, id, "tool_arguments", 5, 128<<10)
 	if err != nil || !bytes.Equal(got, body[5:5+(128<<10)]) {
-		t.Fatalf("read: %d %v", len(got), err)
+		t.Fatalf("bounded optional read: %d %v", len(got), err)
 	}
 	for _, request := range []struct {
 		capture       captureidentity.Reference
 		offset, limit int
-	}{{op.Capture, -1, 1}, {op.Capture, 0, 0}, {op.Capture, 0, (128 << 10) + 1}, {op.Capture, len(body) + 1, 1}, {captureidentity.Reference{Kind: op.Capture.Kind, ID: "wrong"}, 0, 1}} {
-		if _, err := repo.ReadContent(ctx, request.capture, id, "tool_arguments", request.offset, request.limit); err == nil {
+	}{{capture, -1, 1}, {capture, 0, 0}, {capture, 0, (128 << 10) + 1}, {capture, len(body) + 1, 1}, {captureidentity.Reference{Kind: capture.Kind, ID: "wrong"}, 0, 1}} {
+		if _, err := store.ReadNativeContent(ctx, request.capture, id, "tool_arguments", request.offset, request.limit); err == nil {
 			t.Fatalf("invalid read: %+v", request)
 		}
 	}
-	if err := repo.PutContent(ctx, id, "elicitation", []byte("secret"), now); err == nil {
+	bad := value
+	bad.Part = "elicitation"
+	if err := store.PutNativeContent(ctx, bad); err == nil {
 		t.Fatal("sensitive content part accepted")
 	}
-	if _, err := store.database.Exec(`UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, op.Arguments.Digest[:]); err != nil {
+	digest := sha256.Sum256(body)
+	if _, err := store.store.database.Exec(`UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, digest[:]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ReadContent(ctx, op.Capture, id, "tool_arguments", 0, 1); err == nil {
+	if _, err := store.ReadNativeContent(ctx, capture, id, "tool_arguments", 0, 1); err == nil {
 		t.Fatal("corrupt body returned")
 	}
-	// Descriptor projections are independent of body validation.
-	if _, err := repo.Get(ctx, id); err != nil {
-		t.Fatal(err)
+	page, err := store.PageNativeInspection(ctx, nativetool.InspectionIndexRequest{Capture: capture, Limit: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatal("body corruption broke bounded discovery", err)
 	}
 }
 

@@ -27,21 +27,24 @@ import (
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
 type recordingItem struct {
-	acp           *acpobservation.Record
-	capture       recording.CaptureObservation
-	nativeHistory *nativetool.RecordedHistory
-	nativeSink    nativetool.HistoryWriter
-	metadata      *recordedMetadata
-	content       *exchangecontent.OwnedRecord
-	contentSink   exchangecontent.SourceRecorder
-	kind          recording.Kind
-	stamp         recording.Stamp
-	connection    connectionevent.Event
-	egress        egressaudit.Attempt
-	reservation   *recording.Reservation
-	bytes         int64
+	nativeContent     *nativemcp.OwnedContent
+	nativeContentSink nativetool.ContentWriter
+	acp               *acpobservation.Record
+	capture           recording.CaptureObservation
+	nativeHistory     *nativetool.RecordedHistory
+	nativeSink        nativetool.HistoryWriter
+	metadata          *recordedMetadata
+	content           *exchangecontent.OwnedRecord
+	contentSink       exchangecontent.SourceRecorder
+	kind              recording.Kind
+	stamp             recording.Stamp
+	connection        connectionevent.Event
+	egress            egressaudit.Attempt
+	reservation       *recording.Reservation
+	bytes             int64
 }
 type observationRecorder struct {
+	nativeContent      nativetool.ContentWriter
 	acp                acpobservation.Writer
 	capture            recording.CaptureWriter
 	nativeHistory      nativetool.HistoryWriter
@@ -237,7 +240,11 @@ func (r *observationRecorder) run() {
 				} else if item.kind == recording.Capture {
 					err = r.capture.PutCaptureObservation(r.ctx, item.stamp.Scope(), item.capture)
 				} else if item.kind == recording.Native {
-					err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
+					if item.nativeContent != nil {
+						err = item.nativeContentSink.PutNativeContent(r.ctx, item.nativeContent.Observation())
+					} else {
+						err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
+					}
 				} else if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
 				} else if item.kind == recording.Activity {
@@ -253,7 +260,7 @@ func (r *observationRecorder) run() {
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
-					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict)) {
+					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict) || errors.Is(err, nativetool.ErrNotFound)) {
 						outcome = recording.Discarded
 					}
 				}
