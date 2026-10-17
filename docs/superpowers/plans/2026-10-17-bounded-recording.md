@@ -49,9 +49,12 @@ func (b *Budget) Snapshot() Statistics
 
 // Neither a Fence nor a Stamp authorizes execution.
 type Fence struct { ArchiveEpoch, CaptureGeneration uint64 }
+type Epoch struct { /* one Runtime-owned monotonic atomic epoch */ }
+func NewEpoch(uint64) (*Epoch, error)
+func (e *Epoch) Advance(uint64) bool
 type Stamp struct { /* immutable reference/fence + revocable in-memory token */ }
 type ScopeToken struct { /* only fixed scope identity, generation and revoked bit */ }
-func NewScopeToken(captureidentity.Reference, Fence) (*ScopeToken, error)
+func NewScopeToken(*Epoch, captureidentity.Reference, Fence) (*ScopeToken, error)
 func (t *ScopeToken) Stamp() Stamp
 func (t *ScopeToken) Revoke()
 func (s Stamp) Current() bool
@@ -59,9 +62,9 @@ func (s Stamp) Capture() captureidentity.Reference
 func (s Stamp) Fence() Fence
 ```
 
-The zero-value Stamp is invalid; a Runtime-wide token uses a zero Capture reference and nonzero archive epoch. Capture-bound tokens require a valid reference and positive generation. Keep no global unbounded map in this package. Scope token persistence/publication belongs to control composition in the storage plan. `Statistics` uses fixed fields/arrays for reserved records/bytes, accepted and drops by closed kind/reason, confirmed writes and unconfirmed writes; no IDs/URLs/error strings as metric labels. Document that Accepted is in-memory ownership, not durable confirmation.
+The zero-value Stamp is invalid; a Runtime-wide token uses a zero Capture reference and nonzero archive epoch. Capture-bound tokens require a valid reference and positive generation. Each token retains the Runtime's Epoch pointer and the fixed epoch it was issued against; `Current` checks both revocation and equality with that atomic value. `Advance` accepts only a positive greater value and never walks tokens/queued items. Independent Runtime Epoch owners cannot revoke each other's stamps. Keep no global unbounded map or process-global epoch in this package. Scope token persistence/publication belongs to control composition in the storage plan. `Statistics` uses fixed fields/arrays for reserved records/bytes, accepted and drops by closed kind/reason, confirmed writes and unconfirmed writes; no IDs/URLs/error strings as metric labels. Document that Accepted is in-memory ownership, not durable confirmation.
 
-- [ ] **Step 1: Write concurrency/ownership tests first.** Reserve from two named lanes against one small Budget; fill it with one producer-owned, one queued and one worker-owned reservation. Another TryReserve/TryGrow must return immediately while owners remain held, and existing totals must stay unchanged on refusal. Release/transfer after dequeue must not free capacity early. Concurrent reservations never exceed limits; repeated Release is harmless; invalid negative/overflow arithmetic cannot change counters. Revoking a token makes old stamps stale without affecting another scope.
+- [ ] **Step 1: Write concurrency/ownership tests first.** Reserve from two named lanes against one small Budget; fill it with one producer-owned, one queued and one worker-owned reservation. Another TryReserve/TryGrow must return immediately while owners remain held, and existing totals must stay unchanged on refusal. Release/transfer after dequeue must not free capacity early. Concurrent reservations never exceed limits; repeated Release is harmless; invalid negative/overflow arithmetic cannot change counters. Revoking a token makes old stamps stale without affecting another scope; advancing the Runtime epoch invalidates its old stamps without walking them or affecting a separate Runtime owner.
 
 ```go
 budget, err := recording.NewBudget(recording.Limits{Records: 2, Bytes: 64})
