@@ -536,6 +536,9 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 	ctx context.Context,
 	id string,
 ) (capturerun.TerminalEvidence, error) {
+	if barrier.recorder != nil {
+		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManagedRun, id, barrier.reporter)
+	}
 	terminal, err := barrier.raw.PrepareTerminalScope(
 		ctx, rawevidence.ScopeManagedRun, id,
 	)
@@ -547,12 +550,6 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 		}
 		return nil, err
 	}
-	if barrier.recorder != nil {
-		if err := barrier.recorder.Flush(ctx); err != nil {
-			terminal.Abort()
-			return nil, err
-		}
-	}
 	return terminal, nil
 }
 
@@ -560,6 +557,9 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 	ctx context.Context,
 	id string,
 ) (manualcapture.TerminalEvidence, error) {
+	if barrier.recorder != nil {
+		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManualCapture, id, barrier.reporter)
+	}
 	terminal, err := barrier.raw.PrepareTerminalScope(
 		ctx, rawevidence.ScopeManualCapture, id,
 	)
@@ -570,12 +570,6 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 			))
 		}
 		return nil, err
-	}
-	if barrier.recorder != nil {
-		if err := barrier.recorder.Flush(ctx); err != nil {
-			terminal.Abort()
-			return nil, err
-		}
 	}
 	return terminal, nil
 }

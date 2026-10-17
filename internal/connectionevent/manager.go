@@ -429,13 +429,13 @@ func (c *Connection) ObservationScope(capture captureidentity.Reference) recordi
 	return c.manager.scopes.ScopeStamp(capture)
 }
 func (c *Connection) BindObservationScope(stamp recording.Stamp) error {
-	if c == nil || !stamp.Current() || stamp.Capture().Validate() != nil {
+	if c == nil || !stamp.Current() || !stamp.HasCapture() {
 		return ErrInvalidEvent
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.bound {
-		if c.stamp.Scope() == stamp.Scope() {
+		if c.stamp.SameScope(stamp) {
 			return nil
 		}
 		return ErrInvalidEvent

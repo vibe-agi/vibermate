@@ -30,24 +30,28 @@ type recordingItem struct {
 	bytes       int64
 }
 type observationRecorder struct {
-	budget           *recording.Budget
-	epoch            *recording.Epoch
-	connections      connectionevent.ScopedStore
-	egress           egressaudit.ScopedAttemptStore
-	queue            chan *recordingItem
-	ctx              context.Context
-	cancel           context.CancelFunc
-	done             chan struct{}
-	mu               sync.Mutex
-	closed, sealed   bool
-	offered, settled uint64
-	changed          chan struct{}
+	budget             *recording.Budget
+	epoch              *recording.Epoch
+	connections        connectionevent.ScopedStore
+	egress             egressaudit.ScopedAttemptStore
+	queue              chan *recordingItem
+	ctx                context.Context
+	cancel             context.CancelFunc
+	done               chan struct{}
+	mu                 sync.Mutex
+	closed, sealed     bool
+	offered, settled   uint64
+	changed            chan struct{}
+	adminSlot          chan struct{}
+	pendingFence       *recordingScopeFence
+	pendingFenceTarget uint64
 }
 
 func newObservationRecorder(owner context.Context, b *recording.Budget, c connectionevent.ScopedStore, e egressaudit.ScopedAttemptStore) *observationRecorder {
 	epoch, _ := recording.NewEpoch(1)
 	ctx, cancel := context.WithCancel(owner)
-	r := &observationRecorder{budget: b, epoch: epoch, connections: c, egress: e, queue: make(chan *recordingItem, 2048), ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{})}
+	r := &observationRecorder{budget: b, epoch: epoch, connections: c, egress: e, queue: make(chan *recordingItem, 2048), ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), adminSlot: make(chan struct{}, 1)}
+	r.adminSlot <- struct{}{}
 	go r.run()
 	return r
 }
@@ -60,11 +64,11 @@ func (r *observationRecorder) ScopeStamp(c captureidentity.Reference) recording.
 	if c != (captureidentity.Reference{}) {
 		generation = 1
 	}
-	t, err := recording.NewScopeToken(r.epoch, c, recording.Fence{ArchiveEpoch: r.epoch.Value(), CaptureGeneration: generation})
+	stamp, err := recording.NewStamp(r.epoch, c, recording.Fence{ArchiveEpoch: r.epoch.Value(), CaptureGeneration: generation})
 	if err != nil {
 		return recording.Stamp{}
 	}
-	return t.Stamp()
+	return stamp
 }
 func (r *observationRecorder) ObserveConnection(s recording.Stamp, e connectionevent.Event) recording.OfferResult {
 	return r.offer(s, recording.Connection, e, egressaudit.Attempt{})
@@ -97,7 +101,7 @@ func (r *observationRecorder) offer(s recording.Stamp, k recording.Kind, e conne
 	}
 	// Descriptor, complete owned strings, scope/token, and conservative SQL/
 	// driver argument workspace stay charged through actual I/O completion.
-	bytes = int64(unsafe.Sizeof(recordingItem{})) + int64(len(s.Capture().ID)) + 256
+	bytes = int64(unsafe.Sizeof(recordingItem{})) + int64(s.CaptureIDBytes()) + 256
 	if k == recording.Connection {
 		bytes += connectionStringBytes(e)
 	} else {
@@ -230,9 +234,18 @@ func (r *observationRecorder) settle(item *recordingItem, outcome recording.Sett
 	item.reservation.Release()
 	r.mu.Lock()
 	r.settled++
+	var fence *recordingScopeFence
+	if r.pendingFence != nil && r.settled >= r.pendingFenceTarget {
+		fence = r.pendingFence
+		r.pendingFence = nil
+		r.pendingFenceTarget = 0
+	}
 	close(r.changed)
 	r.changed = make(chan struct{})
 	r.mu.Unlock()
+	if fence != nil {
+		fence.Abort()
+	}
 }
 func (r *observationRecorder) Flush(ctx context.Context) error {
 	r.mu.Lock()
@@ -344,14 +357,16 @@ func (a recordingArchive) DeleteCapture(ctx context.Context, kind, id string) (r
 	}
 	var terminal rawevidence.TerminalScope
 	if a.raw != nil {
-		terminal, err = a.raw.PrepareTerminalScope(ctx, rawevidence.ScopeKind(kind), id)
+		terminal, err = a.recorder.prepareScope(ctx, a.raw, rawevidence.ScopeKind(kind), id, nil)
 		if err != nil {
 			return resourcedeletion.Released{}, err
 		}
 		defer terminal.Abort()
 	}
-	if err := a.recorder.Flush(ctx); err != nil {
-		return resourcedeletion.Released{}, err
+	if a.raw == nil {
+		if err := a.recorder.Flush(ctx); err != nil {
+			return resourcedeletion.Released{}, err
+		}
 	}
 	released, err := a.delegate.DeleteCapture(ctx, kind, id)
 	if err == nil && terminal != nil {
@@ -361,4 +376,80 @@ func (a recordingArchive) DeleteCapture(ctx context.Context, kind, id string) (r
 }
 func (a recordingArchive) ClearEvidence(ctx context.Context) (resourcedeletion.Released, error) {
 	return a.delegate.ClearEvidence(ctx)
+}
+
+// Administrative work has one fixed owner, acquired before Raw can allocate a
+// terminal lease. On timeout the existing worker owns that lease until the
+// exact accepted-work target has actually settled. No per-scope registry or
+// goroutine is introduced; retries wait for this slot with their own context.
+type recordingScopeFence struct {
+	recorder *observationRecorder
+	terminal rawevidence.TerminalScope
+	once     sync.Once
+}
+
+func (f *recordingScopeFence) Commit() { f.finish(true) }
+func (f *recordingScopeFence) Abort()  { f.finish(false) }
+func (f *recordingScopeFence) finish(commit bool) {
+	if f == nil {
+		return
+	}
+	f.once.Do(func() {
+		terminal := f.terminal
+		f.terminal = nil
+		if commit {
+			terminal.Commit()
+		} else {
+			terminal.Abort()
+		}
+		f.recorder.adminSlot <- struct{}{}
+	})
+}
+func (r *observationRecorder) prepareScope(ctx context.Context, raw rawEvidenceRuntime, kind rawevidence.ScopeKind, id string, reporter interface{ ReportRawEvidenceFailure(error) }) (rawevidence.TerminalScope, error) {
+	if ctx == nil {
+		return nil, errors.New("recording administration context is nil")
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.done:
+		return nil, errors.New("recorder closed")
+	case <-r.adminSlot:
+	}
+	if err := ctx.Err(); err != nil {
+		r.adminSlot <- struct{}{}
+		return nil, err
+	}
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if closed {
+		r.adminSlot <- struct{}{}
+		return nil, errors.New("recorder closed")
+	}
+	terminal, err := raw.PrepareTerminalScope(ctx, kind, id)
+	if err != nil {
+		r.adminSlot <- struct{}{}
+		if reporter != nil {
+			reporter.ReportRawEvidenceFailure(err)
+		}
+		return nil, err
+	}
+	fence := &recordingScopeFence{recorder: r, terminal: terminal}
+	r.mu.Lock()
+	target := r.offered
+	r.mu.Unlock()
+	if err := r.wait(ctx, target); err != nil {
+		r.mu.Lock()
+		if r.settled < target {
+			r.pendingFence = fence
+			r.pendingFenceTarget = target
+			r.mu.Unlock()
+		} else {
+			r.mu.Unlock()
+			fence.Abort()
+		}
+		return nil, err
+	}
+	return fence, nil
 }

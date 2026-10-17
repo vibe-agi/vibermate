@@ -3,7 +3,6 @@ package recording
 import (
 	"errors"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
-	"strings"
 	"sync/atomic"
 )
 
@@ -38,50 +37,100 @@ func (e *Epoch) Advance(value uint64) bool {
 	}
 }
 
-// ScopeToken retains fixed scope identity and one revocation bit. No token
-// authorizes execution. Tokens must not be copied; publish their Stamp values.
+// Stamp keeps bounded coordinates inline. Runtime producers retain this value
+// in their existing execution owner without allocating a recording-only token
+// or string backing. Scope/Capture materialization is for admitted consumers.
+type Stamp struct {
+	epoch         *Epoch
+	revoked       *atomic.Bool
+	fence         Fence
+	captureID     [captureidentity.MaxIDBytes]byte
+	captureLength uint8
+	captureKind   uint8
+}
+
+// NewStamp makes epoch-revocable coordinates without a heap-owned scope token.
+func NewStamp(epoch *Epoch, reference captureidentity.Reference, fence Fence) (Stamp, error) {
+	if epoch == nil || epoch.Value() != fence.ArchiveEpoch {
+		return Stamp{}, errors.New("recording epoch is not current")
+	}
+	if err := (Scope{Capture: reference, Fence: fence}).Validate(); err != nil {
+		return Stamp{}, err
+	}
+	s := Stamp{epoch: epoch, fence: fence, captureLength: uint8(len(reference.ID))}
+	switch reference.Kind {
+	case captureidentity.KindManagedRun:
+		s.captureKind = 1
+	case captureidentity.KindManualCapture:
+		s.captureKind = 2
+	}
+	copy(s.captureID[:], reference.ID)
+	return s, nil
+}
+
+// ScopeToken is an explicit individual revocation owner, retained by callers
+// needing that control lifetime. Runtime per-request producers use NewStamp.
+// Tokens must not be copied; their Stamp values remain safe to copy.
 type ScopeToken struct {
-	epoch   *Epoch
-	capture captureidentity.Reference
-	fence   Fence
+	stamp   Stamp
 	revoked atomic.Bool
 }
 
-// Stamp is an immutable, revocable observation scope. Its zero value is invalid.
-type Stamp struct{ token *ScopeToken }
-
 func NewScopeToken(epoch *Epoch, reference captureidentity.Reference, fence Fence) (*ScopeToken, error) {
-	if epoch == nil || fence.ArchiveEpoch == 0 || epoch.value.Load() != fence.ArchiveEpoch {
-		return nil, errors.New("recording epoch is not current")
+	stamp, err := NewStamp(epoch, reference, fence)
+	if err != nil {
+		return nil, err
 	}
-	if reference == (captureidentity.Reference{}) {
-		if fence.CaptureGeneration != 0 {
-			return nil, errors.New("runtime recording scope cannot have a capture generation")
-		}
-	} else if reference.Validate() != nil || fence.CaptureGeneration == 0 {
-		return nil, errors.New("invalid recording capture scope")
-	}
-	return &ScopeToken{epoch: epoch, capture: captureidentity.Reference{Kind: captureidentity.Kind(strings.Clone(string(reference.Kind))), ID: strings.Clone(reference.ID)}, fence: fence}, nil
+	return &ScopeToken{stamp: stamp}, nil
 }
-func (t *ScopeToken) Stamp() Stamp { return Stamp{token: t} }
+func (t *ScopeToken) Stamp() Stamp {
+	if t == nil {
+		return Stamp{}
+	}
+	s := t.stamp
+	s.revoked = &t.revoked
+	return s
+}
 func (t *ScopeToken) Revoke() {
 	if t != nil {
 		t.revoked.Store(true)
 	}
 }
 func (s Stamp) Current() bool {
-	t := s.token
-	return t != nil && t.epoch != nil && !t.revoked.Load() && t.fence.ArchiveEpoch != 0 && t.epoch.value.Load() == t.fence.ArchiveEpoch
+	return s.epoch != nil && s.fence.ArchiveEpoch != 0 && (s.revoked == nil || !s.revoked.Load()) && s.epoch.Value() == s.fence.ArchiveEpoch
 }
+func (s Stamp) Fence() Fence        { return s.fence }
+func (s Stamp) HasCapture() bool    { return s.captureKind != 0 }
+func (s Stamp) CaptureIDBytes() int { return int(s.captureLength) }
+func (s Stamp) SameScope(other Stamp) bool {
+	return s.epoch == other.epoch && s.fence == other.fence && s.captureKind == other.captureKind && s.captureLength == other.captureLength && s.captureID == other.captureID
+}
+func (s Stamp) captureKindValue() captureidentity.Kind {
+	switch s.captureKind {
+	case 1:
+		return captureidentity.KindManagedRun
+	case 2:
+		return captureidentity.KindManualCapture
+	default:
+		return ""
+	}
+}
+
+// MatchesCapture compares producer coordinates without constructing strings.
+func (s Stamp) MatchesCapture(reference captureidentity.Reference) bool {
+	if reference.Kind != s.captureKindValue() || len(reference.ID) != int(s.captureLength) {
+		return false
+	}
+	for i := 0; i < int(s.captureLength); i++ {
+		if s.captureID[i] != reference.ID[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Capture materializes owned persistence coordinates. Recording workers call it
+// only after acquiring their reservation, including scope conversion workspace.
 func (s Stamp) Capture() captureidentity.Reference {
-	if s.token == nil {
-		return captureidentity.Reference{}
-	}
-	return s.token.capture
-}
-func (s Stamp) Fence() Fence {
-	if s.token == nil {
-		return Fence{}
-	}
-	return s.token.fence
+	return captureidentity.Reference{Kind: s.captureKindValue(), ID: string(s.captureID[:s.captureLength])}
 }

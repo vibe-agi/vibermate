@@ -462,3 +462,33 @@ func TestConnectionBuffersAttemptAndIgnoresInvalidDisplayMetadata(t *testing.T) 
 		t.Fatal("invalid optional snapshots changed live terminal or escaped validation")
 	}
 }
+
+func TestBindingRetainedInlineScopesAllocatesNothing(t *testing.T) {
+	epoch, _ := recording.NewEpoch(1)
+	stamp, err := recording.NewStamp(epoch, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "inline-connection"}, recording.Fence{ArchiveEpoch: 1, CaptureGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connections [1024]Connection
+	manager := &Manager{}
+	index := 0
+	allocs := testing.AllocsPerRun(1000, func() {
+		c := &connections[index%len(connections)]
+		c.manager = manager
+		if err := c.BindObservationScope(stamp); err != nil {
+			panic(err)
+		}
+		if err := c.BindObservationScope(stamp); err != nil {
+			panic(err)
+		}
+		index++
+	})
+	if allocs != 0 {
+		t.Fatalf("live binding/comparison allocated %g scope copies", allocs)
+	}
+	for i := range 1000 {
+		if !connections[i].stamp.Current() {
+			t.Fatal("live connection lost inline stamp")
+		}
+	}
+}

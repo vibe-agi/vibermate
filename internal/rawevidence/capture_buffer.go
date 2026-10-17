@@ -340,14 +340,13 @@ func (b *CaptureBuffer) Discard() {
 }
 
 func stampMatches(stamp recording.Stamp, ctx Context) bool {
-	ref := stamp.Capture()
 	switch ctx.ScopeKind {
 	case ScopeRuntime:
-		return ref == (captureidentity.Reference{})
+		return stamp.MatchesCapture(captureidentity.Reference{})
 	case ScopeManagedRun:
-		return ref.Kind == captureidentity.KindManagedRun && ref.ID == ctx.ScopeID
+		return stamp.MatchesCapture(captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: ctx.ScopeID})
 	case ScopeManualCapture:
-		return ref.Kind == captureidentity.KindManualCapture && ref.ID == ctx.ScopeID
+		return stamp.MatchesCapture(captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: ctx.ScopeID})
 	default:
 		return false
 	}

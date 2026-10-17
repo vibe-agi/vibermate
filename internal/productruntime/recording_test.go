@@ -9,8 +9,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -287,4 +290,225 @@ func TestRecorderSharesRawBudgetAndOwnsStringCopies(t *testing.T) {
 	if b.Snapshot().ReservedRecords != 1 {
 		t.Fatal("worker release changed unrelated Raw owner")
 	}
+}
+
+func TestLiveRecordingStampsRemainAllocationFreeAtCapacityAndAfterDrain(t *testing.T) {
+	b, _ := recording.NewBudget(recording.Limits{Records: 1, Bytes: 1 << 20})
+	sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
+	close(sink.release)
+	r := newObservationRecorder(context.Background(), b, sink, sink)
+	defer r.Shutdown(context.Background())
+	occupied, _ := b.TryReserve(recording.Raw, 32)
+	defer occupied.Release()
+	reference := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "retained-live-stamps"}
+	var stamps [1024]recording.Stamp
+	index := 0
+	allocs := testing.AllocsPerRun(1000, func() { stamps[index%len(stamps)] = r.ScopeStamp(reference); index++ })
+	if allocs != 0 {
+		occupied.Release()
+		t.Fatalf("full budget still allocated %g per retained stamp", allocs)
+	}
+	event := connectionevent.Event{ConnectionID: "stamp-capacity", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+	allocs = testing.AllocsPerRun(1000, func() {
+		if r.ObserveConnection(stamps[0], event) != recording.DroppedCapacity {
+			panic("full budget admitted copy")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("refused offer materialized %g unreserved producer copies", allocs)
+	}
+	occupied.Release()
+	if r.ObserveConnection(stamps[0], event) != recording.Accepted {
+		t.Fatal("freed budget refused snapshot")
+	}
+	if err := r.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.Snapshot().ReservedRecords != 0 {
+		t.Fatal("settled snapshot kept reservation")
+	}
+	allocs = testing.AllocsPerRun(1000, func() { stamps[index%len(stamps)] = r.ScopeStamp(reference); index++ })
+	if allocs != 0 {
+		t.Fatalf("drained budget hides %g producer allocations", allocs)
+	}
+	for _, s := range stamps[:1000] {
+		if !s.Current() {
+			t.Fatal("live inline coordinate lost")
+		}
+	}
+}
+
+type scopeFenceArchive struct{ deletes int }
+
+func (a *scopeFenceArchive) DeleteCapture(context.Context, string, string) (resourcedeletion.Released, error) {
+	a.deletes++
+	return resourcedeletion.Released{}, nil
+}
+func (a *scopeFenceArchive) ClearEvidence(context.Context) (resourcedeletion.Released, error) {
+	return resourcedeletion.Released{}, nil
+}
+
+func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
+	for _, path := range []string{"managed_prepare", "manual_prepare", "delete"} {
+		t.Run(path, func(t *testing.T) {
+			sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(sink.release) }) }
+			r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
+				return newObservationRecorder(ctx, b, sink, sink)
+			}})
+			if err != nil {
+				release()
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { release(); shutdownRuntime(t, r) })
+			kind := rawevidence.ScopeManualCapture
+			captureKind := captureidentity.KindManualCapture
+			if path == "managed_prepare" {
+				kind = rawevidence.ScopeManagedRun
+				captureKind = captureidentity.KindManagedRun
+			}
+			const id = "held-admin-fence"
+			barrier := captureEvidenceBarrier{raw: r.rawEvidence, recorder: r.recorder}
+			store := &scopeFenceArchive{}
+			archive := recordingArchive{raw: r.rawEvidence, recorder: r.recorder, delegate: store}
+			perform := func(ctx context.Context, target string) error {
+				if path == "delete" {
+					_, err := archive.DeleteCapture(ctx, string(captureKind), target)
+					return err
+				}
+				var terminal interface{ Abort() }
+				var err error
+				if path == "managed_prepare" {
+					terminal, err = barrier.PrepareManagedRun(ctx, target)
+				} else {
+					terminal, err = barrier.PrepareManualCapture(ctx, target)
+				}
+				if err == nil {
+					terminal.Abort()
+				}
+				return err
+			}
+			event := connectionevent.Event{ConnectionID: "held-admin-connection", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+			if r.recorder.ObserveConnection(r.recorder.ScopeStamp(captureidentity.Reference{Kind: captureKind, ID: id}), event) != recording.Accepted {
+				t.Fatal("observation refused")
+			}
+			<-sink.entered
+			short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			err = perform(short, id)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("admin wait = %v", err)
+			}
+			lease, err := r.rawEvidence.BeginScope(t.Context(), kind, id)
+			if lease != nil {
+				lease.Release()
+			}
+			if !errors.Is(err, rawevidence.ErrScopeTerminal) {
+				t.Fatalf("deadline reopened Raw fence while general I/O is live: %v", err)
+			}
+			retry, cancelRetry := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			err = perform(retry, "other-admin-fence")
+			cancelRetry()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("second admin owner bypassed occupied slot: %v", err)
+			}
+			other, err := r.rawEvidence.BeginScope(t.Context(), kind, "other-admin-fence")
+			if err != nil {
+				t.Fatalf("slot retry installed another Raw fence: %v", err)
+			}
+			other.Release()
+			if store.deletes != 0 {
+				t.Fatal("timed-out deletion acknowledged physical erase")
+			}
+			release()
+			joined, cancelJoined := context.WithTimeout(t.Context(), time.Second)
+			defer cancelJoined()
+			if err := perform(joined, id); err != nil {
+				t.Fatalf("settled worker failed to release admin slot: %v", err)
+			}
+			lease, err = r.rawEvidence.BeginScope(joined, kind, id)
+			if path == "delete" {
+				if !errors.Is(err, rawevidence.ErrScopeTerminal) || store.deletes != 1 {
+					t.Fatal("successful erase did not seal scope")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("settled aborted prepare did not reopen scope: %v", err)
+				}
+				lease.Release()
+			}
+		})
+	}
+}
+
+type stagedFenceStore struct {
+	entered chan int
+	release [2]chan struct{}
+	writes  int
+}
+
+func (s *stagedFenceStore) PutConnection(context.Context, recording.Scope, connectionevent.Event) error {
+	index := s.writes
+	s.writes++
+	s.entered <- index
+	<-s.release[index]
+	return nil
+}
+
+func TestCaptureFenceSurvivesPartialSettlementAndShutdown(t *testing.T) {
+	sink := &stagedFenceStore{entered: make(chan int, 2), release: [2]chan struct{}{make(chan struct{}), make(chan struct{})}}
+	var releases [2]sync.Once
+	release := func(i int) { releases[i].Do(func() { close(sink.release[i]) }) }
+	r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, e egressaudit.ScopedAttemptStore) *observationRecorder {
+		return newObservationRecorder(ctx, b, sink, e)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { release(0); release(1); shutdownRuntime(t, r) })
+	const id = "two-write-fence"
+	stamp := r.recorder.ScopeStamp(captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: id})
+	event := connectionevent.Event{ConnectionID: "two-write-connection", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+	for range 2 {
+		if r.recorder.ObserveConnection(stamp, event) != recording.Accepted {
+			t.Fatal("queued target refused")
+		}
+	}
+	<-sink.entered
+	barrier := captureEvidenceBarrier{raw: r.rawEvidence, recorder: r.recorder}
+	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	_, err = barrier.PrepareManualCapture(short, id)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	release(0)
+	<-sink.entered
+	assertHeld := func() {
+		lease, err := r.rawEvidence.BeginScope(t.Context(), rawevidence.ScopeManualCapture, id)
+		if lease != nil {
+			lease.Release()
+		}
+		if !errors.Is(err, rawevidence.ErrScopeTerminal) {
+			t.Fatal("partial settlement released the fence")
+		}
+	}
+	assertHeld()
+	stop, cancelStop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	err = r.recorder.Shutdown(stop)
+	cancelStop()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("blocked worker shutdown pretended to join", err)
+	}
+	assertHeld()
+	release(1)
+	if err := r.recorder.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := r.rawEvidence.BeginScope(t.Context(), rawevidence.ScopeManualCapture, id)
+	if err != nil {
+		t.Fatal("completed worker retained fence", err)
+	}
+	lease.Release()
 }

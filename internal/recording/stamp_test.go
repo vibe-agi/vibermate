@@ -2,6 +2,7 @@ package recording
 
 import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -70,5 +71,56 @@ func TestConcurrentStampRevocation(t *testing.T) {
 	wg.Wait()
 	if s.Current() {
 		t.Fatal("stale stamp current")
+	}
+}
+
+func TestInlineStampRetainedCoordinatesAllocateNothing(t *testing.T) {
+	epoch, _ := NewEpoch(1)
+	reference := captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: "inline-capture"}
+	var retained [1024]Stamp
+	index := 0
+	allocs := testing.AllocsPerRun(1000, func() {
+		stamp, err := NewStamp(epoch, reference, Fence{1, 1})
+		if err != nil {
+			panic(err)
+		}
+		if !stamp.HasCapture() || stamp.CaptureIDBytes() != len(reference.ID) || !stamp.SameScope(stamp) || !stamp.MatchesCapture(reference) {
+			panic("lost coordinates")
+		}
+		retained[index%len(retained)] = stamp
+		index++
+	})
+	if allocs != 0 {
+		t.Fatalf("retaining inline stamps allocated %g producer copies", allocs)
+	}
+	for _, stamp := range retained[:1000] {
+		if stamp.Capture() != reference || !stamp.Current() {
+			t.Fatal("retained inline coordinates changed")
+		}
+	}
+	epoch.Advance(2)
+	for _, stamp := range retained[:1000] {
+		if stamp.Current() {
+			t.Fatal("inline stamp survived epoch revocation")
+		}
+	}
+}
+
+func TestInlineStampMaximumCaptureCoordinates(t *testing.T) {
+	epoch, _ := NewEpoch(4)
+	ref := captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: strings.Repeat("x", captureidentity.MaxIDBytes)}
+	stamp, err := NewStamp(epoch, ref, Fence{4, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stamp.Capture() != ref || !stamp.MatchesCapture(ref) || stamp.CaptureIDBytes() != captureidentity.MaxIDBytes {
+		t.Fatal("inline maximum-length ID changed")
+	}
+	ref.ID += "x"
+	if stamp.MatchesCapture(ref) {
+		t.Fatal("inline comparison truncated oversized identity")
+	}
+	if _, err := NewStamp(epoch, ref, Fence{4, 3}); err == nil {
+		t.Fatal("oversized inline coordinates accepted")
 	}
 }
