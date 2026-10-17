@@ -160,6 +160,7 @@ type ConversationIndexer interface {
 }
 
 type Options struct {
+	CaptureObservations recording.CaptureObservationReader
 	NetworkAccess       *NetworkAccess
 	ProductUpdates      ProductUpdateReader
 	NativeContentKey    [32]byte
@@ -217,6 +218,7 @@ type NetworkAccess struct {
 }
 
 type Handler struct {
+	captureObservations recording.CaptureObservationReader
 	networkAccess       *NetworkAccess
 	productUpdates      ProductUpdateReader
 	nativeContentKey    [32]byte
@@ -358,6 +360,7 @@ func New(options Options) (*Handler, error) {
 		assignments:         options.Assignments,
 		clientToolAccess:    options.ClientToolAccess,
 		activities:          options.Activities,
+		captureObservations: options.CaptureObservations,
 		conversationIndexer: options.ConversationIndexer,
 		contents:            options.Contents,
 		connections:         options.Connections,

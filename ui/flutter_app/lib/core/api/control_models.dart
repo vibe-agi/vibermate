@@ -8084,6 +8084,72 @@ final class ActivitySummaryScope {
       Object.hash(captureRunId, manualCaptureId, client, sessionId);
 }
 
+/// Retained authentication observations, separate from retained request counts.
+/// Either timestamp may be unknown in a released archive.
+final class CaptureObservationSummary {
+  const CaptureObservationSummary({
+    required this.captureKind,
+    required this.captureId,
+    required this.archiveEpoch,
+    required this.captureGeneration,
+    required this.credentialRevision,
+    required this.firstObservedAt,
+    required this.lastObservedAt,
+  });
+  factory CaptureObservationSummary.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'captureKind',
+        'captureId',
+        'archiveEpoch',
+        'captureGeneration',
+        'credentialRevision',
+        'firstObservedAt',
+        'lastObservedAt',
+      },
+    );
+    final result = CaptureObservationSummary(
+      captureKind: requireString(value, 'captureKind', path),
+      captureId: requireString(value, 'captureId', path),
+      archiveEpoch: requireInteger(value, 'archiveEpoch', path, minimum: 1),
+      captureGeneration: requireInteger(
+        value,
+        'captureGeneration',
+        path,
+        minimum: 1,
+      ),
+      credentialRevision: requireInteger(value, 'credentialRevision', path),
+      firstObservedAt: optionalTimestamp(value, 'firstObservedAt', path),
+      lastObservedAt: optionalTimestamp(value, 'lastObservedAt', path),
+    );
+    if (!RegExp(r'^[A-Za-z0-9_.:-]{1,128}$').hasMatch(result.captureId) ||
+        !const {'managed_run', 'manual_capture'}.contains(result.captureKind) ||
+        (result.captureKind == 'managed_run'
+            ? result.credentialRevision != 0
+            : result.credentialRevision < 1) ||
+        (result.firstObservedAt != null &&
+            result.lastObservedAt != null &&
+            result.firstObservedAt!.isAfter(result.lastObservedAt!))) {
+      throw ControlContractException(
+        '$path Capture observation is inconsistent',
+      );
+    }
+    return result;
+  }
+  final String captureKind, captureId;
+  final int archiveEpoch, captureGeneration, credentialRevision;
+  final DateTime? firstObservedAt, lastObservedAt;
+  bool matches(ActivitySummaryScope scope) =>
+      scope.client.isEmpty &&
+      scope.sessionId.isEmpty &&
+      (captureKind == 'managed_run'
+          ? scope.captureRunId == captureId && scope.manualCaptureId.isEmpty
+          : scope.manualCaptureId == captureId && scope.captureRunId.isEmpty);
+}
+
 final class ExchangeSummary {
   const ExchangeSummary({
     required this.scope,
@@ -8098,6 +8164,7 @@ final class ExchangeSummary {
     required this.failures,
     required this.otherFailures,
     this.contentBodiesAvailable,
+    this.captureObservation,
   });
 
   factory ExchangeSummary.fromJson(Object? json, String path) {
@@ -8118,7 +8185,7 @@ final class ExchangeSummary {
         'failures',
         'otherFailures',
       },
-      optional: const {'contentBodiesAvailable'},
+      optional: const {'contentBodiesAvailable', 'captureObservation'},
     );
     final failures = <String, int>{};
     final raw = requireList(value['failures'], '$path.failures');
@@ -8155,8 +8222,16 @@ final class ExchangeSummary {
       failures: Map.unmodifiable(failures),
       otherFailures: requireInteger(value, 'otherFailures', path),
       contentBodiesAvailable: bodies as bool?,
+      captureObservation: value.containsKey('captureObservation')
+          ? CaptureObservationSummary.fromJson(
+              value['captureObservation'],
+              '$path.captureObservation',
+            )
+          : null,
     );
-    if (result.requests !=
+    if (result.captureObservation != null &&
+            !result.captureObservation!.matches(result.scope) ||
+        result.requests !=
             result.succeeded +
                 result.failed +
                 result.canceled +
@@ -8180,6 +8255,7 @@ final class ExchangeSummary {
 
   /// Launch scopes may report whether any non-expired full body remains.
   final bool? contentBodiesAvailable;
+  final CaptureObservationSummary? captureObservation;
 }
 
 final class ActivityPage {
