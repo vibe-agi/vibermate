@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 	"time"
@@ -391,6 +392,78 @@ func TestListExchangeResolvesBodiesWithoutHoldingItsRows(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("ListExchange never returned; it read a body while holding its rows")
+	}
+}
+
+// Reading one Exchange must stay bounded by its own chunks, even when other
+// retained evidence fills the store. Converting every stored digest to hex
+// made a small read monopolize the connection also used by Capture attachment.
+func TestRawEvidenceReadRemainsResponsiveWithUnrelatedHistory(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.RawEvidenceRepository()
+
+	// Unlike bodyForTest, this does not collapse to a few repeated chunks.
+	body := make([]byte, 4<<20)
+	state := uint32(0x2545F491)
+	for index := range body {
+		state = state*1664525 + 1013904223
+		body[index] = byte(state >> 24)
+	}
+	record := rawEvidenceRecordForTest(
+		"responsive-read", 1, rawevidence.LayerClientIngress,
+		body, []byte(`{"version":1,"headers":[]}`),
+	)
+	if err := repository.AppendBatch(context.Background(), []rawevidence.StoredEnvelope{record}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed valid unrelated chunks directly so fixture preparation does not
+	// compress an entire archive. They are deliberately not part of this body.
+	tx, err := store.database.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	statement, err := tx.Prepare(`INSERT INTO runtime_evidence_chunks
+		(digest, plain_bytes, codec, payload) VALUES (?, ?, 'identity', ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statement.Close()
+	for index := uint64(0); index < 50000; index++ {
+		payload := make([]byte, 64)
+		copy(payload, "unrelated retained evidence")
+		binary.LittleEndian.PutUint64(payload[32:], index)
+		digest := sha256.Sum256(payload)
+		if _, err := statement.Exec(digest[:], len(payload), payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := statement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var manifestEntries int
+	if err := store.database.QueryRow(`SELECT length(chunk_manifest) / 32 FROM runtime_evidence_bodies`).Scan(&manifestEntries); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("fixture: %d unrelated chunks, %d requested manifest entries", 50000, manifestEntries)
+
+	// Indexed retrieval has ample headroom inside this budget; scanning all
+	// unrelated chunks for every manifest entry exhausts it on the real driver.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	loaded, err := repository.ListExchange(ctx, record.ExchangeID)
+	t.Logf("Exchange read: %s", time.Since(started))
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("unrelated history prevented a bounded Exchange read: result=%v budget=%v", err, ctx.Err())
+	}
+	if len(loaded) != 1 || !bytes.Equal(loaded[0].Body, body) {
+		t.Fatal("bounded Exchange read did not preserve the observed body")
 	}
 }
 

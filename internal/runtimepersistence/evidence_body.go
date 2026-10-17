@@ -223,9 +223,12 @@ func loadEvidenceChunks(
 	}
 	rows, err := queryer.QueryContext(
 		ctx,
+		// Decode the requested digests, leaving the stored BLOB primary key
+		// searchable. hex(chunks.digest) scans unrelated retained history while
+		// holding the same connection needed by Capture lifecycle writes.
 		`SELECT chunks.digest, chunks.plain_bytes, chunks.codec, chunks.payload
-		   FROM runtime_evidence_chunks AS chunks
-		   JOIN json_each(?) AS wanted ON wanted.value = hex(chunks.digest)`,
+		   FROM json_each(?) AS wanted
+		   JOIN runtime_evidence_chunks AS chunks ON chunks.digest = unhex(wanted.value)`,
 		string(encoded),
 	)
 	if err != nil {

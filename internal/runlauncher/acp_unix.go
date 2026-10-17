@@ -52,7 +52,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	create := launcher.captureCreateRequest(ctx, cwd, executable, request.Command, environment.SystemTransparentID)
 	var control *controlClient
 	if launcher.config.Remote != nil {
-		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, max(controlTransportTimeout(launcher.config), launcher.remoteAuthenticationTimeout), launcher.remoteAuthenticationTimeout, cwd, request.Command, executable)
+		connection, companion, connectErr := connectRemote(ctx, *launcher.config.Remote, max(controlTransportTimeout(launcher.config), launcher.initialControlTimeout), launcher.initialControlTimeout, cwd, request.Command, executable)
 		if connectErr != nil {
 			return 1, classifyRemoteConnectionFailure(connectErr)
 		}
@@ -65,7 +65,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 		if loadErr != nil {
 			return 1, ErrRuntimeUnavailable
 		}
-		control, err = newControlClient(session, controlTransportTimeout(launcher.config))
+		control, err = newControlClient(session, max(controlTransportTimeout(launcher.config), launcher.initialControlTimeout))
 		if err != nil {
 			return 1, ErrRuntimeUnavailable
 		}
@@ -108,7 +108,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 	}
 	attached := make(chan struct{})
 	process.OnStart = func(call context.Context, pid int) error {
-		if err := launcher.callWithTimeout(call, func(call context.Context) error { return control.attach(call, grant, pid) }); err != nil {
+		if err := launcher.callWithin(call, launcher.initialControlTimeout, func(call context.Context) error { return control.attach(call, grant, pid) }); err != nil {
 			return err
 		}
 		close(attached)
