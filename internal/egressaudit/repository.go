@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -126,4 +128,15 @@ func ParseCursor(value string) (int64, error) {
 		return 0, ErrInvalidCursor
 	}
 	return sequence, nil
+}
+
+// Observer accepts optional owned snapshots. Acceptance is not durability.
+type Observer interface {
+	ObserveEgress(recording.Stamp, Attempt) recording.OfferResult
+}
+
+// AttemptStore retains a self-contained start or terminal snapshot.
+// Native execution transactions continue to use their mandatory repository.
+type AttemptStore interface {
+	PutAttempt(context.Context, Attempt) error
 }

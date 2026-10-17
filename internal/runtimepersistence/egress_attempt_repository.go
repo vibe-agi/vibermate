@@ -537,3 +537,74 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 	}
 	return egressaudit.Record{Sequence: sequence, Attempt: attempt}, nil
 }
+
+// PutAttempt retains a complete snapshot without requiring an earlier start.
+// A late start is harmless; immutable coordinates and terminal facts cannot
+// overwrite conflicting evidence. Native control transactions remain separate.
+func (repository *egressAttemptRepository) PutAttempt(ctx context.Context, attempt egressaudit.Attempt) error {
+	if attempt.Purpose() == egressaudit.PurposeClientToolService {
+		return errors.New("native execution requires its control transaction")
+	}
+	input := normalizedEgressStart(attempt)
+	validated, err := egressaudit.New(input)
+	if err != nil {
+		return err
+	}
+	if attempt.Terminal() {
+		if _, err := validated.Finish(normalizedEgressTerminal(attempt)); err != nil {
+			return err
+		}
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	tx, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	existing, err := scanEgressAttempt(tx.QueryRowContext(operation, egressAttemptSelect+" WHERE attempt_id = ?", attempt.ID()))
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err = appendEgressAttempt(operation, tx, validated); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if normalizedEgressStart(existing.Attempt) != input {
+		return errors.New("EgressAttempt immutable coordinates conflict")
+	} else if existing.Attempt.Terminal() {
+		if attempt.Terminal() && normalizedEgressTerminal(existing.Attempt) != normalizedEgressTerminal(attempt) {
+			return errors.New("EgressAttempt terminal conflicts")
+		}
+		return tx.Commit()
+	}
+	if attempt.Terminal() {
+		if _, err = completeEgressAttempt(operation, tx, attempt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func normalizedEgressStart(a egressaudit.Attempt) egressaudit.NewInput {
+	return egressaudit.NewInput{
+		ID: a.ID(), ConnectionID: a.ConnectionID(),
+		Purpose: a.Purpose(), PayloadClass: a.PayloadClass(), Parent: a.Parent(),
+		Caller: a.Caller(), CallerID: a.CallerID(), TargetOrigin: a.TargetOrigin(),
+		Decision: a.Decision(), ReusedTransport: a.ReusedTransport(),
+		StartedAt: fromUnixMillis(toUnixMillis(a.StartedAt())),
+	}
+}
+
+var _ egressaudit.AttemptStore = (*egressAttemptRepository)(nil)
+
+func normalizedEgressTerminal(a egressaudit.Attempt) egressaudit.TerminalInput {
+	return egressaudit.TerminalInput{
+		Outcome: a.Outcome(), ErrorClass: a.ErrorClass(),
+		BytesOut: a.BytesOut(), BytesIn: a.BytesIn(),
+		CompletedAt:          fromUnixMillis(toUnixMillis(a.CompletedAt())),
+		UnobservedByteCounts: !a.ByteCountsKnown(),
+	}
+}
