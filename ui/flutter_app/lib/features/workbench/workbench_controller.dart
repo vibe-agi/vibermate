@@ -3005,6 +3005,21 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  void _invalidateNetworkContinuation(Object error) {
+    if (error is! ControlProblem ||
+        (error.status != 409 && error.status != 422)) {
+      return;
+    }
+    final current = networkData;
+    if (current == null) return;
+    networkData = NetworkData(
+      approvals: current.approvals,
+      rules: current.rules,
+      connections: const ConnectionPage(items: [], nextCursor: null),
+      egressAttempts: const EgressAttemptPage(items: [], nextCursor: null),
+    );
+  }
+
   Future<void> loadMoreConnections() async {
     final current = networkData;
     final cursor = current?.connections.nextCursor;
@@ -3029,6 +3044,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
+      _invalidateNetworkContinuation(error);
       _setNetworkError(error);
       notifyListeners();
     }
@@ -3058,6 +3074,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
+      _invalidateNetworkContinuation(error);
       _setNetworkError(error);
       notifyListeners();
     }

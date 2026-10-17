@@ -431,6 +431,7 @@ func (record Record) Validate() error {
 }
 
 type PageRequest struct {
+	Cursor              string
 	BeforeSequence      int64
 	Limit               int
 	IngressID           string
@@ -438,7 +439,7 @@ type PageRequest struct {
 }
 
 func (request PageRequest) Validate() error {
-	if request.BeforeSequence < 0 ||
+	if len(request.Cursor) > 512 || (request.Cursor != "" && request.BeforeSequence != 0) || request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
 		validateIdentity("ingress filter", request.IngressID, true) != nil {
@@ -462,6 +463,11 @@ type Repository interface {
 	List(context.Context, PageRequest) (Page, error)
 	Timeline(context.Context, string) (Timeline, error)
 	Recover(context.Context, time.Time) (int, error)
+}
+
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
 }
 
 type Reader interface {

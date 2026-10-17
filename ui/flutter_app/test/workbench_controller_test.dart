@@ -17,6 +17,74 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final domain in ['connections', 'egress']) {
+    for (final status in [409, 422]) {
+      test(
+        'network continuation resets retained audit pages $domain $status',
+        () async {
+          final delegate = PreviewControlApi();
+          final api = _NetworkInspectionApi(delegate, failureStatus: status);
+          final controller = WorkbenchController(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: true,
+            closeRuntime: delegate.close,
+          );
+          addTearDown(controller.dispose);
+          await controller.initialize();
+          await controller.refreshNetwork();
+          final original = controller.networkData!;
+          expect(original.connections.items, isNotEmpty);
+          expect(original.egressAttempts.items, isNotEmpty);
+          if (domain == 'connections') {
+            await controller.loadMoreConnections();
+          } else {
+            await controller.loadMoreEgressAttempts();
+          }
+          final retained = controller.networkData!;
+          expect(retained.connections.items, isEmpty);
+          expect(retained.connections.nextCursor, isNull);
+          expect(retained.egressAttempts.items, isEmpty);
+          expect(retained.egressAttempts.nextCursor, isNull);
+          expect(retained.approvals, same(original.approvals));
+          expect(retained.rules, same(original.rules));
+          expect(controller.networkError, isNotNull);
+          await controller.refreshNetwork();
+          expect(controller.networkData!.connections.items, isNotEmpty);
+          expect(
+            controller.networkData!.connections.nextCursor,
+            'connections-2',
+          );
+        },
+      );
+    }
+  }
+  test('network continuation preserves empty advancing pages', () async {
+    final delegate = PreviewControlApi();
+    final api = _NetworkInspectionApi(delegate);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: delegate.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.refreshNetwork();
+    final original = controller.networkData!;
+    await controller.loadMoreConnections();
+    await controller.loadMoreEgressAttempts();
+    expect(
+      controller.networkData!.connections.items.length,
+      original.connections.items.length,
+    );
+    expect(
+      controller.networkData!.egressAttempts.items.length,
+      original.egressAttempts.items.length,
+    );
+    expect(controller.networkData!.connections.nextCursor, 'connections-tail');
+    expect(controller.networkData!.egressAttempts.nextCursor, 'egress-tail');
+  });
   for (final width in [640.0, 1440.0]) {
     testWidgets('Runtime first cause survives failed inventory at $width', (
       tester,
@@ -2447,4 +2515,56 @@ final class _DeletionTrackingApi implements ControlApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _NetworkInspectionApi extends _UsageTrackingApi {
+  _NetworkInspectionApi(super.delegate, {this.failureStatus});
+
+  final int? failureStatus;
+  int networkLoads = 0;
+
+  @override
+  Future<NetworkData> loadNetwork() async {
+    networkLoads++;
+    final original = await delegate.loadNetwork();
+    return NetworkData(
+      approvals: original.approvals,
+      rules: original.rules,
+      connections: ConnectionPage(
+        items: original.connections.items,
+        nextCursor: 'connections-$networkLoads',
+      ),
+      egressAttempts: EgressAttemptPage(
+        items: original.egressAttempts.items,
+        nextCursor: 'egress-$networkLoads',
+      ),
+    );
+  }
+
+  void check() {
+    if (failureStatus case final status?) {
+      throw ControlProblem(
+        status: status,
+        reasonCode: status == 409
+            ? 'inspection_changed'
+            : 'invalid_control_request',
+        messageKey: 'error.inspection_changed',
+      );
+    }
+  }
+
+  @override
+  Future<ConnectionPage> connections({String? cursor, int limit = 50}) async {
+    check();
+    return const ConnectionPage(items: [], nextCursor: 'connections-tail');
+  }
+
+  @override
+  Future<EgressAttemptPage> egressAttempts({
+    String? cursor,
+    int limit = 50,
+  }) async {
+    check();
+    return const EgressAttemptPage(items: [], nextCursor: 'egress-tail');
+  }
 }

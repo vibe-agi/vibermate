@@ -142,6 +142,9 @@ func (repository *connectionEventRepository) List(
 	if err := request.Validate(); err != nil {
 		return connectionevent.Page{}, err
 	}
+	if request.Cursor != "" {
+		return connectionevent.Page{}, connectionevent.ErrInvalidCursor
+	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
 		return connectionevent.Page{}, err

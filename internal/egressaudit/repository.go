@@ -48,6 +48,24 @@ func (request PageRequest) Normalized() (PageRequest, error) {
 			"an egress parent filter requires both a kind and an ID",
 		)
 	}
+	if request.ConnectionID != "" {
+		if err := validateIdentity("Connection ID", request.ConnectionID); err != nil {
+			return PageRequest{}, err
+		}
+	}
+	if request.ParentID != "" {
+		if err := validateIdentity("parent ID", request.ParentID); err != nil {
+			return PageRequest{}, err
+		}
+		switch request.ParentKind {
+		case ParentUpstreamAttempt, ParentClientOperation, ParentOriginalRequest, ParentBlindConnection, ParentDatagramConnection, ParentRuntimeAction:
+		default:
+			return PageRequest{}, errors.New("egress parent kind is invalid")
+		}
+	}
+	if len(request.AfterCursor) > 512 || strings.ContainsAny(request.AfterCursor, " \t\r\n") {
+		return PageRequest{}, ErrInvalidCursor
+	}
 	if request.ExchangeID != "" {
 		if err := validateIdentity("Exchange ID", request.ExchangeID); err != nil {
 			return PageRequest{}, err
@@ -93,6 +111,11 @@ type Writer interface {
 }
 
 // Reader is the read-only projection used by control surfaces.
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+}
+
 type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
 }

@@ -402,7 +402,7 @@ func (repository *egressAttemptRepository) List(
 	return page, nil
 }
 
-func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record, error) {
+func scanEgressAttempt(rows interface{ Scan(...any) error }, extra ...any) (egressaudit.Record, error) {
 	var (
 		sequence                int64
 		attemptID               string
@@ -434,7 +434,7 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		bytesIn                 int64
 		known                   int64
 	)
-	if err := rows.Scan(
+	dest := []any{
 		&sequence,
 		&attemptID,
 		&connectionID,
@@ -461,7 +461,8 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		&bytesOut,
 		&bytesIn,
 		&known,
-	); err != nil {
+	}
+	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return egressaudit.Record{}, fmt.Errorf(
 			"scan EgressAttempt: %w",
 			err,

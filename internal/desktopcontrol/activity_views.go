@@ -753,6 +753,11 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.activities, handler.contents, handler.egress, handler.conversationIndexer)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	exchangeID := request.PathValue("exchangeId")
 	record, err := handler.activities.GetExchange(request.Context(), exchangeID)
 	switch {
@@ -779,7 +784,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		case pageErr != nil || !contentReferencesMatch(record, page.ExchangeID, page.Parent, page.Frozen):
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		default:
-			writeJSON(writer, http.StatusOK, page)
+			writeInspectionJSON(writer, page, check)
 		}
 		return
 	}
@@ -836,6 +841,10 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 			return
 		}
+		if err = check(); err != nil {
+			writeInspectionProblem(writer, err)
+			return
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.WriteHeader(http.StatusOK)
@@ -844,7 +853,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		}
 		return
 	}
-	writeJSON(writer, http.StatusOK, detail)
+	writeInspectionJSON(writer, detail, check)
 }
 
 func contentReferencesMatch(record activity.Record, id string, parent exchangecontent.ParentRef, frozen exchangecontent.FrozenRef) bool {

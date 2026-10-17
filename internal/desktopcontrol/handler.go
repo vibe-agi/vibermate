@@ -44,6 +44,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -64,6 +65,8 @@ const (
 	ReasonRouteNotFound                      ReasonCode = "control_route_not_found"
 	ReasonInvalidRequest                     ReasonCode = "invalid_control_request"
 	ReasonRevisionConflict                   ReasonCode = "revision_conflict"
+	ReasonInspectionChanged                  ReasonCode = "inspection_changed"
+	ReasonInspectionUnavailable              ReasonCode = "inspection_unavailable"
 	ReasonEnvironmentNotFound                ReasonCode = "environment_not_found"
 	ReasonEnvironmentDraftNotFound           ReasonCode = "environment_draft_not_found"
 	ReasonClientToolAccessUnsupported        ReasonCode = "environment_client_tool_access_unsupported"
@@ -1105,37 +1108,55 @@ func (handler *Handler) listConnections(
 		return
 	}
 	var before int64
+	opaque := ""
 	if raw := request.URL.Query().Get("cursor"); raw != "" {
-		before, err = connectionevent.ParseCursor(raw)
-		if err != nil {
-			writeProblem(
-				writer,
-				http.StatusUnprocessableEntity,
-				ReasonInvalidRequest,
-			)
-			return
+		if _, independent := handler.connections.(recording.InspectionBoundary); independent {
+			opaque = raw
+		} else {
+			before, err = connectionevent.ParseCursor(raw)
+			if err != nil {
+				writeProblem(
+					writer,
+					http.StatusUnprocessableEntity,
+					ReasonInvalidRequest,
+				)
+				return
+			}
 		}
 	}
-	page, err := handler.connections.List(
-		request.Context(),
-		connectionevent.PageRequest{
-			BeforeSequence:      before,
-			Limit:               limit,
-			IngressID:           values.Get("ingressId"),
-			LatestPerConnection: latestPerConnection,
-		},
-	)
-	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+	pageRequest := connectionevent.PageRequest{
+		BeforeSequence:      before,
+		Cursor:              opaque,
+		Limit:               limit,
+		IngressID:           values.Get("ingressId"),
+		LatestPerConnection: latestPerConnection,
+	}
+	if err := pageRequest.Validate(); err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	check, err := inspectionResponseBoundary(request.Context(), handler.connections)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
+	page, err := handler.connections.List(request.Context(), pageRequest)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
+	writeInspectionJSON(writer, page, check)
 }
 
 func (handler *Handler) getConnection(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
+	check, err := inspectionResponseBoundary(request.Context(), handler.connections)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	timeline, err := handler.connections.Timeline(
 		request.Context(),
 		request.PathValue("connectionId"),
@@ -1144,9 +1165,9 @@ func (handler *Handler) getConnection(
 	case errors.Is(err, connectionevent.ErrNotFound):
 		writeProblem(writer, http.StatusNotFound, ReasonConnectionNotFound)
 	case err != nil:
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		writeInspectionProblem(writer, err)
 	default:
-		writeJSON(writer, http.StatusOK, timeline)
+		writeInspectionJSON(writer, timeline, check)
 	}
 }
 
@@ -1501,30 +1522,41 @@ func (handler *Handler) listEgressAttempts(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
+	if !onlyQueryKeys(request.URL.Query(), "limit", "cursor", "connectionId", "exchangeId", "parentKind", "parentId", "purpose") {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
 	limit, err := queryLimit(request, egressaudit.DefaultPageLimit)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	page, err := handler.egress.List(
-		request.Context(),
-		egressaudit.PageRequest{
-			Limit:        limit,
-			AfterCursor:  request.URL.Query().Get("cursor"),
-			ConnectionID: request.URL.Query().Get("connectionId"),
-			ExchangeID:   request.URL.Query().Get("exchangeId"),
-			ParentKind:   egressaudit.ParentKind(request.URL.Query().Get("parentKind")),
-			ParentID:     request.URL.Query().Get("parentId"),
-			Purpose:      egressaudit.EgressPurpose(request.URL.Query().Get("purpose")),
-		},
-	)
+	pageRequest, err := (egressaudit.PageRequest{
+		Limit:        limit,
+		AfterCursor:  request.URL.Query().Get("cursor"),
+		ConnectionID: request.URL.Query().Get("connectionId"),
+		ExchangeID:   request.URL.Query().Get("exchangeId"),
+		ParentKind:   egressaudit.ParentKind(request.URL.Query().Get("parentKind")),
+		ParentID:     request.URL.Query().Get("parentId"),
+		Purpose:      egressaudit.EgressPurpose(request.URL.Query().Get("purpose")),
+	}).Normalized()
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.egress)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
+	page, err := handler.egress.List(request.Context(), pageRequest)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	// An attempt is immutable evidence with unexported fields, so it is
 	// rendered through its explicit contract rather than serialized directly.
-	writeJSON(writer, http.StatusOK, egressaudit.PageViewOf(page))
+	writeInspectionJSON(writer, egressaudit.PageViewOf(page), check)
 }
 
 func nativeAuthorityDependency(o Options) nativetool.AuthorityRepository {

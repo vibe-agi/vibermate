@@ -265,6 +265,9 @@ final class AppCopy {
         'This account no longer exists. Refresh the page and select another account.',
     'error.upstream_not_found':
         'This upstream service no longer exists. Refresh the page and select another service.',
+    'error.inspection_changed': 'Saved history changed. Refresh this view.',
+    'error.inspection_unavailable':
+        'Saved history is unavailable. Try refreshing this view.',
     'error.configuration_conflict':
         'The configuration changed before this edit was saved. Refresh the page and review your changes again.',
     'error.policy_review_stale':
@@ -2065,11 +2068,11 @@ final class AppCopy {
     'network.approval.confirm.detail':
         'Apply “{action}” to {target} at revision {revision}. The waiting requests resume or end as soon as the runtime accepts it.',
     'network.connections.title': 'Connection evidence',
-    'network.connections.latest': 'Latest state',
+    'network.connections.latest': 'Retained state',
     'network.connections.latest.detail':
-        'One current row per physical connection. Expand for routing evidence. Uninspected forwarding shows destinations and byte counts, not request content—even for cleartext HTTP.',
+        'One retained snapshot per connection. Expand for routing evidence. Uninspected forwarding shows destinations and byte counts, not request content—even for cleartext HTTP.',
     'network.connections.empty':
-        'ViberMate has not recorded a connection here. Direct traffic may not pass through this proxy.',
+        'No retained connection records are available in this view.',
     'network.connections.load_more': 'Load more connections',
     'network.connections.source': 'Source',
     'network.connections.destination': 'Destination',
@@ -2091,7 +2094,7 @@ final class AppCopy {
     'network.egress.detail':
         'Shows outbound attempts routed through ViberMate. A missing record does not prove the device made no direct connection. Transport byte counts include HTTP framing; they are not file sizes or file-path evidence.',
     'network.egress.empty':
-        'ViberMate has not recorded an outbound attempt here. This does not establish that the device made no direct connection.',
+        'No retained outbound attempts are available in this view.',
     'network.egress.load_more': 'Load more egress attempts',
     'network.egress.caller': 'Caller',
     'network.egress.target': 'Target',
@@ -3269,6 +3272,8 @@ final class AppCopy {
     'error.account_credential_unavailable': '账号凭据暂不可用。请在「上游账号」中检查凭据状态后重试。',
     'error.account_not_found': '此账号已不存在。请刷新页面，重新选择账号。',
     'error.upstream_not_found': '此上游服务已不存在。请刷新页面，重新选择服务。',
+    'error.inspection_changed': '保留的历史记录已变化，请刷新此视图。',
+    'error.inspection_unavailable': '暂时无法读取保留的历史记录，请尝试刷新此视图。',
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
@@ -4756,10 +4761,10 @@ final class AppCopy {
     'network.approval.confirm.detail':
         '在修订 {revision} 对 {target} 执行“{action}”。运行时接受后，等待中的请求会立即继续或终止。',
     'network.connections.title': '连接证据',
-    'network.connections.latest': '最新状态',
+    'network.connections.latest': '保留的状态',
     'network.connections.latest.detail':
-        '每条物理连接只显示当前一行；展开可检查路由证据。未检查内容的转发只能看到目的地和字节数，明文 HTTP 也可能如此。',
-    'network.connections.empty': 'ViberMate 尚未记录到连接；设备的直连流量可能不会经过此代理。',
+        '每个连接显示一条保留的状态记录；展开可检查路由证据。未检查内容的转发只能看到目的地和字节数，明文 HTTP 也可能如此。',
+    'network.connections.empty': '此视图中没有可用的保留连接记录。',
     'network.connections.load_more': '加载更多连接',
     'network.connections.source': '来源',
     'network.connections.destination': '目标',
@@ -4779,7 +4784,7 @@ final class AppCopy {
     'network.egress.title': '出站尝试',
     'network.egress.detail':
         '仅展示经过 ViberMate 的对外尝试。没有记录不代表设备没有直连。传输字节数包含 HTTP 封装，不是文件大小，也无法确定本地路径。',
-    'network.egress.empty': 'ViberMate 尚未记录到出站尝试；这不能证明设备没有其他直连。',
+    'network.egress.empty': '此视图中没有可用的保留出站尝试记录。',
     'network.egress.load_more': '加载更多出站尝试',
     'network.egress.caller': '调用方',
     'network.egress.target': '目标',

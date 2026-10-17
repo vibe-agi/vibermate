@@ -25,7 +25,7 @@ import (
 
 var (
 	ErrInspectionUnavailable = recording.ErrInspectionUnavailable
-	ErrInspectionSourceLimit = errors.New("inspection source inventory exceeds connection limit")
+	ErrInspectionSourceLimit = errors.New("inspection resources exceed supported limits")
 	ErrInspectionChanged     = recording.ErrInspectionChanged
 	ErrInspectionCursor      = recording.ErrInspectionCursor
 )
