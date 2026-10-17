@@ -31,6 +31,7 @@ type manualCaptureRepository struct {
 	database      *sql.DB
 	operations    *operationGate
 	stopCommitter transactionCommitter
+	controlOnly   bool
 }
 
 const manualCaptureActivityAt = `MAX(created_at_unix_ms, COALESCE(
@@ -62,7 +63,12 @@ func (repository *manualCaptureRepository) Create(
 	}
 	defer finish()
 	ownerID, _ := record.Owner.ProxyClientBindingID()
-	result, err := repository.database.ExecContext(
+	tx, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(
 		operation,
 		`INSERT INTO manual_captures (
 		     capture_id,
@@ -106,7 +112,10 @@ func (repository *manualCaptureRepository) Create(
 	if affected != 1 {
 		return manualcapture.ErrStateConflict
 	}
-	return nil
+	if _, err := tx.ExecContext(operation, `INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES('manual_capture',?,1,0)`, record.ID.String()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (repository *manualCaptureRepository) Rotate(
@@ -401,7 +410,7 @@ func (repository *manualCaptureRepository) Get(
 	var activityAt int64
 	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
-		`SELECT `+manualCaptureColumns+`, `+manualCaptureActivityAt+`
+		`SELECT `+manualCaptureColumns+`, `+repository.activityExpression()+`
 		 FROM manual_captures
 		 WHERE capture_id = ? AND owner_kind = ? AND owner_id = ?`,
 		id.String(),
@@ -489,7 +498,7 @@ func (repository *manualCaptureRepository) List(
 		return nil, err
 	}
 	const runningRank = `CASE WHEN state = 'active' THEN 0 ELSE 1 END`
-	query := `SELECT ` + manualCaptureColumns + `, ` + manualCaptureActivityAt + ` AS activity_at_unix_ms
+	query := `SELECT ` + manualCaptureColumns + `, ` + repository.activityExpression() + ` AS activity_at_unix_ms
 		 FROM manual_captures
 		 WHERE owner_kind = ? AND owner_id = ?`
 	arguments := []any{
@@ -716,3 +725,10 @@ func nullableUnixMillis(value time.Time) any {
 }
 
 const sha256Size = 32
+
+func (repository *manualCaptureRepository) activityExpression() string {
+	if repository.controlOnly {
+		return `MAX(created_at_unix_ms,COALESCE(last_observed_at_unix_ms,CASE WHEN state='active' THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
+	}
+	return manualCaptureActivityAt
+}

@@ -51,6 +51,8 @@ CREATE TABLE native_tool_operations(
   recording TEXT NOT NULL  CHECK(recording IN('off','metadata_only','full')),
   retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
   created_at_unix_ms INTEGER NOT NULL,
+  recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+  recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
   last_event_kind TEXT NOT NULL,
   last_event_at_unix_ms INTEGER NOT NULL CHECK(last_event_at_unix_ms >= created_at_unix_ms),
   maximum_event_at_unix_ms INTEGER NOT NULL CHECK(maximum_event_at_unix_ms >= last_event_at_unix_ms),

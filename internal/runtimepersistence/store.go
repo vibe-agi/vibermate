@@ -76,16 +76,21 @@ type Store struct {
 	operations         *operationGate
 	nativeTools        *nativeToolRepository
 
-	closeMu   sync.Mutex
-	closing   bool
-	closed    bool
-	closeDone chan struct{}
-	closeErr  error
+	observationOnly bool
+	closeMu         sync.Mutex
+	closing         bool
+	closed          bool
+	closeDone       chan struct{}
+	closeErr        error
 }
 
 // Open creates the data directory, opens SQLite through an explicit typed
 // connector, initializes the current schema, and reads its durable state.
 func Open(ctx context.Context, options Options) (*Store, error) {
+	return openStore(ctx, options, nil)
+}
+
+func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, error) {
 	if options.NativeStreamLifetime == 0 {
 		options.NativeStreamLifetime = 30 * time.Minute
 	}
@@ -130,7 +135,11 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 	// Reject an old baseline before even enabling WAL: journal_mode itself can
 	// change the database header despite a later schema transaction rollback.
-	if err := validateExistingSchema(ctx, options.DatabasePath, options.BusyTimeout); err != nil {
+	validate := validateExistingSchema
+	if role != nil {
+		validate = role.validateExisting
+	}
+	if err := validate(ctx, options.DatabasePath, options.BusyTimeout); err != nil {
 		return nil, err
 	}
 
@@ -149,7 +158,11 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	if err := initializeSchema(ctx, database, time.Now()); err != nil {
+	initialize := initializeSchema
+	if role != nil {
+		initialize = role.initialize
+	}
+	if err := initialize(ctx, database, time.Now()); err != nil {
 		return fail(err)
 	}
 	if err := protectDatabaseArtifacts(options.DatabasePath); err != nil {
@@ -212,6 +225,12 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	)
 	rawEvidence := newRawEvidenceRepository(database, operations)
 	runtimeUsers := newRuntimeUserRepository(database, operations)
+	if role != nil {
+		repository.identity = role.identity
+		repository.revision = role.revision
+		captureRepo.controlOnly = true
+		manualCaptureRepo.controlOnly = true
+	}
 	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
@@ -251,8 +270,9 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
-		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery)},
+		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery), legacyHistory: role == nil},
 		closeDone:          make(chan struct{}),
+		observationOnly:    role != nil && role.identity == observationSchemaIdentity,
 	}, nil
 }
 
@@ -396,16 +416,18 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	clear(s.nativeTools.recovery)
 	clear(s.nativeTools.streamOpened)
 	defer s.nativeTools.issuerMu.Unlock()
-	tx, err := s.database.BeginTx(ctx, nil)
 	var nativeErr error
-	if err != nil {
-		nativeErr = err
-	} else {
-		nativeErr = revokeNativeScopesWhere(ctx, tx, "state<>'closed'", time.Now().UTC())
-		if nativeErr == nil {
-			nativeErr = tx.Commit()
+	if !s.observationOnly {
+		tx, err := s.database.BeginTx(ctx, nil)
+		if err != nil {
+			nativeErr = err
+		} else {
+			nativeErr = revokeNativeScopesWhere(ctx, tx, "state<>'closed'", time.Now().UTC())
+			if nativeErr == nil {
+				nativeErr = tx.Commit()
+			}
+			_ = tx.Rollback()
 		}
-		_ = tx.Rollback()
 	}
 	closeErr := errors.Join(nativeErr, s.reads.Close(), s.database.Close())
 	s.closeMu.Lock()

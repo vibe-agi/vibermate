@@ -61,6 +61,7 @@ type captureRunRepository struct {
 	database      *sql.DB
 	operations    *operationGate
 	stopCommitter transactionCommitter
+	controlOnly   bool
 }
 
 // Derive display/order from scoped, body-free evidence using the existing
@@ -209,6 +210,9 @@ func (repository *captureRunRepository) Create(
 		return err
 	} else if affected != 1 {
 		return capturerun.ErrCapabilityRejected
+	}
+	if _, err := tx.ExecContext(operation, `INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES('managed_run',?,1,0)`, record.ID); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -722,7 +726,7 @@ func (repository *captureRunRepository) List(
 	}
 	defer finish()
 	const runningRank = `CASE WHEN state IN ('created', 'attached') THEN 0 ELSE 1 END`
-	query := `SELECT ` + captureRunColumns + `, ` + captureRunActivityAt + ` AS activity_at_unix_ms
+	query := `SELECT ` + captureRunColumns + `, ` + repository.activityExpression() + ` AS activity_at_unix_ms
 		 FROM capture_runs WHERE 1=1`
 	arguments := make([]any, 0, 7)
 	if request.RuntimeUserID != "" {
@@ -797,7 +801,7 @@ func (repository *captureRunRepository) Get(
 	var activityAt int64
 	record, err := scanCaptureRun(repository.database.QueryRowContext(
 		operation,
-		`SELECT `+captureRunColumns+`, `+captureRunActivityAt+` FROM capture_runs WHERE run_id = ?`,
+		`SELECT `+captureRunColumns+`, `+repository.activityExpression()+` FROM capture_runs WHERE run_id = ?`,
 		runID,
 	), &activityAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -845,4 +849,11 @@ func (repository *captureRunRepository) Active(
 	default:
 		return false, capturerun.ErrInvalidRequest
 	}
+}
+
+func (repository *captureRunRepository) activityExpression() string {
+	if repository.controlOnly {
+		return `MAX(created_at_unix_ms,COALESCE(first_observed_at_unix_ms,CASE WHEN state IN ('created','attached') THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
+	}
+	return captureRunActivityAt
 }

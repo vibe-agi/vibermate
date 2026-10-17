@@ -28,6 +28,8 @@ type SchemaStateReader interface {
 }
 
 type Repository struct {
+	identity   string
+	revision   int64
 	database   *sql.DB
 	operations *operationGate
 }
@@ -35,7 +37,7 @@ type Repository struct {
 var _ SchemaStateReader = (*Repository)(nil)
 
 func newRepository(database *sql.DB, operations *operationGate) *Repository {
-	return &Repository{database: database, operations: operations}
+	return &Repository{database: database, operations: operations, identity: schemaIdentity, revision: schemaRevision}
 }
 
 func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
@@ -66,7 +68,7 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	); err != nil {
 		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrUnsupportedSchema, err)
 	}
-	if state.Identity != schemaIdentity || state.Revision != schemaRevision {
+	if state.Identity != r.identity || state.Revision != r.revision {
 		return SchemaState{}, fmt.Errorf("%w: identity %q revision %d", ErrUnsupportedSchema, state.Identity, state.Revision)
 	}
 	if err := transaction.Commit(); err != nil {

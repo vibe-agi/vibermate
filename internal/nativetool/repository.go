@@ -6,6 +6,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // Repository is the single durable authority contract. Its SQLite adapter and
@@ -77,6 +78,7 @@ type ContentDescriptor struct {
 	ExpiresAt time.Time
 }
 type Operation struct {
+	RecordingScope                          recording.Scope
 	ID                                      ID
 	Capture                                 captureidentity.Reference
 	EnvironmentID                           environment.EnvironmentID

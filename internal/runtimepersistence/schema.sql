@@ -1457,6 +1457,8 @@ CREATE TABLE native_tool_operations(
   recording TEXT NOT NULL  CHECK(recording IN('off','metadata_only','full')),
   retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
   created_at_unix_ms INTEGER NOT NULL,
+  recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+  recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
   last_event_kind TEXT NOT NULL,
   last_event_at_unix_ms INTEGER NOT NULL CHECK(last_event_at_unix_ms >= created_at_unix_ms),
   maximum_event_at_unix_ms INTEGER NOT NULL CHECK(maximum_event_at_unix_ms >= last_event_at_unix_ms),
@@ -1667,3 +1669,18 @@ CREATE TABLE native_tool_deliveries(
  CHECK((completed_at_unix_ms IS NULL)=(outcome='')),
  CHECK(completed_at_unix_ms IS NOT NULL OR (error_class='' AND bytes_out=0 AND bytes_in=0 AND byte_counts_known=1))
 ) STRICT;
+
+CREATE TABLE runtime_storage_state(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ visibility_revision INTEGER NOT NULL CHECK(visibility_revision>0)
+) STRICT;
+CREATE TABLE recording_capture_fences(
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ generation INTEGER NOT NULL CHECK(generation>0),
+ deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
+ PRIMARY KEY(capture_kind,capture_id)
+) STRICT;
+INSERT INTO runtime_storage_state VALUES(1,'transitional-monolith',1,1);

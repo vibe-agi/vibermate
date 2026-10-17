@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type nativeBindingRow struct {
@@ -82,12 +83,12 @@ func loadNativeBinding(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativ
 }
 func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativetool.Operation, error) {
 	var op nativetool.Operation
-	var kind, capture, env, recording, requestKind, connection, method string
-	var er, revision, created, expires, retention, eventAt, maximumEventAt int64
+	var kind, capture, env, recordingMode, requestKind, connection, method string
+	var er, revision, created, expires, retention, eventAt, maximumEventAt, archiveEpoch, captureGeneration int64
 	var eventKind string
 	var digest []byte
 	var completed, in, out sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,completed_at_unix_ms,bytes_in,bytes_out,terminal_reason,last_event_kind,last_event_at_unix_ms,maximum_event_at_unix_ms FROM native_tool_operations WHERE operation_id=?`, id).Scan(&kind, &capture, &env, &er, &digest, &connection, &op.TargetOrigin, &method, &requestKind, &revision, &op.State, &op.DecisionSource, &recording, &retention, &created, &expires, &completed, &in, &out, &op.Reason, &eventKind, &eventAt, &maximumEventAt)
+	err := tx.QueryRowContext(ctx, `SELECT capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,completed_at_unix_ms,bytes_in,bytes_out,terminal_reason,last_event_kind,last_event_at_unix_ms,maximum_event_at_unix_ms,recording_archive_epoch,recording_capture_generation FROM native_tool_operations WHERE operation_id=?`, id).Scan(&kind, &capture, &env, &er, &digest, &connection, &op.TargetOrigin, &method, &requestKind, &revision, &op.State, &op.DecisionSource, &recordingMode, &retention, &created, &expires, &completed, &in, &out, &op.Reason, &eventKind, &eventAt, &maximumEventAt, &archiveEpoch, &captureGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return op, nativetool.ErrNotFound
 	}
@@ -100,7 +101,7 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	if retention < 0 || retention > 3650 {
 		return op, nativetool.ErrInvalid
 	}
-	op.Recording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingMode(recording), RetentionDays: uint16(retention)}
+	op.Recording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingMode(recordingMode), RetentionDays: uint16(retention)}
 	op.Kind = nativetool.RequestKind(requestKind)
 	terminal := op.State == "denied" || op.State == "completed" || op.State == "failed" || op.State == "canceled" || op.State == "uncertain"
 	validState := terminal || op.State == "received" || op.State == "validated" || op.State == "awaiting_decision" || op.State == "started"
@@ -117,12 +118,13 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	}
 	op.ID = id
 	op.Capture = c
+	op.RecordingScope = recording.Scope{Capture: c, Fence: recording.Fence{ArchiveEpoch: uint64(archiveEpoch), CaptureGeneration: uint64(captureGeneration)}}
 	op.EnvironmentID = eid
 	op.EnvironmentRevision = environment.Revision(er)
 	copy(op.EnvironmentDigest[:], digest)
 	op.Revision = uint64(revision)
 	op.CreatedAt = time.UnixMilli(created).UTC()
-	if eventAt < created || maximumEventAt < eventAt {
+	if archiveEpoch <= 0 || captureGeneration <= 0 || eventAt < created || maximumEventAt < eventAt {
 		return op, nativetool.ErrInvalid
 	}
 	validEvent := map[string][]string{"received": {"received"}, "validated": {"validated", "allowed"}, "awaiting_decision": {"awaiting_decision"}, "denied": {"denied"}, "started": {"started", "progress"}, "completed": {"completed"}, "failed": {"failed"}, "canceled": {"canceled", "revoked"}, "uncertain": {"uncertain"}}
