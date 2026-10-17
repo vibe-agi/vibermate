@@ -424,8 +424,9 @@ func (repository *activityRepository) putScopedConversationIdentity(ctx context.
 		return err
 	}
 	defer finish()
-	// The existence test and insertion must be one SQLite statement: an
-	// asynchronous indexer may finish after Capture deletion has committed.
+	// Old unscoped indexers require a surviving parent in this same statement.
+	// A scoped association is independently publishable from its original stamp;
+	// any present root with conflicting coordinates still refuses the write.
 	columns := `exchange_id,client_kind,session_id,session_resumable,actor_id,actor_label,actor_type,actor_is_subagent,provider_response_id,provider_message_id,protocol_ids_json,attributes_json,evidence_source,confidence,observed_at_unix_ms`
 	args := []any{exchangeID, identity.Client, identity.SessionID, identity.SessionResumable, identity.ActorID, identity.ActorLabel, identity.ActorType, identity.ActorIsSubagent, identity.ProviderResponseID, identity.ProviderMessageID, string(protocolIDs), string(attributes), identity.Source, identity.Confidence, toUnixMillis(identity.ObservedAt)}
 	if repository.coordinates {
@@ -437,15 +438,19 @@ func (repository *activityRepository) putScopedConversationIdentity(ctx context.
 	contentWhere := `exchange_id=?`
 	args = append(args, exchangeID)
 	if provided {
-		activityWhere += ` AND recording_archive_epoch=? AND recording_capture_generation=? AND CASE WHEN capture_run_id<>'' THEN 'managed_run' WHEN manual_capture_id<>'' THEN 'manual_capture' ELSE '' END=? AND CASE WHEN capture_run_id<>'' THEN capture_run_id ELSE manual_capture_id END=?`
+		activityWhere += ` AND NOT(recording_archive_epoch=? AND recording_capture_generation=? AND CASE WHEN capture_run_id<>'' THEN 'managed_run' WHEN manual_capture_id<>'' THEN 'manual_capture' ELSE '' END=? AND CASE WHEN capture_run_id<>'' THEN capture_run_id ELSE manual_capture_id END=?)`
 		args = append(args, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, scope.Capture.Kind, scope.Capture.ID)
 	}
 	args = append(args, exchangeID)
 	if provided {
-		contentWhere += ` AND recording_archive_epoch=? AND recording_capture_generation=? AND scope_kind=? AND scope_id=?`
+		contentWhere += ` AND NOT(recording_archive_epoch=? AND recording_capture_generation=? AND scope_kind=? AND scope_id=?)`
 		args = append(args, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, scope.Capture.Kind, scope.Capture.ID)
 	}
-	result, err := repository.database.ExecContext(operation, `INSERT INTO runtime_exchange_agent_identities (`+columns+`) SELECT `+placeholders+` WHERE EXISTS(SELECT 1 FROM runtime_activities WHERE `+activityWhere+`) OR EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE `+contentWhere+`) ON CONFLICT(exchange_id) DO NOTHING`, args...)
+	guard := `EXISTS(SELECT 1 FROM runtime_activities WHERE ` + activityWhere + `) OR EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE ` + contentWhere + `)`
+	if provided {
+		guard = `NOT EXISTS(SELECT 1 FROM runtime_activities WHERE ` + activityWhere + `) AND NOT EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE ` + contentWhere + `)`
+	}
+	result, err := repository.database.ExecContext(operation, `INSERT INTO runtime_exchange_agent_identities (`+columns+`) SELECT `+placeholders+` WHERE `+guard+` ON CONFLICT(exchange_id) DO NOTHING`, args...)
 
 	if err != nil {
 		return fmt.Errorf("persist Exchange Agent identity: %w", err)
@@ -460,6 +465,9 @@ func (repository *activityRepository) putScopedConversationIdentity(ctx context.
 	if repository.coordinates {
 		var stored recording.Scope
 		err := repository.database.QueryRowContext(operation, `SELECT recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation FROM runtime_exchange_agent_identities WHERE exchange_id=?`, exchangeID).Scan(&stored.Capture.Kind, &stored.Capture.ID, &stored.Fence.ArchiveEpoch, &stored.Fence.CaptureGeneration)
+		if errors.Is(err, sql.ErrNoRows) && !provided {
+			return activity.ErrExchangeNotFound
+		}
 		if err != nil || stored != scope {
 			return recording.ErrObservationDiscarded
 		}
@@ -487,31 +495,14 @@ func (repository *activityRepository) putScopedConversationIdentity(ctx context.
 	if err != nil {
 		return fmt.Errorf("encode merged Exchange Agent attributes: %w", err)
 	}
-	result, err = repository.database.ExecContext(
-		operation,
-		`UPDATE runtime_exchange_agent_identities
-		 SET client_kind = ?, session_id = ?, session_resumable = ?,
-		     actor_id = ?, actor_label = ?, actor_type = ?, actor_is_subagent = ?,
-		     provider_response_id = ?, provider_message_id = ?,
-		     protocol_ids_json = ?, attributes_json = ?,
-		     evidence_source = ?, confidence = ?, observed_at_unix_ms = ?
-		 WHERE exchange_id = ?`,
-		merged.Client,
-		merged.SessionID,
-		merged.SessionResumable,
-		merged.ActorID,
-		merged.ActorLabel,
-		merged.ActorType,
-		merged.ActorIsSubagent,
-		merged.ProviderResponseID,
-		merged.ProviderMessageID,
-		string(protocolIDs),
-		string(attributes),
-		merged.Source,
-		merged.Confidence,
-		toUnixMillis(merged.ObservedAt),
-		exchangeID,
-	)
+	updateArgs := []any{merged.Client, merged.SessionID, merged.SessionResumable, merged.ActorID, merged.ActorLabel, merged.ActorType, merged.ActorIsSubagent, merged.ProviderResponseID, merged.ProviderMessageID, string(protocolIDs), string(attributes), merged.Source, merged.Confidence, toUnixMillis(merged.ObservedAt), exchangeID}
+	where := `exchange_id=?`
+	if repository.coordinates {
+		where += ` AND recording_scope_kind=? AND recording_scope_id=? AND recording_archive_epoch=? AND recording_capture_generation=?`
+		updateArgs = append(updateArgs, scope.Capture.Kind, scope.Capture.ID, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration)
+	}
+	result, err = repository.database.ExecContext(operation, `UPDATE runtime_exchange_agent_identities SET client_kind=?,session_id=?,session_resumable=?,actor_id=?,actor_label=?,actor_type=?,actor_is_subagent=?,provider_response_id=?,provider_message_id=?,protocol_ids_json=?,attributes_json=?,evidence_source=?,confidence=?,observed_at_unix_ms=? WHERE `+where, updateArgs...)
+
 	if err != nil {
 		return fmt.Errorf("deepen Exchange Agent identity: %w", err)
 	}

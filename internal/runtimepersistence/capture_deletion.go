@@ -94,7 +94,7 @@ func (store *Store) DeleteCapture(
 	if _, err := deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_exchange_agent_identities
-		  WHERE exchange_id IN (SELECT id FROM capture_purge_exchange_ids)`,
+		  WHERE (recording_scope_kind=? AND recording_scope_id=?) OR (recording_archive_epoch=0 AND exchange_id IN (SELECT id FROM capture_purge_exchange_ids))`, captureKind, captureID,
 	); err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture Agent identities: %w", err)
 	}

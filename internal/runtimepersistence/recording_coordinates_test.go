@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -169,5 +170,66 @@ func TestCurrentSemanticRootsPreserveScopesAndSharedGraph(t *testing.T) {
 	nativeExec(t, store.store.database, `DELETE FROM runtime_exchange_contents WHERE exchange_id='scoped-capture-a'`)
 	if _, err := store.ExchangeContentRepository().Get(ctx, "scoped-capture-b", time.Now().UTC()); err != nil {
 		t.Fatal("removing one root lost another scope's shared graph")
+	}
+}
+
+func TestIndependentIdentityRootRejectsMalformedAndConflictingScopes(t *testing.T) {
+	store := coordinateObservationStore(t)
+	ctx := context.Background()
+	writer := store.ConversationIdentityRepository().(activity.ScopedConversationIdentityWriter)
+	scope := recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "identity-only"}, Fence: recording.Fence{ArchiveEpoch: 7, CaptureGeneration: 9}}
+	identity := agentconversation.ClientIdentity{Client: "codex", SessionID: "original", SessionResumable: true, Source: agentconversation.ClientIdentitySourceProtocolEvidence, Confidence: "exact", ObservedAt: time.Now().UTC()}
+	if err := writer.PutScopedConversationIdentity(ctx, scope, "independent", identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.PutScopedConversationIdentity(ctx, recording.Scope{}, "malformed", identity); !errors.Is(err, recording.ErrObservationDiscarded) {
+		t.Fatalf("malformed scope: %v", err)
+	}
+	changed := scope
+	changed.Fence.CaptureGeneration++
+	if err := writer.PutScopedConversationIdentity(ctx, changed, "independent", identity); !errors.Is(err, recording.ErrObservationDiscarded) {
+		t.Fatalf("same Exchange scope was relabeled: %v", err)
+	}
+	if err := store.ConversationIdentityRepository().PutConversationIdentity(ctx, "unscoped", identity); !errors.Is(err, recording.ErrObservationDiscarded) {
+		t.Fatalf("unscoped current root created: %v", err)
+	}
+	var count int
+	if err := store.store.database.QueryRow(`SELECT count(*) FROM runtime_exchange_agent_identities`).Scan(&count); err != nil || count != 1 {
+		t.Fatal("refused scope created an association", err)
+	}
+	var epoch, generation int
+	if err := store.store.database.QueryRow(`SELECT recording_archive_epoch,recording_capture_generation FROM runtime_exchange_agent_identities`).Scan(&epoch, &generation); err != nil || epoch != 7 || generation != 9 {
+		t.Fatal("original independent scope changed", err)
+	}
+}
+
+func TestDeletingCaptureFindsIndependentIdentityRoot(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	ctx := context.Background()
+	writer := store.ConversationIdentityRepository().(activity.ScopedConversationIdentityWriter)
+	for _, id := range []string{"identity-a", "identity-b"} {
+		nativeExec(t, store.database, `INSERT INTO capture_runs(run_id,proxy_capability_hash,control_capability_hash,cwd,canonical_executable_path,executable_label,client_catalog_revision,state,created_at_unix_ms,expires_at_unix_ms,updated_at_unix_ms) VALUES(?,randomblob(32),randomblob(32),'/tmp','/bin/echo','fixture',1,'finished',1,2,2)`, id)
+		scope := recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: id}, Fence: recording.Fence{ArchiveEpoch: 1, CaptureGeneration: 1}}
+		identity := agentconversation.ClientIdentity{Client: "codex", SessionID: id, SessionResumable: true, Source: agentconversation.ClientIdentitySourceProtocolEvidence, Confidence: "exact", ObservedAt: time.Now().UTC()}
+		if err := writer.PutScopedConversationIdentity(ctx, scope, id+"-exchange", identity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DeleteCapture(ctx, "managed_run", "identity-a"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.database.QueryRow(`SELECT count(*) FROM runtime_exchange_agent_identities WHERE recording_scope_id='identity-a'`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("identity-only root escaped scoped deletion", err)
+	}
+	if err := store.database.QueryRow(`SELECT count(*) FROM runtime_exchange_agent_identities WHERE recording_scope_id='identity-b'`).Scan(&count); err != nil || count != 1 {
+		t.Fatal("other independent identity root was deleted", err)
+	}
+	if _, err := store.ClearEvidence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.database.QueryRow(`SELECT count(*) FROM runtime_exchange_agent_identities`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("clear left independent identity root", err)
 	}
 }

@@ -3,6 +3,7 @@ package productruntime
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,5 +83,72 @@ func TestGeneralRecorderPersistsOriginalRootCoordinates(t *testing.T) {
 	}
 	if state := budget.Snapshot(); state.ReservedBytes != 0 || state.ReservedRecords != 0 {
 		t.Fatal("scope handoff leaked recorder ownership")
+	}
+}
+
+// Only the Activity projection fails. The real Manager still prepares the
+// event, and the queue must publish independent identity through the real
+// ObservationStore with its original admitted scope and no semantic parent.
+type rejectedScopedActivity struct{ activity.Repository }
+
+func (r rejectedScopedActivity) AppendScoped(context.Context, recording.Scope, activity.Record) (activity.Record, error) {
+	return activity.Record{}, errors.New("synthetic optional Activity failure")
+}
+func TestGeneralRecorderIdentityKeepsOriginalScopeWithoutOtherRoots(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "observations.db")
+	store, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: path, LayoutID: "identity-root", ArchiveID: "current", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown(ctx)
+	manager, err := activity.New(activity.DefaultOptions(rejectedScopedActivity{store.ActivityRepository()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(ctx)
+	budget, _ := recording.NewBudget(recording.Limits{Records: 2048, Bytes: 64 << 20})
+	queue := newObservationRecorder(ctx, budget, nil, nil)
+	defer queue.Shutdown(ctx)
+	queue.epoch.Advance(7)
+	capture := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "identity-original"}
+	token, err := recording.NewScopeToken(queue.epoch, capture, recording.Fence{ArchiveEpoch: 7, CaptureGeneration: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := activityAttemptObserver{queue: queue, recorder: manager, identities: store.ConversationIdentityRepository()}
+	event := activity.Event{Kind: activity.KindExchangeStarted, SubjectID: "identity-only-exchange", Status: activity.StatusPending, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "fixture", SourceRecognition: activity.SourceRecognitionConfigured, CaptureRunID: capture.ID, ConnectionID: "connection", EnvironmentID: "env", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "ep", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1}
+	event.Conversation, _ = agentconversation.Pending(event.SubjectID)
+	if _, err = manager.Prepare(event); err != nil {
+		t.Fatal(err)
+	}
+	reservation, ok := observer.metadataReservation(token.Stamp(), event)
+	if !ok {
+		t.Fatal("metadata not admitted")
+	}
+	if err = observer.offerPrepared(token.Stamp(), reservation, event, []protocolcore.ProtocolEvidenceValue{{Name: "openai_responses.session_id", Value: "independent-original"}}, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, table := range []string{"runtime_activities", "runtime_exchange_contents"} {
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
+			t.Fatal("fixture unexpectedly has parent root", err)
+		}
+	}
+	var epoch, generation int
+	var kind, id, session string
+	if err = db.QueryRow(`SELECT recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation,session_id FROM runtime_exchange_agent_identities WHERE exchange_id=?`, event.SubjectID).Scan(&kind, &id, &epoch, &generation, &session); err != nil || kind != string(capture.Kind) || id != capture.ID || epoch != 7 || generation != 9 || session != "independent-original" {
+		t.Fatalf("independent identity lost original scope: %v", err)
+	}
+	if got := budget.Snapshot(); got.ReservedBytes != 0 || got.ReservedRecords != 0 {
+		t.Fatal("independent identity leaked queued ownership")
 	}
 }
