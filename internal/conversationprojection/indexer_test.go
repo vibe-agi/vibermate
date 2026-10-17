@@ -3,6 +3,8 @@ package conversationprojection
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"reflect"
 	"testing"
 	"time"
@@ -248,4 +250,70 @@ type lookupResolver struct {
 func (resolver *lookupResolver) ResolveBatch(_ context.Context, _ string, lookups []agentconversation.ClientIdentityLookup) (map[string]agentconversation.ClientIdentity, error) {
 	resolver.lookups = lookups
 	return nil, nil
+}
+
+type opaqueActivityReader struct {
+	activity.Reader
+	requests []activity.PageRequest
+	fail     bool
+}
+
+func (*opaqueActivityReader) Begin(context.Context) (recording.InspectionToken, error) {
+	return recording.InspectionToken{}, nil
+}
+func (*opaqueActivityReader) Check(context.Context, recording.InspectionToken) error { return nil }
+func (r *opaqueActivityReader) ListExchanges(_ context.Context, q activity.PageRequest) (activity.Page, error) {
+	r.requests = append(r.requests, q)
+	if r.fail {
+		r.fail = false
+		return activity.Page{}, recording.ErrInspectionChanged
+	}
+	return activity.Page{Consumed: q.Limit, NextCursor: fmt.Sprintf("opaque-%d", len(r.requests))}, nil
+}
+
+type inspectionMetadataReader struct{ metadataOnlyReader }
+
+func (*inspectionMetadataReader) Begin(context.Context) (recording.InspectionToken, error) {
+	return recording.InspectionToken{}, nil
+}
+func (*inspectionMetadataReader) Check(context.Context, recording.InspectionToken) error { return nil }
+
+type readonlyIdentityInspection struct{ identityRepository }
+
+func (*readonlyIdentityInspection) Begin(context.Context) (recording.InspectionToken, error) {
+	return recording.InspectionToken{}, nil
+}
+func (*readonlyIdentityInspection) Check(context.Context, recording.InspectionToken) error {
+	return nil
+}
+
+type noRepair struct{}
+
+func (noRepair) RepairConversation(context.Context, activity.ConversationRepair) error { return nil }
+func TestReindexInspectionBoundsEmptyAdvancingPagesAndClearsInvalidCursor(t *testing.T) {
+	reader := &opaqueActivityReader{}
+	indexer, err := New(Options{Activities: reader, Contents: &inspectionMetadataReader{}, IdentityInspection: &readonlyIdentityInspection{}, RepairWriter: noRepair{}, CaptureRuns: runReader{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := activity.ConversationIndexRequest{CaptureRunID: "run", Limit: 10}
+	if err := indexer.Reindex(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.requests) != 50 || reader.requests[49].Cursor != "opaque-49" || indexer.CaptureRunCaughtUp("run") {
+		t.Fatalf("empty advancing scan was unbounded or falsely caught up: %+v", reader.requests)
+	}
+	reader.fail = true
+	if err := indexer.Reindex(context.Background(), request); !errors.Is(err, recording.ErrInspectionChanged) {
+		t.Fatalf("stale continuation: %v", err)
+	}
+	if reader.requests[50].Cursor != "opaque-50" {
+		t.Fatal("did not resume source-bound watermark")
+	}
+	if err := indexer.Reindex(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if reader.requests[51].Cursor != "" || reader.requests[51].BeforeSequence != 0 || reader.requests[51].WithoutLocalConversationIdentity {
+		t.Fatalf("failed scan watermark retained: %+v", reader.requests[51])
+	}
 }

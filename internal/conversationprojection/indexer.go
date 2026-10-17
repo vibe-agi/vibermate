@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
@@ -21,35 +23,50 @@ import (
 const maxExchangesPerRefresh = 10_000
 
 type Options struct {
-	Activities  activity.Reader
-	Contents    exchangecontent.Reader
-	CaptureRuns capturerun.Reader
-	Identities  activity.ConversationIdentityRepository
-	Writer      activity.ConversationProjectionWriter
-	Resolvers   map[string]agentconversation.ClientIdentityResolver
+	IdentityInspection activity.IdentityInspectionReader
+	RepairWriter       activity.ConversationRepairWriter
+	Activities         activity.Reader
+	Contents           exchangecontent.Reader
+	CaptureRuns        capturerun.Reader
+	Identities         activity.ConversationIdentityRepository
+	Writer             activity.ConversationProjectionWriter
+	Resolvers          map[string]agentconversation.ClientIdentityResolver
 }
 
 type Indexer struct {
-	mu          sync.Mutex
-	scopes      map[string]scanScope
-	activities  activity.Reader
-	contents    exchangecontent.Reader
-	captureRuns capturerun.Reader
-	identities  activity.ConversationIdentityRepository
-	writer      activity.ConversationProjectionWriter
-	resolvers   map[string]agentconversation.ClientIdentityResolver
+	mu             sync.Mutex
+	scopes         map[string]scanScope
+	activities     activity.Reader
+	contents       exchangecontent.Reader
+	captureRuns    capturerun.Reader
+	identities     activity.ConversationIdentityReader
+	identityWriter activity.ConversationIdentityRepository
+	repairWriter   activity.ConversationRepairWriter
+	inspection     bool
+	writer         activity.ConversationProjectionWriter
+	resolvers      map[string]agentconversation.ClientIdentityResolver
 }
 
 type scanScope struct {
 	before   int64
+	cursor   string
 	repaired bool
 }
 
 func New(options Options) (*Indexer, error) {
 	if options.Activities == nil || options.Contents == nil ||
-		options.CaptureRuns == nil || options.Identities == nil ||
-		options.Writer == nil {
+		options.CaptureRuns == nil || (options.IdentityInspection == nil && (options.Identities == nil || options.Writer == nil)) {
 		return nil, errors.New("Conversation projection dependencies are incomplete")
+	}
+	var identities activity.ConversationIdentityReader = options.Identities
+	if options.IdentityInspection != nil {
+		identities = options.IdentityInspection
+		if _, ok := options.Activities.(recording.InspectionBoundary); !ok {
+			return nil, errors.New("Activity inspection boundary is missing")
+		}
+		if _, ok := options.Contents.(recording.InspectionBoundary); !ok {
+			return nil, errors.New("content inspection boundary is missing")
+		}
 	}
 	resolvers := make(map[string]agentconversation.ClientIdentityResolver, len(options.Resolvers))
 	for client, resolver := range options.Resolvers {
@@ -61,7 +78,7 @@ func New(options Options) (*Indexer, error) {
 	return &Indexer{
 		scopes:     make(map[string]scanScope),
 		activities: options.Activities, contents: options.Contents,
-		captureRuns: options.CaptureRuns, identities: options.Identities,
+		captureRuns: options.CaptureRuns, identities: identities, identityWriter: options.Identities, repairWriter: options.RepairWriter, inspection: options.IdentityInspection != nil,
 		writer: options.Writer, resolvers: resolvers,
 	}, nil
 }
@@ -77,16 +94,26 @@ func (indexer *Indexer) Reindex(
 	if indexer == nil || ctx == nil || request.Validate() != nil {
 		return activity.ErrInvalidEvent
 	}
-	if request.ManualCaptureID != "" {
+	if request.ManualCaptureID != "" || (indexer.inspection && indexer.repairWriter == nil) {
 		return nil
 	}
 	indexer.mu.Lock()
 	defer indexer.mu.Unlock()
 	scope, knownScope := indexer.scopes[request.CaptureRunID]
-	var nextBefore int64
-	if err := indexer.reindex(ctx, request, scope.repaired, scope.before, &nextBefore); err != nil {
+	var expiry time.Time
+	check, err := indexer.beginInspection(ctx)
+	if err != nil {
+		clear(indexer.scopes)
+		return err
+	}
+	next := scanScope{repaired: scope.repaired}
+	if err := indexer.reindex(ctx, request, scope, &next, &expiry, func() error { return check(expiry) }); err != nil {
 		// A failed projection may have persisted its identity first. Force the
 		// next pass to inspect those rows again instead of skipping them.
+		clear(indexer.scopes)
+		return err
+	}
+	if err := check(expiry); err != nil {
 		clear(indexer.scopes)
 		return err
 	}
@@ -95,8 +122,8 @@ func (indexer *Indexer) Reindex(
 		// repeats its first full pass when it is visited again.
 		clear(indexer.scopes)
 	}
-	scope.before = nextBefore
-	if nextBefore == 0 {
+	scope.before, scope.cursor = next.before, next.cursor
+	if next.before == 0 && next.cursor == "" {
 		scope.repaired = true
 	}
 	indexer.scopes[request.CaptureRunID] = scope
@@ -113,21 +140,22 @@ func (indexer *Indexer) CaptureRunCaughtUp(captureRunID string) bool {
 	indexer.mu.Lock()
 	defer indexer.mu.Unlock()
 	scope, ok := indexer.scopes[captureRunID]
-	return ok && scope.repaired && scope.before == 0
+	return ok && scope.repaired && scope.before == 0 && scope.cursor == ""
 }
 
 func (indexer *Indexer) reindex(
 	ctx context.Context,
 	request activity.ConversationIndexRequest,
-	withoutLocalIdentity bool,
-	before int64,
-	nextBefore *int64,
+	scope scanScope,
+	next *scanScope,
+	expiry *time.Time,
+	check func() error,
 ) error {
-	records, cursor, err := indexer.terminals(ctx, request.CaptureRunID, before, withoutLocalIdentity)
+	records, continuation, err := indexer.terminals(ctx, request.CaptureRunID, scope)
 	if err != nil {
 		return err
 	}
-	*nextBefore = cursor
+	*next = continuation
 	type candidate struct {
 		record                   activity.Record
 		responseID               string
@@ -136,14 +164,14 @@ func (indexer *Indexer) reindex(
 	}
 	byRun := make(map[string][]candidate)
 	for _, record := range records {
-		if record.CaptureRunID == "" {
+		if record.CaptureRunID == "" || (indexer.inspection && (record.InspectionRoot == nil || !record.InspectionRoot.Current)) {
 			continue
 		}
 		var storedProtocolIdentity *agentconversation.ClientIdentity
 		identity, identityErr := indexer.identities.GetConversationIdentity(ctx, record.SubjectID)
 		switch {
 		case identityErr == nil:
-			if err := indexer.project(ctx, record, identity); err != nil {
+			if err := indexer.projectChecked(ctx, record, identity, check); err != nil {
 				return err
 			}
 			if identity.Source == agentconversation.ClientIdentitySourceLocalState {
@@ -174,6 +202,7 @@ func (indexer *Indexer) reindex(
 		if contentErr != nil {
 			return contentErr
 		}
+		includeExpiry(expiry, content.ExpiresAt)
 		responseID := content.ResponseID
 		responseEvidence := content.ResponseProtocolEvidence
 		if storedProtocolIdentity == nil {
@@ -186,14 +215,7 @@ func (indexer *Indexer) reindex(
 				responseID,
 				record.OccurredAt,
 			); found {
-				if err := indexer.identities.PutConversationIdentity(
-					ctx,
-					record.SubjectID,
-					networkIdentity,
-				); err != nil {
-					return err
-				}
-				if err := indexer.project(ctx, record, networkIdentity); err != nil {
+				if err := indexer.persist(ctx, record, networkIdentity, check); err != nil {
 					return err
 				}
 			}
@@ -271,11 +293,7 @@ func (indexer *Indexer) reindex(
 			if !found {
 				continue
 			}
-			err := indexer.identities.PutConversationIdentity(
-				ctx,
-				item.record.SubjectID,
-				identity,
-			)
+			err := indexer.persist(ctx, item.record, identity, check)
 			if errors.Is(err, activity.ErrInvalidEvent) {
 				// The client-local log names a different session or actor than
 				// the wire already recorded for this Exchange (a Codex subagent
@@ -284,9 +302,6 @@ func (indexer *Indexer) reindex(
 				continue
 			}
 			if err != nil {
-				return err
-			}
-			if err := indexer.project(ctx, item.record, identity); err != nil {
 				return err
 			}
 		}
@@ -306,63 +321,111 @@ func protocolEvidenceFromIdentity(
 	return converted
 }
 
-func (indexer *Indexer) Identity(
-	ctx context.Context,
-	exchangeID string,
-) (agentconversation.ClientIdentity, error) {
-	if indexer == nil || ctx == nil {
-		return agentconversation.ClientIdentity{}, activity.ErrInvalidEvent
-	}
-	identity, err := indexer.identities.GetConversationIdentity(ctx, exchangeID)
-	if err == nil || !errors.Is(err, activity.ErrExchangeNotFound) {
-		return identity, err
-	}
-	content, contentErr := indexer.contents.GetConversationEvidence(ctx, exchangeID)
-	if errors.Is(contentErr, exchangecontent.ErrNotFound) {
-		return agentconversation.ClientIdentity{}, activity.ErrExchangeNotFound
-	}
-	if contentErr != nil {
-		return agentconversation.ClientIdentity{}, contentErr
-	}
-	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
-		content.RequestProtocolEvidence,
-		content.ResponseID,
-		content.RecordedAt,
-	)
-	if !found {
-		return agentconversation.ClientIdentity{}, activity.ErrExchangeNotFound
-	}
-	return identity, nil
+// IdentityInspection retains the original metadata lifetime through outer
+// enrichment. Persisted identity roots have no transcript expiry.
+type IdentityInspection struct {
+	Identity            agentconversation.ClientIdentity
+	InspectionExpiresAt time.Time `json:"-"`
 }
 
-func (indexer *Indexer) terminals(
-	ctx context.Context,
-	captureRunID string,
-	before int64,
-	withoutLocalIdentity bool,
-) ([]activity.Record, int64, error) {
+func (indexer *Indexer) Identity(ctx context.Context, exchangeID string) (agentconversation.ClientIdentity, error) {
+	value, err := indexer.InspectIdentity(ctx, exchangeID)
+	return value.Identity, err
+}
+func (indexer *Indexer) InspectIdentity(ctx context.Context, exchangeID string) (IdentityInspection, error) {
+	if indexer == nil || ctx == nil {
+		return IdentityInspection{}, activity.ErrInvalidEvent
+	}
+	check, err := indexer.beginInspection(ctx)
+	if err != nil {
+		return IdentityInspection{}, err
+	}
+	result, err := indexer.identity(ctx, exchangeID)
+	if err != nil {
+		return IdentityInspection{}, err
+	}
+	if err := check(result.InspectionExpiresAt); err != nil {
+		return IdentityInspection{}, err
+	}
+	return result, nil
+}
+func (indexer *Indexer) identity(ctx context.Context, exchangeID string) (IdentityInspection, error) {
+	identity, err := indexer.identities.GetConversationIdentity(ctx, exchangeID)
+	if err == nil {
+		return IdentityInspection{Identity: identity}, nil
+	}
+	if !errors.Is(err, activity.ErrExchangeNotFound) {
+		return IdentityInspection{}, err
+	}
+	content, err := indexer.contents.GetConversationEvidence(ctx, exchangeID)
+	if errors.Is(err, exchangecontent.ErrNotFound) {
+		return IdentityInspection{}, activity.ErrExchangeNotFound
+	}
+	if err != nil {
+		return IdentityInspection{}, err
+	}
+	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(content.RequestProtocolEvidence, content.ResponseID, content.RecordedAt)
+	if !found {
+		return IdentityInspection{}, activity.ErrExchangeNotFound
+	}
+	return IdentityInspection{Identity: identity, InspectionExpiresAt: content.ExpiresAt}, nil
+}
+
+func (indexer *Indexer) terminals(ctx context.Context, captureRunID string, scope scanScope) ([]activity.Record, scanScope, error) {
 	records := make([]activity.Record, 0, activity.MaxPageSize)
-	for len(records) < maxExchangesPerRefresh {
-		limit := activity.MaxPageSize
-		if remaining := maxExchangesPerRefresh - len(records); remaining < limit {
-			limit = remaining
-		}
+	consumed := 0
+	for consumed < maxExchangesPerRefresh {
+		// Keep the same limit across continuation requests: it is part of the
+		// independent cursor's query binding, including an empty filtered page.
 		page, err := indexer.activities.ListExchanges(ctx, activity.PageRequest{
-			BeforeSequence:                   before,
-			Limit:                            limit,
-			CaptureRunID:                     captureRunID,
-			WithoutLocalConversationIdentity: withoutLocalIdentity,
+			BeforeSequence: scope.before, Cursor: scope.cursor, Limit: activity.MaxPageSize,
+			CaptureRunID: captureRunID, WithoutLocalConversationIdentity: scope.repaired,
 		})
 		if err != nil {
-			return nil, 0, err
+			return nil, scanScope{}, err
 		}
 		records = append(records, page.Items...)
-		if page.NextBeforeSequence == 0 {
-			return records, 0, nil
+		examined := len(page.Items)
+		if indexer.inspection {
+			examined = page.Consumed
+			if examined < len(page.Items) || examined > activity.MaxPageSize || (page.NextCursor != "" && (examined == 0 || page.NextCursor == scope.cursor)) {
+				return nil, scanScope{}, recording.ErrInspectionUnavailable
+			}
+			scope.cursor = page.NextCursor
+		} else {
+			scope.before = page.NextBeforeSequence
 		}
-		before = page.NextBeforeSequence
+		consumed += examined
+		if scope.before == 0 && scope.cursor == "" {
+			return records, scope, nil
+		}
 	}
-	return records, before, nil
+	return records, scope, nil
+}
+
+func (indexer *Indexer) persist(ctx context.Context, record activity.Record, identity agentconversation.ClientIdentity, check func() error) error {
+	if indexer.inspection {
+		return indexer.projectChecked(ctx, record, identity, check)
+	}
+	if err := indexer.identityWriter.PutConversationIdentity(ctx, record.SubjectID, identity); err != nil {
+		return err
+	}
+	return indexer.project(ctx, record, identity)
+}
+func (indexer *Indexer) projectChecked(ctx context.Context, record activity.Record, identity agentconversation.ClientIdentity, check func() error) error {
+	if !indexer.inspection {
+		return indexer.project(ctx, record, identity)
+	}
+	if record.InspectionRoot == nil || !record.InspectionRoot.Current || indexer.repairWriter == nil {
+		return nil
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	if err := indexer.activities.(recording.InspectionBoundary).Check(ctx, record.InspectionRoot.Token); err != nil {
+		return err
+	}
+	return indexer.repairWriter.RepairConversation(ctx, activity.ConversationRepair{Root: *record.InspectionRoot, Identity: identity.Clone()})
 }
 
 func (indexer *Indexer) project(
