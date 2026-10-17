@@ -93,7 +93,10 @@ func TestNativeDeleteSessionHasOwnStartAndAudit(t *testing.T) {
 		t.Fatalf("DELETE native history %+v %v", op, err)
 	}
 	var audits int
-	if err = f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE parent_kind='client_operation' AND operation_id=? AND payload_class='none' AND account_id=''`, c.id).Scan(&audits); err != nil || audits != 1 {
+	if err = f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries d
+		JOIN native_tool_once n ON n.operation_id=d.operation_id AND n.attempt_id=d.attempt_id
+		WHERE d.operation_id=? AND d.payload_class='none'
+		AND d.completed_at_unix_ms IS NOT NULL AND d.outcome='completed'`, c.id).Scan(&audits); err != nil || audits != 1 {
 		t.Fatalf("DELETE audit%d %v", audits, err)
 	}
 }
