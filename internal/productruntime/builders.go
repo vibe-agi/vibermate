@@ -656,11 +656,12 @@ func (observer activityAttemptObserver) ObserveTerminal(ctx context.Context, obs
 }
 
 type exchangeActivitySourceEvidence struct {
-	kind            activity.SourceKind
-	displayName     string
-	recognition     activity.SourceRecognition
-	captureRunID    string
-	manualCaptureID string
+	kind                                      activity.SourceKind
+	displayName                               string
+	recognition                               activity.SourceRecognition
+	captureRunID                              string
+	manualCaptureID                           string
+	workspaceID, workspaceLabel, captureLabel string
 }
 
 func exchangeActivitySource(
@@ -681,6 +682,10 @@ func exchangeActivitySource(
 		)
 	}
 	evidence.displayName = admission.SourceLabel()
+	evidence.captureLabel = admission.SourceLabel()
+	if scope, ok := admission.WorkspaceScope(); ok {
+		evidence.workspaceID, evidence.workspaceLabel = scope.WorkspaceID().String(), scope.WorkspaceLabel()
+	}
 	switch admission.AttributionConfidence() {
 	case captureadmission.AttributionVerified:
 		evidence.recognition = activity.SourceRecognitionVerified

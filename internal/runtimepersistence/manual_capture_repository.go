@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -28,10 +29,12 @@ const manualCaptureColumns = `
 	last_observed_at_unix_ms`
 
 type manualCaptureRepository struct {
-	database      *sql.DB
-	operations    *operationGate
-	stopCommitter transactionCommitter
-	controlOnly   bool
+	database        *sql.DB
+	operations      *operationGate
+	stopCommitter   transactionCommitter
+	controlOnly     bool
+	captureObserver recording.CaptureObserver
+	recordingScopes recording.ScopeIssuer
 }
 
 const manualCaptureActivityAt = `MAX(created_at_unix_ms, COALESCE(
@@ -335,28 +338,15 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture expiry result: %w", err)
 	}
-	result, err := transaction.ExecContext(
+	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
-		`UPDATE manual_captures
-		 SET observation = 'observed',
-		     last_observed_at_unix_ms = ?,
-		     updated_at_unix_ms = ?
-		 WHERE proxy_credential_hash = ?
-		   AND state = 'active'
-		   AND (lifetime = 'until_revoked' OR expires_at_unix_ms > ?)`,
-		toUnixMillis(now),
-		toUnixMillis(now),
-		digest[:],
-		toUnixMillis(now),
-	)
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("observe ManualCapture authorization: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture authorization result: %w", err)
-	}
-	if affected != 1 {
+		`SELECT `+manualCaptureColumns+`
+		 FROM manual_captures WHERE proxy_credential_hash = ?
+		 AND state = 'active'
+		 AND (lifetime = 'until_revoked' OR expires_at_unix_ms > ?)`,
+		digest[:], toUnixMillis(now),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
 		if expired > 0 {
 			if err := transaction.Commit(); err != nil {
 				return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture expiry: %w", err)
@@ -364,18 +354,13 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		}
 		return manualcapture.DurableRecord{}, manualcapture.ErrCredentialRejected
 	}
-	record, err := scanManualCapture(transaction.QueryRowContext(
-		operation,
-		`SELECT `+manualCaptureColumns+`
-		 FROM manual_captures WHERE proxy_credential_hash = ?`,
-		digest[:],
-	))
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read authorized ManualCapture: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture authorization: %w", err)
 	}
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now)
 	return record, nil
 }
 

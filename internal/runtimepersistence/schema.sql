@@ -426,6 +426,9 @@ CREATE TABLE proxy_client_bindings(
   CHECK(updated_at_unix_ms >= created_at_unix_ms)
 ) STRICT;
 CREATE TABLE "runtime_activities"(
+ workspace_id TEXT NOT NULL DEFAULT '',
+ workspace_label TEXT NOT NULL DEFAULT '',
+ capture_label TEXT NOT NULL DEFAULT '',
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   activity_id TEXT NOT NULL UNIQUE
   CHECK(length(CAST(activity_id AS BLOB)) BETWEEN 1 AND 512),

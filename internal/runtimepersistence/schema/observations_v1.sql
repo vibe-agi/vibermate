@@ -7,6 +7,9 @@ CREATE TABLE runtime_metadata(
 ) STRICT;
 
 CREATE TABLE "runtime_activities"(
+ workspace_id TEXT NOT NULL DEFAULT '',
+ workspace_label TEXT NOT NULL DEFAULT '',
+ capture_label TEXT NOT NULL DEFAULT '',
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   activity_id TEXT NOT NULL UNIQUE
   CHECK(length(CAST(activity_id AS BLOB)) BETWEEN 1 AND 512),
@@ -829,7 +832,7 @@ CREATE TABLE native_history_snapshots(
  bytes_out INTEGER CHECK(bytes_out IS NULL OR bytes_out>=0),
  event_kind TEXT NOT NULL CHECK(length(CAST(event_kind AS BLOB)) BETWEEN 1 AND 32),
  event_at_unix_ms INTEGER NOT NULL CHECK(event_at_unix_ms>=created_at_unix_ms),
- maximum_event_at_unix_ms INTEGER NOT NULL CHECK(event_at_unix_ms>=created_at_unix_ms),
+ maximum_event_at_unix_ms INTEGER NOT NULL CHECK(maximum_event_at_unix_ms>=event_at_unix_ms),
  metadata_expires_at_unix_ms INTEGER NOT NULL CHECK(metadata_expires_at_unix_ms>created_at_unix_ms),
  PRIMARY KEY(operation_id,operation_revision)
 ) STRICT;
@@ -883,3 +886,14 @@ CREATE TABLE native_tool_contents(
 ) STRICT;
 CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
 CREATE INDEX native_tool_contents_expiry ON native_tool_contents(expires_at_unix_ms);
+
+CREATE TABLE capture_observations(
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0),
+ credential_revision INTEGER NOT NULL CHECK((capture_kind='managed_run' AND credential_revision=0) OR (capture_kind='manual_capture' AND credential_revision>0)),
+ first_observed_at_unix_ms INTEGER NOT NULL CHECK(first_observed_at_unix_ms>0),
+ last_observed_at_unix_ms INTEGER NOT NULL CHECK(last_observed_at_unix_ms>=first_observed_at_unix_ms),
+ PRIMARY KEY(capture_kind,capture_id,archive_epoch,capture_generation,credential_revision)
+) STRICT;

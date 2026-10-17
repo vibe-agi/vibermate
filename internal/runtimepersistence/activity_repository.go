@@ -94,9 +94,9 @@ func (repository *activityRepository) Append(
 		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
-		     transport_evidence_json
+		     transport_evidence_json, workspace_id, workspace_label, capture_label
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		toUnixMillis(record.OccurredAt),
 		string(record.Kind),
@@ -130,7 +130,7 @@ func (repository *activityRepository) Append(
 		diagnosis.ProviderField, diagnosis.ProviderErrorCode,
 		diagnosis.ClientField,
 		diagnosis.ClientPath,
-		transportEvidence,
+		transportEvidence, record.WorkspaceID, record.WorkspaceLabel, record.CaptureLabel,
 	)
 	if err != nil {
 		return activity.Record{}, fmt.Errorf("append Activity: %w", err)
@@ -185,7 +185,7 @@ func (repository *activityRepository) List(
 		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
-		     transport_evidence_json
+		     transport_evidence_json, workspace_id, workspace_label, capture_label
 		 FROM runtime_activities
 		 WHERE (? = 0 OR sequence < ?)
 		 ORDER BY sequence DESC
@@ -234,7 +234,7 @@ func exchangeCandidateQuery(request activity.PageRequest) (string, []any) {
 			     conversation_projection_id, conversation_display_name,
 			     conversation_kind, conversation_evidence, conversation_actor,
 			     provider_status, provider_field, provider_error_code, client_field, client_path,
-			     transport_evidence_json`)
+			     transport_evidence_json, workspace_id, workspace_label, capture_label`)
 }
 
 // exchangeSummaryCandidateQuery projects only the columns SummarizeExchanges
@@ -333,7 +333,7 @@ func (repository *activityRepository) GetExchange(
 		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
-		     transport_evidence_json
+		     transport_evidence_json, workspace_id, workspace_label, capture_label
 		 FROM runtime_activities
 		 WHERE kind IN ('exchange.started', 'exchange.completed')
 		   AND subject_id = ?
@@ -763,7 +763,7 @@ func conversationPageQuery(request activity.ConversationIndexRequest) (string, [
 		        conversation_projection_id, conversation_display_name,
 		        conversation_kind, conversation_evidence, conversation_actor,
 		        provider_status, provider_field, provider_error_code, client_field, client_path,
-		        transport_evidence_json
+		        transport_evidence_json, workspace_id, workspace_label, capture_label
 		 FROM selected
 		 ORDER BY first_sequence DESC,
 		          lower(preferred_display_name) ASC,
@@ -876,7 +876,7 @@ func (state *activityScanState) targets() []any {
 		&state.conversation.Actor,
 		&state.diagnosis.ProviderStatus, &state.diagnosis.ProviderField, &state.diagnosis.ProviderErrorCode,
 		&state.diagnosis.ClientField, &state.diagnosis.ClientPath,
-		&state.transportEvidence,
+		&state.transportEvidence, &record.WorkspaceID, &record.WorkspaceLabel, &record.CaptureLabel,
 	}
 }
 

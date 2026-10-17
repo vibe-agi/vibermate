@@ -26,6 +26,7 @@ import (
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
 type recordingItem struct {
+	capture       recording.CaptureObservation
 	nativeHistory *nativetool.RecordedHistory
 	nativeSink    nativetool.HistoryWriter
 	metadata      *recordedMetadata
@@ -39,6 +40,7 @@ type recordingItem struct {
 	bytes         int64
 }
 type observationRecorder struct {
+	capture            recording.CaptureWriter
 	nativeHistory      nativetool.HistoryWriter
 	reportFailure      func(string, error)
 	usagePolicy        atomic.Pointer[runtimeusage.CollectionPolicy]
@@ -227,7 +229,9 @@ func (r *observationRecorder) run() {
 			outcome := recording.Discarded
 			if item.stamp.Current() && r.ctx.Err() == nil {
 				var err error
-				if item.kind == recording.Native {
+				if item.kind == recording.Capture {
+					err = r.capture.PutCaptureObservation(r.ctx, item.stamp.Scope(), item.capture)
+				} else if item.kind == recording.Native {
 					err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
 				} else if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)

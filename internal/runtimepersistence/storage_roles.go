@@ -28,6 +28,7 @@ type ControlOptions struct {
 	BusyTimeout, CommitReconcileTimeout time.Duration
 	NativeStreamLifetime                time.Duration
 	NativeHistory                       nativetool.HistoryRecorder
+	CaptureObserver                     recording.CaptureObserver
 	RecordingScopes                     recording.ScopeIssuer
 }
 
@@ -54,6 +55,8 @@ func OpenControl(ctx context.Context, o ControlOptions) (*ControlStore, error) {
 	}
 	s.nativeTools.history = o.NativeHistory
 	s.nativeTools.recordingScopes = o.RecordingScopes
+	s.captureRepo.captureObserver, s.captureRepo.recordingScopes = o.CaptureObserver, o.RecordingScopes
+	s.manualCapture.captureObserver, s.manualCapture.recordingScopes = o.CaptureObserver, o.RecordingScopes
 	return &ControlStore{store: s}, nil
 }
 

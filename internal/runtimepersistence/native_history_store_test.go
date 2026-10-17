@@ -112,3 +112,14 @@ func TestNativeHistoryTerminalSnapshotSurvivesControlRetirement(t *testing.T) {
 		t.Fatal("conflicting original scope accepted", err)
 	}
 }
+
+func TestNativeHistorySchemaRejectsMaximumBeforeEvent(t *testing.T) {
+	store, terminal := nativeIndependentHistoryFixture(t)
+	if err := store.PutNativeHistory(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.store.database.Exec(`UPDATE native_history_snapshots SET maximum_event_at_unix_ms=event_at_unix_ms-1 WHERE operation_id=?`, terminal.Observation.Operation.ID)
+	if err == nil {
+		t.Fatal("schema accepted maximum event time before event")
+	}
+}

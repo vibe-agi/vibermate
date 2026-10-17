@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -58,10 +59,12 @@ const captureRunColumns = `
 	git_json`
 
 type captureRunRepository struct {
-	database      *sql.DB
-	operations    *operationGate
-	stopCommitter transactionCommitter
-	controlOnly   bool
+	database        *sql.DB
+	operations      *operationGate
+	stopCommitter   transactionCommitter
+	controlOnly     bool
+	captureObserver recording.CaptureObserver
+	recordingScopes recording.ScopeIssuer
 }
 
 // Derive display/order from scoped, body-free evidence using the existing
@@ -244,37 +247,10 @@ func (repository *captureRunRepository) AuthorizeProxy(
 	if err != nil {
 		return capturerun.DurableRecord{}, fmt.Errorf("authorize CaptureRun proxy: %w", err)
 	}
-	// This is the only place that can honestly mark observation: an
-	// authenticated proxy connection is the one signal that traffic actually
-	// arrived through this run. The write is conditional so a later connection
-	// cannot move the first-observed time.
-	// The stored value is what a later read will see, so the value returned to
-	// this caller is the stored one. Handing back an untruncated time would
-	// make the same fact differ between the first call and every later one.
-	storedAt := fromUnixMillis(toUnixMillis(now))
-	observed, changed := record.WithObservedTraffic(storedAt)
-	if !changed {
-		return record, nil
-	}
-	if _, err := repository.database.ExecContext(
-		operation,
-		`UPDATE capture_runs
-		    SET observation = 'observed',
-		        first_observed_at_unix_ms = ?,
-		        updated_at_unix_ms = ?
-		  WHERE run_id = ?
-		    AND observation = 'waiting_for_traffic'
-		    AND state IN ('created', 'attached')`,
-		toUnixMillis(storedAt),
-		toUnixMillis(now),
-		record.ID,
-	); err != nil {
-		return capturerun.DurableRecord{}, fmt.Errorf(
-			"record CaptureRun observation: %w",
-			err,
-		)
-	}
-	return observed, nil
+	// Authentication depends only on current control facts. Traffic display is
+	// optional evidence published by the admitted connection/exchange producer.
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, 0, now)
+	return record, nil
 }
 
 func (repository *captureRunRepository) Attach(

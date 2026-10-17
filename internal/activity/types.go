@@ -92,6 +92,9 @@ type Event struct {
 	ReasonCode             string
 	SourceKind             SourceKind
 	SourceDisplayName      string
+	WorkspaceID            string
+	WorkspaceLabel         string
+	CaptureLabel           string
 	SourceRecognition      SourceRecognition
 	CaptureRunID           string
 	ManualCaptureID        string
@@ -178,6 +181,15 @@ func (event Event) Validate() error {
 	}
 	isExchange := event.Kind == KindExchangeStarted ||
 		event.Kind == KindExchangeCompleted
+	if !validSearchResultText(event.WorkspaceID, 128) || !validSearchResultText(event.WorkspaceLabel, 120) || !validSearchResultText(event.CaptureLabel, 256) {
+		return ErrInvalidEvent
+	}
+	if (event.WorkspaceID != "" || event.WorkspaceLabel != "") && event.SourceKind != SourceCaptureRun {
+		return ErrInvalidEvent
+	}
+	if event.CaptureLabel != "" && event.SourceKind != SourceCaptureRun && event.SourceKind != SourceManualProxy {
+		return ErrInvalidEvent
+	}
 	if isExchange {
 		if !hasExecution ||
 			validateIdentity("source display name", event.SourceDisplayName, false) != nil ||
@@ -679,6 +691,9 @@ type Record struct {
 	ReasonCode             string                 `json:"reasonCode,omitempty"`
 	SourceKind             SourceKind             `json:"sourceKind,omitempty"`
 	SourceDisplayName      string                 `json:"sourceDisplayName,omitempty"`
+	WorkspaceID            string                 `json:"workspaceId,omitempty"`
+	WorkspaceLabel         string                 `json:"workspaceLabel,omitempty"`
+	CaptureLabel           string                 `json:"captureLabel,omitempty"`
 	SourceRecognition      SourceRecognition      `json:"sourceRecognition,omitempty"`
 	CaptureRunID           string                 `json:"captureRunId,omitempty"`
 	ManualCaptureID        string                 `json:"manualCaptureId,omitempty"`
@@ -802,6 +817,9 @@ func (record Record) validatePrepared() error {
 		ReasonCode:             record.ReasonCode,
 		SourceKind:             record.SourceKind,
 		SourceDisplayName:      record.SourceDisplayName,
+		WorkspaceID:            record.WorkspaceID,
+		WorkspaceLabel:         record.WorkspaceLabel,
+		CaptureLabel:           record.CaptureLabel,
 		SourceRecognition:      record.SourceRecognition,
 		CaptureRunID:           record.CaptureRunID,
 		ManualCaptureID:        record.ManualCaptureID,

@@ -13,6 +13,7 @@ const (
 	Raw
 	Native
 	ACP
+	Capture
 	KindCount
 )
 
