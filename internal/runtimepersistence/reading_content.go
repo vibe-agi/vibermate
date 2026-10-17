@@ -20,7 +20,7 @@ func (repository *exchangeContentRepository) readingUserGroup(ctx context.Contex
 	for depth := ref.requestCount; depth > 0; depth-- {
 		var node storedTranscriptNode
 		var parent sql.NullString
-		err := repository.database.QueryRowContext(ctx, `SELECT digest,parent_digest,message_digest,depth
+		err := repository.reads.QueryRowContext(ctx, `SELECT digest,parent_digest,message_digest,depth
 		 FROM runtime_exchange_content_transcripts WHERE digest=?`, wantDigest).Scan(&node.digest, &parent, &node.messageDigest, &node.depth)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, "", exchangecontent.ErrInvalidEvidence

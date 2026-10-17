@@ -365,3 +365,11 @@ func (manager *Manager) RecordScopedSource(ctx context.Context, scope recording.
 	}
 	return sink.PutScopedSource(operation, scope, source)
 }
+
+// InspectionReader observes optional retained sources independently of the
+// recorder. Outer consumers recheck after their complete response enrichment.
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+	InspectAvailableBodies(context.Context, []string) (BodyAvailability, error)
+}

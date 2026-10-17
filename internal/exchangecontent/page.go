@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -78,24 +79,27 @@ type ProjectionPage struct {
 // within a bounded window; nextCursor walks toward older request history.
 // A body page is a UTF-8 fragment, explicitly not a complete JSON argument.
 type ContentPage struct {
-	BlockMetadata    *BlockPageMetadata                   `json:"blockMetadata,omitempty"`
-	CanonicalCursor  string                               `json:"canonicalCursor,omitempty"`
-	Data             []byte                               `json:"data,omitempty"`
-	BlockKind        string                               `json:"blockKind,omitempty"`
-	CallID           string                               `json:"callId,omitempty"`
-	ToolName         string                               `json:"toolName,omitempty"`
-	ExchangeID       string                               `json:"exchangeId"`
-	Kind             string                               `json:"kind"`
-	Messages         []Message                            `json:"messages"`
-	Blocks           []Block                              `json:"blocks"`
-	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
-	Text             string                               `json:"text,omitempty"`
-	Offset           int                                  `json:"offset"`
-	Total            int                                  `json:"total"`
-	NextCursor       string                               `json:"nextCursor,omitempty"`
-	Parent           ParentRef                            `json:"-"`
-	Frozen           FrozenRef                            `json:"-"`
-	Mode             environment.ContentRecordingMode     `json:"-"`
+	// InspectionExpiresAt retains the original source deadline through outer
+	// enrichment/encoding. It is not a wire field or a refreshed lifetime.
+	InspectionExpiresAt time.Time                            `json:"-"`
+	BlockMetadata       *BlockPageMetadata                   `json:"blockMetadata,omitempty"`
+	CanonicalCursor     string                               `json:"canonicalCursor,omitempty"`
+	Data                []byte                               `json:"data,omitempty"`
+	BlockKind           string                               `json:"blockKind,omitempty"`
+	CallID              string                               `json:"callId,omitempty"`
+	ToolName            string                               `json:"toolName,omitempty"`
+	ExchangeID          string                               `json:"exchangeId"`
+	Kind                string                               `json:"kind"`
+	Messages            []Message                            `json:"messages"`
+	Blocks              []Block                              `json:"blocks"`
+	ProtocolEvidence    []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
+	Text                string                               `json:"text,omitempty"`
+	Offset              int                                  `json:"offset"`
+	Total               int                                  `json:"total"`
+	NextCursor          string                               `json:"nextCursor,omitempty"`
+	Parent              ParentRef                            `json:"-"`
+	Frozen              FrozenRef                            `json:"-"`
+	Mode                environment.ContentRecordingMode     `json:"-"`
 }
 
 func (page ContentPage) Validate() error {

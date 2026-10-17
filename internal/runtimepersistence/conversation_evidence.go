@@ -19,7 +19,7 @@ func (repository *exchangeContentRepository) GetConversationEvidence(
 		return exchangecontent.ConversationEvidence{}, err
 	}
 	defer finish()
-	reference, err := loadStoredContentReference(operation, repository.database, exchangeID, now)
+	reference, err := loadStoredContentReferenceWithin(operation, repository.reads, exchangeID, now, repository.limits)
 	if err != nil {
 		return exchangecontent.ConversationEvidence{}, err
 	}

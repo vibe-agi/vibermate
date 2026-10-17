@@ -26,7 +26,7 @@ const transcriptNodeDomain = "vibermate:exchange-transcript-node\x00"
 type exchangeContentRepository struct {
 	coordinates, requireScope bool
 	database                  *sql.DB
-	reads                     *sql.DB
+	reads                     contentReadQueries
 	operations                *operationGate
 	limits                    *exchangecontent.SourceLimits
 	loadPhysical              storedPhysicalLoader
@@ -809,26 +809,30 @@ func (repository *exchangeContentRepository) RequestPreviews(
 
 func loadStoredContentReference(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	exchangeID string,
 	now time.Time,
 ) (storedContentReference, error) {
 	return loadStoredContentReferenceWithin(ctx, database, exchangeID, now, nil)
 }
 
-func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exchangeID string, now time.Time, limits *exchangecontent.SourceLimits) (storedContentReference, error) {
+func loadStoredContentReferenceWithin(ctx context.Context, database contentReadQueries, exchangeID string, now time.Time, limits *exchangecontent.SourceLimits) (storedContentReference, error) {
 	var reference storedContentReference
 	var scopeKind, scopeID, mode string
 	var recordedMillis, expiresMillis int64
 	var encodedManifest []byte
 	err := database.QueryRowContext(
 		ctx,
-		`SELECT scope_kind, scope_id, mode,
+		`SELECT CASE WHEN length(CAST(scope_kind AS BLOB))<=32 THEN scope_kind END,
+                CASE WHEN length(CAST(scope_id AS BLOB))<=128 THEN scope_id END,
+                CASE WHEN length(CAST(mode AS BLOB))<=32 THEN mode END,
 		        recorded_at_unix_ms, expires_at_unix_ms,
-		        request_transcript_digest, expected_transcript_digest,
-		        base_transcript_digest, request_message_count,
+		        CASE WHEN length(CAST(request_transcript_digest AS BLOB))=64 THEN request_transcript_digest END,
+                CASE WHEN length(CAST(expected_transcript_digest AS BLOB))=64 THEN expected_transcript_digest END,
+		        CASE WHEN base_transcript_digest IS NULL OR length(CAST(base_transcript_digest AS BLOB))=64 THEN base_transcript_digest ELSE '' END, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, system_message_digest,
+		        CASE WHEN response_message_digest IS NULL OR length(CAST(response_message_digest AS BLOB))=64 THEN response_message_digest ELSE '' END,
+                CASE WHEN system_message_digest IS NULL OR length(CAST(system_message_digest AS BLOB))=64 THEN system_message_digest ELSE '' END,
 		        CASE WHEN length(manifest_json) BETWEEN 1 AND 33554432 THEN manifest_json END
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ? AND expires_at_unix_ms > ?`,
@@ -871,6 +875,7 @@ func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exc
 		reference.inherited > reference.requestCount ||
 		!validStoredDigest(reference.requestRoot) ||
 		!validStoredDigest(reference.expectedRoot) ||
+		(reference.systemDigest.Valid && !validStoredDigest(reference.systemDigest.String)) ||
 		(reference.inherited == 0 && reference.baseRoot.Valid) ||
 		(reference.inherited > 0 && (!reference.baseRoot.Valid ||
 			!validStoredDigest(reference.baseRoot.String))) {
@@ -898,7 +903,7 @@ func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exc
 
 func loadFullStoredContent(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	reference storedContentReference,
 ) (exchangecontent.Record, error) {
 	messages, err := loadStoredTranscript(
@@ -1393,7 +1398,7 @@ func findStoredTranscriptBase(
 
 func loadStoredTranscript(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	root string,
 	wantCount int,
 ) ([]exchangecontent.Message, error) {
@@ -1456,7 +1461,7 @@ func loadStoredTranscript(
 
 func loadStoredTranscriptSuffix(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	root string,
 	baseRoot sql.NullString,
 	inherited int,
@@ -1561,7 +1566,7 @@ func loadStoredTranscriptSuffix(
 
 func loadStoredResponseMessage(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest sql.NullString,
 ) (*exchangecontent.Message, error) {
 	if !digest.Valid {
@@ -1580,7 +1585,7 @@ func loadStoredResponseMessage(
 // never a message in its transcript.
 func loadStoredSystemBlocks(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest sql.NullString,
 ) ([]exchangecontent.Block, error) {
 	if !digest.Valid {
@@ -1595,7 +1600,7 @@ func loadStoredSystemBlocks(
 
 func loadStoredMessage(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest string,
 ) (exchangecontent.Message, error) {
 	return loadStoredMessageBlocks(ctx, database, digest)
