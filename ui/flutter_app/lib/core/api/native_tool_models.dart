@@ -3,33 +3,40 @@ import 'dart:typed_data';
 import 'control_models.dart';
 
 final class NativeToolOperationPage {
-  const NativeToolOperationPage(this.items, this.nextSequence);
+  const NativeToolOperationPage(
+    this.items,
+    this.nextCursor,
+    this.inspectionVersion,
+  );
   factory NativeToolOperationPage.fromJson(
     Object? raw,
     String capture,
-    int after,
+    String after,
     int limit,
   ) {
     final map = requireObject(raw, 'native.operations');
     requireFields(
       map,
       'native.operations',
-      required: const {'items', 'nextSequence'},
+      required: const {'items', 'nextCursor', 'inspectionVersion'},
     );
+    final version = nativeHex(map['inspectionVersion'], 64);
     final items = requireList(
       map['items'],
       'native.operations.items',
     ).map((item) => NativeToolOperation.fromJson(item, capture)).toList();
-    final sequence = requireInteger(map, 'nextSequence', 'native.operations');
-    if (sequence < after ||
+    final cursor = requireString(map, 'nextCursor', 'native.operations');
+    if (cursor.isEmpty ||
+        utf8.encode(cursor).length > 512 ||
         items.length > limit ||
-        items.map((op) => op.operationId).toSet().length != items.length) {
+        items.map((op) => op.operationId).toSet().length != items.length ||
+        items.any((op) => op.inspectionVersion != version)) {
       throw const ControlContractException('Invalid native operation page');
     }
-    return NativeToolOperationPage(List.unmodifiable(items), sequence);
+    return NativeToolOperationPage(List.unmodifiable(items), cursor, version);
   }
   final List<NativeToolOperation> items;
-  final int nextSequence;
+  final String nextCursor, inspectionVersion;
 }
 
 DateTime _nativeTime(Object? raw) {
@@ -50,9 +57,12 @@ final class NativePartDescriptor {
       map,
       'native.part',
       required: const {'state'},
-      optional: const {'digest', 'expiresAt'},
+      optional: const {'digest', 'expiresAt', 'observedAt'},
     );
     state = requireString(map, 'state', 'native.part');
+    observedAt = map['observedAt'] == null
+        ? null
+        : _nativeTime(map['observedAt']);
     if (!const {
       'off',
       'metadata_only',
@@ -74,7 +84,7 @@ final class NativePartDescriptor {
   }
   late final String state;
   late final String? digest;
-  late final DateTime? expiresAt;
+  late final DateTime? expiresAt, observedAt;
 }
 
 final class NativeToolOperation {
@@ -85,6 +95,7 @@ final class NativeToolOperation {
       map,
       'native.operation',
       required: const {
+        'inspectionVersion',
         'operationId',
         'captureKey',
         'environment',
@@ -103,6 +114,7 @@ final class NativeToolOperation {
         'content',
       },
     );
+    inspectionVersion = nativeHex(map['inspectionVersion'], 64);
     operationId = nativeHex(map['operationId'], 32);
     captureKey = requireString(map, 'captureKey', 'native.operation');
     environment = NativeEnvironment.fromJson(map['environment']);
@@ -111,7 +123,11 @@ final class NativeToolOperation {
     toolName = requireStringValue(map, 'toolName', 'native.operation');
     state = requireString(map, 'state', 'native.operation');
     reason = requireStringValue(map, 'reason', 'native.operation');
-    decisionSource = requireString(map, 'decisionSource', 'native.operation');
+    decisionSource = requireStringValue(
+      map,
+      'decisionSource',
+      'native.operation',
+    );
     targetOrigin = requireString(map, 'targetOrigin', 'native.operation');
     credentialOwner = requireStringValue(
       map,
@@ -137,9 +153,10 @@ final class NativeToolOperation {
     bytesOut = counter('bytesOut');
     final origin = Uri.tryParse(targetOrigin);
     if (captureKey != expectedCapture ||
-        revision < 1 ||
+        (state == 'unknown' ? revision != 0 : revision < 1) ||
         !RegExp(r'^[A-Za-z0-9_.:/-]{0,256}$').hasMatch(toolName) ||
         !const {
+          'unknown',
           'received',
           'validated',
           'awaiting_decision',
@@ -150,7 +167,9 @@ final class NativeToolOperation {
           'canceled',
           'uncertain',
         }.contains(state) ||
-        !const {'none', 'policy', 'user'}.contains(decisionSource) ||
+        (state == 'unknown'
+            ? decisionSource.isNotEmpty
+            : !const {'none', 'policy', 'user'}.contains(decisionSource)) ||
         credentialOwner != '' && credentialOwner != 'original_client' ||
         origin == null ||
         origin.scheme != 'https' ||
@@ -198,7 +217,9 @@ final class NativeToolOperation {
         'Invalid native operation kind or reason',
       );
     }
-    if (terminal != (completedAt != null) || terminal == reason.isEmpty) {
+    if (terminal != (completedAt != null) ||
+        terminal == reason.isEmpty ||
+        state == 'unknown' && (bytesIn != null || bytesOut != null)) {
       throw const ControlContractException('Invalid native lifecycle');
     }
     final content = requireObject(map['content'], 'native.content');
@@ -215,7 +236,8 @@ final class NativeToolOperation {
       throw const ControlContractException('Invalid native recording');
     }
   }
-  late final String operationId,
+  late final String inspectionVersion,
+      operationId,
       captureKey,
       kind,
       toolName,
@@ -304,6 +326,7 @@ final class NativeToolContentPage {
       map,
       'native.contentPage',
       required: const {
+        'inspectionVersion',
         'operationId',
         'captureKey',
         'part',
@@ -312,6 +335,7 @@ final class NativeToolContentPage {
       },
       optional: const {'nextCursor'},
     );
+    inspectionVersion = nativeHex(map['inspectionVersion'], 64);
     operationId = nativeHex(map['operationId'], 32);
     captureKey = requireString(map, 'captureKey', 'native.contentPage');
     part = requireString(map, 'part', 'native.contentPage');
@@ -336,7 +360,11 @@ final class NativeToolContentPage {
       throw const ControlContractException('Invalid native content page');
     }
   }
-  late final String operationId, captureKey, part, bodyDigest;
+  late final String inspectionVersion,
+      operationId,
+      captureKey,
+      part,
+      bodyDigest;
   late final List<NativeContentBlock> blocks;
   late final String? nextCursor;
 }

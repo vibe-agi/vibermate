@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type PendingPreviewReader interface {
@@ -54,9 +55,9 @@ func nativeProblem(w http.ResponseWriter, err error) {
 		writeProblem(w, 409, ReasonRevisionConflict)
 	case errors.Is(err, nativetool.ErrNotFound):
 		writeProblem(w, 404, ReasonApprovalNotFound)
-	case errors.Is(err, nativetool.ErrInvalid):
+	case errors.Is(err, nativetool.ErrInvalid), errors.Is(err, recording.ErrInspectionCursor):
 		writeProblem(w, 422, ReasonInvalidRequest)
-	case errors.Is(err, nativetool.ErrConflict), errors.Is(err, nativetool.ErrReplay):
+	case errors.Is(err, nativetool.ErrConflict), errors.Is(err, nativetool.ErrReplay), errors.Is(err, recording.ErrInspectionChanged):
 		writeProblem(w, 409, ReasonRevisionConflict)
 	default:
 		writeProblem(w, 503, ReasonRuntimeUnavailable)
@@ -69,7 +70,7 @@ func (h *Handler) nativeCapture(w http.ResponseWriter, r *http.Request, write bo
 		writeProblem(w, 401, ReasonUnauthorized)
 		return ref, false
 	}
-	if err == nil && h.nativeTools == nil && h.nativeAuthority == nil {
+	if err == nil && h.nativeTools == nil && h.nativeAuthority == nil && h.nativeInspection == nil {
 		err = nativetool.ErrUnavailable
 	}
 	if err != nil {

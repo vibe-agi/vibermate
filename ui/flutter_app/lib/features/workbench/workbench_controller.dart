@@ -391,7 +391,9 @@ final class WorkbenchController extends ChangeNotifier
   bool nativeOperationsLoading = false, nativeOperationsComplete = false;
   String? nativeOperationsError;
   bool _nativeReaderVisible = false;
-  int _nativeReaderEpoch = 0, _nativeOperationSequence = 0;
+  int _nativeReaderEpoch = 0;
+  String _nativeOperationCursor = '';
+  String? _nativeInspectionVersion;
   final _nativeOperationGenerations = <String, int>{};
   final _nativeContentLoads = <String, Future<List<NativeRecordedBlock>>>{};
   final _nativeContentCache = <String, List<NativeRecordedBlock>>{};
@@ -422,7 +424,8 @@ final class WorkbenchController extends ChangeNotifier
         )
         .firstOrNull;
     final descriptor = current?.part(part);
-    return current?.revision == operation.revision &&
+    return current?.inspectionVersion == operation.inspectionVersion &&
+        current?.revision == operation.revision &&
         descriptor?.state == 'available' &&
         descriptor?.digest == operation.part(part).digest &&
         descriptor?.expiresAt?.isAfter(DateTime.now().toUtc()) == true;
@@ -442,7 +445,8 @@ final class WorkbenchController extends ChangeNotifier
 
   void _discardNativeReader() {
     _nativeReaderEpoch++;
-    _nativeOperationSequence = 0;
+    _nativeOperationCursor = '';
+    _nativeInspectionVersion = null;
     nativeOperations = const [];
     nativeOperationsLoading = false;
     nativeOperationsComplete = false;
@@ -491,9 +495,16 @@ final class WorkbenchController extends ChangeNotifier
       final previousComplete = nativeOperationsComplete;
       final page = await _api.nativeToolOperations(
         capture,
-        afterSequence: _nativeOperationSequence,
+        cursor: _nativeOperationCursor,
       );
       if (!current()) {
+        return;
+      }
+      if (_nativeInspectionVersion != null &&
+          _nativeInspectionVersion != page.inspectionVersion) {
+        _discardNativeReader();
+        notifyListeners();
+        unawaited(refreshNativeTools());
         return;
       }
       final operations = {
@@ -504,6 +515,7 @@ final class WorkbenchController extends ChangeNotifier
       for (final op in page.items) {
         final old = operations[op.operationId];
         if (old == null ||
+            old.inspectionVersion != op.inspectionVersion ||
             old.revision != op.revision ||
             old.arguments.digest != op.arguments.digest ||
             old.result.digest != op.result.digest ||
@@ -522,8 +534,15 @@ final class WorkbenchController extends ChangeNotifier
           if (!current()) {
             return;
           }
+          if (op.inspectionVersion != page.inspectionVersion) {
+            _discardNativeReader();
+            notifyListeners();
+            unawaited(refreshNativeTools());
+            return;
+          }
           final old = operations[id]!;
-          if (old.revision != op.revision ||
+          if (old.inspectionVersion != op.inspectionVersion ||
+              old.revision != op.revision ||
               old.arguments.digest != op.arguments.digest ||
               old.result.digest != op.result.digest ||
               old.arguments.state != op.arguments.state ||
@@ -549,8 +568,9 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       nativeOperationsComplete =
-          readError == null && page.nextSequence == _nativeOperationSequence;
-      _nativeOperationSequence = page.nextSequence;
+          readError == null && page.nextCursor == _nativeOperationCursor;
+      _nativeOperationCursor = page.nextCursor;
+      _nativeInspectionVersion = page.inspectionVersion;
       nativeOperations = List.unmodifiable(
         operations.values.toList()
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
@@ -566,6 +586,11 @@ final class WorkbenchController extends ChangeNotifier
       }
     } on Object catch (error) {
       if (current()) {
+        if (error is ControlProblem &&
+            (error.status == 409 || error.status == 422) &&
+            _nativeOperationCursor.isNotEmpty) {
+          _discardNativeReader();
+        }
         nativeOperationsError = _describeError(error);
         notifyListeners();
       }
@@ -593,7 +618,7 @@ final class WorkbenchController extends ChangeNotifier
     final epoch = _nativeReaderEpoch,
         generation = _nativeOperationGenerations[op.operationId] ?? 0;
     final key =
-        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation';
+        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation/${op.inspectionVersion}';
     final cached = _nativeContentCache.remove(key);
     if (cached != null) {
       _nativeContentCache[key] = cached;
@@ -623,7 +648,9 @@ final class WorkbenchController extends ChangeNotifier
           part,
           cursor: cursor,
         );
-        if (!current() || page.bodyDigest != descriptor.digest) {
+        if (!current() ||
+            page.inspectionVersion != op.inspectionVersion ||
+            page.bodyDigest != descriptor.digest) {
           throw const ControlContractException('Native content changed');
         }
         for (final block in page.blocks) {

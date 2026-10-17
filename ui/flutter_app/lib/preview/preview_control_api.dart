@@ -19,9 +19,13 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
   @override
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
-  }) async => NativeToolOperationPage(const [], afterSequence);
+  }) async => NativeToolOperationPage(
+    const [],
+    cursor.isEmpty ? 'preview-tail' : cursor,
+    '0' * 64,
+  );
   @override
   Future<NativeToolOperation> nativeToolOperation(
     String captureKey,

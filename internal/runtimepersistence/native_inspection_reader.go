@@ -208,6 +208,9 @@ func nativeIdentity(op nativetool.Operation) nativetool.InspectionIdentity {
 }
 func (r *NativeInspectionReader) get(s *nativeInspectionRead, c captureidentity.Reference, id nativetool.ID, now time.Time) (nativetool.InspectionOperation, error) {
 	result := nativetool.InspectionOperation{Token: s.token}
+	if fence, exists := s.snapshot.Scopes[c]; !exists || fence.Deleted {
+		return result, nativetool.ErrNotFound
+	}
 	var identity *nativetool.InspectionIdentity
 	var scope recording.Scope
 	var history *nativetool.RecordedHistory

@@ -161,6 +161,7 @@ type Options struct {
 	ProductUpdates      ProductUpdateReader
 	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
+	NativeInspection    nativetool.InspectionReader
 	NativeAuthority     nativetool.AuthorityRepository
 	NativePreviews      PendingPreviewReader
 	ContentLimits       *exchangecontent.SourceLimits
@@ -214,6 +215,7 @@ type Handler struct {
 	networkAccess       *NetworkAccess
 	productUpdates      ProductUpdateReader
 	nativeContentKey    [32]byte
+	nativeInspection    nativetool.InspectionReader
 	nativeTools         nativetool.Repository
 	nativeAuthority     nativetool.AuthorityRepository
 	nativePreviews      PendingPreviewReader
@@ -353,6 +355,7 @@ func New(options Options) (*Handler, error) {
 		egress:              options.Egress,
 		approvals:           options.Approvals,
 		nativeTools:         options.NativeTools,
+		nativeInspection:    options.NativeInspection,
 		nativeAuthority:     nativeAuthorityDependency(options),
 		nativePreviews:      options.NativePreviews,
 		endpoints:           options.Endpoints,

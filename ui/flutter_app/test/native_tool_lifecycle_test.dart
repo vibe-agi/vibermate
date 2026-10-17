@@ -43,7 +43,8 @@ void main() {
               request.url.path.endsWith('/operations')
                   ? {
                       'items': [op],
-                      'nextSequence': revision,
+                      'inspectionVersion': 'e' * 64,
+                      'nextCursor': 'cursor$revision',
                     }
                   : op,
             );
@@ -123,11 +124,13 @@ void main() {
         if (request.url.path.endsWith('/operations')) {
           return nativeResponse({
             'items': expired && invalidation == 'deleted' ? [] : [op],
-            'nextSequence': 7,
+            'inspectionVersion': 'e' * 64,
+            'nextCursor': 'cursor${7}',
           });
         }
         if (request.url.path.contains('/content')) {
           return nativeResponse({
+            'inspectionVersion': 'e' * 64,
             'operationId': nativeOperationID,
             'captureKey': op['captureKey'],
             'part': 'tool_result',
@@ -269,14 +272,16 @@ void main() {
               (a['content'] as Map)['result'] = {'state': 'unavailable'};
             }
             if (request.url.path.endsWith('/operations')) {
-              cursors.add(request.url.queryParameters['afterSequence']);
+              cursors.add(request.url.queryParameters['cursor']);
               return nativeResponse({
                 'items': failed
                     ? outcome == 'page_revision' && !recovered
                           ? [a]
                           : []
                     : [a, b],
-                'nextSequence': failed && outcome == 'page_revision' ? 8 : 7,
+                'inspectionVersion': 'e' * 64,
+                'nextCursor':
+                    'cursor${failed && outcome == 'page_revision' ? 8 : 7}',
               });
             }
             if (request.url.path.contains('/content')) {
@@ -362,7 +367,11 @@ void main() {
           await tester.runAsync(controller.refreshNativeTools);
           await tester.pumpAndSettle();
           expect(controller.nativeOperationsError, isNull);
-          expect(cursors, ['0', '7', outcome == 'page_revision' ? '8' : '7']);
+          expect(cursors, [
+            null,
+            'cursor7',
+            outcome == 'page_revision' ? 'cursor8' : 'cursor7',
+          ]);
           expect(find.text('old A result'), findsNothing);
           expect(contentReads, 1);
         },

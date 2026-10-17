@@ -25,9 +25,9 @@ import (
 	"time"
 )
 
-func recordedRouter(t *testing.T, runtime *productruntime.Runtime, repo nativetool.Repository, manuals manualcapture.Controller, clock *decisionClock) http.Handler {
+func recordedRouter(t *testing.T, runtime *productruntime.Runtime, repo nativetool.InspectionReader, manuals manualcapture.Controller, clock *decisionClock) http.Handler {
 	t.Helper()
-	app, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: clock, ManualCaptures: manuals, NativeTools: repo})
+	app, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: clock, ManualCaptures: manuals, NativeInspection: repo})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,13 +79,20 @@ func TestNativeRecordedRouterImagesPagingAndCursorScope(t *testing.T) {
 	}
 	text := strings.Repeat("\u6c49\U0001f642<&", 12000)
 	result, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "text", "text": text}, map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(img.Bytes())}}, "structuredContent": map[string]any{"answer": 42}})
-	nativemcp.ExerciseNativeRecordedControl(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, string(result), func(store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation) {
+	nativemcp.ExerciseNativeRecordedControl(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, string(result), func(store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation, reader nativetool.InspectionReader, invalidate func(bool)) {
+		inspected, err := reader.Get(context.Background(), capture, op.ID)
+		if err != nil || inspected.Result == nil {
+			t.Fatalf("separate recorded descriptor: %v", err)
+		}
+		if op.Result != nil || op.Arguments != nil {
+			t.Fatal("authority exposed optional descriptors")
+		}
 		clock := &decisionClock{time.Now().UTC()}
-		router := recordedRouter(t, runtime, store.NativeToolRepository(), manuals, clock)
+		router := recordedRouter(t, runtime, reader, manuals, clock)
 		path := "/api/v1/captures/" + capture.Key() + "/native-tools/operations/" + op.ID.String()
 		recordedStatus(t, recordedGET(router, path, ""), 401)
 		recordedStatus(t, recordedGET(router, path, capability(3)), 200)
-		recordedStatus(t, recordedGET(router, strings.TrimSuffix(path, "/"+op.ID.String())+"?afterSequence=999999", capability(3)), 200)
+		recordedStatus(t, recordedGET(router, strings.TrimSuffix(path, "/"+op.ID.String())+"?afterSequence=999999", capability(3)), 422)
 		var firstCursor, cursor string
 		var texts []string
 		var imageData, structured string
@@ -107,7 +114,7 @@ func TestNativeRecordedRouterImagesPagingAndCursorScope(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 				t.Fatal(err)
 			}
-			if len(page.Blocks) > 24 || page.BodyDigest != op.Result.Digest.String() {
+			if len(page.Blocks) > 24 || page.BodyDigest != inspected.Result.Digest.String() {
 				t.Fatal("page scope/digest invalid")
 			}
 			for _, block := range page.Blocks {
@@ -151,11 +158,16 @@ func TestNativeRecordedRouterImagesPagingAndCursorScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		payload := bytes.Replace(signed[:len(signed)-32], []byte(op.Result.Digest.String()), []byte(strings.Repeat("0", 64)), 1)
+		var payloadFields map[string]any
+		if err := json.Unmarshal(signed[:len(signed)-32], &payloadFields); err != nil {
+			t.Fatal(err)
+		}
+		payloadFields["q"] = strings.Repeat("A", 43)
+		payload, _ := json.Marshal(payloadFields)
 		tampered := base64.RawURLEncoding.EncodeToString(append(payload, signed[len(signed)-32:]...))
 		recordedStatus(t, recordedGET(router, path+"/content?part=tool_result&cursor="+url.QueryEscape(tampered), capability(3)), 422)
 		recordedStatus(t, recordedGET(router, path+"/content?part=tool_arguments&cursor="+url.QueryEscape(firstCursor), capability(3)), 422)
-		restarted := recordedRouter(t, runtime, store.NativeToolRepository(), manuals, clock)
+		restarted := recordedRouter(t, runtime, reader, manuals, clock)
 		recordedStatus(t, recordedGET(restarted, path+"/content?part=tool_result&cursor="+url.QueryEscape(firstCursor), capability(3)), 422)
 		other, err := manuals.Create(context.Background(), manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Other", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeTemporary, ExpiresIn: time.Hour})
 		if err != nil {
@@ -168,13 +180,13 @@ func TestNativeRecordedRouterImagesPagingAndCursorScope(t *testing.T) {
 }
 
 type deleteDuringNativeRead struct {
-	nativetool.Repository
+	nativetool.InspectionReader
 	remove func()
 }
 
-func (r *deleteDuringNativeRead) ReadContent(ctx context.Context, capture captureidentity.Reference, id nativetool.ID, part string, offset, limit int) ([]byte, error) {
-	body, err := r.Repository.ReadContent(ctx, capture, id, part, offset, limit)
-	if r.remove != nil {
+func (r *deleteDuringNativeRead) ReadContent(ctx context.Context, q nativetool.InspectionContentRequest) ([]byte, error) {
+	body, err := r.InspectionReader.ReadContent(ctx, q)
+	if err == nil && r.remove != nil {
 		remove := r.remove
 		r.remove = nil
 		remove()
@@ -202,9 +214,9 @@ func TestNativeRecordedRouterUnavailableAndDeleteDuringRead(t *testing.T) {
 			if scenario == "invalid_codec" {
 				result = `{"content":[{"type":"image","mimeType":"image/png","data":"ZmFrZQ=="}]}`
 			}
-			changes := []func(*sql.DB, nativetool.Operation){}
+			changes := []nativemcp.NativeRecordedMutation{}
 			if scenario == "corrupt_digest" {
-				changes = append(changes, func(db *sql.DB, op nativetool.Operation) {
+				changes = append(changes, func(db *sql.DB, op nativetool.InspectionOperation) {
 					if _, err := db.Exec(`UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, op.Result.Digest[:]); err != nil {
 						t.Fatal(err)
 					}
@@ -214,23 +226,15 @@ func TestNativeRecordedRouterUnavailableAndDeleteDuringRead(t *testing.T) {
 			if scenario == "unknown_profile" {
 				exercise = nativemcp.ExerciseNativeUnknownRecordedControl
 			}
-			exercise(t, recording, result, func(store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation) {
+			exercise(t, recording, result, func(store *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation, reader nativetool.InspectionReader, invalidate func(bool)) {
 				clock := &decisionClock{time.Now().UTC()}
-				var repo nativetool.Repository = store.NativeToolRepository()
+				var repo nativetool.InspectionReader = reader
 				if scenario == "expired" {
 					clock.now = op.CreatedAt.Add(25 * time.Hour)
 				}
 				if scenario == "clear" || scenario == "delete" {
-					repo = &deleteDuringNativeRead{Repository: repo, remove: func() {
-						if scenario == "clear" {
-							if _, err := store.ClearEvidence(context.Background()); err != nil {
-								t.Fatal(err)
-							}
-						} else {
-							if _, err := store.DeleteCapture(context.Background(), string(capture.Kind), capture.ID); err != nil {
-								t.Fatal(err)
-							}
-						}
+					repo = &deleteDuringNativeRead{InspectionReader: repo, remove: func() {
+						invalidate(scenario == "clear")
 					}}
 				}
 				router := recordedRouter(t, runtime, repo, manuals, clock)

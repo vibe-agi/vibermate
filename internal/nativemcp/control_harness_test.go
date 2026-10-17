@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -473,42 +474,131 @@ func ExerciseNativeExpiredControl(t *testing.T, check func(Executor, *runtimeper
 	exerciseNativeRejectedControl(t, true, check)
 }
 
-// Real executor -> native repository bridge, intentionally test-only.
-func ExerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
-	exerciseNativeRecordedControl(t, recording, result, true, check, mutate...)
+// Separate-role reader/HTTP fixture, not production Runtime composition.
+// The actual completed operation is input to the optional writer; expected
+// HTTP output is never borrowed from the authority repository.
+type NativeRecordedCheck func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation, nativetool.InspectionReader, func(bool))
+type NativeRecordedMutation func(*sql.DB, nativetool.InspectionOperation)
+
+func ExerciseNativeRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
+	exerciseNativeRecordedControl(t, policy, result, true, true, check, mutate...)
 }
-func ExerciseNativeUnknownRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
-	exerciseNativeRecordedControl(t, recording, result, false, check, mutate...)
+func ExerciseNativeUnknownRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
+	exerciseNativeRecordedControl(t, policy, result, false, true, check, mutate...)
 }
-func exerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, known bool, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
+func ExerciseNativeContentOnlyControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck) {
+	exerciseNativeRecordedControl(t, policy, result, true, false, check)
+}
+func exerciseNativeRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, known, history bool, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
 	t.Helper()
-	f := newNativeFixtureMode(t, environment.ToolPolicyObserve, recording)
+	ctx := context.Background()
+	f := newNativeFixtureMode(t, environment.ToolPolicyObserve, policy)
 	if known {
 		f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{}
 	}
 	f.handshake(t)
-	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
+	manuals, err := manualcapture.NewManager(ctx, manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manuals.Shutdown(context.Background())
+	defer manuals.Shutdown(ctx)
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":3,"result":` + result + `}`))}, nil
 	}
 	call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"frozen.txt"},"_meta":{"private":"metadata-sentinel"}}}`, "synthetic-session")
-	terminal := f.executor.Serve(context.Background(), call, httptest.NewRecorder())
+	terminal := f.executor.Serve(ctx, call, httptest.NewRecorder())
 	if terminal.Outcome != OutcomeCompleted {
 		t.Fatalf("recorded terminal %+v", terminal)
 	}
-	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
+	op, err := f.store.NativeToolRepository().Get(ctx, call.id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range mutate {
-		change(f.db, op)
+	if err = f.content.flush(); err != nil {
+		t.Fatal(err)
 	}
-	check(f.store, manuals, f.capture, op)
+	if history {
+		var kind string
+		var at int64
+		if err = f.db.QueryRow(`SELECT last_event_kind,last_event_at_unix_ms FROM native_tool_operations WHERE operation_id=?`, op.ID).Scan(&kind, &at); err != nil {
+			t.Fatal(err)
+		}
+		if err = f.content.store.PutNativeHistory(ctx, nativetool.RecordedHistory{Scope: op.RecordingScope, Observation: nativetool.HistoryObservation{Operation: op, EventKind: kind, EventAt: time.UnixMilli(at).UTC(), MaximumEventAt: op.MaximumEventAt, MetadataExpiresAt: op.MetadataExpiresAt}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var observationPath string
+	if err = f.contentDB.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&observationPath); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(filepath.Dir(observationPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPath := filepath.Join(root, "inspection-control.db")
+	control, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{DatabasePath: controlPath, LayoutID: "native-fixture", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Shutdown(ctx)
+	controlDB, err := sql.Open("sqlite", controlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlDB.Close()
+	if _, err = controlDB.Exec(`UPDATE runtime_storage_state SET archive_epoch=?`, op.RecordingScope.Fence.ArchiveEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = controlDB.Exec(`INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES(?,?,?,0)`, op.Capture.Kind, op.Capture.ID, op.RecordingScope.Fence.CaptureGeneration); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := runtimepersistence.NewInspectionCatalog(runtimepersistence.InspectionCatalogOptions{Root: root, LayoutID: "native-fixture", Generation: 1, Sources: []runtimepersistence.InspectionSource{{ID: "archive", RelativePath: "observations.db", Database: runtimepersistence.SchemaState{Identity: "vibermate-observations", Revision: 1}, Current: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close(ctx)
+	reader := runtimepersistence.NewNativeInspectionReader(catalog, control)
+	inspected, err := reader.Get(ctx, op.Capture, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertNoSensitiveRows(t, f, []string{"metadata-sentinel", "synthetic-original-login"})
+	for _, change := range mutate {
+		change(f.contentDB, inspected)
+	}
+	invalidate := func(all bool) {
+		tx, err := controlDB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if all {
+			_, err = tx.Exec(`UPDATE runtime_storage_state SET archive_epoch=archive_epoch+1,visibility_revision=visibility_revision+1`)
+		} else {
+			_, err = tx.Exec(`UPDATE recording_capture_fences SET generation=generation+1,deleted=1 WHERE capture_kind=? AND capture_id=?`, op.Capture.Kind, op.Capture.ID)
+			if err == nil {
+				_, err = tx.Exec(`UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1`)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if all {
+			_, err = f.store.ClearEvidence(ctx)
+		} else {
+			_, err = f.store.DeleteCapture(ctx, string(op.Capture.Kind), op.Capture.ID)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(f.store, manuals, f.capture, op, reader, invalidate)
+	if len(mutate) == 0 {
+		assertNoSensitiveRows(t, f, []string{"metadata-sentinel", "synthetic-original-login"})
+	}
 }
 
 func ExerciseNativeUnavailableControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {

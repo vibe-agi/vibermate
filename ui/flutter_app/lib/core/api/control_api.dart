@@ -26,7 +26,7 @@ abstract interface class ControlApi {
   Future<ProductUpdateMetadata> checkProductUpdate();
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
   });
   Future<NativeToolOperation> nativeToolOperation(
@@ -546,19 +546,19 @@ final class HttpControlApi
   @override
   Future<NativeToolOperationPage> nativeToolOperations(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
   }) async {
     validateNativeCapture(captureKey);
-    if (afterSequence < 0 || limit < 1 || limit > 199) {
+    if (utf8.encode(cursor).length > 512 || limit < 1 || limit > 199) {
       throw const ControlContractException('Invalid native operation query');
     }
     return NativeToolOperationPage.fromJson(
       await _readNativePreview(
-        '${_nativeOperationsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+        '${_nativeOperationsPath(captureKey)}?limit=$limit${cursor.isEmpty ? '' : '&cursor=${Uri.encodeQueryComponent(cursor)}'}',
       ),
       captureKey,
-      afterSequence,
+      cursor,
       limit,
     );
   }
