@@ -1,6 +1,7 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,6 +16,77 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test(
+    'real HTTP timeout releases its socket and keeps shared client usable',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final disconnected = Completer<void>();
+      final started = Completer<void>();
+      Socket? stalled;
+      var requests = 0;
+      server.listen((request) async {
+        requests++;
+        if (requests == 1) {
+          final socket = await request.response.detachSocket(
+            writeHeaders: false,
+          );
+          stalled = socket;
+          socket.listen(
+            (_) {},
+            onDone: () {
+              if (!disconnected.isCompleted) disconnected.complete();
+            },
+            onError: (Object error) {
+              if (!disconnected.isCompleted) disconnected.complete();
+            },
+          );
+          socket.add(
+            utf8.encode(
+              'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\n \r\n',
+            ),
+          );
+          await socket.flush();
+          started.complete();
+        } else {
+          request.response.write(
+            '{"schema":"vibermate-runtime-user-list-v1","items":[]}',
+          );
+          await request.response.close();
+        }
+      });
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: 'R' * 43,
+          writeToken: 'W' * 43,
+          instanceId: 'timeout-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(days: 10)),
+        ),
+        inspectSession: false,
+      );
+      addTearDown(() async {
+        await api.close();
+        stalled?.destroy();
+        await server.close(force: true);
+      });
+      final pending = expectLater(
+        api.runtimeUsers(),
+        throwsA(
+          isA<TimeoutException>().having(
+            (error) => error.duration,
+            'duration',
+            const Duration(seconds: 30),
+          ),
+        ),
+      );
+      await started.future.timeout(const Duration(seconds: 2));
+      await pending;
+      await disconnected.future.timeout(const Duration(seconds: 2));
+      expect(await api.runtimeUsers(), isEmpty);
+    },
+    timeout: const Timeout(Duration(seconds: 40)),
+  );
+
   test(
     'SOCKS delivery create rejects changed HTTP or SOCKS endpoint after review',
     () async {

@@ -1,4 +1,4 @@
-import '../../features/workbench/workbench_controller.dart';
+import '../preferences/workbench_preferences.dart';
 
 final class AppCopy {
   const AppCopy._(this._values);
@@ -51,6 +51,8 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'error.control_timeout':
+        'The control request timed out. Refresh to check the latest state. Agent work continues; recorded data may be incomplete.',
     'native.empty': 'No tool activity recorded',
     'native.readerUnavailable':
         'Tool activity cannot be read. Refresh this Capture.',
@@ -3117,6 +3119,7 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'error.control_timeout': '控制请求超时。请刷新以查看最新状态。Agent 工作会继续；记录的数据可能不完整。',
     'native.empty': '尚未记录工具活动',
     'native.readerUnavailable': '工具活动暂时无法读取，请刷新此 Capture。',
     'native.loginUnknown': '尚未确认登录账号',

@@ -52,6 +52,60 @@ http.Response _users() => http.Response(
 );
 
 void main() {
+  testWidgets(
+    'a timed out renewal replays its original key and ignores a late response',
+    (tester) async {
+      final lostReply = Completer<http.Response>();
+      String? committedKey;
+      var renewals = 0;
+      var invalidations = 0;
+      final client = MockClient((request) async {
+        if (request.url.path.endsWith('/current')) {
+          return _state(const Duration(milliseconds: 500));
+        }
+        if (request.url.path.endsWith('/refresh')) {
+          renewals++;
+          expectSync(request.headers['authorization'], 'Bearer $_write');
+          expectSync(request.headers['if-match'], '1');
+          final key = request.headers['idempotency-key'];
+          if (committedKey == null) {
+            committedKey = key;
+            return lostReply.future;
+          }
+          expectSync(key, committedKey);
+          return _rotation();
+        }
+        expectSync(request.headers['authorization'], 'Bearer $_nextRead');
+        return _users();
+      });
+      final api = await HttpControlApi.connect(
+        _session(),
+        client: client,
+        onSessionInvalidated: () => invalidations++,
+      );
+      addTearDown(api.close);
+      Object? error;
+      final pending = api.runtimeUsers().then<void>(
+        (_) {},
+        onError: (Object failure) {
+          error = failure;
+        },
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 30));
+      await pending;
+      expect(error, isA<ControlRequestTimeout>());
+      expect(await api.runtimeUsers(), isEmpty);
+      expect(renewals, 2);
+      lostReply.complete(_rotation());
+      await tester.pump();
+      expect(await api.runtimeUsers(), isEmpty);
+      expect(renewals, 2);
+      expect(invalidations, 0);
+      await api.close();
+    },
+  );
+
   test(
     'Desktop session renews while no dashboard or user request is made',
     () async {
