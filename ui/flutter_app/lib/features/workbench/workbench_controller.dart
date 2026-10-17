@@ -20,6 +20,7 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
+import '../../core/i18n/app_copy.dart';
 import '../../core/api/product_update_api.dart';
 import '../../core/update/product_version.dart';
 import 'runtime_connection_guide.dart';
@@ -4655,6 +4656,9 @@ final class WorkbenchController extends ChangeNotifier
   String _describeError(Object error) {
     return switch (error) {
       DashboardUnavailable failure => _describeError(failure.cause),
+      TimeoutException() => AppCopy.forLanguage(language)(
+        'error.control_timeout',
+      ),
       EnvironmentUpstreamReferenceException() =>
         'error.environment_upstream_changed',
       ControlProblem(reasonCode: 'environment_upstream_stale') =>
