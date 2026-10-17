@@ -7,6 +7,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 // Optional history loss must not revoke a valid current native operation.
@@ -121,5 +122,77 @@ func TestNativeAuthorityRefusesCorruptCurrentProof(t *testing.T) {
 				t.Fatal("corrupt required proof authorized send")
 			}
 		})
+	}
+}
+
+func TestNativePendingApprovalsEqualTimestampsAndRestart(t *testing.T) {
+	store, id, _ := nativeStoreFixture(t, environment.ToolPolicyReview)
+	repo := store.NativeToolRepository()
+	authority := store.nativeTools
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	base, _ := nativeDecisionFixture(t, store, id)
+	ids := []nativetool.ID{"cccccccccccccccccccccccccccccccc", "dddddddddddddddddddddddddddddddd"}
+	for i, approval := range ids {
+		op := id
+		if i == 1 {
+			op = "55555555555555555555555555555555"
+			nativeBindCall(t, repo, base, op, 5, nil, now)
+		}
+		if _, err := repo.RequestApproval(ctx, op, approval, now.Add(time.Millisecond), now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := authority.ListPendingApprovals(ctx, nativetool.PendingApprovalRequest{Capture: base.Capture(), Limit: 1})
+	if err != nil || len(first.Items) != 1 || first.Items[0].Approval.ID != ids[0] || first.NextID != ids[0] {
+		t.Fatalf("first equal-time page: %+v %v", first, err)
+	}
+	second, err := authority.ListPendingApprovals(ctx, nativetool.PendingApprovalRequest{Capture: base.Capture(), AfterCreatedAt: first.NextCreatedAt, AfterID: first.NextID, Limit: 1})
+	if err != nil || len(second.Items) != 1 || second.Items[0].Approval.ID != ids[1] || second.NextID != "" {
+		t.Fatalf("exhaustion: %+v %v", second, err)
+	}
+	late := nativetool.ID("66666666666666666666666666666666")
+	nativeBindCall(t, repo, base, late, 6, nil, now)
+	if _, err := repo.RequestApproval(ctx, late, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := authority.ListPendingApprovals(ctx, nativetool.PendingApprovalRequest{Capture: base.Capture(), Limit: 1})
+	if err != nil || len(restarted.Items) != 1 || restarted.Items[0].Operation.ID != late {
+		t.Fatalf("new earlier tuple omitted: %+v %v", restarted, err)
+	}
+}
+
+func TestNativeCurrentMaximumEventSurvivesClockRegression(t *testing.T) {
+	store, id, rev := nativeStoreFixture(t, environment.ToolPolicyReview)
+	repo := store.NativeToolRepository()
+	base, _ := nativeDecisionFixture(t, store, id)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	catalog, _ := base.CatalogDigest()
+	args, _ := protocolcore.NewJSONObject([]byte(`{"path":"a"}`), 1024)
+	key, _ := protocolcore.NewCallKey("native", "99")
+	binding, err := nativetool.NewBinding(nativetool.BindingInput{Kind: nativetool.RequestToolsCall, Plan: base.Plan(), Capture: base.Capture(), AssignmentRevision: base.AssignmentRevision(), OwnerEpoch: base.OwnerEpoch(), SessionID: base.SessionID(), SessionRevision: base.SessionRevision(), CatalogGeneration: base.CatalogGeneration(), CatalogDigest: &catalog, ExactRPC: []byte(`{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`), Intents: []protocolcore.ToolIntent{{ResponseID: "rpc-99", Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := nativetool.ID("77777777777777777777777777777777")
+	nativeReceiveOnly(t, repo, operation, binding, now)
+	maximum := now.Add(100 * time.Millisecond)
+	if err := repo.Bind(ctx, operation, binding, maximum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RequestApproval(ctx, operation, "99999999999999999999999999999999", now.Add(50*time.Millisecond), now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	op, err := repo.Get(ctx, operation)
+	if err != nil || !op.MaximumEventAt.Equal(maximum) {
+		t.Fatalf("clock regression replaced maximum event: %+v %v", op, err)
+	}
+	if err := repo.Revoke(ctx, op.Capture, rev, "revoked", now.Add(60*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	op, err = repo.Get(ctx, operation)
+	if err != nil || op.CompletedAt == nil || !op.CompletedAt.Equal(maximum) {
+		t.Fatalf("retirement ignored maximum event: %+v %v", op, err)
 	}
 }

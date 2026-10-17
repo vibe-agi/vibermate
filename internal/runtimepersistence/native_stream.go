@@ -452,6 +452,13 @@ func (r *nativeToolRepository) FinishObservedRPC(ctx context.Context, receipt na
 		if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 			return err
 		}
+		if physical.Counts != nil {
+			op.BytesIn = &counts.BytesIn
+			op.BytesOut = &counts.BytesOut
+		} else {
+			op.BytesIn = nil
+			op.BytesOut = nil
+		}
 		if err := finishNativeLogical(ctx, tx, op, logical); err != nil {
 			return err
 		}
@@ -732,6 +739,9 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 		if claims != 0 || audits != 0 {
 			return nativetool.ErrInvalid
 		}
+		zero := int64(0)
+		op.BytesIn = &zero
+		op.BytesOut = &zero
 		if err := nativeTransition(ctx, tx, op, "canceled", op.DecisionSource, "revoked", "revoked", now); err != nil {
 			return err
 		}
@@ -775,6 +785,8 @@ func (r *nativeToolRepository) cleanupNativeRecoveryAttempt(ctx context.Context,
 	if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 		return err
 	}
+	op.BytesIn = nil
+	op.BytesOut = nil
 	if err := finishNativeLogical(ctx, tx, op, nativetool.LogicalFinishInput{Outcome: outcome, Reason: reason, ObservedAt: now}); err != nil {
 		return err
 	}

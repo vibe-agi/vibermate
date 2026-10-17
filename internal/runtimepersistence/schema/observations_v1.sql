@@ -801,3 +801,85 @@ CREATE TABLE observation_storage_state(
  layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
  archive_id TEXT NOT NULL CHECK(length(CAST(archive_id AS BLOB)) BETWEEN 1 AND 128)
 ) STRICT;
+
+CREATE TABLE native_history_snapshots(
+ operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
+ operation_revision INTEGER NOT NULL CHECK(operation_revision>0),
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
+ environment_id TEXT NOT NULL CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+ environment_revision INTEGER NOT NULL CHECK(environment_revision>0),
+ environment_digest BLOB NOT NULL CHECK(length(environment_digest)=32),
+ binding_digest BLOB CHECK(binding_digest IS NULL OR length(binding_digest)=32),
+ approval_id TEXT CHECK(approval_id IS NULL OR (length(approval_id)=32 AND approval_id NOT GLOB '*[^0-9a-f]*')),
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ rpc_kind TEXT NOT NULL CHECK(rpc_kind IN('unclassified','initialize','initialized','tools_list','tools_call','ping','cancel','server_reply','get_stream','delete_session')),
+ tool_name TEXT NOT NULL CHECK(length(CAST(tool_name AS BLOB))<=256),
+ target_origin TEXT NOT NULL CHECK(length(CAST(target_origin AS BLOB)) BETWEEN 1 AND 1024),
+ credential_owner TEXT NOT NULL CHECK(length(CAST(credential_owner AS BLOB))<=128),
+ state TEXT NOT NULL CHECK(state IN('received','validated','awaiting_decision','denied','started','completed','failed','canceled','uncertain')),
+ decision_source TEXT NOT NULL CHECK(decision_source IN('none','policy','user')),
+ terminal_reason TEXT NOT NULL CHECK(length(CAST(terminal_reason AS BLOB))<=64),
+ created_at_unix_ms INTEGER NOT NULL CHECK(created_at_unix_ms>0),
+ completed_at_unix_ms INTEGER CHECK(completed_at_unix_ms IS NULL OR completed_at_unix_ms>=created_at_unix_ms),
+ bytes_in INTEGER CHECK(bytes_in IS NULL OR bytes_in>=0),
+ bytes_out INTEGER CHECK(bytes_out IS NULL OR bytes_out>=0),
+ event_kind TEXT NOT NULL CHECK(length(CAST(event_kind AS BLOB)) BETWEEN 1 AND 32),
+ event_at_unix_ms INTEGER NOT NULL CHECK(event_at_unix_ms>=created_at_unix_ms),
+ maximum_event_at_unix_ms INTEGER NOT NULL CHECK(event_at_unix_ms>=created_at_unix_ms),
+ metadata_expires_at_unix_ms INTEGER NOT NULL CHECK(metadata_expires_at_unix_ms>created_at_unix_ms),
+ PRIMARY KEY(operation_id,operation_revision)
+) STRICT;
+CREATE TABLE native_history_latest(
+ operation_id TEXT PRIMARY KEY,
+ operation_revision INTEGER NOT NULL,
+ FOREIGN KEY(operation_id,operation_revision) REFERENCES native_history_snapshots(operation_id,operation_revision)
+) STRICT;
+CREATE TABLE native_inspection_index(
+ position INTEGER PRIMARY KEY AUTOINCREMENT,
+ operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
+ environment_id TEXT NOT NULL CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+ environment_revision INTEGER NOT NULL CHECK(environment_revision>0),
+ environment_digest BLOB NOT NULL CHECK(length(environment_digest)=32),
+ rpc_kind TEXT NOT NULL CHECK(rpc_kind IN('unclassified','initialize','initialized','tools_list','tools_call','ping','cancel','server_reply','get_stream','delete_session')),
+ target_origin TEXT NOT NULL CHECK(length(CAST(target_origin AS BLOB)) BETWEEN 1 AND 1024),
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ created_at_unix_ms INTEGER NOT NULL CHECK(created_at_unix_ms>0),
+ history_revision INTEGER NOT NULL DEFAULT 0 CHECK(history_revision>=0)
+) STRICT;
+CREATE INDEX native_history_expiry ON native_history_snapshots(metadata_expires_at_unix_ms,operation_id);
+CREATE INDEX native_inspection_capture ON native_inspection_index(capture_kind,capture_id,position);
+
+-- Immutable body/display coordinates; no foreign key to a live operation.
+-- Task2 publishes this graph and the shared inspection index atomically.
+CREATE TABLE native_tool_contents(
+ operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
+ part TEXT NOT NULL CHECK(part IN('tool_arguments','tool_result')),
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
+ environment_id TEXT NOT NULL CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+ environment_revision INTEGER NOT NULL CHECK(environment_revision>0),
+ environment_digest BLOB NOT NULL CHECK(length(environment_digest)=32),
+ rpc_kind TEXT NOT NULL CHECK(rpc_kind='tools_call'),
+ tool_name TEXT NOT NULL CHECK(length(CAST(tool_name AS BLOB)) BETWEEN 1 AND 256),
+ target_origin TEXT NOT NULL CHECK(length(CAST(target_origin AS BLOB)) BETWEEN 1 AND 1024),
+ credential_owner TEXT NOT NULL CHECK(length(CAST(credential_owner AS BLOB)) BETWEEN 1 AND 128),
+ recording TEXT NOT NULL CHECK(recording='full'),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 3650),
+ created_at_unix_ms INTEGER NOT NULL CHECK(created_at_unix_ms>0),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>created_at_unix_ms),
+ body_digest BLOB NOT NULL CHECK(length(body_digest)=32) REFERENCES runtime_evidence_bodies(digest),
+ PRIMARY KEY(operation_id,part)
+) STRICT;
+CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
+CREATE INDEX native_tool_contents_expiry ON native_tool_contents(expires_at_unix_ms);

@@ -6,6 +6,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"math"
@@ -25,17 +26,20 @@ import (
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
 type recordingItem struct {
-	metadata    *recordedMetadata
-	content     *exchangecontent.OwnedRecord
-	contentSink exchangecontent.SourceRecorder
-	kind        recording.Kind
-	stamp       recording.Stamp
-	connection  connectionevent.Event
-	egress      egressaudit.Attempt
-	reservation *recording.Reservation
-	bytes       int64
+	nativeHistory *nativetool.RecordedHistory
+	nativeSink    nativetool.HistoryWriter
+	metadata      *recordedMetadata
+	content       *exchangecontent.OwnedRecord
+	contentSink   exchangecontent.SourceRecorder
+	kind          recording.Kind
+	stamp         recording.Stamp
+	connection    connectionevent.Event
+	egress        egressaudit.Attempt
+	reservation   *recording.Reservation
+	bytes         int64
 }
 type observationRecorder struct {
+	nativeHistory      nativetool.HistoryWriter
 	reportFailure      func(string, error)
 	usagePolicy        atomic.Pointer[runtimeusage.CollectionPolicy]
 	budget             *recording.Budget
@@ -223,7 +227,9 @@ func (r *observationRecorder) run() {
 			outcome := recording.Discarded
 			if item.stamp.Current() && r.ctx.Err() == nil {
 				var err error
-				if item.kind == recording.Connection {
+				if item.kind == recording.Native {
+					err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
+				} else if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
 				} else if item.kind == recording.Activity {
 					err = item.metadata.persist(r.ctx, r.reportFailure)
@@ -238,7 +244,7 @@ func (r *observationRecorder) run() {
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
-					if errors.Is(err, runtimeusage.ErrObservationDiscarded) {
+					if errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict)) {
 						outcome = recording.Discarded
 					}
 				}

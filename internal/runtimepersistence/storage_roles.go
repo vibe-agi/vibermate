@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/recording"
 )
@@ -31,17 +30,11 @@ type ControlOptions struct {
 	NativeHistory                       nativetool.HistoryRecorder
 	RecordingScopes                     recording.ScopeIssuer
 }
-type ObservationOptions struct {
-	DatabasePath, LayoutID, ArchiveID   string
-	BusyTimeout, CommitReconcileTimeout time.Duration
-	ContentLimits                       *exchangecontent.SourceLimits
-}
 
 // Owners intentionally do not embed Store: authority callers cannot reach an
 // observation repository through the control owner. The private implementation
 // shares constructor plumbing, not pools, paths, gates, or role dependencies.
 type ControlStore struct{ store *Store }
-type ObservationStore struct{ store *Store }
 
 type roleSchema struct {
 	identity             string
@@ -62,17 +55,6 @@ func OpenControl(ctx context.Context, o ControlOptions) (*ControlStore, error) {
 	s.nativeTools.history = o.NativeHistory
 	s.nativeTools.recordingScopes = o.RecordingScopes
 	return &ControlStore{store: s}, nil
-}
-func OpenObservations(ctx context.Context, o ObservationOptions) (*ObservationStore, error) {
-	if !roleID(o.LayoutID) || !roleID(o.ArchiveID) {
-		return nil, ErrInvalidDatabasePath
-	}
-	role := &roleSchema{identity: observationSchemaIdentity, revision: 1, ddl: observationSchemaSQL, layout: o.LayoutID, archive: o.ArchiveID}
-	s, err := openStore(ctx, Options{DatabasePath: o.DatabasePath, BusyTimeout: o.BusyTimeout, CommitReconcileTimeout: o.CommitReconcileTimeout, ContentLimits: o.ContentLimits}, role)
-	if err != nil {
-		return nil, err
-	}
-	return &ObservationStore{store: s}, nil
 }
 
 func (r *roleSchema) validateExisting(ctx context.Context, path string, timeout time.Duration) error {
@@ -172,8 +154,42 @@ func (r *roleSchema) initialize(ctx context.Context, db *sql.DB, now time.Time) 
 	}
 	return tx.Commit()
 }
-func (s *ControlStore) Shutdown(ctx context.Context) error     { return s.store.Shutdown(ctx) }
-func (s *ObservationStore) Shutdown(ctx context.Context) error { return s.store.Shutdown(ctx) }
+func (s *ControlStore) Shutdown(ctx context.Context) error { return s.store.Shutdown(ctx) }
+
 func (s *ControlStore) NativeToolRepository() nativetool.AuthorityRepository {
 	return s.store.nativeTools
+}
+
+func (s *ControlStore) RetireNativeMetadata(ctx context.Context, now time.Time, limit int) (int64, error) {
+	if !nativeTime(now) || limit < 1 || limit > 1000 {
+		return 0, nativetool.ErrInvalid
+	}
+	operation, finish, err := s.store.operations.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+	tx, err := s.store.database.BeginTx(operation, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(operation, `DELETE FROM native_tool_operations WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE completed_at_unix_ms IS NOT NULL AND metadata_expires_at_unix_ms<=? AND NOT EXISTS(SELECT 1 FROM native_tool_deliveries d WHERE d.operation_id=native_tool_operations.operation_id AND d.completed_at_unix_ms IS NULL) ORDER BY metadata_expires_at_unix_ms,operation_id LIMIT ?)`, now.UnixMilli(), limit)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *ControlStore) SchemaStateReader() SchemaStateReader { return s.store.repo }
+
+func (s *ControlStore) Settings(ctx context.Context) (DatabaseSettings, error) {
+	return s.store.Settings(ctx)
 }

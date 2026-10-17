@@ -1,4 +1,4 @@
--- Prepared native revision-2 DDL; not used by the active revision-1 Store.
+-- Current native control DDL for unreleased control revision 3.
 CREATE TABLE native_tool_scopes(
   capture_kind TEXT NOT NULL  CHECK(capture_kind IN('managed_run','manual_capture')),
   capture_id TEXT NOT NULL  CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
@@ -159,32 +159,12 @@ CREATE TABLE native_tool_once(
   PRIMARY KEY(capture_kind,capture_id,replay_key)
 ) STRICT;
 
-CREATE TABLE native_tool_events(
-  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-  operation_id TEXT NOT NULL REFERENCES native_tool_operations(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
-  operation_revision INTEGER NOT NULL CHECK(operation_revision BETWEEN 1 AND 9223372036854775807),
-  kind TEXT NOT NULL  CHECK(kind IN('received','validated','awaiting_decision','allowed','denied','started','progress','completed','failed','canceled','uncertain','revoked')),
-  occurred_at_unix_ms INTEGER NOT NULL,
-  UNIQUE(operation_id,operation_revision)
-) STRICT;
-
-CREATE TABLE native_tool_contents(
-  operation_id TEXT NOT NULL REFERENCES native_tool_operations(operation_id) ON DELETE CASCADE CHECK(length(operation_id) = 32 AND operation_id NOT GLOB '*[^0-9a-f]*'),
-  part TEXT NOT NULL  CHECK(part IN('tool_arguments','tool_result')),
-  body_digest BLOB NOT NULL CHECK(length(body_digest) = 32) REFERENCES runtime_evidence_bodies(digest),
-  expires_at_unix_ms INTEGER NOT NULL,
-  PRIMARY KEY(operation_id,part)
-) STRICT;
-
 CREATE UNIQUE INDEX native_tool_approvals_idempotency
 ON native_tool_approvals(idempotency_key) WHERE idempotency_key <> '';
 CREATE INDEX native_tool_sessions_scope_state ON native_tool_sessions(capture_kind,capture_id,state);
 CREATE INDEX native_tool_operations_scope_created ON native_tool_operations(capture_kind,capture_id,created_at_unix_ms,operation_id);
 CREATE INDEX native_tool_operations_expiry ON native_tool_operations(metadata_expires_at_unix_ms);
 CREATE INDEX native_tool_approvals_state_created ON native_tool_approvals(state,created_at_unix_ms,approval_id);
-CREATE INDEX native_tool_events_operation_sequence ON native_tool_events(operation_id,sequence);
-CREATE INDEX native_tool_contents_expiry ON native_tool_contents(expires_at_unix_ms);
-CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
 
 CREATE TRIGGER native_tool_binding_immutable
 BEFORE UPDATE ON native_tool_bindings BEGIN
@@ -210,20 +190,6 @@ WHEN (NEW.state IN('validated','awaiting_decision','started','completed','failed
     AND (NEW.completed_at_unix_ms IS NULL OR NEW.completed_at_unix_ms <> OLD.completed_at_unix_ms))
 BEGIN
   SELECT RAISE(ABORT,'invalid native operation transition');
-END;
-CREATE TRIGGER native_tool_content_insert_guard
-BEFORE INSERT ON native_tool_contents
-WHEN NOT EXISTS(SELECT 1 FROM native_tool_operations
-  WHERE operation_id = NEW.operation_id AND recording = 'full' AND rpc_kind = 'tools_call')
-BEGIN
-  SELECT RAISE(ABORT,'native content requires full tools call recording');
-END;
-CREATE TRIGGER native_tool_content_update_guard
-BEFORE UPDATE ON native_tool_contents
-WHEN NOT EXISTS(SELECT 1 FROM native_tool_operations
-  WHERE operation_id = NEW.operation_id AND recording = 'full' AND rpc_kind = 'tools_call')
-BEGIN
-  SELECT RAISE(ABORT,'native content requires full tools call recording');
 END;
 
 CREATE TABLE native_tool_deliveries(

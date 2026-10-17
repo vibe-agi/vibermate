@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
 // A recording transaction must not hold Capture creation or lease renewal.
@@ -113,5 +115,145 @@ func TestStorageRoleNativeAuthorityNeedsNoObservationOwner(t *testing.T) {
 	}
 	if final.RecordingScope != op.RecordingScope {
 		t.Fatal("old operation recording scope upgraded after epoch change")
+	}
+}
+
+func TestStorageRoleNativeMetadataRetiresIndependentOfFullRetention(t *testing.T) {
+	ctx := context.Background()
+	control, err := OpenControl(ctx, ControlOptions{DatabasePath: filepath.Join(t.TempDir(), "control.db"), LayoutID: "retention-layout", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, id, rev := nativeFixtureOnStore(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 3650}, true, nil, control.store, egressprofile.Direct())
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	nativeAllow(t, control.store.NativeToolRepository(), id, now)
+	if _, err := control.NativeToolRepository().Start(ctx, id, "retention-delivery", rev, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.NativeToolRepository().Finish(ctx, id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.RetireNativeMetadata(ctx, now.Add(31*24*time.Hour), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.NativeToolRepository().Get(ctx, id); !errors.Is(err, nativetool.ErrNotFound) {
+		t.Fatalf("full content policy retained control metadata: %v", err)
+	}
+	var claims int
+	if err := control.store.database.QueryRow(`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&claims); err != nil || claims != 1 {
+		t.Fatalf("protocol once identity lost: %d %v", claims, err)
+	}
+}
+
+func TestStorageRoleObservationRawGraphCollectsWithoutControlTables(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenObservations(ctx, ObservationOptions{DatabasePath: filepath.Join(t.TempDir(), "observations.db"), LayoutID: "raw-layout", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	now := time.Now().UTC()
+	record := rawEvidenceRecordForTest("writer-1.1", 1, rawevidence.LayerClientIngress, []byte("independent-observation-body"), []byte(`{"version":1,"headers":[]}`))
+	record.ObservedAt = now.Add(-time.Hour)
+	record.ExpiresAt = now.Add(time.Minute)
+	repo := store.RawEvidenceRepository()
+	if err := repo.AppendBatch(ctx, []rawevidence.StoredEnvelope{record}, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.ListExchange(ctx, record.ExchangeID)
+	if err != nil || len(got) != 1 {
+		t.Fatal("optional graph not published", err)
+	}
+	recovery, err := repo.BeginWriterSession(ctx, rawevidence.WriterSession{WriterID: "next", StartedAt: now.Add(time.Hour), MaximumUnflushedTime: time.Millisecond})
+	if err != nil || recovery.PurgedExpiredEnvelopes != 1 {
+		t.Fatalf("independent graph GC: %+v %v", recovery, err)
+	}
+	got, err = repo.ListExchange(ctx, record.ExchangeID)
+	if err != nil || len(got) != 0 {
+		t.Fatal("expired graph remains", err)
+	}
+}
+
+func TestStorageRoleRetirementKeepsUnfinishedPhysicalDelivery(t *testing.T) {
+	ctx := context.Background()
+	control, err := OpenControl(ctx, ControlOptions{DatabasePath: filepath.Join(t.TempDir(), "control.db"), LayoutID: "physical-retirement", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, id, rev := nativeFixtureOnStore(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, true, nil, control.store, egressprofile.Direct())
+	repo := control.NativeToolRepository()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	base, _ := nativeDecisionFixture(t, control.store, id)
+	nativeAllow(t, control.store.NativeToolRepository(), id, now)
+	receipt, err := repo.Start(ctx, id, "pending-physical", rev, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := repo.OpenObservedStream(ctx, receipt, base, time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CompleteStreamRPC(ctx, stream, nativetool.LogicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.RetireNativeMetadata(ctx, now.Add(31*24*time.Hour), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Get(ctx, id); err != nil {
+		t.Fatalf("logical completion discarded unfinished physical proof: %v", err)
+	}
+	if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.RetireNativeMetadata(ctx, now.Add(31*24*time.Hour), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Get(ctx, id); !errors.Is(err, nativetool.ErrNotFound) {
+		t.Fatal("finished physical proof failed to retire", err)
+	}
+}
+
+func TestStorageRoleRejectsForeignRoleAndLayout(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	controlPath := filepath.Join(dir, "control.db")
+	observationPath := filepath.Join(dir, "observations.db")
+	controlOptions := ControlOptions{DatabasePath: controlPath, LayoutID: "layout", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second}
+	observationOptions := ObservationOptions{DatabasePath: observationPath, LayoutID: "layout", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second}
+	control, err := OpenControl(ctx, controlOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := OpenObservations(ctx, observationOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := observation.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	controlOptions.DatabasePath = observationPath
+	if got, err := OpenControl(ctx, controlOptions); got != nil || !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatal("observation file became control authority", err)
+	}
+	controlOptions.DatabasePath = controlPath
+	controlOptions.LayoutID = "foreign"
+	if got, err := OpenControl(ctx, controlOptions); got != nil || !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatal("foreign layout became control authority", err)
+	}
+	observationOptions.DatabasePath = controlPath
+	if got, err := OpenObservations(ctx, observationOptions); got != nil || !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatal("control file became observation role", err)
+	}
+	observationOptions.DatabasePath = observationPath
+	observationOptions.ArchiveID = "foreign"
+	if got, err := OpenObservations(ctx, observationOptions); got != nil || !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatal("foreign archive identity accepted", err)
 	}
 }

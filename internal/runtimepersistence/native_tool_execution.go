@@ -391,6 +391,13 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
 		return err
 	}
+	if unknown {
+		op.BytesIn = nil
+		op.BytesOut = nil
+	} else {
+		op.BytesIn = &in.BytesIn
+		op.BytesOut = &in.BytesOut
+	}
 	if err := nativeTransition(ctx, tx, op, in.Outcome, op.DecisionSource, in.Reason, in.Outcome, in.ObservedAt); err != nil {
 		return err
 	}
@@ -467,6 +474,9 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 			if state == "failed" && op.State == "received" {
 				state = "denied"
 			}
+			zero := int64(0)
+			op.BytesIn = &zero
+			op.BytesOut = &zero
 			if err := nativeTransition(ctx, tx, op, state, op.DecisionSource, in.Reason, state, in.ObservedAt); err != nil {
 				return err
 			}
@@ -546,12 +556,8 @@ func retireNativeWork(ctx context.Context, tx *sql.Tx, c captureidentity.Referen
 			return err
 		}
 		at := now
-		var last int64
-		if err := tx.QueryRowContext(ctx, `SELECT maximum_event_at_unix_ms FROM native_tool_operations WHERE operation_id=?`, id).Scan(&last); err != nil {
-			return err
-		}
-		if at.UnixMilli() < last {
-			at = time.UnixMilli(last).UTC()
+		if at.Before(op.MaximumEventAt) {
+			at = op.MaximumEventAt
 		}
 		if op.State == "started" {
 			if err := finishNative(ctx, tx, op, nativetool.TerminalInput{Outcome: "uncertain", Reason: "execution_uncertain", ObservedAt: at}); err != nil {

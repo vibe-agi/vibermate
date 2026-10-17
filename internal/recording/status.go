@@ -27,6 +27,9 @@ const (
 	DroppedInvalid
 	DroppedStale
 	DroppedClosed
+	DroppedRolledBack
+	DroppedControlCommitUnknown
+	DroppedOwnerCanceled
 	OfferResultCount
 )
 

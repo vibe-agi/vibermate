@@ -105,6 +105,7 @@ func (r *nativeToolRepository) RequestApproval(ctx context.Context, operation, i
 		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_approvals(approval_id,operation_id,binding_digest,revision,state,created_at_unix_ms,expires_at_unix_ms,resolved_at_unix_ms,idempotency_key,consumed_at_unix_ms) VALUES(?,?,?,1,'pending',?,?,NULL,'',NULL)`, id, operation, b.digest[:], now.UnixMilli(), expires.UnixMilli()); err != nil {
 			return err
 		}
+		op.ApprovalID = &id
 		if err := nativeTransition(ctx, tx, op, "awaiting_decision", "none", "", "awaiting_decision", now); err != nil {
 			return err
 		}
@@ -290,6 +291,9 @@ func cancelNativeScopedApprovals(ctx context.Context, tx *sql.Tx, c captureident
 		}
 		if now.Before(a.CreatedAt) {
 			now = a.CreatedAt
+		}
+		if now.Before(op.MaximumEventAt) {
+			now = op.MaximumEventAt
 		}
 		if a.State == "allowed" {
 			// A known Start consumes approval atomically. An unconsumed allow on

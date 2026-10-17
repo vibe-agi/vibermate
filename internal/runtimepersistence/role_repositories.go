@@ -61,3 +61,10 @@ func (s *ControlStore) ProviderAccountRepository() provideraccount.Repository {
 }
 func (s *ObservationStore) RawEvidenceRepository() rawevidence.Repository { return s.store.rawEvidence }
 func (s *ControlStore) RuntimeUserRepository() runtimeuser.Repository     { return s.store.runtimeUsers }
+
+func (s *ControlStore) EgressDefaultRepository() egressprofile.DefaultRepository {
+	return s.store.egressDefault
+}
+func (s *ObservationStore) EgressAttemptStore() egressaudit.AttemptStore {
+	return s.store.egressAttempts
+}

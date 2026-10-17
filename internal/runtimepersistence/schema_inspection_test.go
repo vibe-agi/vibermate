@@ -259,7 +259,7 @@ func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
 				}
 			}
 			if scenario != "absent" && scenario != "zero" {
-				if scenario != "empty" && scenario != "foreign" && scenario != "foreign_reserved_prefix" && scenario != "forged_metadata" && scenario != "v1" && scenario != "forged_revision2" {
+				if scenario != "empty" && scenario != "foreign" && scenario != "foreign_reserved_prefix" && scenario != "forged_metadata" && scenario != "v1" && scenario != "v2" && scenario != "forged_revision2" {
 					shutdownTestStore(t, openTestStore(t, path))
 				}
 				db := openSQLiteForTest(t, path)
@@ -270,6 +270,8 @@ func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
 					if scenario == "forged_revision2" {
 						statement += `; UPDATE runtime_metadata SET schema_revision=2`
 					}
+				case "v2":
+					statement = schemaV2SQL + `; INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',2,'2026-10-03T00:00:00Z')`
 				case "foreign":
 					statement = "CREATE TABLE foreign_data(value TEXT)"
 				case "foreign_reserved_prefix":

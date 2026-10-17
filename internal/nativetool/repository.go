@@ -9,8 +9,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
-// Repository is the single durable authority contract. Its SQLite adapter and
-// sealed start receipts are implemented only after the reviewed schema switch.
+// ScopeInput names current control authority. Optional inspection is exposed
+// separately from AuthorityRepository; legacy Repository remains a bridge.
 type ScopeInput struct {
 	Capture                      captureidentity.Reference
 	ExpectedRevision, OwnerEpoch uint64
@@ -78,6 +78,7 @@ type ContentDescriptor struct {
 	ExpiresAt time.Time
 }
 type Operation struct {
+	MaximumEventAt, MetadataExpiresAt       time.Time
 	RecordingScope                          recording.Scope
 	ID                                      ID
 	Capture                                 captureidentity.Reference

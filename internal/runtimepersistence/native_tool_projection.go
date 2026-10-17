@@ -124,6 +124,8 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	copy(op.EnvironmentDigest[:], digest)
 	op.Revision = uint64(revision)
 	op.CreatedAt = time.UnixMilli(created).UTC()
+	op.MaximumEventAt = time.UnixMilli(maximumEventAt).UTC()
+	op.MetadataExpiresAt = time.UnixMilli(expires).UTC()
 	if archiveEpoch <= 0 || captureGeneration <= 0 || eventAt < created || maximumEventAt < eventAt {
 		return op, nativetool.ErrInvalid
 	}

@@ -676,11 +676,7 @@ CREATE TABLE runtime_usage_policy(
   revision INTEGER NOT NULL CHECK(revision>0), collecting_since_unix_ms INTEGER
 ) STRICT;
 
-CREATE TABLE runtime_usage_retention_caps(
-  retention_days INTEGER PRIMARY KEY CHECK(retention_days BETWEEN 1 AND 365),
-  through_sequence INTEGER NOT NULL CHECK(through_sequence>0),
-  after_sequence INTEGER NOT NULL DEFAULT 0 CHECK(after_sequence>=0 AND after_sequence<through_sequence)
-) STRICT;
+
 
 CREATE TABLE runtime_user_policies(
   user_id TEXT PRIMARY KEY NOT NULL REFERENCES runtime_users(user_id) ON DELETE CASCADE,

@@ -66,6 +66,12 @@ func (r *nativeToolRepository) transaction(ctx context.Context, fn func(context.
 	}
 	defer tx.Rollback()
 	workContext := permit.context
+	var history *nativeHistoryBatch
+	if r.history != nil {
+		history = &nativeHistoryBatch{recorder: r.history, scopes: r.recordingScopes}
+		workContext = context.WithValue(workContext, nativeHistoryKey{}, history)
+	}
+	defer history.discard(nativetool.HistoryRolledBack)
 	if r.legacyHistory {
 		workContext = context.WithValue(workContext, nativeLegacyHistoryKey{}, true)
 	}
@@ -81,8 +87,10 @@ func (r *nativeToolRepository) transaction(ctx context.Context, fn func(context.
 		return errors.Join(nativetool.ErrUnavailable, err)
 	}
 	if err = r.committer.Commit(tx); err != nil {
+		history.discard(nativetool.HistoryCommitUnknown)
 		return errors.Join(nativetool.ErrUnavailable, err, context.Cause(permit.context))
 	}
+	history.publish(permit.context)
 	return nil
 }
 func nativeCapture(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, now time.Time) error {
@@ -137,17 +145,24 @@ type nativeScope struct {
 }
 
 func loadNativeScope(ctx context.Context, tx *sql.Tx, c captureidentity.Reference) (nativeScope, error) {
+	return loadNativeScopeFacts(ctx, tx, c, false)
+}
+func loadNativeScopeFacts(ctx context.Context, tx *sql.Tx, c captureidentity.Reference, receiving bool) (nativeScope, error) {
 	var s nativeScope
 	var rev, owner, expires, archiveEpoch, captureGeneration int64
 	var barrier int
-	err := tx.QueryRowContext(ctx, `SELECT s.revision,s.owner_epoch,s.state,s.replay_barrier,s.expires_at_unix_ms,r.archive_epoch,f.generation FROM native_tool_scopes s JOIN runtime_storage_state r ON r.singleton=1 JOIN recording_capture_fences f ON f.capture_kind=s.capture_kind AND f.capture_id=s.capture_id WHERE s.capture_kind=? AND s.capture_id=?`, c.Kind, c.ID).Scan(&rev, &owner, &s.state, &barrier, &expires, &archiveEpoch, &captureGeneration)
+	query := `SELECT revision,owner_epoch,state,replay_barrier,expires_at_unix_ms,0,0 FROM native_tool_scopes WHERE capture_kind=? AND capture_id=?`
+	if receiving {
+		query = `SELECT s.revision,s.owner_epoch,s.state,s.replay_barrier,s.expires_at_unix_ms,r.archive_epoch,f.generation FROM native_tool_scopes s JOIN runtime_storage_state r ON r.singleton=1 JOIN recording_capture_fences f ON f.capture_kind=s.capture_kind AND f.capture_id=s.capture_id WHERE s.capture_kind=? AND s.capture_id=?`
+	}
+	err := tx.QueryRowContext(ctx, query, c.Kind, c.ID).Scan(&rev, &owner, &s.state, &barrier, &expires, &archiveEpoch, &captureGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, nativetool.ErrNotFound
 	}
 	if err != nil {
 		return s, err
 	}
-	if archiveEpoch <= 0 || captureGeneration <= 0 || rev <= 0 || owner < 0 || (barrier != 0 && barrier != 1) || (s.state != "active" && s.state != "unbound" && s.state != "revoked" && s.state != "closed") || s.state == "active" && owner == 0 || expires <= 0 {
+	if receiving && (archiveEpoch <= 0 || captureGeneration <= 0) || rev <= 0 || owner < 0 || (barrier != 0 && barrier != 1) || (s.state != "active" && s.state != "unbound" && s.state != "revoked" && s.state != "closed") || s.state == "active" && owner == 0 || expires <= 0 {
 		return s, nativetool.ErrInvalid
 	}
 	s.recordingScope = recording.Scope{Capture: c, Fence: recording.Fence{ArchiveEpoch: uint64(archiveEpoch), CaptureGeneration: uint64(captureGeneration)}}
@@ -595,7 +610,7 @@ func (r *nativeToolRepository) Receive(ctx context.Context, in nativetool.Receiv
 		if err := nativeCapture(ctx, tx, in.Capture, in.ObservedAt); err != nil {
 			return err
 		}
-		scope, err := loadNativeScope(ctx, tx, in.Capture)
+		scope, err := loadNativeScopeFacts(ctx, tx, in.Capture, true)
 		if err != nil {
 			return err
 		}
@@ -680,6 +695,7 @@ func (r *nativeToolRepository) Receive(ctx context.Context, in nativetool.Receiv
 				return err
 			}
 		}
+		stageNativeHistory(ctx, nativetool.Operation{ID: in.ID, Capture: in.Capture, RecordingScope: scope.recordingScope, EnvironmentID: in.EnvironmentID, EnvironmentRevision: in.EnvironmentRevision, EnvironmentDigest: in.EnvironmentDigest, Recording: in.Recording, Kind: in.Kind, TargetOrigin: in.TargetOrigin, Revision: 1, State: "received", DecisionSource: "none", CreatedAt: in.ObservedAt, MaximumEventAt: in.ObservedAt, MetadataExpiresAt: in.ObservedAt.Add(30 * 24 * time.Hour)}, "received", in.ObservedAt)
 		result = nativetool.ReceiveResult{OperationID: in.ID}
 		return nil
 	})
@@ -708,7 +724,22 @@ func nativeTransition(ctx context.Context, tx *sql.Tx, op nativetool.Operation, 
 	if n != 1 {
 		return nativetool.ErrConflict
 	}
-	return appendNativeEvent(ctx, tx, op.ID, op.Revision+1, event, now)
+	if err := appendNativeEvent(ctx, tx, op.ID, op.Revision+1, event, now); err != nil {
+		return err
+	}
+	op.Revision++
+	op.State = state
+	op.DecisionSource = source
+	op.Reason = reason
+	if completed != nil {
+		t := now
+		op.CompletedAt = &t
+	}
+	if now.After(op.MaximumEventAt) {
+		op.MaximumEventAt = now
+	}
+	stageNativeHistory(ctx, op, event, now)
+	return nil
 }
 func (r *nativeToolRepository) Bind(ctx context.Context, id nativetool.ID, b nativetool.Binding, now time.Time) error {
 	if b.Kind() == nativetool.RequestServerReply {
@@ -874,6 +905,9 @@ func (r *nativeToolRepository) bind(ctx context.Context, id nativetool.ID, b nat
 		if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_binding_egress(operation_id,binding_digest,binding_version,profile_json,selection_source,default_revision) VALUES(?,?,2,?,?,?)`, id, digest[:], string(profileJSON), resolved.Source(), resolved.DefaultRevision()); err != nil {
 			return err
 		}
+		op.BindingDigest = &digest
+		op.ToolName = b.ToolName()
+		op.CredentialOwner = string(route.CredentialOwner)
 		if plan.PolicySet().ToolMode == environment.ToolPolicyStrict && (b.Kind() == nativetool.RequestToolsCall || b.Kind() == nativetool.RequestServerReply) {
 			denied = true
 			return nativeTransition(ctx, tx, op, "denied", "policy", "policy_strict", "denied", now)
