@@ -959,3 +959,11 @@ CREATE TABLE runtime_usage_retention_rules(
  retention_days INTEGER PRIMARY KEY CHECK(retention_days BETWEEN 1 AND 365),
  through_policy_revision INTEGER NOT NULL CHECK(through_policy_revision>0)
 ) STRICT;
+
+CREATE TABLE runtime_usage_legacy_retention_caps(
+  archive_id TEXT NOT NULL CHECK(length(CAST(archive_id AS BLOB)) BETWEEN 1 AND 128),
+  retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 365),
+  after_sequence INTEGER NOT NULL CHECK(after_sequence>=0),
+  through_sequence INTEGER NOT NULL CHECK(through_sequence>0 AND after_sequence<through_sequence),
+  PRIMARY KEY(archive_id,retention_days)
+) STRICT;
