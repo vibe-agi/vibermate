@@ -1,0 +1,5 @@
+# Isolate recording from Agent execution
+
+An authorized Agent must keep working when recording is slow, full or unavailable; connection history, captured payloads and usage copies are best effort. We therefore separate compact execution state from observation storage and admit optional copies through bounded, non-waiting queues, preserving existing history as a lazily read archive during the verified storage cutover. Authentication, configuration, approvals and native one-use delivery facts remain reliable execution state; a second connection to the same database or a background writer alone would still let recording contend with those operations.
+
+This replaces the previous requirement to commit ordinary connection and egress audit rows before forwarding. Inspection can show incomplete history and cannot serve as execution authority; deletion and retention still require durable visibility decisions so delayed recording cannot resurrect removed data. An external message broker is unnecessary because recording is explicitly lossy, while a broker would add another service to operate without removing the need to bound producer memory and separate storage.

@@ -257,6 +257,14 @@ _Avoid_: Conversation, request
 One captured client request and its terminal downstream outcome, together with routing and evidence. An Exchange is the evidence boundary from which a Turn is presented.
 _Avoid_: Conversation, Session
 
+**Execution State**:
+The facts required to authorize and correctly continue an Agent's work: configuration, Capture authority, one-use execution claims, and protocol delivery or replay state. Missing observation records neither grant nor withdraw execution authority.
+_Avoid_: Request log, retained payload copy, usage report
+
+**Observation Record**:
+A best-effort retained copy of authorized Agent activity, such as connection history, request or response evidence, conversation display, and usage. It may be incomplete or absent without changing the Agent's authorized execution or delivered result. An observation record is never execution authority or the actual bytes being delivered.
+_Avoid_: Send permission, execution receipt, delivery buffer
+
 **Native Tool Operation**:
 One native tool-protocol request with its own frozen Capture, Environment, original-client authority, decision and outcome. It is not a model Exchange; receiving its result after reconnection does not create a second execution.
 _Avoid_: Agent API Call, model request, connection
