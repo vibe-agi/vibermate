@@ -528,7 +528,7 @@ func (manager *Manager) offer(observation Observation, stamp recording.Stamp) (W
 			reservation.Release()
 		}
 	}()
-	if observation.validate() != nil {
+	if observation.validate() != nil || (!observation.Complete && !validObservationReason(observation.IncompleteReason)) {
 		return Watermark{}, result
 	}
 	if observation.Recording == RecordingOff {

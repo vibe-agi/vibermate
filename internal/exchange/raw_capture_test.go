@@ -3,12 +3,18 @@ package exchange
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
 )
@@ -141,4 +147,112 @@ func (o *rawCaptureObserverForTest) snapshot() []rawevidence.Observation {
 		result = append(result, rawevidence.Observation{Layer: record.Layer, Headers: headers, Body: payload.Body, Representation: record.Representation})
 	}
 	return result
+}
+
+type delayedTransformTailBody struct {
+	prefix            *bytes.Reader
+	tail              []byte
+	allowTail, closed chan struct{}
+	closeOnce         sync.Once
+	original, eof     bool
+	active            atomic.Int32
+	tailRead          atomic.Bool
+}
+
+func (b *delayedTransformTailBody) Read(p []byte) (int, error) {
+	b.active.Add(1)
+	defer b.active.Add(-1)
+	if b.prefix.Len() > 0 {
+		n, _ := b.prefix.Read(p)
+		if b.eof && b.prefix.Len() == 0 {
+			return n, io.EOF
+		}
+		return n, nil
+	}
+	if b.original {
+		return 0, context.Canceled
+	}
+	select {
+	case <-b.closed:
+		return 0, io.ErrClosedPipe
+	case <-b.allowTail:
+		b.tailRead.Store(true)
+		return copy(p, b.tail), io.EOF
+	}
+}
+func (b *delayedTransformTailBody) Close() error {
+	b.closeOnce.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestTransformRawDigestRequiresLogicalEOFNotSemanticTerminal(t *testing.T) {
+	for _, original := range []bool{false, true} {
+		for _, eof := range []bool{false, true} {
+			t.Run(fmt.Sprintf("original=%t/eof=%t", original, eof), func(t *testing.T) {
+				account := testAccount{id: "account.primary", revision: 1, epoch: 1}
+				options := testPlanOptions{clientProtocol: environment.ClientProtocolOpenAIResponses, destination: environment.DestinationKindUpstream, providerOrigin: "https://api.openai.com", backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough, accounts: []testAccount{account}, preferred: account.id, transform: messagetransform.Policy{ResponseJavaScript: `response.headers["x-transform"] = "yes";`}}
+				if original {
+					options.destination = environment.DestinationKindOriginal
+					options.accounts = nil
+					options.preferred = ""
+				}
+				plan := mustEnvironmentRequestPlan(t, options)
+				wire := originalResponsesTerminalWire(t)
+				body := &delayedTransformTailBody{prefix: bytes.NewReader(wire), tail: []byte(": delayed tail\n\n"), allowTail: make(chan struct{}), closed: make(chan struct{}), original: original, eof: eof}
+				defer close(body.allowTail)
+				defer body.Close()
+				response := streamResponse(http.StatusOK, body)
+				response.Body = body
+				pipeline := newTestPipeline(t, newAccountAuthority(t, account), &providerDouble{results: []providerResult{{response: response}}}, approvedDecisions(), &attemptObserverDouble{})
+				defer shutdownPipeline(t, pipeline)
+				raw := newRawCaptureObserverForTest(t)
+				pipeline.rawEvidence = raw
+				downstream := &downstreamRecorder{}
+				request := mustClientRequestWithOptions(t, "terminal-tail", plan, streamingResponsesClientRequest(), WithOriginalHeaders(http.Header{"Authorization": {"Bearer fixture"}}))
+				done := make(chan error, 1)
+				joined := make(chan struct{})
+				defer func() { body.Close(); <-joined }()
+				go func() {
+					defer close(joined)
+					_, err := pipeline.Execute(context.Background(), request, downstream)
+					done <- err
+				}()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("semantic completion waited for unread tail")
+				}
+				if body.active.Load() != 0 || body.tailRead.Load() {
+					t.Fatal("semantic completion lost I/O join or drained optional tail")
+				}
+				if !bytes.Equal(downstream.bytesSnapshot(), wire) {
+					t.Fatal("transformed forwarded bytes changed")
+				}
+				if err := raw.Flush(context.Background(), rawevidence.Watermark{}); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, record := range raw.repo.records {
+					if record.Layer != rawevidence.LayerTransformResponseInput {
+						continue
+					}
+					found = true
+					expectedDigest, expectedState := rawevidence.DigestObservedPrefix, rawevidence.PayloadTruncated
+					if eof {
+						expectedDigest = rawevidence.DigestFull
+						expectedState = rawevidence.PayloadCaptured
+					}
+					if record.DigestScope != expectedDigest || record.PayloadState != expectedState || !bytes.Equal(record.Body, wire) || record.BodySHA256 != sha256.Sum256(wire) || record.BodyBytes != int64(len(wire)) || (!eof && record.PayloadReason != "response_closed_before_eof") || (eof && record.PayloadReason != "") {
+						t.Fatalf("semantic success mislabeled logical evidence: digest=%s state=%s reason=%s", record.DigestScope, record.PayloadState, record.PayloadReason)
+					}
+				}
+				if !found {
+					t.Fatal("transform input record missing")
+				}
+			})
+		}
+	}
 }

@@ -964,9 +964,13 @@ func (pipeline *Pipeline) captureMessageTransformStream(request providertranspor
 	return transformer.capture
 }
 
-func (pipeline *Pipeline) observeMessageTransformStreamResponse(_ context.Context, _ providertransport.Request, transformer *streamMessageTransformer) {
+func (pipeline *Pipeline) observeMessageTransformStreamResponse(_ context.Context, _ providertransport.Request, transformer *streamMessageTransformer, reachedEOF bool) {
 	if transformer != nil {
-		transformer.capture.Finish(rawevidence.TerminalMetadata{Complete: true})
+		reason := ""
+		if !reachedEOF {
+			reason = "response_closed_before_eof"
+		}
+		transformer.capture.Finish(rawevidence.TerminalMetadata{Complete: reachedEOF, IncompleteReason: reason})
 	}
 }
 
@@ -2111,6 +2115,7 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 		ResponseModeEventStream,
 		"",
 	)
+	reachedEOF := false
 	started := false
 	buffer := make([]byte, streamReadBufferBytes)
 	for {
@@ -2180,6 +2185,7 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
+			reachedEOF = true
 			break
 		}
 		if readErr != nil {
@@ -2216,7 +2222,7 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 			err,
 		)
 	}
-	pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer)
+	pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer, reachedEOF)
 	if !started {
 		return newFailure(
 			ReasonMessageTransformFailed,
@@ -2755,6 +2761,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	keepalive := time.NewTimer(pipeline.streamBudgets.KeepaliveInterval)
 	defer keepalive.Stop()
 
+	reachedEOF := false
 	streamComplete := false
 	for !streamComplete {
 		select {
@@ -2779,6 +2786,8 @@ func (pipeline *Pipeline) consumeProviderStream(
 				streamComplete = true
 				continue
 			}
+			// EOF belongs to the actual logical read, not the semantic decoder.
+			reachedEOF = errors.Is(result.err, io.EOF)
 			fragment := result.fragment
 			if len(fragment) > 0 && transformer != nil {
 				transformed, headerReady, transformErr := transformer.Feed(ctx, fragment)
@@ -2887,7 +2896,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 				err,
 			)
 		}
-		pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer)
+		pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer, reachedEOF)
 	}
 
 	terminal, err := stream.FinishDecoded(ctx)

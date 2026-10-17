@@ -161,3 +161,20 @@ func TestCaptureGrowthChargesOldAndNewBackingTogether(t *testing.T) {
 		t.Fatal("discard leaked bytes")
 	}
 }
+
+func TestStampedObservationRejectsNonlocalIncompleteReason(t *testing.T) {
+	m := openFenceTestManager(t, &memoryRepository{}, DefaultConfig())
+	o := testObservation()
+	o.ScopeKind = ScopeRuntime
+	o.ScopeID = ""
+	o.Complete = false
+	o.IncompleteReason = "private_transport_error"
+	epoch, _ := recording.NewEpoch(1)
+	token, _ := recording.NewScopeToken(epoch, captureidentity.Reference{}, recording.Fence{ArchiveEpoch: 1})
+	if got := m.TryObserve(token.Stamp(), o); got != recording.DroppedInvalid {
+		t.Fatalf("nonlocal stamped reason accepted: %v", got)
+	}
+	if m.budget.Snapshot().ReservedRecords != 0 {
+		t.Fatal("invalid stamped offer retained ownership")
+	}
+}

@@ -1354,32 +1354,7 @@ func (handler *Handler) serveSemantic(
 	rawEnabled := handler.rawEvidence != nil &&
 		rawContext.Recording != rawevidence.RecordingOff
 	if rawEnabled {
-		retained, complete, reason := retainedRawBody(
-			body,
-			rawContext.Recording,
-			handler.rawBodyBytes,
-			"request_payload_limit",
-		)
-		if _, err := handler.observeRaw(request.Context(), rawevidence.Observation{
-			Context:             rawContext,
-			Layer:               rawevidence.LayerClientIngress,
-			Method:              request.Method,
-			Scheme:              requestScheme(request),
-			Authority:           request.Host,
-			Path:                request.URL.EscapedPath(),
-			RawQuery:            request.URL.RawQuery,
-			Headers:             request.Header,
-			Body:                retained,
-			TotalBodyBytes:      int64(len(body)),
-			BodySHA256:          sha256.Sum256(body),
-			DigestAvailable:     true,
-			FullDigestAvailable: true,
-			Complete:            complete,
-			IncompleteReason:    reason,
-			Representation:      "http_message",
-			ContentType:         request.Header.Get("Content-Type"),
-			ContentEncoding:     request.Header.Get("Content-Encoding"),
-		}); err != nil {
+		if err := handler.observeClientIngress(request, rawContext, body); err != nil {
 			handler.reportRawEvidenceFailure(fmt.Errorf(
 				"record client ingress Raw evidence: %w", err,
 			))
@@ -1467,6 +1442,47 @@ func clientProtocolEvidenceFromHeaders(
 		values = append(values, value)
 	}
 	return values
+}
+
+func (handler *Handler) observeClientIngress(request *http.Request, rawContext rawevidence.Context, body []byte) error {
+	if recorder, ok := handler.rawEvidence.(rawevidence.CaptureObserver); ok {
+		capture := recorder.Capture(rawevidence.CaptureMetadata{
+			Context: rawContext, Layer: rawevidence.LayerClientIngress, Method: request.Method,
+			Scheme: requestScheme(request), Authority: request.Host, Path: request.URL.EscapedPath(), RawQuery: request.URL.RawQuery,
+			Headers: request.Header, ContentType: request.Header.Get("Content-Type"), ContentEncoding: request.Header.Get("Content-Encoding"),
+		}, handler.rawBodyBytes)
+		// A nil refused handle neither hashes nor copies the borrowed request body.
+		capture.ObserveBytes(body, "")
+		capture.Finish(rawevidence.TerminalMetadata{Complete: true})
+		return nil
+	}
+	retained, complete, reason := retainedRawBody(
+		body,
+		rawContext.Recording,
+		handler.rawBodyBytes,
+		"request_payload_limit",
+	)
+	_, err := handler.observeRaw(request.Context(), rawevidence.Observation{
+		Context:             rawContext,
+		Layer:               rawevidence.LayerClientIngress,
+		Method:              request.Method,
+		Scheme:              requestScheme(request),
+		Authority:           request.Host,
+		Path:                request.URL.EscapedPath(),
+		RawQuery:            request.URL.RawQuery,
+		Headers:             request.Header,
+		Body:                retained,
+		TotalBodyBytes:      int64(len(body)),
+		BodySHA256:          sha256.Sum256(body),
+		DigestAvailable:     true,
+		FullDigestAvailable: true,
+		Complete:            complete,
+		IncompleteReason:    reason,
+		Representation:      "http_message",
+		ContentType:         request.Header.Get("Content-Type"),
+		ContentEncoding:     request.Header.Get("Content-Encoding"),
+	})
+	return err
 }
 
 func retainedRawBody(

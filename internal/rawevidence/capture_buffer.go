@@ -274,7 +274,7 @@ func (b *CaptureBuffer) Finish(terminal TerminalMetadata) recording.OfferResult 
 		result = recording.DroppedStale
 		return result
 	}
-	if (!terminal.Complete && !validTerminalReason(terminal.IncompleteReason)) || (terminal.Complete && terminal.IncompleteReason != "") {
+	if (!terminal.Complete && !validObservationReason(terminal.IncompleteReason)) || (terminal.Complete && terminal.IncompleteReason != "") {
 		return result
 	}
 	extra := observationCharge(Observation{Trailers: terminal.Trailers}) - (32 << 10)
@@ -298,6 +298,12 @@ func (b *CaptureBuffer) Finish(terminal TerminalMetadata) recording.OfferResult 
 			b.record.PayloadReason = terminal.IncompleteReason
 			if b.record.PayloadReason == "" {
 				b.record.PayloadReason = "response_payload_limit"
+				if b.record.Layer == LayerClientIngress || b.record.Layer == LayerProviderEgress || b.record.Layer == LayerTransformRequestInput {
+					b.record.PayloadReason = "request_payload_limit"
+				}
+				if b.record.Layer == LayerTransformResponseInput {
+					b.record.PayloadReason = "transform_input_limit"
+				}
 			}
 		}
 		b.payload.Trailers = canonicalHeadersWithProtected(terminal.Trailers, b.manager.redactor, protectedHeaderSet(b.protected))
@@ -347,9 +353,9 @@ func stampMatches(stamp recording.Stamp, ctx Context) bool {
 	}
 }
 
-func validTerminalReason(reason string) bool {
+func validObservationReason(reason string) bool {
 	switch reason {
-	case "response_read_failed", "response_closed_before_eof", "response_payload_limit", "request_payload_limit", "transform_input_limit", "recording_metadata_only", "transport_failed", "incomplete_response":
+	case "response_read_failed", "response_closed_before_eof", "response_payload_limit", "request_payload_limit", "transform_input_limit", "recording_metadata_only", "transport_failed", "incomplete_response", "response_stream_unavailable":
 		return true
 	default:
 		return false
