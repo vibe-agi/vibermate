@@ -1028,7 +1028,7 @@ func TestOriginalDestinationTransformsSSEEventsAndPreservesStreaming(t *testing.
 		&attemptObserverDouble{},
 		content,
 	)
-	raw := &rawObserverDouble{}
+	raw := newRawCaptureObserverForTest(t)
 	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
 	downstream := &downstreamRecorder{}

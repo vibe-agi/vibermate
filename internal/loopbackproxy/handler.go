@@ -1368,7 +1368,7 @@ func (handler *Handler) serveSemantic(
 			Authority:           request.Host,
 			Path:                request.URL.EscapedPath(),
 			RawQuery:            request.URL.RawQuery,
-			Headers:             request.Header.Clone(),
+			Headers:             request.Header,
 			Body:                retained,
 			TotalBodyBytes:      int64(len(body)),
 			BodySHA256:          sha256.Sum256(body),
@@ -2323,6 +2323,8 @@ type httpDownstreamOptions struct {
 }
 
 type httpDownstream struct {
+	capture          *rawevidence.CaptureBuffer
+	bounded          bool
 	writer           http.ResponseWriter
 	options          httpDownstreamOptions
 	mode             exchange.ResponseMode
@@ -2349,11 +2351,15 @@ func newHTTPDownstream(
 		maximum = 0
 	}
 	downstream := &httpDownstream{
-		writer:        writer,
-		options:       options,
-		hash:          sha256.New(),
-		body:          make([]byte, 0, min(maximum, 32<<10)),
+		writer:  writer,
+		options: options,
+
 		keepaliveWire: []byte(": keepalive\n\n"),
+	}
+	_, downstream.bounded = options.Observer.(rawevidence.CaptureObserver)
+	if !downstream.bounded {
+		downstream.hash = sha256.New()
+		downstream.body = make([]byte, 0, min(maximum, 32<<10))
 	}
 	if options.responsesDataKeepalive {
 		downstream.keepaliveWire, downstream.keepaliveErr = openairesponses.EncodeKeepalive()
@@ -2404,6 +2410,20 @@ func (downstream *httpDownstream) Begin(
 	downstream.begun = true
 	downstream.status = envelope.StatusCode()
 	downstream.headers = envelope.Headers()
+	if recorder, ok := downstream.options.Observer.(rawevidence.CaptureObserver); ok {
+		downstream.capture = recorder.Capture(rawevidence.CaptureMetadata{
+			Context:         downstream.options.Context,
+			Layer:           rawevidence.LayerClientDownstream,
+			StatusCode:      downstream.status,
+			Scheme:          downstream.options.Scheme,
+			Authority:       downstream.options.Authority,
+			Path:            downstream.options.Path,
+			RawQuery:        downstream.options.RawQuery,
+			Headers:         downstream.headers,
+			ContentType:     downstream.headers.Get("Content-Type"),
+			ContentEncoding: downstream.headers.Get("Content-Encoding"),
+		}, downstream.options.MaximumBodyBytes)
+	}
 	copyResponseHeaders(downstream.writer.Header(), downstream.headers)
 	downstream.writer.WriteHeader(envelope.StatusCode())
 	if mode == exchange.ResponseModeEventStream {
@@ -2440,7 +2460,10 @@ func (downstream *httpDownstream) write(
 			len(data),
 		)
 	}
-	if count > 0 {
+	if count > 0 && downstream.bounded {
+		downstream.capture.ObserveBytes(data[:count], kind)
+	}
+	if count > 0 && !downstream.bounded {
 		committed := data[:count]
 		_, _ = downstream.hash.Write(committed)
 		downstream.total += int64(count)
@@ -2546,6 +2569,10 @@ func (downstream *httpDownstream) Finalize() error {
 		if downstream.options.Observer == nil ||
 			downstream.options.Context.Recording == rawevidence.RecordingOff ||
 			!downstream.begun {
+			return
+		}
+		if downstream.bounded {
+			downstream.capture.Finish(rawevidence.TerminalMetadata{Complete: true})
 			return
 		}
 		var digest [sha256.Size]byte

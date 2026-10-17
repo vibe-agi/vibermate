@@ -42,6 +42,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -497,6 +498,7 @@ func buildProvider(
 }
 
 type rawEvidenceBuildRequest struct {
+	budget     *recording.Budget
 	ctx        context.Context
 	repository rawevidence.Repository
 	random     io.Reader
@@ -559,6 +561,7 @@ func buildRawEvidence(
 ) (rawEvidenceRuntime, error) {
 	return rawevidence.Open(request.ctx, rawevidence.Options{
 		Repository: request.repository,
+		Budget:     request.budget,
 		Random:     request.random,
 		Clock:      request.clock,
 		Config:     request.config,

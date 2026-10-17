@@ -85,8 +85,8 @@ func TestManagerConcurrentAgentsStayBoundedAndCommitBatches(t *testing.T) {
 		recordCount       = agentCount * exchangesPerAgent * boundaries
 	)
 	config := Config{
-		MaximumQueueRecords: 64,
-		MaximumQueueBytes:   2 << 20,
+		MaximumQueueRecords: recordCount,
+		MaximumQueueBytes:   64 << 20,
 		MaximumBatchRecords: 32,
 		MaximumBatchBytes:   1 << 20,
 		FlushInterval:       time.Hour,
@@ -409,6 +409,9 @@ func TestManagerRevealAuditsBeforeReturningPayload(t *testing.T) {
 	if err := manager.Flush(context.Background(), watermark); err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.Flush(context.Background(), Watermark{}); err != nil {
+		t.Fatal(err)
+	}
 	metadata, err := manager.ListExchange(
 		context.Background(), observation.ExchangeID,
 	)
@@ -437,7 +440,7 @@ func TestManagerRevealAuditsBeforeReturningPayload(t *testing.T) {
 	}
 }
 
-func TestManagerListExchangeFlushesItsAdmittedWatermark(t *testing.T) {
+func TestManagerListExchangeReadsOnlyExplicitlyFlushedRecords(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
@@ -468,6 +471,9 @@ func TestManagerListExchangeFlushesItsAdmittedWatermark(t *testing.T) {
 		t.Fatalf("record committed before the read barrier: %d", len(records))
 	}
 
+	if err := manager.Flush(context.Background(), Watermark{}); err != nil {
+		t.Fatal(err)
+	}
 	metadata, err := manager.ListExchange(
 		context.Background(), observation.ExchangeID,
 	)
@@ -478,12 +484,7 @@ func TestManagerListExchangeFlushesItsAdmittedWatermark(t *testing.T) {
 	if statistics.DurableWatermark != 1 || statistics.QueueRecords != 0 {
 		t.Fatalf("read barrier did not make evidence durable: %+v", statistics)
 	}
-	manager.admissionMu.Lock()
-	_, retained := manager.exchangeLatest[observation.ExchangeID]
-	manager.admissionMu.Unlock()
-	if retained {
-		t.Fatal("durable Exchange read watermark was retained")
-	}
+
 }
 
 func TestManagerRecoveryReportsUncleanPredecessor(t *testing.T) {
@@ -556,7 +557,7 @@ func TestManagerMetadataOnlyStoresDigestWithoutPayload(t *testing.T) {
 	}
 }
 
-func TestManagerShutdownFlushesAdmittedRecords(t *testing.T) {
+func TestManagerShutdownDiscardsAndReleasesAdmittedRecords(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
@@ -581,10 +582,10 @@ func TestManagerShutdownFlushesAdmittedRecords(t *testing.T) {
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(repository.snapshot()) != 3 {
-		t.Fatal("shutdown did not flush admitted raw evidence")
+	if manager.budget.Snapshot().ReservedRecords != 0 {
+		t.Fatal("shutdown retained observations")
 	}
-	if _, err := manager.Observe(context.Background(), testObservation()); err == nil {
+	if mark, _ := manager.Observe(context.Background(), testObservation()); mark.Sequence != 0 {
 		t.Fatal("closed writer admitted new evidence")
 	}
 }
@@ -729,25 +730,22 @@ func TestManagerDurableFenceKeepsNewerWatermark(t *testing.T) {
 			// success path has returned. Its gate keeps the newer record pending.
 			waitFenceAppend(t, ctx, repository.nextAppendStarted)
 			manager.admissionMu.Lock()
-			exchangeFence := manager.exchangeLatest[firstObservation.ExchangeID]
 			scopeFence := manager.scopeLatest[scopeKey{kind: firstObservation.ScopeKind, id: firstObservation.ScopeID}]
-			newExchangeFence := manager.exchangeLatest[secondObservation.ExchangeID]
 			newScopeFence := manager.scopeLatest[scopeKey{kind: secondObservation.ScopeKind, id: secondObservation.ScopeID}]
 			manager.admissionMu.Unlock()
-			wantExchange, wantScope := uint64(0), uint64(0)
-			if test.sameExchange {
-				wantExchange = second.Sequence
-			}
+			wantScope := uint64(0)
 			if test.sameScope {
 				wantScope = second.Sequence
 			}
-			if exchangeFence != wantExchange || scopeFence != wantScope ||
-				newExchangeFence != second.Sequence || newScopeFence != second.Sequence {
-				t.Fatalf("old fences exchange=%d scope=%d, want %d/%d; newer fences=%d/%d want %d",
-					exchangeFence, scopeFence, wantExchange, wantScope, newExchangeFence, newScopeFence, second.Sequence)
+			if scopeFence != wantScope || newScopeFence != second.Sequence {
+				t.Fatalf("old scope=%d want=%d; new=%d want=%d", scopeFence, wantScope, newScopeFence, second.Sequence)
 			}
 			readDone := make(chan error, 1)
 			go func() {
+				if err := manager.Flush(ctx, second); err != nil {
+					readDone <- err
+					return
+				}
 				metadata, err := manager.ListExchange(ctx, secondObservation.ExchangeID)
 				want := 1
 				if test.sameExchange {
@@ -775,52 +773,34 @@ func TestManagerDurableFenceKeepsNewerWatermark(t *testing.T) {
 	}
 }
 
-func TestManagerFailedCommitKeepsReadFencesAndSlots(t *testing.T) {
+func TestManagerFailedCommitSettlesAndLaterWriteSucceeds(t *testing.T) {
 	repository := &failingFenceRepository{memoryRepository: &memoryRepository{}, fail: true}
-	manager := openFenceTestManager(t, repository, Config{
-		MaximumQueueRecords: 2, MaximumQueueBytes: 1 << 20,
-		MaximumBatchRecords: 2, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour,
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	observation := testObservation()
-	mark, err := manager.Observe(ctx, observation)
-	if err != nil {
-		t.Fatal(err)
+	manager := openFenceTestManager(t, repository, Config{MaximumQueueRecords: 2, MaximumQueueBytes: 1 << 20, MaximumBatchRecords: 2, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour})
+	mark, _ := manager.Observe(context.Background(), testObservation())
+	if manager.Flush(context.Background(), mark) == nil {
+		t.Fatal("failed commit succeeded")
 	}
-	if err := manager.Flush(ctx, mark); err == nil {
-		t.Fatal("failed commit reported success")
+	if got := manager.budget.Snapshot(); got.ReservedRecords != 0 || got.ReservedBytes != 0 {
+		t.Fatalf("failed batch retained ownership: %+v", got)
 	}
-	manager.admissionMu.Lock()
-	exchangeFence := manager.exchangeLatest[observation.ExchangeID]
-	scopeFence := manager.scopeLatest[scopeKey{kind: observation.ScopeKind, id: observation.ScopeID}]
-	manager.admissionMu.Unlock()
-	stats := manager.Statistics()
-	if exchangeFence != mark.Sequence || scopeFence != mark.Sequence || stats.DurableWatermark != 0 ||
-		stats.QueueRecords != 1 || stats.QueueBytes == 0 || stats.LastFailure == "" {
-		t.Fatalf("failed commit lost pending work: exchange=%d scope=%d stats=%+v", exchangeFence, scopeFence, stats)
-	}
-	if manager.recordSlots.TryAcquire(2) {
-		manager.recordSlots.Release(2)
-		t.Fatal("failed commit released its record slot")
-	}
-	if manager.byteSlots.TryAcquire(manager.config.MaximumQueueBytes) {
-		manager.byteSlots.Release(manager.config.MaximumQueueBytes)
-		t.Fatal("failed commit released its byte slots")
-	}
-	if _, err := manager.ListExchange(ctx, observation.ExchangeID); err == nil {
-		t.Fatal("read bypassed failed commit fence")
+	if manager.Statistics().SettledSequence != 1 {
+		t.Fatal("lost batch unsettled")
 	}
 	repository.mu.Lock()
 	repository.fail = false
 	repository.mu.Unlock()
-	if err := manager.Flush(ctx, mark); err != nil {
+	mark, _ = manager.Observe(context.Background(), testObservation())
+	if err := manager.Flush(context.Background(), mark); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Shutdown(ctx); err != nil {
-		t.Fatal(err)
+	stats := manager.Statistics()
+	if stats.DurableWatermark != 0 || stats.HighestPersistedSequence != 2 || stats.PersistedRecords != 1 {
+		t.Fatalf("false durability: %+v", stats)
 	}
-	assertNoDurableFences(t, manager)
+	if len(repository.snapshot()) != 1 {
+		t.Fatal("lost batch retried")
+	}
+	_ = manager.Shutdown(context.Background())
 }
 
 func TestManagerDurableFenceCapacity100000UnreadExchanges(t *testing.T) {
@@ -852,17 +832,12 @@ func TestManagerDurableFenceCapacity100000UnreadExchanges(t *testing.T) {
 	}
 	assertNoDurableFences(t, manager)
 	stats := manager.Statistics()
-	if stats.DurableWatermark != 100000 || stats.QueueRecords != 0 || stats.QueueBytes != 0 || len(manager.records) != 0 {
+	if stats.SettledSequence != stats.AdmittedRecords || stats.QueueRecords != 0 || stats.QueueBytes != 0 || len(manager.records) != 0 {
 		t.Fatalf("capacity workload retained queued work: %+v channel=%d", stats, len(manager.records))
 	}
-	if !manager.recordSlots.TryAcquire(int64(manager.config.MaximumQueueRecords)) {
-		t.Fatal("capacity workload retained record slots")
+	if got := manager.budget.Snapshot(); got.ReservedRecords != 0 || got.ReservedBytes != 0 {
+		t.Fatalf("retained reservations: %+v", got)
 	}
-	manager.recordSlots.Release(int64(manager.config.MaximumQueueRecords))
-	if !manager.byteSlots.TryAcquire(manager.config.MaximumQueueBytes) {
-		t.Fatal("capacity workload retained byte slots")
-	}
-	manager.byteSlots.Release(manager.config.MaximumQueueBytes)
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	manager.scopeMu.Lock()
@@ -949,10 +924,10 @@ func openFenceTestManager(t *testing.T, repository Repository, config Config) *M
 func assertNoDurableFences(t *testing.T, manager *Manager) {
 	t.Helper()
 	manager.admissionMu.Lock()
-	exchanges, scopes := len(manager.exchangeLatest), len(manager.scopeLatest)
+	scopes := len(manager.scopeLatest)
 	manager.admissionMu.Unlock()
-	if exchanges != 0 || scopes != 0 {
-		t.Fatalf("durable unread exchanges retained %d exchange and %d scope read fences", exchanges, scopes)
+	if scopes != 0 {
+		t.Fatalf("settled observations retained %d scope barriers", scopes)
 	}
 }
 

@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/sync/semaphore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -64,6 +65,7 @@ func (config Config) validate() error {
 }
 
 type Options struct {
+	Budget     *recording.Budget
 	Repository Repository
 	Random     io.Reader
 	Clock      Clock
@@ -71,8 +73,10 @@ type Options struct {
 }
 
 type queuedEnvelope struct {
-	record StoredEnvelope
-	weight int64
+	record      StoredEnvelope
+	weight      int64
+	reservation *recording.Reservation
+	stamp       recording.Stamp
 }
 
 type flushRequest struct {
@@ -81,15 +85,18 @@ type flushRequest struct {
 }
 
 type Statistics struct {
-	WriterID             string
-	AdmittedRecords      uint64
-	DurableWatermark     uint64
-	BatchCommits         uint64
-	QueueRecords         int
-	QueueBytes           int64
-	LastFlushDuration    time.Duration
-	LastFailure          string
-	MaximumUnflushedTime time.Duration
+	WriterID                 string
+	AdmittedRecords          uint64
+	DurableWatermark         uint64 // Deprecated: contiguous confirmed prefix only.
+	SettledSequence          uint64
+	HighestPersistedSequence uint64
+	PersistedRecords         uint64
+	BatchCommits             uint64
+	QueueRecords             int
+	QueueBytes               int64
+	LastFlushDuration        time.Duration
+	LastFailure              string
+	MaximumUnflushedTime     time.Duration
 }
 
 type Manager struct {
@@ -100,21 +107,18 @@ type Manager struct {
 	config     Config
 	writerID   string
 
-	byteSlots   *semaphore.Weighted
-	recordSlots *semaphore.Weighted
-	records     chan queuedEnvelope
-	flushes     chan flushRequest
-	stop        chan struct{}
-	done        chan struct{}
+	budget  *recording.Budget
+	records chan queuedEnvelope
+	flushes chan flushRequest
+	done    chan struct{}
 
 	workerContext context.Context
 	cancelWorker  context.CancelCauseFunc
 
-	admissionMu    sync.Mutex
-	accepting      bool
-	next           uint64
-	scopeLatest    map[scopeKey]uint64
-	exchangeLatest map[string]uint64
+	admissionMu sync.Mutex
+	accepting   bool
+	next        uint64
+	scopeLatest map[scopeKey]uint64
 
 	scopeMu        sync.Mutex
 	scopeAccepting bool
@@ -170,6 +174,9 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 	if err := options.Config.validate(); err != nil {
 		return nil, err
 	}
+	if options.Budget == nil {
+		options.Budget, _ = recording.NewBudget(recording.Limits{Records: int64(options.Config.MaximumQueueRecords), Bytes: options.Config.MaximumQueueBytes})
+	}
 	// The salt is resolved before a writer session opens, so a database that
 	// cannot supply one leaves no session behind and admits no observation.
 	salt, err := options.Repository.RedactionSalt(ctx)
@@ -202,17 +209,14 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 		redactor:       redactor,
 		config:         options.Config,
 		writerID:       writerID,
-		byteSlots:      semaphore.NewWeighted(options.Config.MaximumQueueBytes),
-		recordSlots:    semaphore.NewWeighted(int64(options.Config.MaximumQueueRecords)),
+		budget:         options.Budget,
 		records:        make(chan queuedEnvelope, options.Config.MaximumQueueRecords),
 		flushes:        make(chan flushRequest),
-		stop:           make(chan struct{}),
 		done:           make(chan struct{}),
 		workerContext:  workerContext,
 		cancelWorker:   cancelWorker,
 		accepting:      true,
 		scopeLatest:    make(map[scopeKey]uint64),
-		exchangeLatest: make(map[string]uint64),
 		scopeAccepting: true,
 		scopes:         make(map[scopeKey]*scopeState),
 		scopeChanged:   make(chan struct{}),
@@ -240,28 +244,6 @@ func (manager *Manager) ListExchange(
 ) ([]EnvelopeMetadata, error) {
 	if manager == nil || ctx == nil || !validIdentity(exchangeID) {
 		return nil, ErrInvalidRead
-	}
-	// Reads from the live workbench must observe every envelope already
-	// admitted for this Exchange. The writer normally batches for SSD health;
-	// this narrow barrier only flushes when the requested Exchange still has a
-	// queued watermark, so repeated polling of durable evidence does not create
-	// additional writes.
-	manager.admissionMu.Lock()
-	sequence := manager.exchangeLatest[exchangeID]
-	writerID := manager.writerID
-	manager.admissionMu.Unlock()
-	if sequence != 0 {
-		if err := manager.Flush(ctx, Watermark{
-			WriterID: writerID,
-			Sequence: sequence,
-		}); err != nil {
-			return nil, fmt.Errorf("flush Raw evidence Exchange read: %w", err)
-		}
-		manager.admissionMu.Lock()
-		if manager.exchangeLatest[exchangeID] == sequence {
-			delete(manager.exchangeLatest, exchangeID)
-		}
-		manager.admissionMu.Unlock()
 	}
 	records, err := manager.repository.ListExchange(ctx, exchangeID)
 	if err != nil {
@@ -492,103 +474,123 @@ func (manager *Manager) reopenPreparingScope(key scopeKey) {
 	manager.scopeMu.Unlock()
 }
 
-func (manager *Manager) Observe(
-	ctx context.Context,
-	observation Observation,
-) (Watermark, error) {
-	if manager == nil || ctx == nil {
-		return Watermark{}, errors.New("raw evidence observation is incomplete")
+// Observe is the compatibility adapter. A loss has no durability watermark and
+// is not an error in the forwarding operation.
+func (manager *Manager) Observe(ctx context.Context, observation Observation) (Watermark, error) {
+	if manager == nil {
+		return Watermark{}, nil
 	}
-	if err := observation.validate(); err != nil {
-		return Watermark{}, err
+	if ctx == nil {
+		manager.budget.RecordOffer(recording.Raw, recording.DroppedInvalid, 0)
+		return Watermark{}, nil
+	}
+	if ctx.Err() != nil {
+		manager.budget.RecordOffer(recording.Raw, recording.DroppedClosed, 0)
+		return Watermark{}, nil
+	}
+	mark, _ := manager.offer(observation, recording.Stamp{})
+	return mark, nil
+}
+
+func (manager *Manager) TryObserve(stamp recording.Stamp, observation Observation) recording.OfferResult {
+	if manager == nil {
+		return recording.DroppedUnavailable
+	}
+	if !stamp.Current() {
+		manager.budget.RecordOffer(recording.Raw, recording.DroppedStale, 0)
+		return recording.DroppedStale
+	}
+	if !stampMatches(stamp, observation.Context) {
+		manager.budget.RecordOffer(recording.Raw, recording.DroppedInvalid, 0)
+		return recording.DroppedInvalid
+	}
+	_, result := manager.offer(observation, stamp)
+	return result
+}
+
+func (manager *Manager) offer(observation Observation, stamp recording.Stamp) (Watermark, recording.OfferResult) {
+	if manager == nil {
+		return Watermark{}, recording.DroppedUnavailable
+	}
+	result := recording.DroppedInvalid
+	var retained uint64
+	defer func() { manager.budget.RecordOffer(recording.Raw, result, retained) }()
+	// Charge validation, redaction, JSON encoder overlap and retained data before
+	// any allocation. This conservative upper bound includes escaped JSON strings.
+	weight := observationCharge(observation)
+	reservation, ok := manager.budget.TryReserve(recording.Raw, weight)
+	if !ok {
+		result = recording.DroppedCapacity
+		return Watermark{}, result
+	}
+	defer func() {
+		if result != recording.Accepted {
+			reservation.Release()
+		}
+	}()
+	if observation.validate() != nil {
+		return Watermark{}, result
 	}
 	if observation.Recording == RecordingOff {
-		return Watermark{}, errors.New("raw evidence recording is disabled")
-	}
-	if err := manager.persistenceFailure(); err != nil {
-		return Watermark{}, err
+		result = recording.DroppedUnavailable
+		return Watermark{}, result
 	}
 	if observation.ObservedAt.IsZero() {
 		observation.ObservedAt = manager.clock.Now().UTC()
 	} else {
 		observation.ObservedAt = observation.ObservedAt.UTC()
 	}
-
-	// Credential header values are removed before queue admission, so no
-	// credential-bearing header waits in the append queue. Body bytes do wait
-	// there in the clear, bounded by the queue's configured byte ceiling.
-	draft, weight, err := manager.prepare(ctx, observation)
+	draft, err := manager.prepare(observation)
 	if err != nil {
-		return Watermark{}, err
+		return Watermark{}, result
 	}
-	if weight > manager.config.MaximumQueueBytes {
-		return Watermark{}, errors.New("raw evidence envelope exceeds queue byte bound")
+	mark, outcome := manager.publish(draft, reservation, weight, stamp)
+	result = outcome
+	if result == recording.Accepted {
+		retained = uint64(len(draft.Body) + len(draft.PayloadMetadata))
 	}
-	if err := manager.byteSlots.Acquire(ctx, weight); err != nil {
-		return Watermark{}, fmt.Errorf("wait for raw evidence queue capacity: %w", err)
-	}
-	if err := manager.recordSlots.Acquire(ctx, 1); err != nil {
-		manager.byteSlots.Release(weight)
-		return Watermark{}, fmt.Errorf("wait for raw evidence record capacity: %w", err)
-	}
-	release := true
-	defer func() {
-		if release {
-			manager.recordSlots.Release(1)
-			manager.byteSlots.Release(weight)
-		}
-	}()
+	return mark, result
+}
 
+func (manager *Manager) publish(draft StoredEnvelope, reservation *recording.Reservation, weight int64, stamp recording.Stamp) (Watermark, recording.OfferResult) {
+	draft.WriterID = manager.writerID
+	draft.Watermark = 1
+	draft.EnvelopeID = manager.writerID + ".1"
+	if draft.Validate() != nil {
+		return Watermark{}, recording.DroppedInvalid
+	}
 	manager.admissionMu.Lock()
 	defer manager.admissionMu.Unlock()
 	if !manager.accepting {
-		return Watermark{}, errors.New("raw evidence writer is closing")
+		return Watermark{}, recording.DroppedClosed
 	}
-	if err := ctx.Err(); err != nil {
-		return Watermark{}, fmt.Errorf("admit raw evidence: %w", err)
+	if stamp.Fence().ArchiveEpoch != 0 && !stamp.Current() {
+		return Watermark{}, recording.DroppedStale
+	}
+	manager.scopeMu.Lock()
+	state := manager.scopes[scopeKey{kind: draft.ScopeKind, id: draft.ScopeID}]
+	sealed := state != nil && state.phase == scopeSealed
+	manager.scopeMu.Unlock()
+	if sealed {
+		return Watermark{}, recording.DroppedClosed
 	}
 	sequence := manager.next + 1
 	draft.WriterID = manager.writerID
 	draft.Watermark = sequence
 	draft.EnvelopeID = fmt.Sprintf("%s.%d", manager.writerID, sequence)
-	if err := draft.Validate(); err != nil {
-		return Watermark{}, err
-	}
-
-	// The acquired record slot covers both the channel and the worker-held
-	// batch. Therefore the channel has capacity here. Publish the accounting
-	// before making the item visible to the worker so a very fast commit cannot
-	// decrement queue statistics before this admission increments them.
-	manager.next = sequence
-	manager.scopeLatest[scopeKey{
-		kind: observation.ScopeKind,
-		id:   observation.ScopeID,
-	}] = sequence
-	manager.exchangeLatest[observation.ExchangeID] = sequence
-	manager.statsMu.Lock()
-	manager.stats.AdmittedRecords = sequence
-	manager.stats.QueueRecords++
-	manager.stats.QueueBytes += weight
-	manager.statsMu.Unlock()
-	release = false
-	manager.records <- queuedEnvelope{record: draft, weight: weight}
-	return Watermark{WriterID: manager.writerID, Sequence: sequence}, nil
-}
-
-// persistenceFailure prevents a failed writer batch from turning the bounded
-// queue into a series of request-path timeouts. The worker keeps retrying its
-// retained batch on the flush timer; a successful retry clears LastFailure and
-// admissions resume automatically.
-func (manager *Manager) persistenceFailure() error {
 	manager.statsMu.Lock()
 	defer manager.statsMu.Unlock()
-	if manager.stats.LastFailure == "" {
-		return nil
+	select {
+	case manager.records <- queuedEnvelope{record: draft, weight: weight, reservation: reservation, stamp: stamp}:
+		manager.next = sequence
+		manager.scopeLatest[scopeKey{kind: draft.ScopeKind, id: draft.ScopeID}] = sequence
+		manager.stats.AdmittedRecords++
+		manager.stats.QueueRecords++
+		manager.stats.QueueBytes += weight
+		return Watermark{WriterID: manager.writerID, Sequence: sequence}, recording.Accepted
+	default:
+		return Watermark{}, recording.DroppedCapacity
 	}
-	return fmt.Errorf(
-		"raw evidence persistence is degraded: %s",
-		manager.stats.LastFailure,
-	)
 }
 
 // FlushScope waits for every envelope in one capture scope that was admitted
@@ -615,10 +617,12 @@ func (manager *Manager) FlushScope(
 	if err := manager.Flush(ctx, Watermark{
 		WriterID: writerID,
 		Sequence: sequence,
-	}); err != nil {
+	}); err != nil && manager.settledSequence() < sequence {
 		return err
 	}
 
+	// Failed or ambiguous appends that returned are settled too. This scope
+	// barrier fences actual writer I/O; it must not promise recording durability.
 	// Bound lifecycle memory without losing a newer admission that raced the
 	// flush snapshot. A later observation keeps its own watermark for the next
 	// terminal or shutdown barrier.
@@ -630,7 +634,7 @@ func (manager *Manager) FlushScope(
 	return nil
 }
 
-// Flush waits until the requested admitted watermark is durable. A zero
+// Flush is an administrative settlement barrier, not a durability guarantee. A zero
 // watermark means every record admitted before this call.
 func (manager *Manager) Flush(ctx context.Context, watermark Watermark) error {
 	if manager == nil || ctx == nil {
@@ -649,9 +653,9 @@ func (manager *Manager) Flush(ctx context.Context, watermark Watermark) error {
 	// the admission lock while waiting for the single writer goroutine: a slow
 	// repository commit or another flush must not make new observations wait on
 	// a non-context-aware mutex. Later admissions have higher watermarks and do
-	// not change what this flush promises to make durable.
+	// not change the set of writer operations this settlement barrier joins.
 	manager.admissionMu.Unlock()
-	if target == 0 || manager.durableWatermark() >= target {
+	if target == 0 || manager.settledSequence() >= target {
 		return nil
 	}
 	request := flushRequest{target: target, result: make(chan error, 1)}
@@ -686,6 +690,15 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 		return errors.New("raw evidence shutdown context is incomplete")
 	}
 	manager.shutdownOnce.Do(func() {
+		// Seal synchronously: a canceled caller must not stop the worker before
+		// producers have lost publication authority.
+		manager.admissionMu.Lock()
+		manager.accepting = false
+		manager.admissionMu.Unlock()
+		manager.scopeMu.Lock()
+		manager.scopeAccepting = false
+		manager.notifyScopeLocked()
+		manager.scopeMu.Unlock()
 		go manager.executeShutdown(ctx)
 	})
 	select {
@@ -698,60 +711,26 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 }
 
 func (manager *Manager) executeShutdown(ctx context.Context) {
-	manager.scopeMu.Lock()
-	manager.scopeAccepting = false
-	manager.notifyScopeLocked()
-	for manager.activeScopeRequestsLocked() != 0 {
-		changed := manager.scopeChanged
-		manager.scopeMu.Unlock()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			manager.cancelWorker(ctx.Err())
-			manager.shutdownErr = fmt.Errorf(
-				"drain raw evidence capture scopes: %w", ctx.Err(),
-			)
-			close(manager.shutdownDone)
-			return
-		}
-		manager.scopeMu.Lock()
-	}
-	manager.scopeMu.Unlock()
-	manager.admissionMu.Lock()
-	manager.accepting = false
-	manager.admissionMu.Unlock()
-	flushErr := manager.Flush(ctx, Watermark{})
-	close(manager.stop)
-	select {
-	case <-manager.done:
-	case <-ctx.Done():
-		manager.cancelWorker(ctx.Err())
-		<-manager.done
-	}
 	manager.cancelWorker(errors.New("raw evidence writer stopped"))
-	if flushErr == nil {
-		flushErr = manager.repository.CloseWriterSession(
-			ctx, manager.writerID, manager.clock.Now().UTC(),
-		)
-	}
-	manager.shutdownErr = flushErr
+	<-manager.done // Actual I/O ownership survives a caller timeout.
+	manager.shutdownErr = manager.repository.CloseWriterSession(ctx, manager.writerID, manager.clock.Now().UTC())
 	close(manager.shutdownDone)
 }
 
-func (manager *Manager) activeScopeRequestsLocked() uint64 {
-	var active uint64
-	for _, state := range manager.scopes {
-		active += state.active
+func (manager *Manager) prepare(observation Observation) (StoredEnvelope, error) {
+	var body []byte
+	if observation.Recording == RecordingFull && !observation.Unavailable {
+		body = make([]byte, len(observation.Body))
+		copy(body, observation.Body)
 	}
-	return active
-}
-
-func (manager *Manager) prepare(
-	ctx context.Context,
-	observation Observation,
-) (StoredEnvelope, int64, error) {
-	body := slices.Clone(observation.Body)
-	frames := slices.Clone(observation.Frames)
+	if observation.HasContentLength {
+		observation.Headers = observation.Headers.Clone()
+		if observation.Headers == nil {
+			observation.Headers = make(map[string][]string)
+		}
+		observation.Headers.Set("Content-Length", strconv.FormatInt(observation.ContentLength, 10))
+	}
+	frames := observation.Frames
 	state := PayloadCaptured
 	digestScope := DigestFull
 	reason := ""
@@ -772,7 +751,7 @@ func (manager *Manager) prepare(
 	if observation.Unavailable {
 		digest = [sha256.Size]byte{}
 	} else if !observation.DigestAvailable {
-		digest = sha256.Sum256(body)
+		digest = sha256.Sum256(observation.Body)
 	} else if observation.FullDigestAvailable {
 		digestScope = DigestFull
 	}
@@ -791,47 +770,47 @@ func (manager *Manager) prepare(
 			observation, frames, manager.redactor,
 		)
 		if err != nil {
-			return StoredEnvelope{}, 0, err
+			return StoredEnvelope{}, err
 		}
 		if payloadMetadata, err = built.MarshalMetadata(); err != nil {
-			return StoredEnvelope{}, 0, err
+			return StoredEnvelope{}, err
 		}
 		redactedFields = redacted
 	}
 	record := StoredEnvelope{
 		Layer:                    observation.Layer,
 		ScopeKind:                observation.ScopeKind,
-		ScopeID:                  observation.ScopeID,
-		ExchangeID:               observation.ExchangeID,
-		ConnectionID:             observation.ConnectionID,
-		AttemptID:                observation.AttemptID,
-		EnvironmentID:            observation.EnvironmentID,
+		ScopeID:                  strings.Clone(observation.ScopeID),
+		ExchangeID:               strings.Clone(observation.ExchangeID),
+		ConnectionID:             strings.Clone(observation.ConnectionID),
+		AttemptID:                strings.Clone(observation.AttemptID),
+		EnvironmentID:            strings.Clone(observation.EnvironmentID),
 		EnvironmentRevision:      observation.EnvironmentRevision,
-		EnvironmentDigest:        observation.EnvironmentDigest,
-		ClientEndpointID:         observation.ClientEndpointID,
+		EnvironmentDigest:        strings.Clone(observation.EnvironmentDigest),
+		ClientEndpointID:         strings.Clone(observation.ClientEndpointID),
 		ClientEndpointRevision:   observation.ClientEndpointRevision,
-		UpstreamEndpointID:       observation.UpstreamEndpointID,
+		UpstreamEndpointID:       strings.Clone(observation.UpstreamEndpointID),
 		UpstreamEndpointRevision: observation.UpstreamEndpointRevision,
-		ProtocolPlanID:           observation.ProtocolPlanID,
+		ProtocolPlanID:           strings.Clone(observation.ProtocolPlanID),
 		ProtocolPlanRevision:     observation.ProtocolPlanRevision,
-		RouteID:                  observation.RouteID,
+		RouteID:                  strings.Clone(observation.RouteID),
 		RouteRevision:            observation.RouteRevision,
-		AccountID:                observation.AccountID,
+		AccountID:                strings.Clone(observation.AccountID),
 		AccountRevision:          observation.AccountRevision,
 		CredentialEpoch:          observation.CredentialEpoch,
 		ObservedAt:               observation.ObservedAt,
 		ExpiresAt: observation.ObservedAt.AddDate(
 			0, 0, int(observation.RetentionDays),
 		),
-		Method:                   observation.Method,
+		Method:                   strings.Clone(observation.Method),
 		StatusCode:               observation.StatusCode,
-		Scheme:                   observation.Scheme,
-		Authority:                observation.Authority,
-		Path:                     observation.Path,
-		RawQuery:                 observation.RawQuery,
-		ContentType:              observation.ContentType,
-		ContentEncoding:          observation.ContentEncoding,
-		Representation:           observation.Representation,
+		Scheme:                   strings.Clone(observation.Scheme),
+		Authority:                strings.Clone(observation.Authority),
+		Path:                     strings.Clone(observation.Path),
+		RawQuery:                 strings.Clone(observation.RawQuery),
+		ContentType:              strings.Clone(observation.ContentType),
+		ContentEncoding:          strings.Clone(observation.ContentEncoding),
+		Representation:           strings.Clone(observation.Representation),
 		Canonicalization:         httpCanonicalization,
 		HeaderCount:              headerValueCount(observation.Headers),
 		TrailerCount:             headerValueCount(observation.Trailers),
@@ -844,8 +823,7 @@ func (manager *Manager) prepare(
 		PayloadMetadata:          payloadMetadata,
 		Body:                     body,
 	}
-	weight := int64(len(payloadMetadata) + len(body) + 1024)
-	return record, weight, nil
+	return record, nil
 }
 
 func (manager *Manager) run() {
@@ -854,9 +832,23 @@ func (manager *Manager) run() {
 	defer timer.Stop()
 	batch := make([]queuedEnvelope, 0, manager.config.MaximumBatchRecords)
 	var batchBytes int64
+	defer func() {
+		manager.settle(batch, batchBytes, recording.Discarded, nil)
+		for {
+			select {
+			case item := <-manager.records:
+				manager.settle([]queuedEnvelope{item}, item.weight, recording.Discarded, nil)
+			default:
+				return
+			}
+		}
+	}()
 	for {
 		select {
 		case item := <-manager.records:
+			if len(batch) > 0 && batchBytes+item.weight > manager.config.MaximumBatchBytes {
+				manager.commit(&batch, &batchBytes)
+			}
 			batch = append(batch, item)
 			batchBytes += item.weight
 			if len(batch) >= manager.config.MaximumBatchRecords ||
@@ -869,7 +861,7 @@ func (manager *Manager) run() {
 			if err == nil {
 				err = manager.commit(&batch, &batchBytes)
 			}
-			if err == nil && manager.durableWatermark() < request.target {
+			if err == nil && manager.settledSequence() < request.target {
 				err = errors.New("raw evidence flush did not reach its watermark")
 			}
 			request.result <- err
@@ -877,11 +869,6 @@ func (manager *Manager) run() {
 		case <-timer.C:
 			manager.commit(&batch, &batchBytes)
 			timer.Reset(manager.config.FlushInterval)
-		case <-manager.stop:
-			if manager.drainRecords(&batch, &batchBytes) == nil {
-				manager.commit(&batch, &batchBytes)
-			}
-			return
 		case <-manager.workerContext.Done():
 			return
 		}
@@ -895,6 +882,9 @@ func (manager *Manager) drainRecords(
 	for {
 		select {
 		case item := <-manager.records:
+			if len(*batch) > 0 && *batchBytes+item.weight > manager.config.MaximumBatchBytes {
+				manager.commit(batch, batchBytes)
+			}
 			*batch = append(*batch, item)
 			*batchBytes += item.weight
 			if len(*batch) >= manager.config.MaximumBatchRecords ||
@@ -916,6 +906,29 @@ func (manager *Manager) commit(
 	if len(*batch) == 0 {
 		return nil
 	}
+	for _, item := range *batch {
+		if item.stamp.Fence().ArchiveEpoch != 0 && !item.stamp.Current() {
+			manager.settle(*batch, *batchBytes, recording.Discarded, nil)
+			clear(*batch)
+			*batch = (*batch)[:0]
+			*batchBytes = 0
+			return nil
+		}
+	}
+	// Body codecs/driver bindings and chunk manifests use bounded temporary
+	// workspace. Reserve it against an existing owner, without a phantom offer.
+	scratch := int64(0)
+	for _, item := range *batch {
+		scratch = max(scratch, int64(8192+min(len(item.record.Body), 64<<10)*4+len(item.record.Body)/8+len(item.record.PayloadMetadata)*2))
+	}
+	if !(*batch)[0].reservation.TryGrow(scratch) {
+		manager.settle(*batch, *batchBytes, recording.Discarded, nil)
+		clear(*batch)
+		*batch = (*batch)[:0]
+		*batchBytes = 0
+		return nil
+	}
+	defer (*batch)[0].reservation.Shrink(scratch)
 	sort.Slice(*batch, func(left, right int) bool {
 		return (*batch)[left].record.Watermark < (*batch)[right].record.Watermark
 	})
@@ -930,49 +943,65 @@ func (manager *Manager) commit(
 	duration := time.Since(started)
 	manager.statsMu.Lock()
 	manager.stats.LastFlushDuration = duration
-	if err != nil {
-		manager.stats.LastFailure = err.Error()
-		manager.statsMu.Unlock()
-		return err
-	}
-	manager.stats.BatchCommits++
-	manager.stats.DurableWatermark = records[len(records)-1].Watermark
-	manager.stats.LastFailure = ""
-	manager.stats.QueueRecords -= len(*batch)
-	manager.stats.QueueBytes -= *batchBytes
 	manager.statsMu.Unlock()
-	manager.releaseDurableFences(records)
-	for _, item := range *batch {
-		manager.recordSlots.Release(1)
-		manager.byteSlots.Release(item.weight)
+	outcome := recording.Persisted
+	if err != nil {
+		outcome = recording.Unconfirmed
 	}
+	clear(records)
+	manager.settle(*batch, *batchBytes, outcome, err)
+	clear(*batch)
 	*batch = (*batch)[:0]
 	*batchBytes = 0
-	return nil
+	return err
 }
 
-// releaseDurableFences visits only the committed batch. A later admission for
-// the same Exchange or scope still needs its read/terminal durability barrier.
-// Never acquire admissionMu while holding statsMu: Observe locks them in the
-// opposite order.
-func (manager *Manager) releaseDurableFences(records []StoredEnvelope) {
-	manager.admissionMu.Lock()
-	defer manager.admissionMu.Unlock()
-	for _, record := range records {
-		if manager.exchangeLatest[record.ExchangeID] <= record.Watermark {
-			delete(manager.exchangeLatest, record.ExchangeID)
+func (manager *Manager) settle(batch []queuedEnvelope, weight int64, outcome recording.Settlement, err error) {
+	if len(batch) == 0 {
+		return
+	}
+	manager.statsMu.Lock()
+	last := batch[len(batch)-1].record.Watermark
+	if outcome == recording.Persisted {
+		manager.stats.BatchCommits++
+		manager.stats.PersistedRecords += uint64(len(batch))
+		manager.stats.HighestPersistedSequence = last
+		for _, item := range batch {
+			if manager.stats.DurableWatermark+1 == item.record.Watermark {
+				manager.stats.DurableWatermark = item.record.Watermark
+			}
 		}
-		key := scopeKey{kind: record.ScopeKind, id: record.ScopeID}
-		if manager.scopeLatest[key] <= record.Watermark {
+		manager.stats.LastFailure = ""
+	} else if err != nil {
+		manager.stats.LastFailure = "append_unconfirmed"
+	}
+	manager.stats.QueueRecords -= len(batch)
+	manager.stats.QueueBytes -= weight
+	manager.statsMu.Unlock()
+	manager.admissionMu.Lock()
+	for _, item := range batch {
+		key := scopeKey{kind: item.record.ScopeKind, id: item.record.ScopeID}
+		if manager.scopeLatest[key] <= item.record.Watermark {
 			delete(manager.scopeLatest, key)
 		}
 	}
+	manager.admissionMu.Unlock()
+	for index := range batch {
+		retained := uint64(len(batch[index].record.Body) + len(batch[index].record.PayloadMetadata))
+		reservation := batch[index].reservation
+		batch[index] = queuedEnvelope{}
+		manager.budget.RecordSettlement(recording.Raw, outcome, retained)
+		reservation.Release()
+	}
+	manager.statsMu.Lock()
+	manager.stats.SettledSequence = max(manager.stats.SettledSequence, last)
+	manager.statsMu.Unlock()
 }
 
-func (manager *Manager) durableWatermark() uint64 {
+func (manager *Manager) settledSequence() uint64 {
 	manager.statsMu.Lock()
 	defer manager.statsMu.Unlock()
-	return manager.stats.DurableWatermark
+	return manager.stats.SettledSequence
 }
 
 // ReadPayload returns the stored payload. It needs no key: INV-STORE-DISCLOSED

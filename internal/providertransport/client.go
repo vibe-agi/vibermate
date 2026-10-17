@@ -400,8 +400,10 @@ func (client *Client) Do(
 			Authority:            request.Host,
 			Path:                 request.URL.EscapedPath(),
 			RawQuery:             request.URL.RawQuery,
-			Headers:              providerRequestEvidenceHeaders(request),
-			ProtectedHeaderNames: append([]string(nil), evidence.ProtectedHeaderNames...),
+			Headers:              request.Header,
+			ContentLength:        request.ContentLength,
+			HasContentLength:     request.ContentLength > 0 || (request.ContentLength == 0 && (request.Method == http.MethodPost || request.Method == http.MethodPut || request.Method == http.MethodPatch)),
+			ProtectedHeaderNames: evidence.ProtectedHeaderNames,
 			Body:                 frozen.body,
 			Complete:             true,
 			Representation:       "http_message",
@@ -583,9 +585,9 @@ func (client *Client) rawResponseBody(
 		Authority:            request.Host,
 		Path:                 request.URL.EscapedPath(),
 		RawQuery:             request.URL.RawQuery,
-		Headers:              response.Header.Clone(),
-		ProtectedHeaderNames: append([]string(nil), protectedHeaderNames...),
-		Trailers:             func() http.Header { return response.Trailer.Clone() },
+		Headers:              response.Header,
+		ProtectedHeaderNames: protectedHeaderNames,
+		Trailers:             func() http.Header { return response.Trailer },
 		ReportFailure:        client.reportRawEvidenceFailure,
 	})
 }
@@ -619,6 +621,10 @@ func (client *Client) observeRaw(
 		client.rawTimeout,
 	)
 	defer cancel()
+	if _, bounded := client.raw.(rawevidence.CaptureObserver); !bounded && observation.HasContentLength {
+		observation.Headers = observation.Headers.Clone()
+		observation.Headers.Set("Content-Length", strconv.FormatInt(observation.ContentLength, 10))
+	}
 	return client.raw.Observe(operation, observation)
 }
 
@@ -650,6 +656,8 @@ type rawResponseBodyOptions struct {
 }
 
 type rawResponseBody struct {
+	capture *rawevidence.CaptureBuffer
+	bounded bool
 	options rawResponseBodyOptions
 	hash    hash.Hash
 
@@ -666,10 +674,29 @@ type rawResponseBody struct {
 }
 
 func newRawResponseBody(options rawResponseBodyOptions) *rawResponseBody {
-	body := &rawResponseBody{
-		options: options,
-		hash:    sha256.New(),
-		body:    make([]byte, 0, min(options.MaximumBodyBytes, 32<<10)),
+	body := &rawResponseBody{options: options}
+	if recorder, ok := options.Observer.(rawevidence.CaptureObserver); ok {
+		body.bounded = true
+		body.capture = recorder.Capture(rawevidence.CaptureMetadata{
+			Context:              options.Context,
+			Layer:                rawevidence.LayerProviderResponse,
+			StatusCode:           options.StatusCode,
+			Scheme:               options.Scheme,
+			Authority:            options.Authority,
+			Path:                 options.Path,
+			RawQuery:             options.RawQuery,
+			Headers:              options.Headers,
+			ProtectedHeaderNames: options.ProtectedHeaderNames,
+			ContentType:          options.Headers.Get("Content-Type"),
+			ContentEncoding:      options.Headers.Get("Content-Encoding"),
+		}, options.MaximumBodyBytes)
+		// Only the transport owns the source and trailer accessor; the capture holds
+		// no request, response or lease and its metadata is already sanitized.
+		body.options.Headers = nil
+		body.options.ProtectedHeaderNames = nil
+	} else {
+		body.hash = sha256.New()
+		body.body = make([]byte, 0, min(options.MaximumBodyBytes, 32<<10))
 	}
 	body.condition = sync.NewCond(&body.mu)
 	return body
@@ -681,7 +708,10 @@ func (body *rawResponseBody) Read(destination []byte) (int, error) {
 	body.mu.Unlock()
 	count, readErr := body.options.Source.Read(destination)
 	body.mu.Lock()
-	if count > 0 {
+	if count > 0 && body.bounded {
+		body.capture.ObserveBytes(destination[:count], "")
+	}
+	if count > 0 && !body.bounded {
 		_, _ = body.hash.Write(destination[:count])
 		body.total += int64(count)
 		remaining := body.options.MaximumBodyBytes - len(body.body)
@@ -722,6 +752,23 @@ func (body *rawResponseBody) Close() error {
 func (body *rawResponseBody) finalize(terminalErr error) error {
 	body.once.Do(func() {
 		body.mu.Lock()
+		if body.bounded {
+			reachedEOF := body.reachedEOF
+			reason := ""
+			if !reachedEOF {
+				reason = "response_read_failed"
+				if errors.Is(terminalErr, io.ErrClosedPipe) {
+					reason = "response_closed_before_eof"
+				}
+			}
+			body.mu.Unlock()
+			var trailers http.Header
+			if body.options.Trailers != nil {
+				trailers = body.options.Trailers()
+			}
+			body.capture.Finish(rawevidence.TerminalMetadata{Trailers: trailers, Complete: reachedEOF, IncompleteReason: reason})
+			return
+		}
 		retained := slices.Clone(body.body)
 		total := body.total
 		reachedEOF := body.reachedEOF

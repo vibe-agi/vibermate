@@ -911,8 +911,8 @@ func (pipeline *Pipeline) observeMessageTransformRequest(
 		Layer:          rawevidence.LayerTransformRequestInput,
 		Method:         input.Method,
 		Path:           input.Path,
-		Headers:        input.Headers.Clone(),
-		Body:           bytes.Clone(input.Body),
+		Headers:        input.Headers,
+		Body:           input.Body,
 		Complete:       true,
 		Representation: "message_transform_input",
 		ContentType:    input.Headers.Get("Content-Type"),
@@ -930,38 +930,44 @@ func (pipeline *Pipeline) observeMessageTransformResponse(
 	pipeline.observeMessageTransform(ctx, request, rawevidence.Observation{
 		Layer:          rawevidence.LayerTransformResponseInput,
 		StatusCode:     input.StatusCode,
-		Headers:        input.Headers.Clone(),
-		Body:           bytes.Clone(input.Body),
+		Headers:        input.Headers,
+		Body:           input.Body,
 		Complete:       true,
 		Representation: "message_transform_input",
 		ContentType:    input.Headers.Get("Content-Type"),
 	})
 }
 
-func (pipeline *Pipeline) observeMessageTransformStreamResponse(
-	ctx context.Context,
-	request providertransport.Request,
-	transformer *streamMessageTransformer,
-) {
-	input, total, complete := transformer.Input()
-	if input.StatusCode == 0 {
-		return
+// captureMessageTransformStream owns only optional logical input evidence.
+// The transform decoder, script values and forwarding envelopes remain live
+// execution state; no recording handle can affect their result.
+func (pipeline *Pipeline) captureMessageTransformStream(request providertransport.Request, transformer *streamMessageTransformer) *rawevidence.CaptureBuffer {
+	if transformer == nil || pipeline == nil {
+		return nil
 	}
-	reason := ""
-	if !complete {
-		reason = "transform_input_limit"
+	recorder, ok := pipeline.rawEvidence.(rawevidence.CaptureObserver)
+	if !ok {
+		return nil
 	}
-	pipeline.observeMessageTransform(ctx, request, rawevidence.Observation{
-		Layer:            rawevidence.LayerTransformResponseInput,
-		StatusCode:       input.StatusCode,
-		Headers:          input.Headers.Clone(),
-		Body:             bytes.Clone(input.Body),
-		TotalBodyBytes:   total,
-		Complete:         complete,
-		IncompleteReason: reason,
-		Representation:   "message_transform_stream_input",
-		ContentType:      input.Headers.Get("Content-Type"),
-	})
+	rawContext, ok := request.RawEvidenceContext()
+	if !ok || rawContext.Recording == rawevidence.RecordingOff {
+		return nil
+	}
+	transformer.capture = recorder.Capture(rawevidence.CaptureMetadata{
+		Context:        rawContext,
+		Layer:          rawevidence.LayerTransformResponseInput,
+		StatusCode:     transformer.statusCode,
+		Headers:        transformer.headers,
+		ContentType:    transformer.headers.Get("Content-Type"),
+		Representation: "message_transform_stream_input",
+	}, rawevidence.DefaultMaximumBodyBytes)
+	return transformer.capture
+}
+
+func (pipeline *Pipeline) observeMessageTransformStreamResponse(_ context.Context, _ providertransport.Request, transformer *streamMessageTransformer) {
+	if transformer != nil {
+		transformer.capture.Finish(rawevidence.TerminalMetadata{Complete: true})
+	}
 }
 
 func (pipeline *Pipeline) observeMessageTransform(
@@ -2097,6 +2103,8 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 			err,
 		)
 	}
+	rawCapture := pipeline.captureMessageTransformStream(frozenRequest, transformer)
+	defer rawCapture.Discard()
 	contentDecoder := newOriginalContentDecoder(
 		contentPath,
 		decodedContent,
@@ -2613,6 +2621,8 @@ func (pipeline *Pipeline) executeStream(
 				),
 			)
 		}
+		rawCapture := pipeline.captureMessageTransformStream(frozenRequest, transformer)
+		defer rawCapture.Discard()
 		streamBody, err := newLogicalResponseStream(
 			response.Body,
 			strings.Join(response.Header.Values("Content-Encoding"), ","),

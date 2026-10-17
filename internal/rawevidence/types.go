@@ -243,6 +243,9 @@ func (value Context) Validate() error { return value.validate() }
 // Complete reports whether Body covers the entire message body. A false value
 // must carry one stable reason and is never silently upgraded to a full digest.
 type Observation struct {
+	// ContentLength represents the transport-synthesized Header without a producer clone.
+	ContentLength    int64
+	HasContentLength bool
 	Context
 	Layer      Layer
 	ObservedAt time.Time
@@ -433,7 +436,7 @@ func redactedNamesOf(sets ...[]HeaderField) []string {
 	}
 	names := make([]string, 0, len(seen))
 	for name := range seen {
-		names = append(names, name)
+		names = append(names, strings.Clone(name))
 	}
 	sort.Strings(names)
 	return names
@@ -838,6 +841,8 @@ type Repository interface {
 	// purpose is to keep a redacted digest from matching a corpus assembled
 	// elsewhere.
 	RedactionSalt(context.Context) ([]byte, error)
+	// AppendBatch borrows records until it returns. Return only after actual I/O
+	// has stopped; an error may be an unconfirmed commit and is not retried.
 	AppendBatch(context.Context, []StoredEnvelope, time.Time) error
 	ListExchange(context.Context, string) ([]StoredEnvelope, error)
 	GetEnvelope(context.Context, string) (StoredEnvelope, error)
@@ -859,7 +864,8 @@ type ScopeLease interface {
 
 // TerminalScope is returned only after new request admission for the capture
 // has been closed, all already-admitted requests have completed, and their
-// final raw-evidence watermark is durable. The capture authority must Commit
+// final admitted raw-evidence writer I/O has settled (possibly with loss).
+// The capture authority must Commit
 // after its terminal state is durable, or Abort when that mutation fails.
 type TerminalScope interface {
 	Commit()

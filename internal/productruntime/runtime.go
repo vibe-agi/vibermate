@@ -45,6 +45,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -99,6 +100,7 @@ type Runtime struct {
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
+	recordingBudget    *recording.Budget
 	evidenceArchive    resourcedeletion.Archive
 	archiveBarrier     *evidencearchive.Barrier
 	provider           providerRuntime
@@ -327,8 +329,13 @@ func startWithBuilders(
 		cancelOwner(errors.New("runtime owner context stopped"))
 		return nil
 	})
+	recordingBudget, err := recording.NewBudget(recording.Limits{Records: 2048, Bytes: 64 << 20})
+	if err != nil {
+		return fail("recording budget", err)
+	}
 	rawEvidence, err := buildRawEvidence(rawEvidenceBuildRequest{
 		ctx:        ownerContext,
+		budget:     recordingBudget,
 		repository: storageResult.store.RawEvidenceRepository(),
 		random:     securityRandom,
 		clock:      options.Clock,
@@ -1029,6 +1036,7 @@ func startWithBuilders(
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
+		recordingBudget:    recordingBudget,
 		evidenceArchive:    storageResult.store,
 		archiveBarrier:     archiveBarrier,
 		provider:           provider,
