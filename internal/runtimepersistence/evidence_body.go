@@ -167,23 +167,34 @@ func loadEvidenceBody(
 	if len(digest) == 0 {
 		return nil, nil
 	}
-	var plainBytes int
+	if len(digest) != sha256.Size {
+		return nil, errors.New("stored evidence body digest is invalid")
+	}
+	var plainBytes, manifestBytes int
 	var manifest []byte
 	if err := queryer.QueryRowContext(
 		ctx,
-		`SELECT plain_bytes, chunk_manifest FROM runtime_evidence_bodies
-		  WHERE digest = ?`,
-		digest,
-	).Scan(&plainBytes, &manifest); err != nil {
+		// Guard the BLOB projection itself: checking len(manifest) after Scan
+		// would already have materialized a corrupt oversized manifest.
+		`SELECT plain_bytes, length(chunk_manifest),
+		   CASE WHEN plain_bytes BETWEEN 1 AND ?
+		     AND typeof(chunk_manifest)='blob'
+		     AND length(chunk_manifest) BETWEEN 32 AND ?
+		     AND length(chunk_manifest)%32=0 THEN chunk_manifest END
+		 FROM runtime_evidence_bodies WHERE digest = ?`,
+		rawevidence.DefaultMaximumBodyBytes, maximumChunkManifestBytes, digest,
+	).Scan(&plainBytes, &manifestBytes, &manifest); err != nil {
 		return nil, fmt.Errorf("read evidence body: %w", err)
 	}
-	if len(manifest)%sha256.Size != 0 || len(manifest) == 0 ||
-		plainBytes > rawevidence.DefaultMaximumBodyBytes {
+	if plainBytes < 1 || plainBytes > rawevidence.DefaultMaximumBodyBytes ||
+		manifestBytes < sha256.Size || manifestBytes > maximumChunkManifestBytes ||
+		manifestBytes%sha256.Size != 0 || len(manifest) != manifestBytes {
 		return nil, errors.New("stored evidence body manifest is invalid")
 	}
-	// One query for every chunk, not one per chunk: a 16 MiB body reaches the
-	// 8,192-chunk bound, and the store keeps a single connection.
-	chunks, err := loadEvidenceChunks(ctx, queryer, manifest)
+	// Preflight all unique chunks and their manifest occurrence counts before
+	// loading any payload. Both queries use indexed digest probes, not one
+	// query per chunk or a scan of unrelated retained history.
+	chunks, err := loadEvidenceChunks(ctx, queryer, manifest, plainBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +203,9 @@ func loadEvidenceBody(
 		chunk, ok := chunks[string(manifest[offset:offset+sha256.Size])]
 		if !ok {
 			return nil, errors.New("stored evidence body names a missing chunk")
+		}
+		if len(chunk) > plainBytes-len(body) {
+			return nil, errors.New("stored evidence body exceeds its declared length")
 		}
 		body = append(body, chunk...)
 	}
@@ -205,67 +219,159 @@ func loadEvidenceBody(
 	return body, nil
 }
 
-func loadEvidenceChunks(
-	ctx context.Context,
-	queryer evidenceQueryer,
-	manifest []byte,
-) (map[string][]byte, error) {
-	wanted := make([]string, 0, len(manifest)/sha256.Size)
+// evidenceChunkBounds is bounded scalar metadata copied before any payload
+// read. The second query matches these exact values and projects NULL on a
+// mismatch, keeping nontransactional Raw readers safe across concurrent writes.
+type evidenceChunkBounds struct {
+	Digest      string `json:"digest"`
+	PlainBytes  int    `json:"plainBytes"`
+	StoredBytes int    `json:"storedBytes"`
+	Codec       string `json:"codec"`
+}
+
+func loadEvidenceChunkBounds(ctx context.Context, queryer evidenceQueryer, manifest []byte, plainBytes int) (map[string]evidenceChunkBounds, error) {
+	occurrences := make(map[string]int)
 	for offset := 0; offset < len(manifest); offset += sha256.Size {
-		wanted = append(
-			wanted,
-			strings.ToUpper(hex.EncodeToString(manifest[offset:offset+sha256.Size])),
-		)
+		occurrences[string(manifest[offset:offset+sha256.Size])]++
 	}
-	encoded, err := json.Marshal(uniqueStrings(wanted))
+	wanted := make([]string, 0, len(occurrences))
+	for digest := range occurrences {
+		wanted = append(wanted, strings.ToUpper(hex.EncodeToString([]byte(digest))))
+	}
+	encoded, err := json.Marshal(wanted)
 	if err != nil {
 		return nil, errors.New("stored evidence body manifest is invalid")
 	}
-	rows, err := queryer.QueryContext(
-		ctx,
-		// Decode the requested digests, leaving the stored BLOB primary key
-		// searchable. hex(chunks.digest) scans unrelated retained history while
-		// holding the same connection needed by Capture lifecycle writes.
-		`SELECT chunks.digest, chunks.plain_bytes, chunks.codec, chunks.payload
-		   FROM json_each(?) AS wanted
-		   JOIN runtime_evidence_chunks AS chunks ON chunks.digest = unhex(wanted.value)`,
-		string(encoded),
-	)
+	rows, err := queryer.QueryContext(ctx,
+		// Keep the stored BLOB primary key bare on BOTH passes. hex(chunks.digest)
+		// would scan unrelated history for each requested manifest entry.
+		// Codec is allowlisted in SQL as its TEXT column has no length CHECK.
+		`SELECT chunks.digest, chunks.plain_bytes,
+		   CASE WHEN chunks.codec IN ('identity','zstd') THEN chunks.codec ELSE '' END,
+		   CASE WHEN typeof(chunks.payload)='blob' THEN length(chunks.payload) ELSE 0 END
+		 FROM json_each(?) AS wanted
+		 JOIN runtime_evidence_chunks AS chunks ON chunks.digest=unhex(wanted.value)`,
+		string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("read evidence chunk bounds: %w", err)
+	}
+	// This helper returns only after closing rows: callers may have one SQL
+	// connection and cannot start the payload query while these rows are open.
+	defer rows.Close()
+	bounds := make(map[string]evidenceChunkBounds, len(occurrences))
+	total := 0
+	for rows.Next() {
+		var digest []byte
+		var value evidenceChunkBounds
+		if err := rows.Scan(&digest, &value.PlainBytes, &value.Codec, &value.StoredBytes); err != nil {
+			return nil, fmt.Errorf("scan evidence chunk bounds: %w", err)
+		}
+		key := string(digest)
+		count := occurrences[key]
+		if len(digest) != sha256.Size || count == 0 {
+			return nil, errors.New("stored evidence chunk identity is invalid")
+		}
+		if _, duplicate := bounds[key]; duplicate {
+			return nil, errors.New("stored evidence chunk identity is duplicated")
+		}
+		if value.PlainBytes < 1 || value.PlainBytes > evidencechunk.MaximumBytes {
+			return nil, errors.New("stored evidence chunk length is out of range")
+		}
+		// The writer stores identity encoding whenever compression is not
+		// smaller. Thus no valid stored payload exceeds one maximum chunk.
+		if value.StoredBytes < 1 || value.StoredBytes > evidencechunk.MaximumBytes {
+			return nil, errors.New("stored evidence chunk payload length is out of range")
+		}
+		if value.Codec != chunkCodecIdentity && value.Codec != chunkCodecZstd {
+			return nil, errors.New("stored evidence chunk codec is unsupported")
+		}
+		if value.Codec == chunkCodecIdentity && value.StoredBytes != value.PlainBytes {
+			return nil, errors.New("stored identity chunk has the wrong length")
+		}
+		// Count repeated references, not just distinct chunks. Divide before
+		// multiplying so even corrupt metadata cannot overflow the sum.
+		if value.PlainBytes > (plainBytes-total)/count {
+			return nil, errors.New("stored evidence manifest exceeds its declared body length")
+		}
+		total += value.PlainBytes * count
+		value.Digest = strings.ToUpper(hex.EncodeToString(digest))
+		bounds[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate evidence chunk bounds: %w", err)
+	}
+	if len(bounds) != len(occurrences) || total != plainBytes {
+		return nil, errors.New("stored evidence manifest does not match its declared body length")
+	}
+	return bounds, nil
+}
+
+func loadEvidenceChunks(ctx context.Context, queryer evidenceQueryer, manifest []byte, plainBytes int) (map[string][]byte, error) {
+	bounds, err := loadEvidenceChunkBounds(ctx, queryer, manifest, plainBytes)
+	if err != nil {
+		return nil, err
+	}
+	wanted := make([]evidenceChunkBounds, 0, len(bounds))
+	for _, value := range bounds {
+		wanted = append(wanted, value)
+	}
+	encoded, err := json.Marshal(wanted)
+	if err != nil {
+		return nil, errors.New("stored evidence chunk bounds are invalid")
+	}
+	rows, err := queryer.QueryContext(ctx,
+		// Checking after Scan is too late for an oversized payload. These
+		// expected lengths/codecs have already passed the metadata preflight;
+		// CASE also guards a mutation between queries for non-Tx callers.
+		`SELECT chunks.digest,
+		   CASE WHEN chunks.plain_bytes=json_extract(wanted.value,'$.plainBytes')
+		     AND chunks.codec=json_extract(wanted.value,'$.codec')
+		     AND typeof(chunks.payload)='blob'
+		     AND length(chunks.payload)=json_extract(wanted.value,'$.storedBytes')
+		   THEN chunks.payload END
+		 FROM json_each(?) AS wanted
+		 JOIN runtime_evidence_chunks AS chunks
+		   ON chunks.digest=unhex(json_extract(wanted.value,'$.digest'))`,
+		string(encoded))
 	if err != nil {
 		return nil, fmt.Errorf("read evidence chunks: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	chunks := make(map[string][]byte, len(wanted))
+	defer rows.Close()
+	chunks := make(map[string][]byte, len(bounds))
+	decodedBytes := 0
 	for rows.Next() {
 		var digest, stored []byte
-		var plainBytes int
-		var codec string
-		if err := rows.Scan(&digest, &plainBytes, &codec, &stored); err != nil {
+		if err := rows.Scan(&digest, &stored); err != nil {
 			return nil, fmt.Errorf("scan evidence chunk: %w", err)
 		}
-		if plainBytes < 1 || plainBytes > evidencechunk.MaximumBytes {
-			return nil, errors.New("stored evidence chunk length is out of range")
+		key := string(digest)
+		value, found := bounds[key]
+		if !found || len(stored) != value.StoredBytes {
+			return nil, errors.New("stored evidence chunk changed after bounds validation")
 		}
-		switch codec {
-		case chunkCodecIdentity:
-		case chunkCodecZstd:
-			decoded, decodeErr := bodyDecoder.DecodeAll(
-				stored, make([]byte, 0, plainBytes),
-			)
+		if _, duplicate := chunks[key]; duplicate || value.PlainBytes > plainBytes-decodedBytes {
+			return nil, errors.New("stored evidence chunks exceed their declared body length")
+		}
+		if value.Codec == chunkCodecZstd {
+			// The declared length was checked before payload materialization,
+			// and DecodeAll's cap limit prevents output growth beyond it.
+			decoded, decodeErr := bodyDecoder.DecodeAll(stored, make([]byte, 0, value.PlainBytes))
 			if decodeErr != nil {
 				return nil, fmt.Errorf("decompress evidence chunk: %w", decodeErr)
 			}
 			stored = decoded
-		default:
-			return nil, errors.New("stored evidence chunk codec is unsupported")
 		}
-		if len(stored) != plainBytes {
+		if len(stored) != value.PlainBytes {
 			return nil, errors.New("stored evidence chunk has the wrong length")
 		}
-		chunks[string(digest)] = stored
+		decodedBytes += len(stored)
+		chunks[key] = stored
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate evidence chunks: %w", err)
+	}
+	if len(chunks) != len(bounds) {
+		return nil, errors.New("stored evidence body names a missing chunk")
 	}
 	return chunks, nil
 }
