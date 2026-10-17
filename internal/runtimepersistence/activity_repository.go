@@ -649,6 +649,9 @@ func (repository *activityRepository) ListConversations(
 	ctx context.Context,
 	request activity.ConversationIndexRequest,
 ) (activity.ConversationPage, error) {
+	if request.Cursor != "" {
+		return activity.ConversationPage{}, activity.ErrInvalidEvent
+	}
 	if err := request.Validate(); err != nil {
 		return activity.ConversationPage{}, err
 	}
@@ -805,6 +808,9 @@ func (repository *activityRepository) list(
 	lookAhead bool,
 	arguments ...any,
 ) (activity.Page, error) {
+	if request.Cursor != "" {
+		return activity.Page{}, activity.ErrInvalidEvent
+	}
 	if err := request.Validate(); err != nil {
 		return activity.Page{}, err
 	}

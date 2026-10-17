@@ -51,18 +51,19 @@ type CaptureObservationSummary struct {
 // requests in Scope, never just a loaded page. It does not claim that a start
 // without a retained terminal is still executing in the upstream provider.
 type ExchangeSummary struct {
-	CaptureObservation *CaptureObservationSummary `json:"captureObservation,omitempty"`
-	Scope              SummaryScope               `json:"scope"`
-	GeneratedAt        time.Time                  `json:"generatedAt"`
-	Requests           int                        `json:"requests"`
-	Succeeded          int                        `json:"succeeded"`
-	Failed             int                        `json:"failed"`
-	Canceled           int                        `json:"canceled"`
-	Pending            int                        `json:"pending"`
-	FirstObservedAt    *time.Time                 `json:"firstObservedAt"`
-	LastObservedAt     *time.Time                 `json:"lastObservedAt"`
-	Failures           []FailureCount             `json:"failures"`
-	OtherFailures      int                        `json:"otherFailures"`
+	InspectionExpiresAt time.Time                  `json:"-"`
+	CaptureObservation  *CaptureObservationSummary `json:"captureObservation,omitempty"`
+	Scope               SummaryScope               `json:"scope"`
+	GeneratedAt         time.Time                  `json:"generatedAt"`
+	Requests            int                        `json:"requests"`
+	Succeeded           int                        `json:"succeeded"`
+	Failed              int                        `json:"failed"`
+	Canceled            int                        `json:"canceled"`
+	Pending             int                        `json:"pending"`
+	FirstObservedAt     *time.Time                 `json:"firstObservedAt"`
+	LastObservedAt      *time.Time                 `json:"lastObservedAt"`
+	Failures            []FailureCount             `json:"failures"`
+	OtherFailures       int                        `json:"otherFailures"`
 	// ContentBodiesAvailable is set only for launch scopes. It answers whether
 	// any non-expired full conversation body remains for that Capture, so a
 	// statistics view can skip conversations(200) identity enrichment.

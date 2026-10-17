@@ -29,6 +29,9 @@ func (repository *activityRepository) SearchExchanges(
 	ctx context.Context,
 	request activity.SearchRequest,
 ) (activity.SearchPage, error) {
+	if request.Query.Cursor != "" {
+		return activity.SearchPage{}, activity.ErrInvalidEvent
+	}
 	if err := request.Validate(); err != nil {
 		return activity.SearchPage{}, err
 	}
