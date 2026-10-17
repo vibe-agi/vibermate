@@ -701,7 +701,7 @@ final class WorkbenchController extends ChangeNotifier
   String? nativeApprovalError;
   bool _nativeApprovalVisible = false;
   int _nativeApprovalEpoch = 0;
-  int _nativeApprovalSequence = 0;
+  String _nativeApprovalCursor = '';
   int _nativeDecisions = 0;
   Set<String> _nativePendingIDs = {};
   bool get nativeApprovalAttention => _nativePendingIDs.isNotEmpty;
@@ -721,7 +721,7 @@ final class WorkbenchController extends ChangeNotifier
 
   void _discardNativeApprovals() {
     _nativeApprovalEpoch++;
-    _nativeApprovalSequence = 0;
+    _nativeApprovalCursor = '';
     nativeApprovals = const [];
     nativeApprovalScanComplete = false;
     nativeApprovalsLoading = false;
@@ -749,8 +749,8 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = <String, NativeApproval>{};
       final pendingIDs = <String>{};
-      // Event pages alone cannot remove a pending question when a terminal
-      // event has fallen outside this page. Revalidate every visible ID.
+      // Revalidate known pending questions directly. The discovery cursor
+      // traverses the current set and restarts after every exhausted scan.
       for (final id in _nativePendingIDs) {
         try {
           final approval = await _api.nativeApproval(capture, id);
@@ -773,7 +773,7 @@ final class WorkbenchController extends ChangeNotifier
       }
       final page = await _api.nativeApprovals(
         capture,
-        afterSequence: _nativeApprovalSequence,
+        cursor: _nativeApprovalCursor,
       );
       if (!current()) return;
       for (final approval in page.items) {
@@ -782,8 +782,8 @@ final class WorkbenchController extends ChangeNotifier
           if (_nativeApprovalVisible) updated[approval.id] = approval;
         }
       }
-      nativeApprovalScanComplete = page.nextSequence == _nativeApprovalSequence;
-      _nativeApprovalSequence = page.nextSequence;
+      nativeApprovalScanComplete = page.nextCursor.isEmpty;
+      _nativeApprovalCursor = page.nextCursor;
       _nativePendingIDs = pendingIDs;
       nativeApprovals = _nativeApprovalVisible
           ? List.unmodifiable(updated.values)
@@ -793,7 +793,7 @@ final class WorkbenchController extends ChangeNotifier
       if (!current()) return;
       nativeApprovals = const [];
       nativeApprovalScanComplete = false;
-      _nativeApprovalSequence = 0;
+      _nativeApprovalCursor = '';
       _nativePendingIDs = {};
       nativeApprovalError = _describeError(error);
     } finally {

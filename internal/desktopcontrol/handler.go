@@ -161,6 +161,7 @@ type Options struct {
 	ProductUpdates      ProductUpdateReader
 	NativeContentKey    [32]byte
 	NativeTools         nativetool.Repository
+	NativeAuthority     nativetool.AuthorityRepository
 	NativePreviews      PendingPreviewReader
 	ContentLimits       *exchangecontent.SourceLimits
 	LaunchSnapshots     *launchsnapshot.Store
@@ -214,6 +215,7 @@ type Handler struct {
 	productUpdates      ProductUpdateReader
 	nativeContentKey    [32]byte
 	nativeTools         nativetool.Repository
+	nativeAuthority     nativetool.AuthorityRepository
 	nativePreviews      PendingPreviewReader
 	contentLimits       *exchangecontent.SourceLimits
 	launchSnapshots     *launchsnapshot.Store
@@ -351,6 +353,7 @@ func New(options Options) (*Handler, error) {
 		egress:              options.Egress,
 		approvals:           options.Approvals,
 		nativeTools:         options.NativeTools,
+		nativeAuthority:     nativeAuthorityDependency(options),
 		nativePreviews:      options.NativePreviews,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
@@ -1511,4 +1514,14 @@ func (handler *Handler) listEgressAttempts(
 	// An attempt is immutable evidence with unexported fields, so it is
 	// rendered through its explicit contract rather than serialized directly.
 	writeJSON(writer, http.StatusOK, egressaudit.PageViewOf(page))
+}
+
+func nativeAuthorityDependency(o Options) nativetool.AuthorityRepository {
+	if o.NativeAuthority != nil {
+		return o.NativeAuthority
+	}
+	// Explicit transitional composition: current authority wins; optional
+	// history remains separately reachable through the legacy inspection field.
+	authority, _ := o.NativeTools.(nativetool.AuthorityRepository)
+	return authority
 }

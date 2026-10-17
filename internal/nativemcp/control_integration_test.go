@@ -109,15 +109,10 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 				first := request("GET", collection+"?limit=1", read, "", "", "")
 				check(first, 200)
 				var page desktopcontrol.NativeApprovalPageDTO
-				if err = json.Unmarshal(first.Body.Bytes(), &page); err != nil || len(page.Items) != 0 || page.NextSequence <= 0 {
-					t.Fatalf("filtered page did not advance %+v %v", page, err)
+				if err = json.Unmarshal(first.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].ID != a.ID.String() || page.NextCursor != "" {
+					t.Fatalf("direct pending page %+v %v", page, err)
 				}
-				end := request("GET", collection+"?afterSequence=999999", read, "", "", "")
-				check(end, 200)
-				if err = json.Unmarshal(end.Body.Bytes(), &page); err != nil || len(page.Items) != 0 || page.NextSequence != 999999 {
-					t.Fatalf("terminal page cursor moved backwards %+v %v", page, err)
-				}
-				for _, query := range []string{"?limit=0", "?limit=200", "?limit=1&limit=2", "?afterSequence=0&afterSequence=1", "?unknown=1", "?afterSequence=-1"} {
+				for _, query := range []string{"?limit=0", "?limit=200", "?limit=1&limit=2", "?afterSequence=0", "?afterSequence=999999", "?afterSequence=0&afterSequence=1", "?unknown=1", "?afterSequence=-1", "?cursor=", "?cursor=foreign", "?cursor=a&cursor=b"} {
 					check(request("GET", collection+query, read, "", "", ""), 422)
 				}
 				var dto desktopcontrol.NativeApprovalDTO

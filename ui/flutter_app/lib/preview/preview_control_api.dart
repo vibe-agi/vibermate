@@ -37,9 +37,9 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
   @override
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
-  }) async => NativeApprovalPage(const [], afterSequence);
+  }) async => NativeApprovalPage(const [], '');
   @override
   Future<NativeApproval> nativeApproval(String captureKey, String approvalId) =>
       throw UnsupportedError('No native approvals in preview');

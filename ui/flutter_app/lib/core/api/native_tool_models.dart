@@ -696,31 +696,33 @@ final class NativeApproval {
 }
 
 final class NativeApprovalPage {
-  const NativeApprovalPage(this.items, this.nextSequence);
+  const NativeApprovalPage(this.items, this.nextCursor);
   factory NativeApprovalPage.fromJson(
     Object? raw,
     String capture, {
-    required int afterSequence,
+    required String cursor,
     required int limit,
   }) {
     final map = requireObject(raw, 'native.approvals');
     requireFields(
       map,
       'native.approvals',
-      required: const {'items', 'nextSequence'},
+      required: const {'items', 'nextCursor'},
     );
-    final sequence = requireInteger(map, 'nextSequence', 'native.approvals');
+    final next = requireStringValue(map, 'nextCursor', 'native.approvals');
     final items = requireList(map['items'], 'native.approvals.items')
         .map((item) => NativeApproval.fromJson(item, capture))
         .toList(growable: false);
-    if (sequence < afterSequence ||
+    if (next.length > 256 ||
+        (next.isNotEmpty &&
+            (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(next) || next == cursor)) ||
         items.length > limit ||
         items.any((a) => a.state != 'pending') ||
         items.map((a) => a.id).toSet().length != items.length) {
       throw const ControlContractException('Invalid native approval page');
     }
-    return NativeApprovalPage(List.unmodifiable(items), sequence);
+    return NativeApprovalPage(List.unmodifiable(items), next);
   }
   final List<NativeApproval> items;
-  final int nextSequence;
+  final String nextCursor;
 }

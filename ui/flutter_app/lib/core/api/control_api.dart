@@ -41,7 +41,7 @@ abstract interface class ControlApi {
   });
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
   });
   Future<NativeApproval> nativeApproval(String captureKey, String approvalId);
@@ -632,19 +632,22 @@ final class HttpControlApi
   @override
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
   }) async {
-    if (afterSequence < 0 || limit < 1 || limit > 199) {
+    if (cursor.length > 256 ||
+        (cursor.isNotEmpty && !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) ||
+        limit < 1 ||
+        limit > 199) {
       throw const ControlContractException('Invalid native page request');
     }
     final payload = await _readNativePreview(
-      '${_nativeApprovalsPath(captureKey)}?afterSequence=$afterSequence&limit=$limit',
+      '${_nativeApprovalsPath(captureKey)}?limit=$limit${cursor.isEmpty ? '' : '&cursor=${Uri.encodeQueryComponent(cursor)}'}',
     );
     return NativeApprovalPage.fromJson(
       payload,
       captureKey,
-      afterSequence: afterSequence,
+      cursor: cursor,
       limit: limit,
     );
   }

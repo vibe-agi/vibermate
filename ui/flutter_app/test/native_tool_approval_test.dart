@@ -42,6 +42,39 @@ Map<String, Object?> nativeApprovalFixture() => {
   },
 };
 void main() {
+  test('pending traversal restarts to discover later earlier tuples', () async {
+    var pages = 0;
+    final cursors = <String?>[];
+    final later = {
+      ...nativeApprovalFixture(),
+      'id': '00000000000000000000000000000000',
+    };
+    final api = await nativeApi((request) async {
+      if (!request.url.path.endsWith('/approvals')) {
+        return nativeResponse(nativeApprovalFixture());
+      }
+      cursors.add(request.url.queryParameters['cursor']);
+      pages++;
+      return nativeResponse({
+        'items': pages == 1
+            ? [nativeApprovalFixture()]
+            : pages == 3
+            ? [later]
+            : [],
+        'nextCursor': pages == 1 ? 'cursorA' : '',
+      });
+    });
+    addTearDown(api.close);
+    final controller = nativeController(api);
+    addTearDown(controller.dispose);
+    await controller.refreshNativeApprovals();
+    await controller.refreshNativeApprovals();
+    expect(controller.nativePendingCount, 1);
+    await controller.refreshNativeApprovals();
+    expect(controller.nativePendingCount, 2);
+    expect(cursors, [null, 'cursorA', null]);
+  });
+
   for (final choice in NativeDecision.values) {
     for (final committed in [false, true]) {
       for (final reopen in [false, true]) {
@@ -64,11 +97,13 @@ void main() {
                 throw http.ClientException('synthetic response lost');
               }
               if (request.url.path.endsWith('/approvals')) {
-                final cursor = request.url.queryParameters['afterSequence'];
+                final cursor = request.url.queryParameters['cursor'];
                 pageCursors.add(cursor);
                 return nativeResponse({
-                  'items': cursor == '0' ? [nativeApprovalFixture()] : [],
-                  'nextSequence': 7,
+                  'items': cursor == null && !(posted && committed)
+                      ? [nativeApprovalFixture()]
+                      : [],
+                  'nextCursor': cursor == null && !posted ? 'cursorA' : '',
                 });
               }
               if (posted) {
@@ -90,7 +125,7 @@ void main() {
             });
             expect(controller.nativeApprovalScanComplete, isTrue);
             expect(controller.nativePendingCount, 1);
-            expect(pageCursors, ['0', '7']);
+            expect(pageCursors, [null, 'cursorA']);
             final old = controller.nativeApprovals.single;
             await tester.pumpWidget(
               MaterialApp(
@@ -181,7 +216,7 @@ void main() {
             });
             await tester.pump();
             expect(posts, 1, reason: 'Recovery must never retry POST');
-            expect(pageCursors, ['0', '7', '7']);
+            expect(pageCursors, [null, 'cursorA', null]);
             expect(controller.nativeApprovalScanComplete, isTrue);
             expect(controller.nativePendingCount, committed ? 0 : 1);
             expect(controller.nativeApprovalAttention, !committed);
@@ -212,7 +247,7 @@ void main() {
           r.url.path.endsWith('/approvals')
               ? {
                   'items': ++pages == 1 ? [nativeApprovalFixture()] : [],
-                  'nextSequence': 7,
+                  'nextCursor': '',
                 }
               : nativeApprovalFixture(),
         ),
@@ -246,7 +281,7 @@ void main() {
               r.url.path.endsWith('/approvals')
                   ? {
                       'items': [nativeApprovalFixture()],
-                      'nextSequence': 7,
+                      'nextCursor': '',
                     }
                   : nativeApprovalFixture(),
             ),
@@ -383,7 +418,7 @@ void main() {
     },
   );
   test(
-    'native refresh removes resolved IDs even when filtered event page is empty',
+    'native refresh removes resolved IDs even when pending page is empty',
     () async {
       var pageCalls = 0;
       var resolved = false;
@@ -392,7 +427,7 @@ void main() {
           r.url.path.endsWith('/approvals')
               ? {
                   'items': ++pageCalls == 1 ? [nativeApprovalFixture()] : [],
-                  'nextSequence': 7,
+                  'nextCursor': pageCalls == 1 ? 'cursorA' : '',
                 }
               : resolved
               ? nativeResolved('denied')
@@ -431,7 +466,7 @@ void main() {
       held.complete(
         nativeResponse({
           'items': [nativeApprovalFixture()],
-          'nextSequence': 7,
+          'nextCursor': '',
         }),
       );
       await Future<void>.delayed(Duration.zero);
@@ -456,7 +491,7 @@ void main() {
           return ++pages == 1
               ? nativeResponse({
                   'items': [nativeApprovalFixture()],
-                  'nextSequence': 1,
+                  'nextCursor': '',
                 })
               : page.future;
         }
@@ -479,7 +514,7 @@ void main() {
       page.complete(
         nativeResponse({
           'items': [nativeApprovalFixture()],
-          'nextSequence': 7,
+          'nextCursor': '',
         }),
       );
       await late;
@@ -487,14 +522,14 @@ void main() {
     },
   );
   test(
-    'Capture switch discards old pending response and starts cursor at zero',
+    'Capture switch discards old pending response and starts a fresh traversal',
     () async {
       final held = Completer<http.Response>();
       final requests = <http.Request>[];
       final api = await nativeApi((r) async {
         requests.add(r);
         if (requests.length == 1) return held.future;
-        return nativeResponse({'items': [], 'nextSequence': 0});
+        return nativeResponse({'items': [], 'nextCursor': ''});
       });
       addTearDown(api.close);
       final controller = nativeController(api);
@@ -507,7 +542,7 @@ void main() {
       held.complete(
         nativeResponse({
           'items': [nativeApprovalFixture()],
-          'nextSequence': 7,
+          'nextCursor': '',
         }),
       );
       await Future<void>.delayed(Duration.zero);
@@ -518,7 +553,7 @@ void main() {
         Uri.decodeComponent(requests.last.url.path),
         contains('manual_capture:other'),
       );
-      expect(requests.last.url.queryParameters['afterSequence'], '0');
+      expect(requests.last.url.queryParameters['cursor'], isNull);
     },
   );
   testWidgets('missing details disables Allow but keeps Deny available', (

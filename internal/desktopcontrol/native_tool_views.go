@@ -98,6 +98,9 @@ func (h *Handler) nativeOperation(ctx context.Context, capture captureidentity.R
 	if err != nil {
 		return nativetool.Operation{}, nativetool.ErrInvalid
 	}
+	if h.nativeTools == nil {
+		return nativetool.Operation{}, nativetool.ErrUnavailable
+	}
 	op, err := h.nativeTools.Get(ctx, id)
 	if err == nil && (op.ID != id || op.Capture != capture) {
 		err = nativetool.ErrNotFound
@@ -112,6 +115,10 @@ func (h *Handler) listNativeOperations(w http.ResponseWriter, r *http.Request) {
 	after, limit, err := nativePageQuery(r.URL.RawQuery)
 	if err != nil {
 		nativeProblem(w, err)
+		return
+	}
+	if h.nativeTools == nil {
+		nativeProblem(w, nativetool.ErrUnavailable)
 		return
 	}
 	page, err := h.nativeTools.Page(r.Context(), nativetool.PageRequest{Capture: capture, AfterSequence: after, Limit: limit})

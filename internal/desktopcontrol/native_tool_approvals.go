@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -42,8 +40,8 @@ type NativeApprovalDTO struct {
 	CredentialOwner string               `json:"credentialOwner"`
 }
 type NativeApprovalPageDTO struct {
-	Items        []NativeApprovalDTO `json:"items"`
-	NextSequence int64               `json:"nextSequence"`
+	Items      []NativeApprovalDTO `json:"items"`
+	NextCursor string              `json:"nextCursor"`
 }
 type NativeDecisionDTO struct {
 	Decision      nativetool.Decision `json:"decision"`
@@ -71,7 +69,7 @@ func (h *Handler) nativeCapture(w http.ResponseWriter, r *http.Request, write bo
 		writeProblem(w, 401, ReasonUnauthorized)
 		return ref, false
 	}
-	if err == nil && h.nativeTools == nil {
+	if err == nil && h.nativeTools == nil && h.nativeAuthority == nil {
 		err = nativetool.ErrUnavailable
 	}
 	if err != nil {
@@ -81,11 +79,14 @@ func (h *Handler) nativeCapture(w http.ResponseWriter, r *http.Request, write bo
 	return ref, true
 }
 func (h *Handler) nativeApproval(ctx context.Context, ref captureidentity.Reference, id nativetool.ID) (nativetool.Approval, nativetool.Operation, error) {
-	a, err := h.nativeTools.GetApproval(ctx, id)
+	if h.nativeAuthority == nil {
+		return nativetool.Approval{}, nativetool.Operation{}, nativetool.ErrUnavailable
+	}
+	a, err := h.nativeAuthority.GetApproval(ctx, id)
 	if err != nil {
 		return a, nativetool.Operation{}, err
 	}
-	op, err := h.nativeTools.Get(ctx, a.OperationID)
+	op, err := h.nativeAuthority.Get(ctx, a.OperationID)
 	if err == nil && (op.ID != a.OperationID || op.Capture != ref || op.ApprovalID == nil || *op.ApprovalID != id || op.BindingDigest == nil || *op.BindingDigest != a.BindingDigest) {
 		err = nativetool.ErrNotFound
 	}
@@ -116,61 +117,36 @@ func (h *Handler) listNativeApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	query, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		nativeProblem(w, nativetool.ErrInvalid)
+	if h.nativeAuthority == nil {
+		nativeProblem(w, nativetool.ErrUnavailable)
 		return
 	}
-	for k, v := range query {
-		if len(v) != 1 || k != "afterSequence" && k != "limit" {
-			nativeProblem(w, nativetool.ErrInvalid)
-			return
-		}
-	}
-	limit := 50
-	var after int64
-	if raw, ok := query["limit"]; ok {
-		limit, err = strconv.Atoi(raw[0])
-		if err != nil || limit < 1 || limit > 199 {
-			nativeProblem(w, nativetool.ErrInvalid)
-			return
-		}
-	}
-	if raw, ok := query["afterSequence"]; ok {
-		after, err = strconv.ParseInt(raw[0], 10, 64)
-		if err != nil || after < 0 {
-			nativeProblem(w, nativetool.ErrInvalid)
-			return
-		}
-	}
-	page, err := h.nativeTools.Page(r.Context(), nativetool.PageRequest{Capture: ref, AfterSequence: after, Limit: limit})
+	query, err := parseNativeApprovalQuery(r.URL.RawQuery, ref)
 	if err != nil {
 		nativeProblem(w, err)
 		return
 	}
-	result := NativeApprovalPageDTO{Items: []NativeApprovalDTO{}, NextSequence: page.NextSequence}
-	// Repository.Page uses zero for an empty terminal page. The HTTP cursor
-	// remains monotonic so refresh can distinguish completion from a restart.
-	if len(page.Items) == 0 && page.NextSequence == 0 {
-		result.NextSequence = after
+	page, err := h.nativeAuthority.ListPendingApprovals(r.Context(), query)
+	if err != nil {
+		nativeProblem(w, err)
+		return
 	}
-	seen := map[nativetool.ID]bool{}
-	for _, op := range page.Items {
-		if op.Capture != ref {
-			nativeProblem(w, nativetool.ErrNotFound)
-			return
-		}
-		if op.ApprovalID == nil || seen[*op.ApprovalID] {
-			continue
-		}
-		seen[*op.ApprovalID] = true
-		a, current, err := h.nativeApproval(r.Context(), ref, *op.ApprovalID)
+	result := NativeApprovalPageDTO{Items: []NativeApprovalDTO{}}
+	if page.NextID != "" {
+		result.NextCursor, err = nativeApprovalCursor(ref, page.NextCreatedAt, page.NextID)
 		if err != nil {
 			nativeProblem(w, err)
 			return
 		}
+	}
+	for _, item := range page.Items {
+		a, op := item.Approval, item.Operation
+		if op.Capture != ref || op.ID != a.OperationID || op.ApprovalID == nil || *op.ApprovalID != a.ID || op.BindingDigest == nil || *op.BindingDigest != a.BindingDigest {
+			nativeProblem(w, nativetool.ErrInvalid)
+			return
+		}
 		if a.State == "pending" && a.ExpiresAt.After(h.clock.Now().UTC()) {
-			result.Items = append(result.Items, h.nativeApprovalDTO(r.Context(), a, current))
+			result.Items = append(result.Items, h.nativeApprovalDTO(r.Context(), a, op))
 		}
 	}
 	writeJSON(w, 200, result)
@@ -262,7 +238,7 @@ func (h *Handler) decideNativeApproval(w http.ResponseWriter, r *http.Request) {
 		nativeProblem(w, nativetool.ErrConflict)
 		return
 	}
-	a, err = h.nativeTools.DecideApproval(r.Context(), nativetool.DecisionInput{ApprovalID: id, ExpectedRevision: revision, Decision: input.Decision, IdempotencyKey: key, ObservedAt: h.clock.Now().UTC()})
+	a, err = h.nativeAuthority.DecideApproval(r.Context(), nativetool.DecisionInput{ApprovalID: id, ExpectedRevision: revision, Decision: input.Decision, IdempotencyKey: key, ObservedAt: h.clock.Now().UTC()})
 	if err != nil {
 		nativeProblem(w, err)
 		return
