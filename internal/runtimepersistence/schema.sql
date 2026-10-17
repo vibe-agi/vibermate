@@ -543,6 +543,10 @@ CREATE TABLE "runtime_activities"(
 ) STRICT;
 CREATE TABLE "runtime_connection_events"(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('', 'managed_run', 'manual_capture')),
+  recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB)) <= 128),
+  recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch >= 0),
+  recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation >= 0),
   connection_id TEXT NOT NULL
   CHECK(length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 512),
   ingress_id TEXT NOT NULL DEFAULT ''
@@ -611,6 +615,10 @@ CREATE TABLE "runtime_connection_events"(
   , inspection_purpose TEXT NOT NULL DEFAULT '' CHECK(inspection_purpose IN('', 'client_tools'))) STRICT;
 CREATE TABLE runtime_egress_attempts(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('', 'managed_run', 'manual_capture')),
+  recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB)) <= 128),
+  recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch >= 0),
+  recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation >= 0),
   attempt_id TEXT NOT NULL UNIQUE
   CHECK(length(CAST(attempt_id AS BLOB)) BETWEEN 1 AND 512),
   connection_id TEXT NOT NULL DEFAULT ''
@@ -1629,3 +1637,6 @@ CREATE TABLE runtime_egress_default(
          AND egress_revision IS NOT NULL AND egress_revision BETWEEN 1 AND 9223372036854775807))
 ) STRICT;
 INSERT INTO runtime_egress_default(singleton,revision) VALUES(1,1);
+
+CREATE INDEX runtime_connections_recording_scope ON runtime_connection_events(recording_scope_kind, recording_scope_id);
+CREATE INDEX runtime_egress_recording_scope ON runtime_egress_attempts(recording_scope_kind, recording_scope_id);

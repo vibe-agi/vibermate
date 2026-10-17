@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,16 +24,15 @@ import (
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
+func TestBlindTunnelDialsDespiteAuditLoss(t *testing.T) {
 	t.Parallel()
 
 	connections := &blindConnectionRepository{}
 	manager, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: connections,
-			Clock:      connectionevent.SystemClock{},
-			Random:     bytes.NewReader(bytes.Repeat([]byte{0x41}, 64)),
+			Reader: connections, Observer: testrecording.Connections(connections), Scopes: testrecording.Connections(connections), Clock: connectionevent.SystemClock{},
+			Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 64)),
 		},
 	)
 	if err != nil {
@@ -55,7 +56,7 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 	handler := &Handler{
 		blindTunnels:   tunnels,
 		egressDefaults: blindFixedDefault{value: blindBuiltinResolved(t)},
-		egressAudit:    egress,
+		egressAudit:    testrecording.Egress(egress),
 		exchangeIDs:    fixedBlindExchangeIDSource{},
 		ownerContext:   context.Background(),
 		clock:          time.Now,
@@ -88,14 +89,14 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 	if !terminal {
 		t.Fatal("blind path did not own its ConnectionEvent terminal")
 	}
-	if egress.appendCalls != 1 || tunnels.dialCalls != 0 {
+	if egress.appendCalls != 1 || tunnels.dialCalls != 1 {
 		t.Fatalf(
 			"audit appends=%d dial calls=%d",
 			egress.appendCalls,
 			tunnels.dialCalls,
 		)
 	}
-	if writer.Code != http.StatusServiceUnavailable {
+	if writer.Code != http.StatusBadGateway {
 		t.Fatalf("response status = %d", writer.Code)
 	}
 	records := connections.snapshot()
@@ -106,13 +107,12 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 	}
 }
 
-func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
+func TestCleartextForwardDialsDespiteAuditLoss(t *testing.T) {
 	t.Parallel()
 	connections := &blindConnectionRepository{}
 	manager, err := connectionevent.New(context.Background(), connectionevent.Options{
-		Repository: connections,
-		Clock:      connectionevent.SystemClock{},
-		Random:     bytes.NewReader(bytes.Repeat([]byte{0x42}, 64)),
+		Reader: connections, Observer: testrecording.Connections(connections), Scopes: testrecording.Connections(connections), Clock: connectionevent.SystemClock{},
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x42}, 64)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
 	handler := &Handler{
 		blindTunnels:   tunnels,
 		egressDefaults: blindFixedDefault{value: blindBuiltinResolved(t)},
-		egressAudit:    egress,
+		egressAudit:    testrecording.Egress(egress),
 		exchangeIDs:    fixedBlindExchangeIDSource{},
 		ownerContext:   context.Background(),
 		clock:          time.Now,
@@ -148,7 +148,7 @@ func TestCleartextForwardDoesNotDialBeforeAuditAppend(t *testing.T) {
 	terminal := handler.serveCleartextForward(writer, request, active, audit,
 		connectionevent.Source{IngressID: "run-ordering", Label: "fixture", Confidence: connectionevent.SourceConfidenceConfigured},
 		"allow-target")
-	if !terminal || egress.appendCalls != 1 || tunnels.dialCalls != 0 || writer.Code != http.StatusServiceUnavailable {
+	if !terminal || egress.appendCalls != 1 || tunnels.dialCalls != 1 || writer.Code != http.StatusBadGateway {
 		t.Fatalf("terminal=%t append=%d dial=%d status=%d", terminal, egress.appendCalls, tunnels.dialCalls, writer.Code)
 	}
 	records := connections.snapshot()
@@ -264,7 +264,7 @@ func TestBlindTunnelAuditClampsDecreasingWallClock(t *testing.T) {
 	clockCalls := 0
 	audit := &blindTerminalAuditDouble{}
 	handler := &Handler{
-		egressAudit:  audit,
+		egressAudit:  testrecording.Egress(audit),
 		ownerContext: context.Background(),
 		clock: func() time.Time {
 			clockCalls++
@@ -310,7 +310,7 @@ func TestBlindTunnelAuditReportsTerminalConstructionFailure(t *testing.T) {
 	startedAt := time.Now().UTC()
 	audit := &blindTerminalAuditDouble{}
 	handler := &Handler{
-		egressAudit:  audit,
+		egressAudit:  testrecording.Egress(audit),
 		ownerContext: context.Background(),
 		clock:        func() time.Time { return time.Time{} },
 	}
@@ -330,36 +330,12 @@ func TestBlindTunnelAuditReportsTerminalConstructionFailure(t *testing.T) {
 	}
 }
 
-func TestBlindTunnelAuditBoundsNonProductionWriterCompletion(t *testing.T) {
-	t.Parallel()
-
-	startedAt := time.Now().UTC().Add(-time.Second)
-	audit := &blockingBlindAuditWriter{result: make(chan error, 1)}
-	handler := &Handler{
-		egressAudit:  audit,
-		ownerContext: context.Background(),
-		clock:        time.Now,
-		auditTimeout: 25 * time.Millisecond,
-	}
-
-	started := time.Now()
-	handler.completeBlindAudit(
-		blindTerminalAttempt(t, startedAt),
-		egressaudit.OutcomeCompleted,
-		"",
-		blindtunnel.Result{BytesOut: 1},
-	)
-	elapsed := time.Since(started)
-	if elapsed < 10*time.Millisecond || elapsed > 500*time.Millisecond {
-		t.Fatalf("bounded audit completion elapsed = %s", elapsed)
-	}
-	select {
-	case err := <-audit.result:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("audit completion context error = %v", err)
-		}
-	default:
-		t.Fatal("audit writer did not observe its completion deadline")
+func TestBlindTunnelAuditLossDoesNotWait(t *testing.T) {
+	audit := &refusingBlindObserver{}
+	handler := &Handler{egressAudit: audit, clock: time.Now}
+	handler.completeBlindAudit(blindTerminalAttempt(t, time.Now().Add(-time.Second)), egressaudit.OutcomeCompleted, "", blindtunnel.Result{BytesOut: 1})
+	if audit.calls != 1 {
+		t.Fatal("terminal observation not offered")
 	}
 }
 
@@ -431,27 +407,12 @@ func (audit *blindTerminalAuditDouble) snapshot() (
 var _ egressaudit.Writer = (*blindTerminalAuditDouble)(nil)
 var _ terminalFailureReporter = (*blindTerminalAuditDouble)(nil)
 
-type blockingBlindAuditWriter struct {
-	result chan error
-}
+type refusingBlindObserver struct{ calls int }
 
-func (*blockingBlindAuditWriter) Append(
-	context.Context,
-	egressaudit.Attempt,
-) (egressaudit.Record, error) {
-	return egressaudit.Record{}, nil
+func (o *refusingBlindObserver) ObserveEgress(recording.Stamp, egressaudit.Attempt) recording.OfferResult {
+	o.calls++
+	return recording.DroppedCapacity
 }
-
-func (writer *blockingBlindAuditWriter) Complete(
-	ctx context.Context,
-	_ egressaudit.Attempt,
-) (egressaudit.Record, error) {
-	<-ctx.Done()
-	writer.result <- ctx.Err()
-	return egressaudit.Record{}, ctx.Err()
-}
-
-var _ egressaudit.Writer = (*blockingBlindAuditWriter)(nil)
 
 type fixedBlindExchangeIDSource struct{}
 

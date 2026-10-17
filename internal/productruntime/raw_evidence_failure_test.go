@@ -14,7 +14,7 @@ func TestRawEvidenceFailureDoesNotStopRuntimeOrFailCoreStorage(t *testing.T) {
 	defer stop(nil)
 	tracker := newStatusTracker("raw-fixture", hostcontract.KindDesktop, time.Now())
 	tracker.commitInitialized(1)
-	repository := &runtimeEgressRepository{owner: owner, stop: stop, status: tracker}
+	repository := &runtimeEgressRepository{owner: owner, status: tracker}
 
 	repository.ReportRawEvidenceFailure(errors.New("fixture Raw writer failure"))
 

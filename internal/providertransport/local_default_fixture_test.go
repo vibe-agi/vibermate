@@ -3,6 +3,7 @@ package providertransport
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -115,7 +116,7 @@ func ExerciseLocalDefaultDiscovery(t *testing.T, acquire func(*testing.T, origin
 	}
 	audit := &runtimeAuditRecorder{}
 	gate := newStartedGate(t)
-	client, err := NewClient(ClientOptions{Coordinator: gate, Authenticator: auth, Transport: transport, Audit: audit, InstanceIDs: &sequentialInstanceIDs{}})
+	client, err := NewClient(ClientOptions{Coordinator: gate, Authenticator: auth, Transport: transport, Audit: testrecording.Egress(audit), InstanceIDs: &sequentialInstanceIDs{}})
 	if err != nil {
 		t.Fatal(err)
 	}

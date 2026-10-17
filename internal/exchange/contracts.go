@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -452,6 +453,7 @@ func (evidence ClientOperationEvidence) validate() error {
 
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
+	observationStamp   recording.Stamp
 	bodyLease          *BodyLease
 	admitted           *protocolcore.Request
 	admittedReport     protocolcore.TranslationReport
@@ -484,20 +486,22 @@ const (
 	clientRequestOptionOriginalHeaders  clientRequestOptionKind = 5
 	clientRequestOptionProtocolEvidence clientRequestOptionKind = 6
 	clientRequestOptionBodyLease        clientRequestOptionKind = 7
+	clientRequestOptionObservationStamp clientRequestOptionKind = 8
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
 // ingress adapter cannot create an unvalidated option shape.
 type ClientRequestOption struct {
-	bodyLease       *BodyLease
-	kind            clientRequestOptionKind
-	clientHello     transportprofile.Observation
-	admission       captureadmission.Admission
-	connectionRef   string
-	anthropicBeta   string
-	clientUserAgent string
-	clientEvidence  []protocolcore.ProtocolEvidenceValue
-	originalHeaders http.Header
+	observationStamp recording.Stamp
+	bodyLease        *BodyLease
+	kind             clientRequestOptionKind
+	clientHello      transportprofile.Observation
+	admission        captureadmission.Admission
+	connectionRef    string
+	anthropicBeta    string
+	clientUserAgent  string
+	clientEvidence   []protocolcore.ProtocolEvidenceValue
+	originalHeaders  http.Header
 }
 
 func WithBodyLease(lease *BodyLease) ClientRequestOption {
@@ -629,6 +633,8 @@ func NewClientRequest(
 	}
 	for _, option := range options {
 		switch option.kind {
+		case clientRequestOptionObservationStamp:
+			request.observationStamp = option.observationStamp
 		case clientRequestOptionBodyLease:
 		case clientRequestOptionClientHello:
 			if request.hasClientHello {
@@ -1650,4 +1656,8 @@ func validateIdentity(label, value string) error {
 
 func cloneStrings(values []string) []string {
 	return slices.Clone(values)
+}
+
+func WithObservationStamp(s recording.Stamp) ClientRequestOption {
+	return ClientRequestOption{kind: clientRequestOptionObservationStamp, observationStamp: s}
 }

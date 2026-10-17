@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -304,6 +305,7 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
+	ObservationStamp  recording.Stamp
 	ResolvedEgress    egressprofile.Resolved
 	RequestID         string
 	TargetRef         string
@@ -349,33 +351,34 @@ type RequestOptions struct {
 // Request is a frozen provider representation. Its URL, authority, body,
 // credential reference, and auth driver cannot be mutated after construction.
 type Request struct {
-	resolvedEgress  egressprofile.Resolved
-	connectionID    string
-	exchangeID      string
-	parentAttemptID string
-	egressAttemptID string
-	requestID       string
-	targetRef       string
-	provenance      RequestProvenance
-	target          Target
-	probeTarget     offlinehold.ProbeTarget
-	action          *offlinehold.ActionLease
-	method          string
-	relativePath    string
-	headers         http.Header
-	body            []byte
-	rawQuery        string
-	credentialMode  providerauth.CredentialMode
-	accountRef      providerauth.AccountRef
-	secretReference secretstore.Reference
-	authDriverRef   providerauth.DriverRef
-	wireProfile     wireprofile.CompiledUpstreamWireProfile
-	wireVariant     wireprofile.CompiledUpstreamWireVariant
-	clientProtocol  wireprofile.ApplicationProtocol
-	clientUserAgent string
-	clientHello     transportprofile.Observation
-	egressProfile   egressprofile.ProfileRevision
-	rawEvidence     *rawevidence.Context
+	observationStamp recording.Stamp
+	resolvedEgress   egressprofile.Resolved
+	connectionID     string
+	exchangeID       string
+	parentAttemptID  string
+	egressAttemptID  string
+	requestID        string
+	targetRef        string
+	provenance       RequestProvenance
+	target           Target
+	probeTarget      offlinehold.ProbeTarget
+	action           *offlinehold.ActionLease
+	method           string
+	relativePath     string
+	headers          http.Header
+	body             []byte
+	rawQuery         string
+	credentialMode   providerauth.CredentialMode
+	accountRef       providerauth.AccountRef
+	secretReference  secretstore.Reference
+	authDriverRef    providerauth.DriverRef
+	wireProfile      wireprofile.CompiledUpstreamWireProfile
+	wireVariant      wireprofile.CompiledUpstreamWireVariant
+	clientProtocol   wireprofile.ApplicationProtocol
+	clientUserAgent  string
+	clientHello      transportprofile.Observation
+	egressProfile    egressprofile.ProfileRevision
+	rawEvidence      *rawevidence.Context
 
 	messageTransformUserAgent *string
 }
@@ -654,33 +657,34 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	return Request{
-		resolvedEgress:  options.ResolvedEgress,
-		connectionID:    options.ConnectionID,
-		exchangeID:      options.ExchangeID,
-		parentAttemptID: options.ParentAttemptID,
-		egressAttemptID: options.EgressAttemptID,
-		requestID:       options.RequestID,
-		targetRef:       options.TargetRef,
-		provenance:      options.Provenance,
-		target:          options.Target,
-		probeTarget:     probeTarget,
-		action:          options.Action,
-		method:          options.Method,
-		relativePath:    relativePath,
-		headers:         options.Headers.Clone(),
-		body:            bytes.Clone(options.Body),
-		rawQuery:        options.RawQuery,
-		credentialMode:  options.CredentialMode,
-		accountRef:      options.AccountRef,
-		secretReference: reference,
-		authDriverRef:   options.AuthDriverRef,
-		wireProfile:     options.WireProfile,
-		wireVariant:     wireVariant,
-		clientProtocol:  options.ClientProtocol,
-		clientUserAgent: options.ClientUserAgent,
-		clientHello:     options.ClientHello,
-		egressProfile:   options.EgressProfile,
-		rawEvidence:     rawEvidence,
+		observationStamp: options.ObservationStamp,
+		resolvedEgress:   options.ResolvedEgress,
+		connectionID:     options.ConnectionID,
+		exchangeID:       options.ExchangeID,
+		parentAttemptID:  options.ParentAttemptID,
+		egressAttemptID:  options.EgressAttemptID,
+		requestID:        options.RequestID,
+		targetRef:        options.TargetRef,
+		provenance:       options.Provenance,
+		target:           options.Target,
+		probeTarget:      probeTarget,
+		action:           options.Action,
+		method:           options.Method,
+		relativePath:     relativePath,
+		headers:          options.Headers.Clone(),
+		body:             bytes.Clone(options.Body),
+		rawQuery:         options.RawQuery,
+		credentialMode:   options.CredentialMode,
+		accountRef:       options.AccountRef,
+		secretReference:  reference,
+		authDriverRef:    options.AuthDriverRef,
+		wireProfile:      options.WireProfile,
+		wireVariant:      wireVariant,
+		clientProtocol:   options.ClientProtocol,
+		clientUserAgent:  options.ClientUserAgent,
+		clientHello:      options.ClientHello,
+		egressProfile:    options.EgressProfile,
+		rawEvidence:      rawEvidence,
 
 		messageTransformUserAgent: messageTransformUserAgent,
 	}, nil

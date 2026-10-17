@@ -3,6 +3,7 @@ package recording
 import (
 	"errors"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"strings"
 	"sync/atomic"
 )
 
@@ -60,7 +61,7 @@ func NewScopeToken(epoch *Epoch, reference captureidentity.Reference, fence Fenc
 	} else if reference.Validate() != nil || fence.CaptureGeneration == 0 {
 		return nil, errors.New("invalid recording capture scope")
 	}
-	return &ScopeToken{epoch: epoch, capture: reference, fence: fence}, nil
+	return &ScopeToken{epoch: epoch, capture: captureidentity.Reference{Kind: captureidentity.Kind(strings.Clone(string(reference.Kind))), ID: strings.Clone(reference.ID)}, fence: fence}, nil
 }
 func (t *ScopeToken) Stamp() Stamp { return Stamp{token: t} }
 func (t *ScopeToken) Revoke() {

@@ -63,6 +63,7 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
+	recorder           *observationRecorder
 	socks              *socksproxy.Server
 	udp                *runtimeUDP
 	vlessProfiles      *vlessprofile.Manager
@@ -128,6 +129,8 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 }
 
 type runtimeBuildOverrides struct {
+	egressObserver  func(*runtimeEgressRepository) egressaudit.Observer
+	recorder        observationRecorderBuilder
 	connectionEvent func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
 	originalProber  func() (*originaltransport.TLSProber, error)
 	providerProber  func() (*providertransport.ProviderProber, error)
@@ -352,6 +355,18 @@ func startWithBuilders(
 		return fail("Raw evidence writer", buildErr)
 	}
 	cleanups.register("Raw evidence writer", rawEvidence.Shutdown)
+	recorderBuilder := overrides.recorder
+	if recorderBuilder == nil {
+		recorderBuilder = newObservationRecorder
+	}
+	recorder := recorderBuilder(ownerContext, recordingBudget, storageResult.store.ConnectionEventRepository().(connectionevent.ScopedStore), egressRepository.(egressaudit.ScopedAttemptStore))
+	cleanups.register("observation recorder", func(ctx context.Context) error {
+		err := recorder.Shutdown(ctx)
+		if err != nil {
+			<-recorder.done
+		}
+		return err
+	})
 	runtimeEgress := newRuntimeEgressRepository(
 		egressRepository,
 		tracker,
@@ -359,6 +374,11 @@ func startWithBuilders(
 		options.Lifecycle,
 		cancelOwner,
 	)
+	runtimeEgress.recorder = recorder
+	var ordinaryEgress egressaudit.Observer = runtimeEgress
+	if overrides.egressObserver != nil {
+		ordinaryEgress = overrides.egressObserver(runtimeEgress)
+	}
 	workspaceIdentity, err := workspaceidentity.Open(
 		ctx,
 		options.Paths.DataDirectory(),
@@ -520,6 +540,7 @@ func startWithBuilders(
 		connectionBuilder = overrides.connectionEvent
 	}
 	connections, err := connectionBuilder(ctx, connectionEventBuildRequest{
+		observer: recorder, scopes: recorder,
 		repository: storageResult.store.ConnectionEventRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -667,7 +688,7 @@ func startWithBuilders(
 		coordinator:    options.OfflineHold,
 		secrets:        options.Secrets,
 		instanceIDs:    options.InstanceIDs,
-		audit:          runtimeEgress,
+		audit:          ordinaryEgress,
 		rawEvidence:    rawEvidence,
 	})
 	if err != nil {
@@ -713,7 +734,7 @@ func startWithBuilders(
 	original, err := buildOriginal(originalBuildRequest{
 		transport:   nativeTransport,
 		coordinator: options.OfflineHold,
-		audit:       runtimeEgress,
+		audit:       ordinaryEgress,
 	})
 	if err != nil {
 		return fail("original-origin transport", err)
@@ -775,7 +796,7 @@ func startWithBuilders(
 		random:           securityRandom,
 		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
-			raw: rawEvidence, reporter: runtimeEgress,
+			raw: rawEvidence, reporter: runtimeEgress, recorder: recorder,
 		},
 	})
 	if err != nil {
@@ -795,7 +816,7 @@ func startWithBuilders(
 		random:           securityRandom,
 		archiveBarrier:   archiveBarrier,
 		barrier: captureEvidenceBarrier{
-			raw: rawEvidence, reporter: runtimeEgress,
+			raw: rawEvidence, reporter: runtimeEgress, recorder: recorder,
 		},
 	})
 	if err != nil {
@@ -859,7 +880,7 @@ func startWithBuilders(
 		approvals:      approvals,
 		blindTunnels:   blindTunnels,
 		egressDefaults: egressDefaults,
-		egressAudit:    runtimeEgress,
+		egressAudit:    ordinaryEgress,
 		rawEvidence:    rawEvidence,
 		random:         securityRandom,
 	})
@@ -1018,6 +1039,7 @@ func startWithBuilders(
 		connections:        connections,
 		egress:             runtimeEgress,
 		egressCompletion:   runtimeEgress,
+		recorder:           recorder,
 		endpoints:          endpoints,
 		accounts:           accounts,
 		accountReads:       accountReads,
@@ -1037,7 +1059,7 @@ func startWithBuilders(
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
 		recordingBudget:    recordingBudget,
-		evidenceArchive:    storageResult.store,
+		evidenceArchive:    recordingArchive{delegate: storageResult.store, recorder: recorder, revoker: nativeRevoker, raw: rawEvidence},
 		archiveBarrier:     archiveBarrier,
 		provider:           provider,
 		original:           original,
@@ -1196,7 +1218,7 @@ func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
 // the whole-archive clear. A Host must expose the destructive action with this
 // exact runtime-owned instance so holder discovery cannot race a new Capture.
 func (r *Runtime) EvidenceArchiveBarrier() evidencearchive.ClearBarrier {
-	return r.archiveBarrier
+	return recordingArchiveBarrier{capture: r.archiveBarrier, recorder: r.recorder}
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.

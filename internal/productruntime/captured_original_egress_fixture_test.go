@@ -48,12 +48,14 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type capturedOriginalConfig struct {
+	recorder             observationRecorderBuilder
 	connectionEvent      func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
 	family, choice, edge string
 	history, oauth       bool
@@ -310,18 +312,6 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		roots.AddCert(f.upstream.Certificate())
 	}
 	wire := &capturedOriginalWire{builder: builder, roots: roots, semantic: cfg.family == "semantic" || cfg.family == "original_model" || cfg.family == "transformed", raw: cfg.family == "raw", before: func(ctx context.Context) error {
-		page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
-		if err != nil {
-			return err
-		}
-		f.mu.Lock()
-		for _, record := range page.Items {
-			if !record.Attempt.Terminal() {
-				f.starts[record.Attempt.ID()] = record.Attempt.Decision()
-				f.wants[record.Attempt.ID()] = f.expected
-			}
-		}
-		f.mu.Unlock()
 		if f.entered != nil {
 			f.first.Do(func() {
 				close(f.entered)
@@ -342,7 +332,8 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	f.options.Secrets = f.secrets
 	f.options.OriginalTransport = wire
 	f.r, err = startWithBuilders(t.Context(), f.options, runtimeBuildOverrides{
-		connectionEvent: cfg.connectionEvent,
+		connectionEvent: cfg.connectionEvent, recorder: cfg.recorder,
+		egressObserver: func(r *runtimeEgressRepository) egressaudit.Observer { return capturedAuditObserver{r, f} },
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
 		},
@@ -656,6 +647,9 @@ func (f *capturedOriginalFixture) editDefault(t *testing.T) {
 	}
 }
 func (f *capturedOriginalFixture) assertAudits(t *testing.T, want int) {
+	if err := f.r.recorder.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Helper()
 	if f.cfg.family == "raw" || f.cfg.family == "original_model" || f.cfg.family == "transformed" {
 		f.assertForwardAudits(t, want)
@@ -771,4 +765,21 @@ func (f *capturedOriginalFixture) drain(t *testing.T) {
 		t.Fatal("captured fixture unexpected traffic/credential", f.bad.Load(), f.network.denied.Load())
 	}
 	t.Logf("captured family=%s choice=%s edge=%s HTTP=%d A=%d B=%d Direct=%d proxyAttemptsA=%d proxyAttemptsB=%d bad=%d denied=%d rotation=0 drain=%+v", f.cfg.family, f.cfg.choice, f.cfg.edge, f.httpCalls.Load(), f.callsA.Load(), f.callsB.Load(), f.network.direct.Load(), f.network.proxyAttemptsA.Load(), f.network.proxyAttemptsB.Load(), f.bad.Load(), f.network.denied.Load(), s)
+}
+
+// Freeze the expected coordinates at the observation offer, independently of
+// optional persistence visibility. This test spy never waits on the writer.
+type capturedAuditObserver struct {
+	*runtimeEgressRepository
+	fixture *capturedOriginalFixture
+}
+
+func (o capturedAuditObserver) ObserveEgress(stamp recording.Stamp, a egressaudit.Attempt) recording.OfferResult {
+	if !a.Terminal() {
+		o.fixture.mu.Lock()
+		o.fixture.starts[a.ID()] = a.Decision()
+		o.fixture.wants[a.ID()] = o.fixture.expected
+		o.fixture.mu.Unlock()
+	}
+	return o.runtimeEgressRepository.ObserveEgress(stamp, a)
 }

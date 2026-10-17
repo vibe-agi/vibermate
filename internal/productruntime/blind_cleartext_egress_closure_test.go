@@ -205,7 +205,11 @@ func (f *b4Fixture) bad(format string, args ...any) {
 	defer f.mu.Unlock()
 	f.invalid = append(f.invalid, fmt.Sprintf(format, args...))
 }
-func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
+func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBuilder) *b4Fixture {
+	var recorder observationRecorderBuilder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
@@ -245,6 +249,9 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 				cleanupContext, stop := context.WithTimeout(context.Background(), 10*time.Second)
 				if err := gate.Drain(cleanupContext); err != nil {
 					t.Errorf("B4 cleanup gate drain: %v", err)
+				}
+				if err := f.r.recorder.Flush(cleanupContext); err != nil {
+					t.Error(err)
 				}
 				page, err := f.r.EgressAttempts().List(cleanupContext, egressaudit.PageRequest{Limit: 10})
 				stop()
@@ -402,7 +409,7 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 	}
 	options.BlindTunnels = &blindTunnelDialer{coordinator: gate, dialer: dialer}
 	options.OriginalTransport = &noNetworkOriginalTransport{}
-	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{blindProber: func() (*blindtunnel.ReachabilityProber, error) {
+	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{recorder: recorder, blindProber: func() (*blindtunnel.ReachabilityProber, error) {
 		return blindtunnel.NewReachabilityProberWithBuilder(builder)
 	}})
 	if err != nil {

@@ -33,7 +33,7 @@ type Options struct {
 	Transport   Transport
 	// Audit records one immutable attempt per real outbound. It is optional
 	// only so existing callers can be migrated; a wired runtime supplies it.
-	Audit egressaudit.Writer
+	Audit egressaudit.Observer
 }
 
 type Transport interface {
@@ -112,7 +112,7 @@ type Client struct {
 
 	coordinator offlinehold.Coordinator
 	transport   Transport
-	audit       egressaudit.Writer
+	audit       egressaudit.Observer
 	clock       func() time.Time
 	operations  map[*operation]struct{}
 	closing     bool
@@ -135,7 +135,7 @@ func New(options Options) (*Client, error) {
 
 func NewProduction(
 	coordinator offlinehold.Coordinator,
-	audit egressaudit.Writer,
+	audit egressaudit.Observer,
 ) (*Client, error) {
 	transport, err := newProductionStrictTransport()
 	if err != nil {
@@ -442,10 +442,11 @@ func (client *Client) beginAudit(
 		decision.PolicyID, decision.PolicyRevision, decision.RuleID = "runtime.egress-default", resolved.DefaultRevision(), "global.default"
 	}
 	attempt, err := egressaudit.New(egressaudit.NewInput{
-		ID:           frozen.requestID,
-		ConnectionID: frozen.connectionID,
-		Purpose:      purpose,
-		PayloadClass: egressaudit.PayloadClass(frozen.payloadClass),
+		ObservationStamp: frozen.observationStamp,
+		ID:               frozen.requestID,
+		ConnectionID:     frozen.connectionID,
+		Purpose:          purpose,
+		PayloadClass:     egressaudit.PayloadClass(frozen.payloadClass),
 		Parent: egressaudit.ParentRef{
 			Kind: egressaudit.ParentOriginalRequest,
 			ID:   frozen.parentID,
@@ -456,17 +457,10 @@ func (client *Client) beginAudit(
 		StartedAt:    client.clock(),
 	})
 	if err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"construct original-origin EgressAttempt: %w",
-			err,
-		)
+		client.reportTerminalFailure(err)
+		return egressaudit.Attempt{}, nil
 	}
-	if _, err := client.audit.Append(ctx, attempt); err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"record original-origin EgressAttempt: %w",
-			err,
-		)
-	}
+	client.audit.ObserveEgress(attempt.ObservationStamp(), attempt)
 	return attempt, nil
 }
 
@@ -498,7 +492,7 @@ func (client *Client) completeAudit(
 		))
 		return
 	}
-	_, _ = client.audit.Complete(ctx, terminal)
+	client.audit.ObserveEgress(terminal.ObservationStamp(), terminal)
 }
 
 func (client *Client) reportTerminalFailure(err error) {

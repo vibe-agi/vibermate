@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const egressAttemptSelect = `SELECT
@@ -542,6 +543,15 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 // A late start is harmless; immutable coordinates and terminal facts cannot
 // overwrite conflicting evidence. Native control transactions remain separate.
 func (repository *egressAttemptRepository) PutAttempt(ctx context.Context, attempt egressaudit.Attempt) error {
+	return repository.putAttempt(ctx, recording.Scope{}, attempt)
+}
+func (repository *egressAttemptRepository) PutScopedAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	return repository.putAttempt(ctx, scope, attempt)
+}
+func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) error {
 	if attempt.Purpose() == egressaudit.PurposeClientToolService {
 		return errors.New("native execution requires its control transaction")
 	}
@@ -565,6 +575,13 @@ func (repository *egressAttemptRepository) PutAttempt(ctx context.Context, attem
 		return err
 	}
 	defer tx.Rollback()
+	priorScope, scopeErr := readRecordingScope(operation, tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
+	if scopeErr != nil && !errors.Is(scopeErr, sql.ErrNoRows) {
+		return scopeErr
+	}
+	if scopeErr == nil && priorScope != scope {
+		return errors.New("egress recording scope conflicts")
+	}
 	existing, err := scanEgressAttempt(tx.QueryRowContext(operation, egressAttemptSelect+" WHERE attempt_id = ?", attempt.ID()))
 	if errors.Is(err, sql.ErrNoRows) {
 		if _, err = appendEgressAttempt(operation, tx, validated); err != nil {
@@ -579,6 +596,9 @@ func (repository *egressAttemptRepository) PutAttempt(ctx context.Context, attem
 			return errors.New("EgressAttempt terminal conflicts")
 		}
 		return tx.Commit()
+	}
+	if _, err = tx.ExecContext(operation, `UPDATE runtime_egress_attempts SET recording_scope_kind=?,recording_scope_id=?,recording_archive_epoch=?,recording_capture_generation=? WHERE attempt_id=?`, scope.Capture.Kind, scope.Capture.ID, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, attempt.ID()); err != nil {
+		return err
 	}
 	if attempt.Terminal() {
 		if _, err = completeEgressAttempt(operation, tx, attempt); err != nil {

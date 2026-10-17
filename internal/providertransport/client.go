@@ -60,7 +60,7 @@ type ClientOptions struct {
 	// required only when a runtime fetch method is used.
 	InstanceIDs InstanceIDSource
 	// Audit records one immutable attempt per real outbound.
-	Audit                 egressaudit.Writer
+	Audit                 egressaudit.Observer
 	RawEvidence           rawevidence.Observer
 	RawObservationTimeout time.Duration
 	RawResponseBodyBytes  int
@@ -134,7 +134,7 @@ type Client struct {
 	transport      Transport
 	instanceIDs    InstanceIDSource
 	runtimePlan    wireprofile.CompiledTransportFingerprintPlan
-	audit          egressaudit.Writer
+	audit          egressaudit.Observer
 	raw            rawevidence.Observer
 	rawTimeout     time.Duration
 	rawBodyBytes   int
@@ -206,7 +206,7 @@ func NewProductionClient(
 	authenticator Authenticator,
 	timeouts TransportTimeouts,
 	instanceIDs InstanceIDSource,
-	audit egressaudit.Writer,
+	audit egressaudit.Observer,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
 	if err != nil {
@@ -226,7 +226,7 @@ func NewProductionClientWithAuthenticators(
 	authenticators []Authenticator,
 	timeouts TransportTimeouts,
 	instanceIDs InstanceIDSource,
-	audit egressaudit.Writer,
+	audit egressaudit.Observer,
 	rawEvidence rawevidence.Observer,
 	defaults egressprofile.Resolver,
 ) (*Client, error) {
@@ -1142,10 +1142,11 @@ func (client *Client) beginAudit(
 		return egressaudit.Attempt{}, nil
 	}
 	attempt, err := egressaudit.New(egressaudit.NewInput{
-		ID:           frozen.egressAttemptID,
-		ConnectionID: frozen.connectionID,
-		Purpose:      egressaudit.PurposeProviderAttempt,
-		PayloadClass: egressaudit.PayloadClientSemantic,
+		ObservationStamp: frozen.observationStamp,
+		ID:               frozen.egressAttemptID,
+		ConnectionID:     frozen.connectionID,
+		Purpose:          egressaudit.PurposeProviderAttempt,
+		PayloadClass:     egressaudit.PayloadClientSemantic,
 		Parent: egressaudit.ParentRef{
 			Kind:       egressaudit.ParentUpstreamAttempt,
 			ID:         frozen.parentAttemptID,
@@ -1157,17 +1158,10 @@ func (client *Client) beginAudit(
 		StartedAt:    client.clock(),
 	})
 	if err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"construct provider EgressAttempt: %w",
-			err,
-		)
+		client.reportTerminalFailure(err)
+		return egressaudit.Attempt{}, nil
 	}
-	if _, err := client.audit.Append(ctx, attempt); err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"record provider EgressAttempt: %w",
-			err,
-		)
-	}
+	client.audit.ObserveEgress(attempt.ObservationStamp(), attempt)
 	return attempt, nil
 }
 
@@ -1215,7 +1209,7 @@ func (client *Client) completeAudit(
 		))
 		return
 	}
-	_, _ = client.audit.Complete(ctx, terminal)
+	client.audit.ObserveEgress(terminal.ObservationStamp(), terminal)
 }
 
 func (client *Client) reportTerminalFailure(err error) {

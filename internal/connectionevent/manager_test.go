@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +18,7 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 
 	repository := &recordingRepository{}
 	manager, err := New(context.Background(), Options{
-		Repository: repository,
+		Reader: repository, Observer: repositoryObserver(repository), Scopes: repositoryScopes(repository),
 		Clock: &stepClock{
 			now: time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC),
 		},
@@ -25,7 +27,7 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := manager.Start(context.Background(), Attempt{
+	connection, err := startTestConnection(manager, context.Background(), Attempt{
 		Source: Source{
 			Confidence: SourceConfidenceUnknown,
 		},
@@ -124,7 +126,7 @@ func TestDeniedConnectionTerminatesAtDecision(t *testing.T) {
 
 	repository := &recordingRepository{}
 	manager := newTestManager(t, repository)
-	connection, err := manager.Start(context.Background(), Attempt{
+	connection, err := startTestConnection(manager, context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
 		RequestedHost: "unknown.invalid",
 		Port:          443,
@@ -160,7 +162,7 @@ func TestAskedConnectionCanTerminateWhileAwaitingDecision(t *testing.T) {
 
 	repository := &recordingRepository{}
 	manager := newTestManager(t, repository)
-	connection, err := manager.Start(context.Background(), Attempt{
+	connection, err := startTestConnection(manager, context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
 		RequestedHost: "review.example.test",
 		Port:          443,
@@ -199,12 +201,12 @@ func TestAskedConnectionCanTerminateWhileAwaitingDecision(t *testing.T) {
 	}
 }
 
-func TestAppendFailureDoesNotAdvanceConnectionPhase(t *testing.T) {
+func TestAppendFailureDoesNotPreventConnectionPhase(t *testing.T) {
 	t.Parallel()
 
 	repository := &recordingRepository{}
 	manager := newTestManager(t, repository)
-	connection, err := manager.Start(context.Background(), Attempt{
+	connection, err := startTestConnection(manager, context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
 		RequestedHost: "api.anthropic.com",
 		Port:          443,
@@ -235,13 +237,13 @@ func TestAppendFailureDoesNotAdvanceConnectionPhase(t *testing.T) {
 	if err := connection.Decide(
 		context.Background(),
 		decision,
-	); err == nil {
-		t.Fatal("Decide() unexpectedly succeeded")
+	); err != nil {
+		t.Fatal(err)
 	}
-	if err := connection.Decide(context.Background(), decision); err != nil {
-		t.Fatalf("Decide() retry error = %v", err)
+	if err := connection.Decide(context.Background(), decision); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("live decision did not advance: %v", err)
 	}
-	if len(repository.records()) != 2 {
+	if len(repository.records()) != 1 {
 		t.Fatalf("record count = %d", len(repository.records()))
 	}
 }
@@ -274,7 +276,7 @@ func TestManagerShutdownRejectsNewRecording(t *testing.T) {
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	_, err := manager.Start(context.Background(), Attempt{
+	_, err := startTestConnection(manager, context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
 		RequestedHost: "api.anthropic.com",
 		Port:          443,
@@ -290,7 +292,7 @@ func newTestManager(
 ) *Manager {
 	t.Helper()
 	manager, err := New(context.Background(), Options{
-		Repository: repository,
+		Reader: repository, Observer: repositoryObserver(repository), Scopes: repositoryScopes(repository),
 		Clock: &stepClock{
 			now: time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC),
 		},
@@ -382,4 +384,81 @@ func (repository *recordingRepository) records() []Event {
 		events[index] = repository.events[index].Event
 	}
 	return events
+}
+
+func TestConnectionPhaseSurvivesHistoryFailure(t *testing.T) {
+	repo := &recordingRepository{failNext: errors.New("history unavailable")}
+	manager := newTestManager(t, repo)
+	c, err := startTestConnection(manager, context.Background(), Attempt{Source: Source{Confidence: SourceConfidenceUnknown}, RequestedHost: "example.test", Port: 443})
+	if err != nil {
+		t.Fatalf("live identity depends on history: %v", err)
+	}
+	if err := c.Decide(context.Background(), DecisionEvidence{Source: Source{Confidence: SourceConfidenceUnknown}, Decision: DecisionAllow, Decryption: DecryptionBlind}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Connected(context.Background(), ConnectedEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Finish(context.Background(), TerminalEvidence{Outcome: OutcomeCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if !c.terminal || c.event.Phase != PhaseClosed || c.ID() == "" {
+		t.Fatal("live state did not reach terminal")
+	}
+}
+
+func repositoryObserver(r Repository) Observer            { return r.(Observer) }
+func repositoryScopes(r Repository) recording.ScopeIssuer { return r.(recording.ScopeIssuer) }
+func (r *recordingRepository) ObserveConnection(_ recording.Stamp, e Event) recording.OfferResult {
+	if _, err := r.Append(context.Background(), e); err != nil {
+		return recording.DroppedUnavailable
+	}
+	return recording.Accepted
+}
+func (r *recordingRepository) ScopeStamp(c captureidentity.Reference) recording.Stamp {
+	epoch, _ := recording.NewEpoch(1)
+	g := uint64(0)
+	if c != (captureidentity.Reference{}) {
+		g = 1
+	}
+	t, _ := recording.NewScopeToken(epoch, c, recording.Fence{ArchiveEpoch: 1, CaptureGeneration: g})
+	return t.Stamp()
+}
+func startTestConnection(m *Manager, ctx context.Context, a Attempt) (*Connection, error) {
+	c, err := m.Start(ctx, a)
+	if err != nil {
+		return c, err
+	}
+	return c, c.BindObservationScope(c.ObservationScope(captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "test"}))
+}
+
+func TestConnectionBuffersAttemptAndIgnoresInvalidDisplayMetadata(t *testing.T) {
+	repo := &recordingRepository{}
+	m := newTestManager(t, repo)
+	c, err := m.Start(context.Background(), Attempt{Source: Source{Confidence: SourceConfidenceUnknown}, RequestedHost: "example.test", Port: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := c.event.StartedAt
+	if len(repo.records()) != 0 {
+		t.Fatal("pre-admission attempt escaped its future capture scope")
+	}
+	if err := c.BindObservationScope(c.ObservationScope(captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "bound"})); err != nil {
+		t.Fatal(err)
+	}
+	if records := repo.records(); len(records) != 1 || !records[0].StartedAt.Equal(original) {
+		t.Fatal("binding changed attempted event time")
+	}
+	if err := c.Decide(context.Background(), DecisionEvidence{Source: Source{Confidence: SourceConfidenceConfigured, IngressID: "trusted", Label: "invalid\ndisplay"}, Decision: DecisionAllow, Decryption: DecryptionBlind}); err != nil {
+		t.Fatalf("optional display rejected live decision: %v", err)
+	}
+	if err := c.Connected(context.Background(), ConnectedEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Finish(context.Background(), TerminalEvidence{Outcome: OutcomeCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if !c.terminal || c.event.Phase != PhaseClosed || len(repo.records()) != 1 {
+		t.Fatal("invalid optional snapshots changed live terminal or escaped validation")
+	}
 }

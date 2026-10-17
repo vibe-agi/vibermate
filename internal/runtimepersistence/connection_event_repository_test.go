@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -19,8 +20,7 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openTestStore(t, databasePath)
 	manager, err := connectionevent.New(context.Background(), connectionevent.Options{
-		Repository: store.ConnectionEventRepository(),
-		Clock: &connectionClock{
+		Reader: store.ConnectionEventRepository(), Observer: testrecording.Connections(store.ConnectionEventRepository()), Scopes: testrecording.Connections(store.ConnectionEventRepository()), Clock: &connectionClock{
 			now: time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC),
 		},
 		Random: bytes.NewReader(bytes.Repeat([]byte{0x52}, 80)),
@@ -28,7 +28,7 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := manager.Start(context.Background(), connectionevent.Attempt{
+	connection, err := testrecording.Start(manager, context.Background(), connectionevent.Attempt{
 		Source: connectionevent.Source{
 			Confidence: connectionevent.SourceConfidenceUnknown,
 		},
@@ -245,8 +245,7 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 	first, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: firstStore.ConnectionEventRepository(),
-			Clock: &connectionClock{
+			Reader: firstStore.ConnectionEventRepository(), Observer: testrecording.Connections(firstStore.ConnectionEventRepository()), Scopes: testrecording.Connections(firstStore.ConnectionEventRepository()), Clock: &connectionClock{
 				now: time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC),
 			},
 			Random: bytes.NewReader(bytes.Repeat([]byte{0x62}, 40)),
@@ -255,7 +254,7 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := first.Start(
+	connection, err := testrecording.Start(first,
 		context.Background(),
 		connectionevent.Attempt{
 			Source: connectionevent.Source{
@@ -309,11 +308,13 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 	}
 
 	secondStore := openTestStore(t, databasePath)
+	if _, err := secondStore.ConnectionEventRepository().Recover(context.Background(), time.Date(2026, 7, 30, 1, 3, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	second, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: secondStore.ConnectionEventRepository(),
-			Clock: &connectionClock{
+			Reader: secondStore.ConnectionEventRepository(), Observer: testrecording.Connections(secondStore.ConnectionEventRepository()), Scopes: testrecording.Connections(secondStore.ConnectionEventRepository()), Clock: &connectionClock{
 				now: time.Date(2026, 7, 30, 1, 3, 0, 0, time.UTC),
 			},
 			Random: bytes.NewReader(bytes.Repeat([]byte{0x63}, 40)),
@@ -348,8 +349,7 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 	third, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: thirdStore.ConnectionEventRepository(),
-			Clock: &connectionClock{
+			Reader: thirdStore.ConnectionEventRepository(), Observer: testrecording.Connections(thirdStore.ConnectionEventRepository()), Scopes: testrecording.Connections(thirdStore.ConnectionEventRepository()), Clock: &connectionClock{
 				now: time.Date(2026, 7, 30, 1, 4, 0, 0, time.UTC),
 			},
 			Random: bytes.NewReader(bytes.Repeat([]byte{0x64}, 40)),
@@ -383,8 +383,7 @@ func TestConnectionEventRecoveryTerminatesPendingAsk(t *testing.T) {
 	first, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: firstStore.ConnectionEventRepository(),
-			Clock: &connectionClock{
+			Reader: firstStore.ConnectionEventRepository(), Observer: testrecording.Connections(firstStore.ConnectionEventRepository()), Scopes: testrecording.Connections(firstStore.ConnectionEventRepository()), Clock: &connectionClock{
 				now: time.Date(2026, 7, 30, 2, 0, 0, 0, time.UTC),
 			},
 			Random: bytes.NewReader(bytes.Repeat([]byte{0x65}, 40)),
@@ -393,7 +392,7 @@ func TestConnectionEventRecoveryTerminatesPendingAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := first.Start(
+	connection, err := testrecording.Start(first,
 		context.Background(),
 		connectionevent.Attempt{
 			Source: connectionevent.Source{
@@ -430,6 +429,9 @@ func TestConnectionEventRecoveryTerminatesPendingAsk(t *testing.T) {
 	}
 
 	secondStore := openTestStore(t, databasePath)
+	if _, err := secondStore.ConnectionEventRepository().Recover(context.Background(), time.Date(2026, 7, 30, 2, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		if err := secondStore.Shutdown(context.Background()); err != nil {
 			t.Errorf("close second store: %v", err)
@@ -438,8 +440,7 @@ func TestConnectionEventRecoveryTerminatesPendingAsk(t *testing.T) {
 	second, err := connectionevent.New(
 		context.Background(),
 		connectionevent.Options{
-			Repository: secondStore.ConnectionEventRepository(),
-			Clock: &connectionClock{
+			Reader: secondStore.ConnectionEventRepository(), Observer: testrecording.Connections(secondStore.ConnectionEventRepository()), Scopes: testrecording.Connections(secondStore.ConnectionEventRepository()), Clock: &connectionClock{
 				now: time.Date(2026, 7, 30, 2, 1, 0, 0, time.UTC),
 			},
 			Random: bytes.NewReader(bytes.Repeat([]byte{0x66}, 40)),

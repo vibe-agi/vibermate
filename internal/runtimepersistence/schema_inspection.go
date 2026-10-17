@@ -239,6 +239,8 @@ func inspectSupportedSchema(ctx context.Context, database schemaQueryer) (Schema
 func inspectSchemaLayout(ctx context.Context, database schemaQueryer, revision int64) error {
 	var bootstraps []string
 	switch revision {
+	case 3:
+		bootstraps = []string{schemaSQL}
 	case 1:
 		bootstraps = []string{schemaV1SQL}
 	case 2:

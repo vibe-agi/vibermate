@@ -851,6 +851,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
 		MessageTransformUserAgent: transformedUserAgent,
 		RawEvidence:               rawEvidence,
+		ObservationStamp:          request.observationStamp,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		resolved, err := request.RequestPlan().ResolvedEgress()

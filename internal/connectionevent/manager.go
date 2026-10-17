@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const connectionIDBytes = 20
@@ -26,17 +28,17 @@ func (SystemClock) Now() time.Time {
 }
 
 type Options struct {
-	Repository Repository
-	Clock      Clock
-	Random     io.Reader
+	Reader   Reader
+	Observer Observer
+	Scopes   recording.ScopeIssuer
+	Clock    Clock
+	Random   io.Reader
 }
 
-func DefaultOptions(repository Repository) Options {
-	return Options{
-		Repository: repository,
-		Clock:      SystemClock{},
-		Random:     rand.Reader,
-	}
+func DefaultOptions(reader Reader) Options {
+	observer, _ := reader.(Observer)
+	scopes, _ := reader.(recording.ScopeIssuer)
+	return Options{Reader: reader, Observer: observer, Scopes: scopes, Clock: SystemClock{}, Random: rand.Reader}
 }
 
 type Attempt struct {
@@ -88,9 +90,11 @@ type Runtime interface {
 }
 
 type Manager struct {
-	repository Repository
-	clock      Clock
-	random     io.Reader
+	reader   Reader
+	observer Observer
+	scopes   recording.ScopeIssuer
+	clock    Clock
+	random   io.Reader
 
 	mu       sync.Mutex
 	randomMu sync.Mutex
@@ -103,22 +107,16 @@ func New(ctx context.Context, options Options) (*Manager, error) {
 	if ctx == nil {
 		return nil, errors.New("ConnectionEvent recovery context is nil")
 	}
-	if options.Repository == nil ||
+	if options.Reader == nil ||
 		options.Clock == nil ||
 		options.Random == nil {
 		return nil, errors.New("ConnectionEvent dependencies are incomplete")
 	}
 	manager := &Manager{
-		repository: options.Repository,
-		clock:      options.Clock,
-		random:     options.Random,
-		changed:    make(chan struct{}),
-	}
-	if _, err := manager.repository.Recover(
-		ctx,
-		manager.clock.Now().UTC(),
-	); err != nil {
-		return nil, fmt.Errorf("recover ConnectionEvents: %w", err)
+		reader: options.Reader, observer: options.Observer, scopes: options.Scopes,
+		clock:   options.Clock,
+		random:  options.Random,
+		changed: make(chan struct{}),
 	}
 	return manager, nil
 }
@@ -127,17 +125,15 @@ func (manager *Manager) Start(
 	ctx context.Context,
 	attempt Attempt,
 ) (*Connection, error) {
-	if err := attempt.Source.validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHost("requested host", attempt.RequestedHost, false); err != nil {
-		return nil, err
-	}
-	operation, finish, err := manager.begin(ctx)
+	_, finish, err := manager.begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer finish()
+	var global recording.Stamp
+	if manager.scopes != nil {
+		global = manager.scopes.ScopeStamp(captureidentity.Reference{})
+	}
 	identifier := make([]byte, connectionIDBytes)
 	manager.randomMu.Lock()
 	_, randomErr := io.ReadFull(manager.random, identifier)
@@ -156,14 +152,7 @@ func (manager *Manager) Start(
 		Phase:            PhaseAttempted,
 		StartedAt:        manager.clock.Now().UTC(),
 	}
-	record, err := manager.repository.Append(operation, event)
-	if err != nil {
-		return nil, err
-	}
-	return &Connection{
-		manager: manager,
-		event:   record.Event,
-	}, nil
+	return &Connection{manager: manager, event: event, attempted: event, global: global}, nil
 }
 
 func (manager *Manager) List(
@@ -178,7 +167,7 @@ func (manager *Manager) List(
 		return Page{}, err
 	}
 	defer finish()
-	page, err := manager.repository.List(operation, request)
+	page, err := manager.reader.List(operation, request)
 	if err != nil {
 		return Page{}, err
 	}
@@ -198,7 +187,7 @@ func (manager *Manager) Timeline(
 		return Timeline{}, err
 	}
 	defer finish()
-	timeline, err := manager.repository.Timeline(operation, connectionID)
+	timeline, err := manager.reader.Timeline(operation, connectionID)
 	if err != nil {
 		return Timeline{}, err
 	}
@@ -268,9 +257,13 @@ func (manager *Manager) notifyLocked() {
 type Connection struct {
 	manager *Manager
 
-	mu       sync.Mutex
-	event    Event
-	terminal bool
+	mu        sync.Mutex
+	event     Event
+	attempted Event
+	stamp     recording.Stamp
+	global    recording.Stamp
+	bound     bool
+	terminal  bool
 }
 
 func (connection *Connection) ID() string {
@@ -289,8 +282,10 @@ func (connection *Connection) Decide(
 	if connection == nil || connection.manager == nil {
 		return ErrInvalidEvent
 	}
-	if err := evidence.Source.validate(); err != nil {
-		return err
+	switch evidence.Decision {
+	case DecisionAllow, DecisionDeny, DecisionAsk:
+	default:
+		return ErrInvalidEvent
 	}
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
@@ -328,9 +323,6 @@ func (connection *Connection) Decide(
 		candidate.EndedAt = connection.manager.clock.Now().UTC()
 		candidate.Outcome = OutcomeDenied
 		candidate.ErrorClass = evidence.ErrorClass
-	}
-	if err := candidate.Validate(); err != nil {
-		return err
 	}
 	if err := connection.appendLocked(ctx, candidate); err != nil {
 		return err
@@ -370,9 +362,6 @@ func (connection *Connection) Connected(
 		candidate.CredentialBindingID = evidence.CredentialBindingID
 	}
 	candidate.Phase = PhaseConnected
-	if err := candidate.Validate(); err != nil {
-		return err
-	}
 	return connection.appendLocked(ctx, candidate)
 }
 
@@ -402,9 +391,6 @@ func (connection *Connection) Finish(
 	default:
 		return ErrInvalidEvent
 	}
-	if err := candidate.Validate(); err != nil {
-		return err
-	}
 	if err := connection.appendLocked(ctx, candidate); err != nil {
 		return err
 	}
@@ -416,17 +402,61 @@ func (connection *Connection) appendLocked(
 	ctx context.Context,
 	candidate Event,
 ) error {
-	operation, finish, err := connection.manager.begin(ctx)
+	_, finish, err := connection.manager.begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer finish()
-	record, err := connection.manager.repository.Append(operation, candidate)
-	if err != nil {
-		return err
+	connection.event = candidate
+	if connection.manager.observer != nil {
+		if connection.bound {
+			connection.manager.observer.ObserveConnection(connection.stamp, candidate)
+		} else if !candidate.EndedAt.IsZero() && connection.manager.scopes != nil {
+			connection.manager.observer.ObserveConnection(connection.global, candidate)
+		}
 	}
-	connection.event = record.Event
 	return nil
 }
 
 var _ Runtime = (*Manager)(nil)
+
+// ObservationScope supplies coordinates only after the caller has established
+// trusted Capture admission. The stamp itself conveys no authority.
+func (c *Connection) ObservationScope(capture captureidentity.Reference) recording.Stamp {
+	if c == nil || c.manager == nil || c.manager.scopes == nil {
+		return recording.Stamp{}
+	}
+	return c.manager.scopes.ScopeStamp(capture)
+}
+func (c *Connection) BindObservationScope(stamp recording.Stamp) error {
+	if c == nil || !stamp.Current() || stamp.Capture().Validate() != nil {
+		return ErrInvalidEvent
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bound {
+		if c.stamp.Scope() == stamp.Scope() {
+			return nil
+		}
+		return ErrInvalidEvent
+	}
+	if c.terminal {
+		return ErrInvalidPhase
+	}
+	c.bound = true
+	c.stamp = stamp
+	if c.manager.observer != nil {
+		c.manager.observer.ObserveConnection(stamp, c.attempted)
+	}
+	c.attempted = Event{}
+	c.global = recording.Stamp{}
+	return nil
+}
+func (c *Connection) ObservationStamp() recording.Stamp {
+	if c == nil {
+		return recording.Stamp{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stamp
+}

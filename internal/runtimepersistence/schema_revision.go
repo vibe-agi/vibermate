@@ -29,7 +29,7 @@ var migration001To002SQL string
 const (
 	// schemaIdentity marks a SQLite file as a ViberMate Runtime database.
 	schemaIdentity = "vibermate-runtime"
-	schemaRevision = int64(2)
+	schemaRevision = int64(3)
 )
 
 // ErrUnsupportedSchema reports a file that is not a ViberMate Runtime database

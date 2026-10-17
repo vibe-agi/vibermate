@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -122,14 +123,13 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 		t.Fatal(err)
 	}
 	attempt := runtimeProviderAttempt(t, "content-control-audit")
-	if _, err := f.runtime.egressCompletion.Append(ctx, attempt); err != nil {
-		t.Fatal(err)
-	}
+	f.runtime.egressCompletion.ObserveEgress(f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), attempt)
 	terminal, err := attempt.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeCompleted, CompletedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.runtime.egressCompletion.Complete(ctx, terminal); err != nil {
+	f.runtime.egressCompletion.ObserveEgress(f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), terminal)
+	if err := f.runtime.recorder.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
 	page, err := f.runtime.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10, ExchangeID: attempt.Parent().ExchangeID})

@@ -3,6 +3,7 @@ package providertransport
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -22,12 +23,13 @@ type AccountReadRequest struct {
 }
 
 type capturedAccountRead struct {
-	plan         environment.RequestPlan
-	connectionID string
-	operationID  string
+	observationStamp recording.Stamp
+	plan             environment.RequestPlan
+	connectionID     string
+	operationID      string
 }
 
-func NewCapturedAccountRead(plan environment.RequestPlan, credential providerauth.Lease, connectionID, operationID string) (AccountReadRequest, error) {
+func NewCapturedAccountRead(plan environment.RequestPlan, credential providerauth.Lease, connectionID, operationID string, stamps ...recording.Stamp) (AccountReadRequest, error) {
 	route, selected, err := plan.AccountReadTarget()
 	if err != nil {
 		return AccountReadRequest{}, err
@@ -47,8 +49,12 @@ func NewCapturedAccountRead(plan environment.RequestPlan, credential provideraut
 		connectionID == "" || operationID == "" {
 		return AccountReadRequest{}, errors.New("account read credential scope is invalid")
 	}
+	var stamp recording.Stamp
+	if len(stamps) > 0 {
+		stamp = stamps[0]
+	}
 	return AccountReadRequest{read: read, credential: credential, targetRef: route.ProviderTarget().ID,
-		captured: &capturedAccountRead{plan: plan, connectionID: connectionID, operationID: operationID}}, nil
+		captured: &capturedAccountRead{observationStamp: stamp, plan: plan, connectionID: connectionID, operationID: operationID}}, nil
 }
 
 func NewOwnedAccountRead(origin originidentity.ProviderOrigin, operation string, credential providerauth.Lease) (AccountReadRequest, error) {

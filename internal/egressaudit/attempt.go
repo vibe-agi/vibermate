@@ -8,6 +8,7 @@ package egressaudit
 import (
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"math"
 	"net"
 	"net/url"
@@ -204,17 +205,18 @@ type DecisionRef struct {
 }
 
 type NewInput struct {
-	ID              string
-	ConnectionID    string
-	Purpose         EgressPurpose
-	PayloadClass    PayloadClass
-	Parent          ParentRef
-	Caller          CallerKind
-	CallerID        string
-	TargetOrigin    string
-	Decision        DecisionRef
-	ReusedTransport bool
-	StartedAt       time.Time
+	ObservationStamp recording.Stamp
+	ID               string
+	ConnectionID     string
+	Purpose          EgressPurpose
+	PayloadClass     PayloadClass
+	Parent           ParentRef
+	Caller           CallerKind
+	CallerID         string
+	TargetOrigin     string
+	Decision         DecisionRef
+	ReusedTransport  bool
+	StartedAt        time.Time
 }
 
 type TerminalInput struct {
@@ -229,17 +231,18 @@ type TerminalInput struct {
 // Attempt is immutable. Finish returns a new terminal value rather than
 // mutating, so an earlier record can never be overwritten.
 type Attempt struct {
-	id              string
-	connectionID    string
-	purpose         EgressPurpose
-	payloadClass    PayloadClass
-	parent          ParentRef
-	caller          CallerKind
-	callerID        string
-	targetOrigin    string
-	decision        DecisionRef
-	reusedTransport bool
-	startedAt       time.Time
+	observationStamp recording.Stamp
+	id               string
+	connectionID     string
+	purpose          EgressPurpose
+	payloadClass     PayloadClass
+	parent           ParentRef
+	caller           CallerKind
+	callerID         string
+	targetOrigin     string
+	decision         DecisionRef
+	reusedTransport  bool
+	startedAt        time.Time
 
 	terminal        bool
 	outcome         Outcome
@@ -324,18 +327,19 @@ func New(input NewInput) (Attempt, error) {
 		return Attempt{}, errors.New("egress start time is required")
 	}
 	return Attempt{
-		id:              input.ID,
-		connectionID:    input.ConnectionID,
-		purpose:         input.Purpose,
-		payloadClass:    input.PayloadClass,
-		parent:          input.Parent,
-		caller:          input.Caller,
-		callerID:        input.CallerID,
-		targetOrigin:    input.TargetOrigin,
-		decision:        input.Decision,
-		reusedTransport: input.ReusedTransport,
-		startedAt:       input.StartedAt.UTC(),
-		byteCountsKnown: true,
+		observationStamp: input.ObservationStamp,
+		id:               input.ID,
+		connectionID:     input.ConnectionID,
+		purpose:          input.Purpose,
+		payloadClass:     input.PayloadClass,
+		parent:           input.Parent,
+		caller:           input.Caller,
+		callerID:         input.CallerID,
+		targetOrigin:     input.TargetOrigin,
+		decision:         input.Decision,
+		reusedTransport:  input.ReusedTransport,
+		startedAt:        input.StartedAt.UTC(),
+		byteCountsKnown:  true,
 	}, nil
 }
 
@@ -704,3 +708,5 @@ func PurposeForEgressKind(kind string) (EgressPurpose, error) {
 		return "", fmt.Errorf("no egress purpose for hold kind %q", kind)
 	}
 }
+
+func (a Attempt) ObservationStamp() recording.Stamp { return a.observationStamp }

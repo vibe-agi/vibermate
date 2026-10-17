@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// Unpublished v2 additions update its exact admitted layout and v1 delta, not
-// frozen v1. Earlier private-v2 layouts must remain explicitly rejected.
+// Published v1/v2 are immutable. The unreleased v3 candidate is pinned here
+// until storage-role isolation finalizes the control/observation bootstraps.
 func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	t.Parallel()
 	const revision1 = "393b7d67f8ffd1952fc516a150e1a2a68707b67536fbc2e7f5a7f17208424cb1"
@@ -20,8 +20,11 @@ func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	if frozen := sha256.Sum256([]byte(schemaV1SQL)); hex.EncodeToString(frozen[:]) != revision1 {
 		t.Fatal("frozen v1 changed")
 	}
+	if frozen := sha256.Sum256([]byte(schemaV2SQL)); hex.EncodeToString(frozen[:]) != revision2 {
+		t.Fatal("frozen v2 changed")
+	}
 	digest := sha256.Sum256([]byte(schemaSQL))
-	if schemaRevision != 2 || hex.EncodeToString(digest[:]) != revision2 {
+	if schemaRevision != 3 || hex.EncodeToString(digest[:]) != "94c3befb118d31e8e42709a8f458b43b878ab5de9acd76dc2034868e6a3994ba" {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
 	}
 }

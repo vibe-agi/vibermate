@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -575,7 +576,7 @@ func newRuntimeFetchClientWithSecret(
 		Coordinator:    gate,
 		Authenticator:  authenticator,
 		Transport:      transport,
-		Audit:          audit,
+		Audit:          testrecording.Egress(audit),
 		InstanceIDs:    &sequentialInstanceIDs{},
 		EgressDefaults: runtimeUnsetDefaults{},
 	})

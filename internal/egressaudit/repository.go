@@ -140,3 +140,8 @@ type Observer interface {
 type AttemptStore interface {
 	PutAttempt(context.Context, Attempt) error
 }
+
+// ScopedAttemptStore retains explicit observation ownership with the snapshot.
+type ScopedAttemptStore interface {
+	PutScopedAttempt(context.Context, recording.Scope, Attempt) error
+}

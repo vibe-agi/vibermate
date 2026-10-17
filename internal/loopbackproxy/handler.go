@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"hash"
 	"io"
 	"log"
@@ -190,7 +191,7 @@ type Options struct {
 	Approvals             NetworkApprovals
 	BlindTunnels          BlindTunnelDialer
 	EgressDefaults        egressprofile.Resolver
-	EgressAudit           egressaudit.Writer
+	EgressAudit           egressaudit.Observer
 	RawEvidence           rawevidence.RequestRecorder
 	RawObservationTimeout time.Duration
 	RawResponseBodyBytes  int
@@ -231,7 +232,7 @@ type Handler struct {
 	approvals      NetworkApprovals
 	blindTunnels   BlindTunnelDialer
 	egressDefaults egressprofile.Resolver
-	egressAudit    egressaudit.Writer
+	egressAudit    egressaudit.Observer
 	rawEvidence    rawevidence.RequestRecorder
 	rawTimeout     time.Duration
 	rawBodyBytes   int
@@ -509,6 +510,7 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
+	_ = audit.BindObservationScope(audit.ObservationScope(capture))
 	// A cleartext forward-proxy request carries its target in an absolute
 	// request-target. It enters the model pipeline only when the exact target
 	// was frozen from this verified Agent's client configuration; every other
@@ -1173,7 +1175,7 @@ func (handler *Handler) serveInner(
 			plan,
 			audit.ID(),
 			exchangeID,
-			body,
+			body, audit.ObservationStamp(),
 		)
 	case protocolspec.ClientOperationOpaque:
 		handler.serveOriginal(
@@ -1182,10 +1184,10 @@ func (handler *Handler) serveInner(
 			plan,
 			audit.ID(),
 			exchangeID,
-			body,
+			body, audit.ObservationStamp(),
 		)
 	case protocolspec.ClientOperationAccountRead:
-		handler.serveAccountRead(writer, request, plan, audit.ID(), exchangeID)
+		handler.serveAccountRead(writer, request, plan, audit.ID(), exchangeID, audit.ObservationStamp())
 	default:
 		writeReason(writer, http.StatusUnprocessableEntity, ReasonPathUnsupported, "")
 	}
@@ -1195,7 +1197,7 @@ type CapturedAccountReader interface {
 	ReadCaptured(context.Context, environment.RequestPlan, accountoperation.Source) (accountoperation.Result, error)
 }
 
-func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *http.Request, plan environment.RequestPlan, connectionID, operationID string) {
+func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *http.Request, plan environment.RequestPlan, connectionID, operationID string, stamp recording.Stamp) {
 	if plan.UsesOriginalAccount() {
 		if _, valid := plan.OriginalOrigin(); !valid {
 			writeReason(writer, http.StatusUnprocessableEntity, "account_read_ambiguous", "")
@@ -1203,14 +1205,14 @@ func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *ht
 		}
 	}
 	if plan.PreservesOriginalDestination() || plan.UsesOriginalAccount() {
-		handler.forwardToOriginalOrigin(writer, request, plan, offlinehold.EgressAuxiliary, plan.Operation().PayloadClass(), connectionID, operationID, nil)
+		handler.forwardToOriginalOrigin(writer, request, plan, offlinehold.EgressAuxiliary, plan.Operation().PayloadClass(), connectionID, operationID, nil, stamp)
 		return
 	}
 	if handler.accountReads == nil {
 		writeReason(writer, http.StatusServiceUnavailable, "account_read_unavailable", "")
 		return
 	}
-	result, err := handler.accountReads.ReadCaptured(request.Context(), plan, accountoperation.Source{ConnectionID: connectionID, OperationID: operationID})
+	result, err := handler.accountReads.ReadCaptured(request.Context(), plan, accountoperation.Source{ConnectionID: connectionID, OperationID: operationID, ObservationStamp: stamp})
 	if err != nil {
 		status, reason := http.StatusBadGateway, ReasonCode("account_read_unavailable")
 		if errors.Is(err, environment.ErrAccountReadAmbiguous) {
@@ -1298,6 +1300,7 @@ func (handler *Handler) serveSemantic(
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
+		exchange.WithObservationStamp(audit.ObservationStamp()),
 	}
 	if bodyLease != nil {
 		requestOptions = append(requestOptions, exchange.WithBodyLease(bodyLease))
@@ -1794,6 +1797,7 @@ func (handler *Handler) serveAgentProbe(
 	connectionID string,
 	requestID string,
 	body []byte,
+	stamp recording.Stamp,
 ) {
 	operation := plan.Operation()
 	if !admitsLocalDispatch(operation, request) {
@@ -1813,7 +1817,7 @@ func (handler *Handler) serveAgentProbe(
 		operation.PayloadClass(),
 		connectionID,
 		requestID,
-		body,
+		body, stamp,
 	)
 }
 
@@ -1824,6 +1828,7 @@ func (handler *Handler) serveOriginal(
 	connectionID string,
 	requestID string,
 	body []byte,
+	stamp recording.Stamp,
 ) {
 	operation := plan.Operation()
 	if !admitsLocalDispatch(operation, request) {
@@ -1843,7 +1848,7 @@ func (handler *Handler) serveOriginal(
 		operation.PayloadClass(),
 		connectionID,
 		requestID,
-		body,
+		body, stamp,
 	)
 }
 
@@ -1856,6 +1861,7 @@ func (handler *Handler) forwardToOriginalOrigin(
 	connectionID string,
 	requestID string,
 	body []byte,
+	stamp recording.Stamp,
 ) {
 	// The egress identity and the original-request identity are generated
 	// independently; the association travels as typed references.
@@ -1875,19 +1881,20 @@ func (handler *Handler) forwardToOriginalOrigin(
 		return
 	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		ResolvedEgress: resolved,
-		RequestID:      egressID,
-		ConnectionID:   connectionID,
-		ParentID:       requestID,
-		Kind:           kind,
-		Origin:         origin,
-		Method:         request.Method,
-		Path:           request.URL.Path,
-		RawQuery:       request.URL.RawQuery,
-		Headers:        request.Header,
-		Body:           body,
-		PayloadClass:   payloadClass,
-		EgressPolicy:   resolved.Profile().Policy,
+		ObservationStamp: stamp,
+		ResolvedEgress:   resolved,
+		RequestID:        egressID,
+		ConnectionID:     connectionID,
+		ParentID:         requestID,
+		Kind:             kind,
+		Origin:           origin,
+		Method:           request.Method,
+		Path:             request.URL.Path,
+		RawQuery:         request.URL.RawQuery,
+		Headers:          request.Header,
+		Body:             body,
+		PayloadClass:     payloadClass,
+		EgressPolicy:     resolved.Profile().Policy,
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -2737,7 +2744,7 @@ func (handler *Handler) serveBlindTunnel(
 		egressID,
 		audit.ID(),
 		"https://"+authority,
-		resolved,
+		resolved, audit.ObservationStamp(),
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -2862,6 +2869,7 @@ func (handler *Handler) beginBlindAudit(
 	connectionID string,
 	targetOrigin string,
 	resolved egressprofile.Resolved,
+	stamps ...recording.Stamp,
 ) (egressaudit.Attempt, error) {
 	if err := resolved.Validate(); err != nil {
 		return egressaudit.Attempt{}, err
@@ -2879,10 +2887,11 @@ func (handler *Handler) beginBlindAudit(
 	}
 	decision.ProxyID, decision.ProxyRevision = resolved.Profile().ID.String(), uint64(resolved.Profile().Revision)
 	attempt, err := egressaudit.New(egressaudit.NewInput{
-		ID:           egressID,
-		ConnectionID: connectionID,
-		Purpose:      egressaudit.PurposeBlindTunnel,
-		PayloadClass: egressaudit.PayloadOpaqueTunnel,
+		ObservationStamp: firstObservationStamp(stamps),
+		ID:               egressID,
+		ConnectionID:     connectionID,
+		Purpose:          egressaudit.PurposeBlindTunnel,
+		PayloadClass:     egressaudit.PayloadOpaqueTunnel,
 		Parent: egressaudit.ParentRef{
 			Kind: egressaudit.ParentBlindConnection,
 			ID:   connectionID,
@@ -2893,11 +2902,10 @@ func (handler *Handler) beginBlindAudit(
 		StartedAt:    handler.clock(),
 	})
 	if err != nil {
-		return egressaudit.Attempt{}, err
+		handler.reportTerminalFailure(err)
+		return egressaudit.Attempt{}, nil
 	}
-	if _, err := handler.egressAudit.Append(ctx, attempt); err != nil {
-		return egressaudit.Attempt{}, err
-	}
+	handler.egressAudit.ObserveEgress(attempt.ObservationStamp(), attempt)
 	return attempt, nil
 }
 
@@ -2924,16 +2932,7 @@ func (handler *Handler) completeBlindAudit(
 		))
 		return
 	}
-	auditTimeout := handler.auditTimeout
-	if auditTimeout <= 0 {
-		auditTimeout = defaultAuditCompletionLimit
-	}
-	ctx, cancel := context.WithTimeout(
-		context.WithoutCancel(handler.ownerContext),
-		auditTimeout,
-	)
-	defer cancel()
-	_, _ = handler.egressAudit.Complete(ctx, terminal)
+	handler.egressAudit.ObserveEgress(terminal.ObservationStamp(), terminal)
 }
 
 func (handler *Handler) reportTerminalFailure(err error) {
@@ -3043,7 +3042,7 @@ func (handler *Handler) serveCleartextForward(
 	defer actionLease.Release()
 	record, err := handler.beginBlindAudit(
 		request.Context(), egressID, audit.ID(), "http://"+authority,
-		resolved,
+		resolved, audit.ObservationStamp(),
 	)
 	if err != nil {
 		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
@@ -3235,4 +3234,11 @@ func policyTarget(
 		return "", 0
 	}
 	return host, port
+}
+
+func firstObservationStamp(stamps []recording.Stamp) recording.Stamp {
+	if len(stamps) == 0 {
+		return recording.Stamp{}
+	}
+	return stamps[0]
 }

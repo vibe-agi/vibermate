@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -532,4 +533,11 @@ func validateHost(label, value string, allowEmpty bool) error {
 		)
 	}
 	return validateIdentity(label, value, false)
+}
+
+type Observer interface {
+	ObserveConnection(recording.Stamp, Event) recording.OfferResult
+}
+type ScopedStore interface {
+	PutConnection(context.Context, recording.Scope, Event) error
 }

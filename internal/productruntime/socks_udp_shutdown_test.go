@@ -3,6 +3,7 @@ package productruntime
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net"
 	"sync"
@@ -26,6 +27,7 @@ type udpTerminalWrite struct {
 }
 type blockedUDPTerminals struct {
 	connectionevent.Repository
+	scoped  connectionevent.ScopedStore
 	entered chan udpTerminalWrite
 	release chan struct{}
 	once    sync.Once
@@ -86,7 +88,7 @@ type udpShutdownFixture struct {
 	revocation *nativeRevocation
 }
 
-func newUDPShutdownFixture(t *testing.T) *udpShutdownFixture {
+func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder) *udpShutdownFixture {
 	t.Helper()
 	gate, e := offlinehold.New(offlinehold.DefaultConfig())
 	if e != nil {
@@ -98,7 +100,14 @@ func newUDPShutdownFixture(t *testing.T) *udpShutdownFixture {
 	options.NetworkOptions = egressnetwork.BuilderOptions{BaseDialer: network}
 	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
 	var revocation *nativeRevocation
-	r, e := startWithBuilders(t.Context(), options, runtimeBuildOverrides{environment: func(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
+	var recorder observationRecorderBuilder = func(ctx context.Context, b *recording.Budget, c connectionevent.ScopedStore, e egressaudit.ScopedAttemptStore) *observationRecorder {
+		block.scoped = c
+		return newObservationRecorder(ctx, b, block, e)
+	}
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
+	r, e := startWithBuilders(t.Context(), options, runtimeBuildOverrides{recorder: recorder, environment: func(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
 		revocation = request.nativeRevocation.(*nativeRevocation)
 		return buildEnvironment(ctx, request)
 	}, connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
@@ -183,48 +192,22 @@ func (f *udpShutdownFixture) requireControlsClosed(t *testing.T) {
 // keeps the second real authenticated session alive behind the first append.
 func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testing.T) {
 	f := newUDPShutdownFixture(t)
+	f.controls[0].Close()
+	f.firstTerminal(t)
 	done := make(chan error, 1)
 	go func() { done <- f.runtime.Shutdown(context.Background()) }()
-	first := f.firstTerminal(t)
-	f.runtime.egressCompletion.mu.Lock()
-	shared := f.runtime.egressCompletion.shutdownContext
-	f.runtime.egressCompletion.mu.Unlock()
-	deadline, _ := shared.Deadline()
-	got, ok := first.ctx.Deadline()
-	if !ok || !got.Equal(deadline) {
-		t.Errorf("UDP terminal renewed its own deadline: got=%v shared=%v", got, deadline)
-	}
 	f.requireControlsClosed(t)
-	// Each terminal entry happens after that flow closes its destination.
-	// Observe both while persistence is still blocked, not eventual Shutdown.
-	second := f.firstTerminal(t)
 	f.network.requireClosed(t)
-	var shutdownErr error
 	select {
-	case shutdownErr = <-done:
-		if shutdownErr == nil {
-			t.Error("shutdown masked terminal durability failure", shutdownErr)
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
 		}
 	case <-time.After(4 * f.budget):
-		t.Error("Runtime shutdown blocked past its owned lifecycle budget")
-		f.repository.unblock()
-		<-done
+		t.Fatal("shutdown did not cancel optional writer")
 	}
-	if !t.Failed() {
-		other, _ := second.ctx.Deadline()
-		if !other.Equal(deadline) {
-			t.Error("later UDP terminal received a renewed shutdown window")
-		}
-		joined, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
-		if e := f.runtime.udp.Drain(joined); e != nil {
-			t.Error("context-aware terminal workers did not join after shutdown", e)
-		} else if f.runtime.egressCompletion.failure() == nil {
-			t.Error("shutdown masked terminal durability failure", shutdownErr)
-		}
-		if f.runtime.offlineHold.Snapshot().ActiveActions != 0 {
-			t.Error("shutdown retained packet leases")
-		}
+	if f.runtime.offlineHold.Snapshot().ActiveActions != 0 {
+		t.Fatal("shutdown retained packet leases")
 	}
 }
 
@@ -278,35 +261,29 @@ func TestShortNativeRevocationCancelsUDPPromptlyWithOwnedTerminalDrain(t *testin
 	f.requireSuccessfulTerminals(t)
 }
 
-func TestNormalUDPControlCloseOwnsDurableTerminalDrain(t *testing.T) {
+func TestNormalUDPControlCloseJoinsTransportBeforeOptionalHistory(t *testing.T) {
 	f := newUDPShutdownFixture(t)
 	for _, c := range f.controls {
 		c.Close()
 	}
 	f.firstTerminal(t)
-	f.firstTerminal(t)
-	f.network.requireClosed(t)
-	f.runtime.udp.mu.Lock()
-	active := f.runtime.udp.active
-	f.runtime.udp.mu.Unlock()
-	if active != 2 {
-		t.Fatal("closed packet terminal workers lost Runtime ownership", active)
+	if err := f.runtime.udp.Drain(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	expired, cancel := context.WithCancel(t.Context())
-	cancel()
-	if e := f.runtime.udp.Drain(expired); !errors.Is(e, context.Canceled) {
-		t.Fatal("owned drain ignored canceled wait", e)
+	f.network.requireClosed(t)
+	if f.runtime.recordingBudget.Snapshot().ReservedRecords == 0 {
+		t.Fatal("blocked worker lost recording ownership")
 	}
 	f.repository.unblock()
 	f.requireSuccessfulTerminals(t)
-	if e := f.runtime.udp.Drain(t.Context()); e != nil {
-		t.Fatal("terminal workers did not join", e)
-	}
 }
 
 func (f *udpShutdownFixture) requireSuccessfulTerminals(t *testing.T) {
 	t.Helper()
 	runtimeUDPWait(t, func() bool { return f.runtime.offlineHold.Snapshot().ActiveActions == 0 })
+	if err := f.runtime.recorder.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	page, e := f.runtime.egress.List(t.Context(), egressaudit.PageRequest{Purpose: egressaudit.PurposeDatagram, Limit: 20})
 	if e != nil || len(page.Items) != 2 {
 		t.Fatal("once-only packet audit count", e, len(page.Items))
@@ -326,4 +303,16 @@ func (f *udpShutdownFixture) requireSuccessfulTerminals(t *testing.T) {
 			t.Fatal("connection terminal bytes/once-only close lost")
 		}
 	}
+}
+
+func (b *blockedUDPTerminals) PutConnection(ctx context.Context, scope recording.Scope, e connectionevent.Event) error {
+	if e.Phase == connectionevent.PhaseClosed || e.Phase == connectionevent.PhaseFailed {
+		b.entered <- udpTerminalWrite{ctx: ctx, event: e}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-b.release:
+		}
+	}
+	return b.scoped.PutConnection(ctx, scope, e)
 }

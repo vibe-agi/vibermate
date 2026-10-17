@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/url"
@@ -622,19 +624,17 @@ func (client *Client) beginRuntimeAudit(
 			input.Decision.RuleID = "account.egress"
 		}
 	}
+	if spec.captured != nil {
+		input.ObservationStamp = spec.captured.observationStamp
+	} else if issuer, ok := client.audit.(recording.ScopeIssuer); ok {
+		input.ObservationStamp = issuer.ScopeStamp(captureidentity.Reference{})
+	}
 	attempt, err := egressaudit.New(input)
 	if err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"construct runtime EgressAttempt: %w",
-			err,
-		)
+		client.reportTerminalFailure(err)
+		return egressaudit.Attempt{}, nil
 	}
-	if _, err := client.audit.Append(ctx, attempt); err != nil {
-		return egressaudit.Attempt{}, fmt.Errorf(
-			"record runtime EgressAttempt: %w",
-			err,
-		)
-	}
+	client.audit.ObserveEgress(attempt.ObservationStamp(), attempt)
 	return attempt, nil
 }
 

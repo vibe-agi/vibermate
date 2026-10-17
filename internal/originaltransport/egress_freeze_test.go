@@ -2,6 +2,7 @@ package originaltransport_test
 
 import (
 	"bytes"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net/http"
 	"testing"
@@ -47,7 +48,7 @@ func TestOriginalTransportRecordsAndSendsSameFrozenGlobalExit(t *testing.T) {
 	recorder := &auditRecorder{}
 	wire := &roundTripper{response: &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewBufferString("ok"))}}
 	gate := &recordingCoordinator{}
-	client, err := originaltransport.New(originaltransport.Options{Coordinator: gate, Transport: wire, Audit: recorder})
+	client, err := originaltransport.New(originaltransport.Options{Coordinator: gate, Transport: wire, Audit: testrecording.Egress(recorder)})
 	if err != nil {
 		t.Fatal(err)
 	}

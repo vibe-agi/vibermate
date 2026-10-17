@@ -86,7 +86,7 @@ func (store *Store) DeleteCapture(
 	deletion.Connections, err = deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_connection_events
-		  WHERE connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
+		  WHERE (recording_scope_kind=? AND recording_scope_id=?) OR (recording_archive_epoch=0 AND connection_id IN (SELECT id FROM capture_purge_connection_ids))`, captureKind, captureID,
 	)
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture connection evidence: %w", err)
@@ -214,6 +214,8 @@ func selectCaptureEvidence(
 		query string
 		args  []any
 	}{
+		{`INSERT OR IGNORE INTO capture_purge_connection_ids(id) SELECT connection_id FROM runtime_connection_events WHERE recording_scope_kind=? AND recording_scope_id=?`, []any{captureKind, captureID}},
+		{`INSERT OR IGNORE INTO capture_purge_attempt_ids(id) SELECT attempt_id FROM runtime_egress_attempts WHERE purpose<>'client_tool_service' AND recording_scope_kind=? AND recording_scope_id=?`, []any{captureKind, captureID}},
 		{
 			`INSERT OR IGNORE INTO capture_purge_exchange_ids(id)
 			 SELECT exchange_id FROM runtime_exchange_contents
@@ -258,7 +260,7 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE purpose<>'client_tool_service' AND (parent_exchange_id IN (
+			 WHERE purpose<>'client_tool_service' AND recording_archive_epoch=0 AND (parent_exchange_id IN (
 			   SELECT id FROM capture_purge_exchange_ids
 			 ) OR connection_id IN (
 			   SELECT id FROM capture_purge_connection_ids
@@ -275,7 +277,7 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE purpose<>'client_tool_service' AND connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
+			 WHERE purpose<>'client_tool_service' AND recording_archive_epoch=0 AND connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
 			nil,
 		},
 	}

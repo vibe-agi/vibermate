@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"math/big"
 	"net"
@@ -244,7 +245,7 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 	client, err := NewClient(ClientOptions{
 		EgressDefaults: defaults,
 		Coordinator:    gate, Authenticator: auth, Transport: transport,
-		Audit: audit, InstanceIDs: &sequentialInstanceIDs{},
+		Audit: testrecording.Egress(audit), InstanceIDs: &sequentialInstanceIDs{},
 	})
 	if err != nil {
 		t.Fatal(err)

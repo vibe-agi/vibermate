@@ -73,14 +73,23 @@ func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
+	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
+		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
+	}
+	// Candidate v3 is intentionally not a shipped intermediate upgrade. The
+	// storage-role cutover will supply direct owned v1/v2 migration.
+	candidateSchema, inspectErr := runtimepersistence.InspectSchema(ctx, request.databasePath, runtimepersistence.DefaultBusyTimeout)
+	if inspectErr != nil {
+		return storageBuildResult{}, inspectErr
+	}
+	if candidateSchema.Revision != 0 && candidateSchema.Revision != 3 {
+		return storageBuildResult{}, runtimepersistence.ErrUnsupportedSchema
+	}
 	if _, err := runtimedata.UpgradeSchemaOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
 		return storageBuildResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return storageBuildResult{}, err
-	}
-	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
-		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
 	}
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		ContentLimits:          request.contentLimits,
@@ -361,6 +370,8 @@ func buildExchangeContent(
 }
 
 type connectionEventBuildRequest struct {
+	observer   connectionevent.Observer
+	scopes     recording.ScopeIssuer
 	repository connectionevent.Repository
 	clock      connectionevent.Clock
 	random     io.Reader
@@ -375,9 +386,9 @@ func buildConnectionEvent(
 	request connectionEventBuildRequest,
 ) (connectionEventRuntime, error) {
 	return connectionevent.New(ctx, connectionevent.Options{
-		Repository: request.repository,
-		Clock:      request.clock,
-		Random:     request.random,
+		Reader: request.repository, Observer: request.observer, Scopes: request.scopes,
+		Clock:  request.clock,
+		Random: request.random,
 	})
 }
 
@@ -437,7 +448,7 @@ type providerBuildRequest struct {
 	coordinator    offlinehold.Coordinator
 	secrets        secretstore.Reader
 	instanceIDs    InstanceIDSource
-	audit          egressaudit.Writer
+	audit          egressaudit.Observer
 	rawEvidence    rawevidence.Observer
 }
 
@@ -516,6 +527,7 @@ type rawEvidenceRuntime interface {
 }
 
 type captureEvidenceBarrier struct {
+	recorder *observationRecorder
 	raw      rawEvidenceRuntime
 	reporter interface{ ReportRawEvidenceFailure(error) }
 }
@@ -533,7 +545,13 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 				"flush managed run %q Raw evidence: %w", id, err,
 			))
 		}
-		return nil, nil
+		return nil, err
+	}
+	if barrier.recorder != nil {
+		if err := barrier.recorder.Flush(ctx); err != nil {
+			terminal.Abort()
+			return nil, err
+		}
 	}
 	return terminal, nil
 }
@@ -551,7 +569,13 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 				"flush manual capture %q Raw evidence: %w", id, err,
 			))
 		}
-		return nil, nil
+		return nil, err
+	}
+	if barrier.recorder != nil {
+		if err := barrier.recorder.Flush(ctx); err != nil {
+			terminal.Abort()
+			return nil, err
+		}
 	}
 	return terminal, nil
 }
@@ -1051,7 +1075,7 @@ func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error
 
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
-	audit       egressaudit.Writer
+	audit       egressaudit.Observer
 	transport   originaltransport.Transport
 }
 
@@ -1171,7 +1195,7 @@ type proxyBuildRequest struct {
 	approvals      loopbackproxy.NetworkApprovals
 	blindTunnels   loopbackproxy.BlindTunnelDialer
 	egressDefaults egressprofile.Resolver
-	egressAudit    egressaudit.Writer
+	egressAudit    egressaudit.Observer
 	rawEvidence    rawevidence.RequestRecorder
 	random         io.Reader
 	bodyAdmission  *exchange.BodyAdmission
