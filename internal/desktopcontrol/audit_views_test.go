@@ -209,6 +209,11 @@ func newAuditFixtureWithRawEvidence(
 	captureReaders ...capturerun.Reader,
 ) *auditFixture {
 	t.Helper()
+	return newAuditFixtureConfigured(t, rawEvidence, nil, captureReaders...)
+}
+
+func newAuditFixtureConfigured(t *testing.T, rawEvidence rawevidence.Reader, configure func(*desktopcontrol.Options), captureReaders ...capturerun.Reader) *auditFixture {
+	t.Helper()
 
 	runtime := startRuntime(t)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
@@ -233,7 +238,7 @@ func newAuditFixtureWithRawEvidence(
 	if rawEvidence == nil {
 		rawEvidence = runtime.RawEvidence()
 	}
-	application, err := desktopcontrol.New(desktopcontrol.Options{
+	options := desktopcontrol.Options{
 		Readiness:    readyState(true),
 		Status:       runtime,
 		Environments: runtime.Environments(),
@@ -259,7 +264,11 @@ func newAuditFixtureWithRawEvidence(
 		ManualCaptures:  runtime.ManualCaptures(),
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
-	})
+	}
+	if configure != nil {
+		configure(&options)
+	}
+	application, err := desktopcontrol.New(options)
 	if err != nil {
 		t.Fatal(err)
 	}

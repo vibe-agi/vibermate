@@ -168,6 +168,8 @@ type Options struct {
 	LaunchSnapshots     *launchsnapshot.Store
 	Storage             StorageLocationReader
 	ACP                 *acpobservation.Manager
+	ACPInspection       acpobservation.InspectionReader
+	ACPMarkers          acpobservation.MarkerReader
 	Readiness           ReadinessReader
 	Status              StatusReader
 	Environments        environment.Controller
@@ -222,7 +224,7 @@ type Handler struct {
 	contentLimits       *exchangecontent.SourceLimits
 	launchSnapshots     *launchsnapshot.Store
 	storage             StorageLocationReader
-	acp                 *acpobservation.Manager
+	acp                 acpobservation.MarkerReader
 	readiness           ReadinessReader
 	status              StatusReader
 	environments        environment.Controller
@@ -334,6 +336,10 @@ func New(options Options) (*Handler, error) {
 		options.Clock == nil {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
+	markers := options.ACPMarkers
+	if markers == nil && options.ACP != nil {
+		markers = options.ACP
+	}
 	handler := &Handler{
 		networkAccess:       networkAccess,
 		productUpdates:      options.ProductUpdates,
@@ -341,7 +347,7 @@ func New(options Options) (*Handler, error) {
 		contentLimits:       options.ContentLimits,
 		launchSnapshots:     options.LaunchSnapshots,
 		storage:             options.Storage,
-		acp:                 options.ACP,
+		acp:                 markers,
 		readiness:           options.Readiness,
 		status:              options.Status,
 		environments:        options.Environments,
@@ -415,7 +421,9 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
-	if options.ACP != nil {
+	if options.ACPInspection != nil {
+		handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/acp", func(w http.ResponseWriter, r *http.Request) { handler.readACPInspection(w, r, options.ACPInspection) })
+	} else if options.ACP != nil {
 		handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/acp", func(writer http.ResponseWriter, request *http.Request) {
 			reference, err := captureidentity.ParseKey(request.PathValue("captureKey"))
 			if err != nil || reference.Kind != captureidentity.KindManagedRun {

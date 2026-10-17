@@ -149,6 +149,10 @@ type Registration struct {
 	ExpiresAtMillis int64
 	Fence           recording.Fence
 }
+type MarkerReader interface {
+	Markers(context.Context, []string) (map[string]bool, error)
+}
+
 type RegistrationRepository interface {
 	Register(context.Context, Registration, int64) (Registration, error)
 	Registration(context.Context, string, int64) (Registration, error)
@@ -160,6 +164,11 @@ type Recorder interface {
 type Writer interface {
 	PutACP(context.Context, Record) error
 }
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+}
+
 type Reader interface {
 	Read(context.Context, string, int64) (Record, error)
 }
