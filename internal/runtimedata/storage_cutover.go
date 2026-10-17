@@ -19,6 +19,11 @@ import (
 
 const roleCutoverSchema = "runtime-role-cutover/v1"
 
+// ErrFreshControlAmbiguous refuses automatic initialization when required control
+// is absent but the root contains more than the closed first-start scaffold.
+// Callers should preserve the root and require recovery or a different empty root.
+var ErrFreshControlAmbiguous = errors.New("required control is missing and prior state remains; preserve this root and recover control or choose an empty data directory")
+
 type cutoverArtifact struct {
 	Name   string `json:"name"`
 	Size   int64  `json:"size"`
@@ -157,6 +162,11 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 		}
 		if state.Revision == 0 && len(files) != 0 || state.Revision != 0 && (len(files) == 0 || files[0].Size == 0) {
 			return layout, ErrTarget
+		}
+		if state.Revision == 0 {
+			if err = validateFreshStorageRoot(work, owned); err != nil {
+				return layout, err
+			}
 		}
 		id, err := newStorageID()
 		if err != nil {
@@ -408,6 +418,51 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 		}
 	}
 	return r.finishActivated(work, owned, receipt)
+}
+
+// validateFreshStorageRoot does not inspect secrets or guess installation age.
+// Both held guards permit a clean-root initialization policy, not proof that a
+// completely erased installation never existed. Receipts/layouts bypass this
+// policy only through their own verified recovery paths.
+func validateFreshStorageRoot(ctx context.Context, owned OwnedStorage) error {
+	if err := checkStorageOwnership(ctx, owned); err != nil {
+		return err
+	}
+	root, err := os.Open(owned.Directory)
+	if err != nil {
+		return ErrFreshControlAmbiguous
+	}
+	defer root.Close()
+	entries, readErr := root.ReadDir(4)
+	if readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) > 3 {
+		return ErrFreshControlAmbiguous
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case lockName, "server.lock":
+			// The exact live file and root inode are checked again below.
+		case "server-secrets":
+			path := filepath.Join(owned.Directory, entry.Name())
+			info, err := os.Lstat(path)
+			if err != nil || info.Mode() != os.ModeDir|0700 {
+				return ErrFreshControlAmbiguous
+			}
+			directory, err := os.Open(path)
+			if err != nil {
+				return ErrFreshControlAmbiguous
+			}
+			held, statErr := directory.Stat()
+			children, readErr := directory.ReadDir(1)
+			closeErr := directory.Close()
+			current, currentErr := os.Lstat(path)
+			if statErr != nil || currentErr != nil || !os.SameFile(info, held) || !os.SameFile(info, current) || current.Mode() != info.Mode() || len(children) != 0 || !errors.Is(readErr, io.EOF) || closeErr != nil {
+				return ErrFreshControlAmbiguous
+			}
+		default:
+			return ErrFreshControlAmbiguous
+		}
+	}
+	return checkStorageOwnership(ctx, owned)
 }
 
 func checkStorageOwnership(ctx context.Context, owned OwnedStorage) error {
