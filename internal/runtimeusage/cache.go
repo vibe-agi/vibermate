@@ -67,7 +67,11 @@ func (projector *Projector) report(ctx context.Context, query AggregationQuery, 
 		if completed.Err != nil {
 			return Report{}, completed.Err
 		}
-		return cloneReport(completed.Val.(Report)), nil
+		report := cloneReport(completed.Val.(Report))
+		if err := projector.CheckReport(ctx, report); err != nil {
+			return Report{}, err
+		}
+		return report, nil
 	}
 }
 

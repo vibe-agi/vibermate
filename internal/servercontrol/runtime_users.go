@@ -142,7 +142,7 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 			writeProblem(writer, http.StatusServiceUnavailable, "runtime_user_usage_unavailable")
 			return
 		}
-		writeServerJSON(writer, http.StatusOK, report)
+		writeUsageReport(writer, request, report, handler.usage)
 		return
 	}
 	if request.URL.RawQuery != "" {

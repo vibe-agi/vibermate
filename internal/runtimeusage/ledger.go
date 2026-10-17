@@ -111,6 +111,11 @@ type PolicyRepository interface {
 	UsagePolicy(context.Context) (CollectionPolicy, error)
 	SetUsagePolicy(context.Context, CollectionPolicy, time.Time) (CollectionPolicy, error)
 }
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+}
+
 type Reader interface {
 	ScanUsage(context.Context, AggregationQuery, runtimeuser.UserID, time.Time, func(UsageBucket) error) (AggregationResult, error)
 }
