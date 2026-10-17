@@ -158,7 +158,9 @@ case <-time.After(2 * time.Second):
 
 **Files:**
 - Create: `internal/productruntime/recording.go`, `internal/productruntime/recording_test.go`, `internal/runtimepersistence/egress_snapshot_test.go`.
+- Create: `internal/recording/scope.go` and focused scope tests; add read-only `Epoch.Value() uint64` and `Stamp.Scope() Scope` accessors.
 - Modify: `internal/connectionevent/manager.go`, `types.go`, `manager_test.go`; `internal/egressaudit/repository.go`; `internal/runtimepersistence/egress_attempt_repository.go`; `internal/productruntime/egress.go`, `runtime.go`, `builders.go`, `status.go`.
+- Modify: `internal/runtimepersistence/schema.sql`, `schema_revision.go`, `schema_inspection.go`, current schema-pin tests, `connection_event_repository.go`, `capture_deletion.go` and focused association/deletion tests; `internal/evidencearchive` barrier interface only where coordinated recording administration needs it.
 - Update ordinary recording dependencies in `internal/providertransport`, `internal/originaltransport`, `internal/loopbackproxy`, `internal/egressnetwork`, account/OAuth/model/update adapters; locate call sites from existing `egressaudit.Writer`/`ReportTerminalFailure` types.
 - Native control transactions and their current attempt persistence remain required until the storage plan; do not redirect them through this queue.
 
@@ -181,8 +183,32 @@ type AttemptStore interface { PutAttempt(context.Context, Attempt) error }
 
 The private productruntime recorder owns a finite tagged union for connection and egress snapshots, one channel and one worker, and the same Budget as Raw. Add metadata/content arms only in Task 4. A queued value owns its copied slices/strings and reservation; it never stores callbacks, context, repository or transport lease. Private Runtime composition passes a trusted Stamp alongside the frozen admitted work. Inspectors retain their existing Reader interfaces.
 
-- [ ] **Step 1: Add blocked-sink integration tests.** With connection and egress storage blocked/failing, a real valid cleartext/CONNECT request reaches a local upstream and returns exact bytes, a subsequent request succeeds, and Runtime owner/readiness remains live. Include blind CONNECT and UDP local peers through their existing deterministic harnesses. Genuine denied/revoked admission still refuses bytes. Connection state reaches terminal even if every offered snapshot drops; no persisted sequence is fabricated.
-- [ ] **Step 2: Add terminal-only persistence tests and observe RED.** A full egress terminal with no stored start inserts all frozen and terminal facts. Repeating it is idempotent; a late same start cannot erase the terminal; a conflicting immutable tuple or terminal fails locally without modifying the existing row. Compare normalized complete tuples, not just IDs.
+Persisted association is a prerequisite to live queue wiring: current deletion derives connection/attempt IDs from Raw and Activity, which can now be absent. Stage the **unreleased candidate revision 3** with direct scope/fence columns and indexes on connection/ordinary-attempt rows. Frozen published v1/v2 DDL stays byte-for-byte unchanged. Do not introduce a shipped intermediate migration or freeze `schema/v3.sql` at this monolithic stage; the storage plan finalizes revision 3 as compact control plus observation revision 1 and supplies the direct owned v1/v2 cutover. Current-version legacy startup qualification remains pending that cutover; never run this candidate on the user's data or release it early.
+
+```go
+// recording: immutable persistence coordinates, never execution authority.
+type Scope struct { Capture captureidentity.Reference; Fence Fence }
+func (s Scope) Validate() error
+func (e *Epoch) Value() uint64
+func (s Stamp) Scope() Scope
+// connectionevent: observation-store consumer only.
+type ScopedStore interface {
+    PutConnection(context.Context, recording.Scope, Event) error
+}
+// egressaudit: use for queued capture/global observations.
+type ScopedAttemptStore interface {
+    PutScopedAttempt(context.Context, recording.Scope, Attempt) error
+}
+```
+
+New scoped writes require a valid scope (positive archive epoch; global zero Capture/generation or valid Capture/positive generation). Store and compare the complete immutable scope alongside the connection ID/attempt identity. Existing legacy/unscoped APIs remain for their current native/recovery consumers; live queued capture snapshots use the scoped methods. Deletion selects rows by direct persisted scope as well as legacy associations, including when **all** linking Raw/Activity rows are missing; no synthetic linking logs, overloaded ingress IDs or in-memory tombstone registry. Scope checks and snapshot insertion are transactional. Do not let a conflicting later scope reassign prior evidence.
+
+Administrative integration remains synchronous in this intermediate step: after existing Raw request leases drain, settle the general recorder before per-Capture physical deletion. For whole clear, hold a recording-only seal and actual-worker drain across the clear, then advance the Runtime-owned epoch before reopening so late auxiliary terminals from the old epoch drop. A caller deadline cannot release an administrative fence while associated writer I/O remains live. Normal offers never wait. Preserve existing native-dependent Egress recovery until native current facts are separated; do not remove it merely because ordinary history is optional. The storage plan replaces these intermediate shared-file/administrative dependencies before release.
+
+- [x] **Step 1: Add blocked-sink integration tests.** With connection and egress storage blocked/failing, a real valid cleartext/CONNECT request reaches a local upstream and returns exact bytes, a subsequent request succeeds, and Runtime owner/readiness remains live. Include blind CONNECT and UDP local peers through their existing deterministic harnesses. Genuine denied/revoked admission still refuses bytes. Connection state reaches terminal even if every offered snapshot drops; no persisted sequence is fabricated.
+- [x] **Step 2: Add terminal-only persistence tests and observe RED.** A full egress terminal with no stored start inserts all frozen and terminal facts. Repeating it is idempotent; a late same start cannot erase the terminal; a conflicting immutable tuple or terminal fails locally without modifying the existing row. Compare normalized complete tuples, not just IDs.
+
+Also add real-store scoped deletion regressions before live wiring: retain a scoped connection and terminal-only attempt with no Raw/Activity link, delete that Capture, and assert both disappear while unrelated scoped/native proof state remains. Test scope-conflict rejection, and a runtime-purpose attempt held across whole clear whose late terminal cannot reappear after the recording seal opens. Verify each RED before implementing the corresponding scope/barrier change.
 
 ```go
 if err := store.PutAttempt(ctx, terminal); err != nil { t.Fatal(err) }
@@ -192,15 +218,16 @@ if err != nil { t.Fatal(err) }
 // Assert exactly one row retaining every terminal and frozen start field.
 ```
 
-- [ ] **Step 3: Advance live connection state before offering snapshots.** Start returns its in-memory ID/time without repository access or history recovery. Decide/Connected/Finish preserve required state validation and update in memory; persistence errors cannot change their result. Bind the initially buffered attempted event once trusted Capture scope is known, preserving its original time. An unbound rejected connection may publish only a Runtime-scoped terminal. Avoid recording optional display-field failures as authorization failures.
-- [ ] **Step 4: Replace ordinary egress writes with observation offers and implement PutAttempt upsert.** Transport retains the frozen Attempt independently of queue acceptance and offers the full terminal. Keep required route/credential/action validation before actual I/O. Remove the pending-terminal global circuit, unbounded retry slice and recording-triggered owner cancellation. Report malformed optional terminal construction through closed recording counters. Native sealed receipts still use reliable native repository transactions.
-- [ ] **Step 5: Run connection/egress and affected real transport tests plus focused race lifecycle cases; commit.** Update obsolete mandatory ordinary-audit tests to the clarified user contract. Do not weaken actual route, authorization or native replay tests. Commit `refactor: separate live connections from retained audit history`.
+- [x] **Step 3: Advance live connection state before offering snapshots.** Start returns its in-memory ID/time without repository access or history recovery. Decide/Connected/Finish preserve required state validation and update in memory; persistence errors cannot change their result. Bind the initially buffered attempted event once trusted Capture scope is known, preserving its original time. An unbound rejected connection may publish only a Runtime-scoped terminal. Avoid recording optional display-field failures as authorization failures.
+- [x] **Step 4: Replace ordinary egress writes with observation offers and implement PutAttempt upsert.** Transport retains the frozen Attempt independently of queue acceptance and offers the full terminal. Keep required route/credential/action validation before actual I/O. Remove the pending-terminal global circuit, unbounded retry slice and recording-triggered owner cancellation. Report malformed optional terminal construction through closed recording counters. Native sealed receipts still use reliable native repository transactions.
+- [x] **Step 5: Run connection/egress and affected real transport tests plus focused race lifecycle cases; commit.** Update obsolete mandatory ordinary-audit tests to the clarified user contract. Do not weaken actual route, authorization or native replay tests. Commit `refactor: separate live connections from retained audit history`.
 
 ### Task 4: Own metadata/content snapshots and remove recording workspace from execution admission
 
 **Files:**
 - Create: `internal/exchangecontent/owned.go`, `internal/exchangecontent/owned_test.go`, `internal/productruntime/recording_content_test.go`.
-- Modify: `internal/exchangecontent/source.go`, `manager.go`; `internal/productruntime/recording.go`, `builders.go`; `internal/exchange/resource_envelope.go`, affected resource/admission tests.
+- Modify: `internal/exchangecontent/source.go`, `manager.go`; `internal/productruntime/recording.go`, `builders.go`; `internal/exchange/resource_envelope.go`, `resource_admission.go`, `content_admission.go`, affected resource/admission tests.
+- Extend the existing trusted evidence path in `internal/captureadmission` and frozen `internal/environment` request plans only where needed to carry the already-authorized Capture user/attribution and selected display labels; use the existing `capturerun.Evidence` values, not a new history lookup. Wire the Runtime's usage-policy publication and focused policy/admission tests.
 - Extend productruntime content-budget/long-session tests at their existing adapter seams. Keep test fixture changes focused on eventual recording visibility.
 
 **Interfaces:**
@@ -235,7 +262,7 @@ type CollectedWriter interface {
 }
 ```
 
-The producer uses a reliably published `runtimeusage.CollectionPolicy` snapshot and admitted Capture/Environment/account facts already in memory. `PutCollectedUsage` initially supplies the same typed seam to the worker; the storage plan implements the observation-only transaction and consent overlays. Any legacy bridge is worker-side only and removed before release; never fabricate a trusted owner from a request label.
+The producer uses a reliably published `runtimeusage.CollectionPolicy` snapshot and admitted Capture/Environment/account facts already in memory. Current `capturerun.Evidence` already contains RuntimeUserID, RuntimeUsername, Runtime metadata and Workspace; `captureadmission` currently drops RuntimeUserID, so preserve it along the trusted admission path. Freeze Environment name from its compiled snapshot and account name from the selected compiled account, never by per-event SQL or an Exchange-ID registry. Publish the initial usage policy from required startup state and only publish later successful CAS revisions monotonically; a failed or out-of-order setting update cannot activate collection. `PutCollectedUsage` initially supplies the same typed seam to the worker; the storage plan implements the observation-only transaction and consent overlays. Any legacy bridge is worker-side only and removed before release; never fabricate a trusted owner from a request label.
 
 Use the existing Source projection/sanitization and shape measurement, extending them with allocation accounting rather than implementing another sanitizer. Deep-own slices, byte buffers and string backing storage. Worker Source can only refer to OwnedRecord storage; no original request graph, extension reader or body lease remains. The caller transfers one reservation on accepted enqueue and releases it on refusal; worker releases after actual completion.
 
@@ -244,7 +271,7 @@ Add explicit `ObservationStamp recording.Stamp` to the three existing Exchange o
 - [ ] **Step 1: Add borrowed-owner and saturation behavioral tests.** Offer request/response content, then mutate and release the producer objects while a sink is blocked; after release, the sink sees the original sanitized snapshot. Saturated recording capacity must allow real JSON and SSE results to finish before the sink is released and must let pipeline body owners close. Metadata-only mode never copies full content merely to discard it. Oversized optional content drops without reducing the live request's valid resource limit.
 - [ ] **Step 2: Observe RED, then implement bounded ownership.** Reserve item/preparation space before Source construction or sanitization scratch. Use nonallocating shape traversal to reject overlarge inputs. Charge every owned capacity and temporary overlap before allocation; insufficient capacity drops immediately. Worker encoder/driver scratch must be reserved separately from queued payloads, never wait for capacity held by its own queue.
 - [ ] **Step 3: Queue body-free Exchange start/terminal bundles.** Generate Activity ID/time before enqueue. Deep-copy mutable protocol/transport/attribution metadata; identities use the same original timestamp. Worker persists independent projections without suppressing all of them after one error. Usage is offered with frozen trusted attribution and collection-policy revision; no new per-event control query is added. The storage plan supplies the durable policy overlay and independent writer; until then use an explicit typed internal usage snapshot seam, never copy untrusted client ownership labels.
-- [ ] **Step 4: Remove only recording materialization terms from RequiredExecutionEnvelope.** Retain codec, transform, tool exposure, actual downstream delivery and resend ledger requirements. Add a behavioral admission test showing that changing optional recording limits/availability does not reduce valid execution concurrency. Record actual owned encoding workspace under recording budget; a comment claiming it is separate is insufficient.
+- [ ] **Step 4: Remove only recording materialization terms from RequiredExecutionEnvelope.** Retain codec, transform, tool exposure, actual downstream delivery and resend ledger requirements. Remove the request-time `preflightContent` Source/manifest feasibility check from execution admission, and stop `ResourcePolicy.Validate` from requiring an optional record to fit its fixed response reservation. Preserve finite semantic input/output limits and actual execution envelope validation. An otherwise valid request must still execute when its optional record is too large, its recording scratch is insufficient, or recording is off. Add behavioral admission tests for this and for changing optional recording limits/availability without reducing valid execution concurrency. Record actual owned encoding workspace under recording budget; a comment claiming it is separate is insufficient.
 - [ ] **Step 5: Run exchangecontent, resource-admission and affected Runtime tests plus focused ownership race tests; commit.** Commit `refactor: own optional content outside agent execution budgets`.
 
 ## Completion boundary and storage handoff

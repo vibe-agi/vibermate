@@ -30,7 +30,9 @@
 **Files:**
 - Modify: `internal/runtimepersistence/store.go`, `operations.go`, `schema.sql`, `schema_revision.go`, `schema_inspection.go`, `native_schema.sql`, native repository/execution/projection/content/session/retirement files, ordinary observation repository constructors.
 - Create: `internal/runtimepersistence/observation_store.go`, `schema/v3.sql`, `schema/observations_v1.sql`, `native_delivery.go`, `native_authority_isolation_test.go`, `storage_role_test.go`.
+- Create focused native history DTO/ownership/persistence files in `internal/nativetool`, `internal/productruntime` and `internal/runtimepersistence`; extend the existing general recording worker, never add another worker.
 - Modify: `internal/nativetool/repository.go`, native composition in `internal/nativemcp`, pending approvals in `internal/desktopcontrol/native_tool_approvals.go` and their focused tests.
+- Update the approval cursor consumers in Flutter `lib/core/api/native_tool_models.dart`, `lib/core/api/control_api.dart`, `lib/features/workbench/workbench_controller.dart`, `lib/preview/preview_control_api.dart` and the focused native approval/API fixtures.
 - Use explicit role fixtures in persistence tests. Frozen `schema/v1.sql` and `schema/v2.sql` are immutable.
 
 **Interfaces:**
@@ -41,6 +43,8 @@ type ControlOptions struct {
     DatabasePath, LayoutID string
     BusyTimeout, CommitReconcileTimeout time.Duration
     NativeStreamLifetime time.Duration
+    NativeHistory nativetool.HistoryRecorder // optional; nil never blocks control
+    RecordingScopes recording.ScopeIssuer // pure current-token lookup
 }
 type ObservationOptions struct {
     DatabasePath, LayoutID, ArchiveID string
@@ -54,6 +58,10 @@ func OpenObservations(context.Context, ObservationOptions) (*ObservationStore, e
 Each role owns separate writer/read pools and operation gate. ControlStore exposes authority/configuration repositories and required administration facts only. ObservationStore exposes existing history repositories plus `egressaudit.AttemptStore` and native inspection projections. A compile-only transitional Store adapter is permitted while moving callers, but remove it from production composition before this plan completes; it must never make optional failure mandatory.
 
 Control DDL keeps the classified identity/grant/configuration/provider/approval tables and `runtime_usage_policy`; adds `runtime_storage_state`, ACP registration, visibility/cleanup tables and usage policy-revision caps defined in Tasks 2/5. Remove ordinary activities, connection/egress history, Raw/semantic graphs, usage rows and native history/content. Observation DDL owns those atomic graphs with no cross-role FK. Native content uses immutable safe operation/capture display coordinates, not a foreign key to live control operations. Schema identity is exact and role-specific.
+
+Provide the initial reliable archive epoch and Capture-generation rows in this task, including fresh Capture creation, because native Receive immediately consumes those facts. Task5 completes deletion/clear/consent mutation, publication and cleanup semantics; it is not the first producer of the generation row. Keep initial facts in the same small control creation transaction and preserve existing ID/conflict rules. Required control repository reads must omit the old Activity/history joins as soon as they are exposed by ControlStore; optional display projection wiring follows in Task2.
+
+The predecessor stages direct scope/fence columns in an unreleased monolithic revision-3 candidate to make lossy connection/egress recording deletable. This task moves those observation tables/fields into the independent observation role and finalizes/freeze-pins control v3; it does not add another published schema step. Only released v1/v2 sources require migration, through Task 3's direct owned cutover. Intermediate candidate test databases are disposable and must never be treated as a supported released layout.
 
 Native operation columns add `last_event_kind`, `last_event_at_unix_ms`, `maximum_event_at_unix_ms`. `native_tool_deliveries` stores one physical once claim's immutable coordinates, frozen egress proof and latest physical outcome. Derive native-purpose constants; arbitrary audit rows never become receipts. Preserve all fields currently compared by `nativeAttemptFacts` and once/approval/session checks, nullable observed byte counts, uncertain commit behavior and logical-versus-physical completion distinction.
 
@@ -76,17 +84,58 @@ type PendingApprovalPage struct { Items []PendingApprovalItem; NextCreatedAt tim
 
 Define the two embedded authority interfaces by copying the existing method sets minus the specified methods; do not rename their execution APIs. Inspection gets separate Page/Get/ReadContent interfaces and source-aware cursors in Task 3.
 
+Pending-approval HTTP pagination changes from observation `afterSequence`/`nextSequence` to `cursor`/`nextCursor`, encoding the control `(createdAtMillis, approvalID)` tuple in a bounded, strict, canonical, versioned opaque cursor bound to the authorized Capture. Reuse the activity-search cursor conventions with a distinct approval domain. Reject legacy `afterSequence` (including zero), duplicate/unknown query fields, malformed or foreign-scope cursors explicitly with 422; never reinterpret or silently ignore an old sequence. Keep the existing bounded page limit and preview/decision ownership checks. The Flutter discovery cursor is a traversal of the current pending set, not an append watermark: after exhaustion, start from the beginning on the next refresh cycle while directly refreshing known pending approvals. Cover equal timestamps and later backdated/lower-ID arrivals so approvals cannot be omitted permanently.
+
+During the Task1-to-Task2 transition, an explicit adapter may expose authority plus separately injected optional legacy content/inspection methods to existing MCP composition. Authority Get always returns current control facts; absence of the optional dependency does not fail construction or open history. The new role/authority fixtures use the narrowed authority directly with no optional store. Task2 removes synchronous content publication and Task4 removes this transitional production composition.
+
+Native history uses a dedicated bounded preparation ticket so a rolled-back or uncertain control commit cannot publish a successful state:
+
+```go
+// nativetool: inspection data only; no executable receipt/binding material.
+type HistoryObservation struct {
+    Operation Operation // safe snapshot; Arguments and Result are nil
+    EventKind string
+    EventAt, MaximumEventAt, MetadataExpiresAt time.Time
+}
+type RecordedHistory struct {
+    Scope recording.Scope
+    Observation HistoryObservation
+}
+type HistoryDiscardReason uint8 // rolled back | control commit unknown | owner canceled
+type PreparedHistory interface {
+    Publish() recording.OfferResult
+    Discard(HistoryDiscardReason)
+}
+type HistoryRecorder interface {
+    PrepareNativeHistory(recording.Stamp, HistoryObservation) (PreparedHistory, recording.OfferResult)
+}
+type HistoryWriter interface {
+    PutNativeHistory(context.Context, RecordedHistory) error
+}
+```
+
+Preparation is non-waiting, reserves from the same global budget before copying every string/pointer, and ends the producer borrow before returning. A ticket owns at most 16 KiB including its envelope/reservation overhead. Use a fixed maximum of 32 tickets per outer control transaction (at most 512 KiB, within the shared budget); excess optional projections drop. No unbounded pending slice, history-only requery or pre-commit queue publication. The fixed holder bookkeeping must be accounted with the prepared allocations. Stage the final post-transition snapshot only after all fields of that revision (including bytes/approval/binding) are known from already-required facts. Publish transfers ownership to the existing general worker only after the outer commit succeeds; rollback/commit-then-error discards. Publish/Discard are mutually exclusive and idempotent, including races. Do not count an unknown control commit as an attempted/unconfirmed observation-store write. External control transaction owners that call native revocation must finalize their own tickets after commit or explicitly disable those optional projections; helpers must never publish before their caller commits. Recovery/deletion/close may run with recording disabled.
+
+Persist original `recording_archive_epoch` and `recording_capture_generation` on each control native operation at Receive, using the durable small control facts projected through its already-required Capture/scope read. Carry the pair as `Operation.RecordingScope recording.Scope` through the existing current-operation SELECT. It is a recording/deletion coordinate, never send authority. Native preparation gets the pure Runtime current stamp and proceeds only when `stamp.Current()` and `stamp.Scope() == operation.RecordingScope`; unavailable/mismatched recording coordinates drop history without changing valid native execution. Never assign a fresh epoch to old work after clear, and never add a historical operation-ID token registry. Task5 completes persisted generation publication and token invalidation; Task3 cutover defines the initial legacy-source fence mapping.
+
+The observation writer atomically inserts the immutable operation/revision event snapshot and advances the latest display snapshot only for a higher operation revision. Exact duplicates are idempotent, conflicting same-revision snapshots/scopes fail recording without overwrite, and older revisions never regress latest state. Each snapshot is self-contained after dropped predecessors or control retirement; no FK/read to live operations, no inference of missing transitions. Preserve independently unknown byte counts and original metadata expiry. Shape/recording scope validation belongs to this optional boundary, not a new native permission check. Full dependency/outer-commit-owner evidence is in `/Users/null/Downloads/vibermate-timeout-fix-20261017-a6aswkq0/native-role-task1-preflight.md`.
+
+Provide a native inspection index with a source-local publication position, updated atomically by history publication and (in Task2) content publication. It retains safe immutable identity while any visible history or content survives, without requiring a live control operation. This permits discovery of content-only records when every lifecycle snapshot was dropped; the index is not a fabricated operation event or authority proof. Content publication may advance inspection discovery but must not invent or downgrade logical operation revision/state. Retention/deletion removes an index entry only when no visible optional projection remains.
+
 - [ ] **Step 1: Add role-lock and native safety regressions before source changes.** Hold an actual observation DB writer transaction, then create/attach/renew/authorize a Capture through the control DB before releasing the lock. With no observation event/egress/content rows, execute a native Start/Verify/Finish through the existing real local MCP fixture and assert exactly one send across repeat/replay. Corrupt a required once/approval/delivery proof and assert no send. Pending approvals must appear with zero history events. Native retirement must not retain control rows solely because full recording retention is long.
 - [ ] **Step 2: Record RED under the monolithic store and mandatory native-history loader.** Test completion-before-release is the isolation assertion; timeouts are guards. Do not use a same-file second pool as the implementation.
 - [ ] **Step 3: Implement role constructors and exact schemas.** Move repository ownership to the correct role; keep Raw and semantic graph publication/GC atomic within observations. Refactor shared helper dependencies so observation writes do not borrow a control transaction. New role tests initialize fresh synthetic data with matching layout identities. Existing offline v1/v2 verification remains available for migration/archive readers.
 - [ ] **Step 4: Convert native current state transactions.** Receive/nativeTransition update revision/state/event tuple and maximum event time together. Start atomically consumes approval, claims once, creates delivery and transitions before issuing its process-local receipt. Verify/Finish/recovery/cancellation use only control tuples. Post-commit event/history projection uses the typed recorder and cannot change the committed operation result. Get never loads optional descriptors. Keep inbound/once identities until protocol-safe scope/session retirement permits removal; body-free recent terminal facts use the existing 30-day metadata interval, independent of content retention.
-- [ ] **Step 5: Switch pending-approval discovery to its indexed control query.** Preserve exact approval preview ownership and pagination; no event Page scan. Run targeted native lifecycle/once/receipt/fault/recovery/retirement tests and role isolation normal/race tests. Commit `refactor: separate control storage from native observation history`.
+
+Add behavioral RED/GREEN coverage for no history publication before commit, rollback and commit-then-error ticket disposal, oversized/bulk transaction staging, duplicate Publish/Discard races, terminal-only independent inspection, out-of-order/idempotent/conflicting snapshots, and original-scope rejection across clear. Control must complete while history remains blocked; all reservations remain owned until actual recording I/O returns.
+- [ ] **Step 5: Switch pending-approval discovery to its indexed control query.** Preserve exact approval preview ownership and the control-tuple cursor across HTTP and Flutter; no event Page scan. Test empty/exhausted traversal, equal timestamps, newly pending earlier tuples, foreign/malformed/legacy cursors, and decision/preview refresh. Run targeted native lifecycle/once/receipt/fault/recovery/retirement tests, role isolation normal/race tests and affected Flutter approval/API tests. Commit `refactor: separate control storage from native observation history`.
 
 ### Task 2: Separate Capture display facts, ACP snapshots and usage collection
 
 **Files:**
 - Modify: `internal/runtimepersistence/capture_run_repository.go`, `capture_control_authority.go`, `manual_capture_repository.go`, `capture_activity_test.go`, `acp_observation.go`, `runtime_usage.go`, `usage_query.go`.
 - Modify: `internal/acpobservation/manager.go`, `observation.go`, `internal/capturecontrol/acp.go`, `internal/runlauncher/acp_unix.go`, native content recording in `internal/nativemcp`.
+- Extend Activity's existing typed recording bundle and observation schema with frozen Capture search/display coordinates from admitted facts: managed workspace ID/label and executable label; manual display name. Update the relevant `activity`/Exchange Runtime adapter fields as needed, without a per-event control lookup or retained Admission/receipt.
 - Create: `internal/runtimepersistence/acp_registration.go`, `capture_recording_isolation_test.go`; focused ACP/native content regressions at existing harnesses.
 
 **Interfaces:**
@@ -110,6 +159,8 @@ ACP Start returns the committed marker and known initial empty snapshot; it neve
 
 Usage policy remains reliable control state. Split current runtimeusage Repository into PolicyRepository (`UsagePolicy`, `SetUsagePolicy`), Reader (`ScanUsage`) and the already-defined typed recording producer. An offered usage snapshot carries original `Observation`, trusted frozen attribution, collection-policy revision, original expiry and Stamp. Collection policy is published in memory only after reliable CAS; no new control lookup per recorded event. Observation writer never reconstructs authority by joining Captures/accounts.
 
+Current Activity search currently joins Capture workspace/labels before filtering and pagination. Preserve those predicates by freezing the safe display fields with the Activity record (keyed by Capture kind plus ID), not by querying control after a page is selected. Source display fallback, model/tool manifest fields and current terminal precedence remain. These are optional display/search copies, never authority; legacy reads can use the corresponding frozen tables inside the archived source.
+
 Consume the predecessor's exact `runtimeusage.CollectedObservation` and `CollectedWriter.PutCollectedUsage(context.Context, CollectedObservation) error` interfaces; do not introduce a second usage snapshot DTO. Implement that write solely in the observation role and remove any predecessor worker-side legacy bridge.
 
 - [ ] **Step 1: Add blocked/failing snapshot regressions.** Valid Capture Run and Manual Capture AuthorizeProxy succeed even if first/last-observed recording fails. Temporary Manual Capture expiry and actual revocation still refuse authorization. Real ACP child starts and preserves its successful exit while optional Create/Read/Save storage is unavailable. True revoked capability still stops it; temporary authority-store failure is unavailable, never 403. Native JSON/SSE result bytes arrive before a blocked PutContent is released; arguments/result copies cannot hold execution leases.
@@ -119,10 +170,19 @@ Consume the predecessor's exact `runtimeusage.CollectedObservation` and `Collect
 ```go
 // nativetool: observation only, never authorization for execution.
 type ContentPart string // tool_arguments | tool_result
-type ContentObservation struct {
+type ContentIdentity struct {
     OperationID ID
-    Capture captureidentity.Reference
+    Scope recording.Scope // original operation coordinates, not a fresh current epoch
+    EnvironmentID environment.EnvironmentID
+    EnvironmentRevision environment.Revision
+    EnvironmentDigest environment.CandidateDigest
+    Kind RequestKind // tools_call
+    ToolName, TargetOrigin, CredentialOwner string
     Recording environment.ContentRecordingPolicy
+    CreatedAt, ExpiresAt time.Time // exact original operation creation + frozen retention
+}
+type ContentObservation struct {
+    Identity ContentIdentity
     ObservedAt time.Time
     Part ContentPart
     Body []byte // borrow ends before ObserveNativeContent returns
@@ -135,6 +195,8 @@ type Recorder interface {
     ObserveACP(recording.Stamp, Record) recording.OfferResult
 }
 ```
+
+Native content must survive dropped history snapshots and retired control metadata without a control lookup. Freeze the identity/expiry from the already-required admitted operation facts, require its original Scope to match the supplied Stamp, and never extend expiry at enqueue/write/retry time. Persist each part's immutable envelope and body graph atomically without a live operation/history FK. Exact duplicates succeed; conflicting body/identity/expiry fails recording only. Cover absent history/control, exact original expiry, duplicate retries and stale content after clear. Task3 inspection may expose retained content with explicitly unknown lifecycle when no operation snapshot survived; it must not fabricate terminal execution facts from a body.
 - [ ] **Step 4: Run affected Capture/ACP/native-content/usage tests, focused race ownership checks and launcher regressions; commit.** Commit `fix: keep capture and tool results independent of saved logs`.
 
 ### Task 3: Verified owned role cutover and lazy legacy inspection
@@ -142,6 +204,7 @@ type Recorder interface {
 **Files:**
 - Create: `internal/runtimedata/storage_layout.go`, `storage_cutover.go`, `storage_cutover_test.go`; `internal/runtimepersistence/control_extract.go`, `control_extract_test.go`, `legacy_observation.go`, `legacy_observation_test.go`.
 - Modify: existing schema inspection/migration/snapshot helpers only where reuse is needed; `internal/productruntime/builders.go` storage preparation; history reader composition and cursor codecs.
+- Split immutable Raw source reads/salt from the current reveal-audit sink; update semantic nested cursors, native inspection DTO/API and Flutter native operation cursor/body-cache consumers together. Pending approvals remain on Task1's control-only interface.
 - Preserve the existing desktop progress adapter in `internal/desktopdaemon/daemon.go` and test it with `internal/desktopbootstrap` / Flutter `desktop_bootstrap_budget_test.dart` if that adapter changes.
 - Preserve frozen v1/v2 files and old receipt handling. Add exact v3 schema digest/revision checks.
 
@@ -158,12 +221,30 @@ func PrepareStorageOwned(context.Context, OwnedStorage, time.Time, func(StorageP
 
 Persist `storage-layout.json` (`vibermate-storage-layout/v1`) with matching control `layout_id`. Root `runtime.db` is control revision 3; `observations.db` is optional role revision 1. Originals move to `archives/<archive-id>/runtime.db` plus retained WAL and `archive-manifest.json`. Paths are bounded, clean, relative, regular and under the owned root; symlinks/conflicts fail closed. New cutover receipt uses existing `schema-upgrade-receipt.json` filename with schema `runtime-role-cutover/v1` and phases preparing/ready/archived/activated, making old binaries refuse incomplete cutover. Revision 3 guards completed downgrade.
 
+Inspection adapters remain domain-specific and share only a lazy source catalog/lease and visibility guard. There is one writable current observation source; archives are immutable outside explicit generation-changing maintenance. A constant-size, domain/query-bound opaque cursor uses the source-set identity/generation plus deterministic `(source publication ordinal, local sequence/boundary)`; no vector of every source position is needed. Current source has the last ordinal. Advance over consumed rows even when filtering/dedup emits none, and preserve the current tail on empty native polling. Source-set/maintenance changes invalidate continuation; ordinary current inserts do not. Apply global winner selection before cursor filtering so a later current duplicate cannot expose an obsolete archived projection. Source publication order is traversal order, not an event-time claim. All nested semantic/content cursors must also retain source/generation and their existing immutable root/digest bindings.
+
+Cross-source summaries, usage and search must deduplicate by domain identity before final filtering/grouping/ranking/limits. Existing per-source `ScanUsage` buckets and summary totals have already lost identities and cannot simply be added. Use narrow domain SQL source projections on a pinned inspection-owned connection attaching only read-only observation/archive sources, never control; select the canonical global winner and apply visibility/policy mirrors before producing bounded final results. Preserve authenticated Usage UserID filtering and exact original retention caps. Use the actual pinned driver's per-connection limits (including `sqlite.Limit` for attachments), cancellation/deadlines and bounded inspection concurrency. If source inventory/query resources exceed supported limits, fail that inspection explicitly; never omit sources or claim partial totals are complete. No new scratch-database fallback is required without a demonstrated supported-layout need, and VM program-size/cache settings do not establish a CPU or temp-disk quota.
+
+Raw Reveal/RevealHeader remain audit-before-disclosure inspection actions. Separate immutable source reads and existing-source salt access from `AppendRevealAudit` on the current observation audit sink. Carry trusted source identity/generation plus Capture scope and original envelope/exchange/actor/outcome/time; no disclosed payload in the audit DTO. New source-qualified audit storage cannot use a foreign key to a nonexistent local envelope and must participate in scoped cleanup; never copy a legacy body just to satisfy the old FK. An unavailable audit sink fails only that reveal. Legacy sources remain read-only and are never passed to a manager that creates salt/session/recovery state. Header fingerprint verification uses the selected source's original salt. Release source transactions before credential/audit I/O and recheck visibility/source generation after the audit, before returning any disclosure.
+
+Native inspection is distinct from authority: archived event references only prove the latest operation snapshot actually retained in that archive, not invented per-revision historical states. New terminal-only snapshots and content-only identity entries remain inspectable after control retirement; content-only lifecycle is explicitly unknown. Use opaque `cursor`/`nextCursor` in the native operations HTTP/Flutter API, reject legacy sequence-only continuation explicitly, preserve the inspection index's publication position, and invalidate stale body/page caches on generation/visibility changes. Never route pending approvals through this optional reader. Concrete reader/consumer evidence is in `/Users/null/Downloads/vibermate-timeout-fix-20261017-a6aswkq0/legacy-reader-task3-preflight.md`.
+
 `StoragePhase` reuses the existing desktop wire vocabulary (`storage_preparing`, then `storage_upgrade`) through a type alias or explicit adapter; receipt checkpoints are internal and must not be sent as invented bootstrap phases. Emit preparation before potentially large inspection, and upgrade before the verified history copy so the existing 5-second first-record / 120-second preparation / 15-minute upgrade budgets behave correctly. Preserve a caller's explicit shorter `SchemaUpgradeTimeout` and cancellation; default owned upgrade work is bounded to 15 minutes. Add a controlled slow-copy startup regression proving it uses the upgrade budget without repeatedly extending its deadline.
 
+Keep the planned function signature: the caller validates/encodes an explicit shorter timeout in its context; preparation derives one 15-minute child deadline, taking the earlier bound. Do not reuse the old progress helper's single `emitted` flag, which suppresses `storage_upgrade` after `storage_preparing`. Replace the candidate builder's pre-inspection/rejection path so the first progress notification precedes expensive work.
+
+Use a new narrow role-extraction certificate, not the old `VerifiedMigrationDatabase`/whole-directory snapshot orchestration. Those old APIs hash/sort every optional table and intentionally reject populated normal v2 additions; they remain unchanged for strict reconciliation of an already pending old receipt. New extraction uses explicit released-v1/v2 source adapters: directly project v1's control fields plus reviewed control defaults into final v3, without normalizing the entire monolith. Preserve original DB/WAL bytes, exact source schema, complete typed required projections and independent target counts/digests. Optional Raw/semantic/ACP/usage payloads are preserved as archive bytes, not certified as readable or admitted as authority.
+
+On the private pinned source connection only, the pinned SQLite supports `ignore_check_constraints=ON` for a full structural `main.integrity_check`: it skips CHECK-expression evaluation while preserving btree/freelist/page-reference, index, type and NOT NULL checks. Require the exact sole `ok` result, restore OFF with readback (or close on failure), then validate all required projected row semantics and required FK closure explicitly; final control gets full ordinary integrity/FK/semantic checks with no exemption. This permits supported optional CHECK/FK defects without filtering diagnostic strings. Any structural/index/type/NOT NULL/expression-evaluation failure or malformed required authority still refuses extraction. Generated/indexed expression damage is not an arbitrary salvage promise. Add synthetic fixtures distinguishing these boundaries; the original/archive connection is never opened with mutating validation.
+
+Import final native rows into a private staged schema with only a fixed reviewed allowlist of lifecycle insert/update triggers deferred. Keep type/CHECK/unique/FK correctness and restore the exact final trigger DDL before certification/publication; no public OpenControl option can disable it. Never replay lifecycle methods or fabricate received/events/receipts to import terminal rows. Preserve all once/inbound identities independently of retired operations: valid historical replay barriers can have no extant operation/delivery, while retained started operations require their exact once/delivery/current proofs. Initial recording fence/source mappings are explicit and never enumerate history to invent live Capture authority. Full allowlists, source-proof boundaries, filesystem barrier ordering and tests are in `/Users/null/Downloads/vibermate-timeout-fix-20261017-a6aswkq0/control-cutover-task3-preflight.md`.
+
 - [ ] **Step 1: Add failure-at-every-barrier tests before implementation.** Fixtures include fresh root, v1, v2, retained WAL, pending old migration, bad schemas, missing control with existing layout, path substitution and conflicting destination. Interrupt after receipt, each archive rename, control publication, layout publication and receipt removal; resume with no fresh identity, lost original history or stale-authority fallback. Assert a second normal startup never opens/hashes legacy/observation files. Old binary inspection rejects pending and final layout.
-- [ ] **Step 2: Record RED; implement the certified state machine.** Hold both guards. Before changing originals, durably publish receipt. Verified-copy DB/WAL into owned private staging; normalize v1 only in that private copy using current verified migration code. Stream explicit control projections into fresh staging v3 (DELETE journal/FULL sync); reduce native event history to current tuple/max time and native attempts to required delivery facts. Copy IDs/revisions/digests/secret references/config choices, not replacement defaults or payloads.
+- [ ] **Step 2: Record RED; implement the certified state machine.** Hold both guards. Before changing originals, durably publish receipt. Verified-copy DB/WAL into owned private staging; use the explicit version-specific role projection adapters and narrower source certificate above, without whole-monolith v1 normalization. Stream explicit control projections into fresh staging v3 (DELETE journal/FULL sync); reduce native event history to current tuple/max time and native attempts to required delivery facts. Copy IDs/revisions/digests/secret references/config choices, not replacement defaults or payloads. Test populated v2, optional row/payload defects versus required/structural refusal, retired once/inbound preservation, exact final triggers and fresh-install interruption.
 - [ ] **Step 3: Certify and publish.** Validate exact schema, integrity, FK closure, required native/control invariants and projection logical digests; verify original artifact digests still match. Close/sync staged control. Record ready, idempotently move originals under certified identities, sync directories, publish archive manifest, publish control+layout, record activated, and remove receipt only after final guards/barriers. Cancellation or uncertain durability remains incomplete. Never automatically roll back authority after v3 might have admitted writes.
 - [ ] **Step 4: Implement lazy archive readers and composite inspection.** Open v1/v2 archived sources only on an inspection/admin request with independent read owner/budgets; retained WAL uses normal read-only recovery semantics, not immutable mode. Preserve IDs and salt meaning. Source-aware cursors include archive identity/generation/local sequence and reject stale generations. Merge/deduplicate current+legacy by actual domain identity. Native historical snapshots/ACP/Activity/Usage reads do not consult control from inside a long history transaction. Control visibility/policy snapshots are released before history work and rechecked after; Task 5 supplies mirrors/fences.
+
+Add tests with overlapping local sequences and cross-source duplicate Exchange/operation IDs; global usage top groups that local top-N merging would miss; terminal-winner filtering before paging; native current-tail append and content-only discovery; nested source-qualified semantic cursors; original-salt archived reveal with blocked audit/deletion race; retained-WAL-only history; and stale generation/body-cache reset. Outer HTTP enrichment must perform its final visibility check after all constituent history reads, before publishing results or visitor output.
 - [ ] **Step 5: Run cutover crash/recovery/legacy/WAL and actual query regression fixtures; commit.** Keep raw payloads out of test logs. Commit `feat: cut over runtime storage while preserving legacy evidence`.
 
 ### Task 4: Wire optional recording startup, recovery, finish and health
