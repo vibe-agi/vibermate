@@ -659,7 +659,9 @@ func (value StoredEnvelope) RecordingScope() recording.Scope {
 	}
 	return scope
 }
-func (value StoredEnvelope) Validate() error {
+
+// ValidateMetadata checks the immutable descriptor without loading body bytes.
+func (value StoredEnvelope) ValidateMetadata() error {
 	if value.RecordingFence.ArchiveEpoch > maxSQLiteInteger || value.RecordingFence.CaptureGeneration > maxSQLiteInteger || value.RecordingFence != (recording.Fence{}) && value.RecordingScope().Validate() != nil {
 		return recording.ErrObservationDiscarded
 	}
@@ -727,6 +729,23 @@ func (value StoredEnvelope) Validate() error {
 	if value.Canonicalization != httpCanonicalization {
 		return errors.New("stored raw evidence canonicalization is invalid")
 	}
+	if value.DigestScope == DigestUnavailable {
+		if value.BodySHA256 != [sha256.Size]byte{} {
+			return errors.New("unavailable raw digest contains bytes")
+		}
+	} else if value.BodySHA256 == [sha256.Size]byte{} && value.BodyBytes != 0 {
+		return errors.New("raw evidence body digest is empty")
+	}
+	if value.PayloadReason != "" && !validReason(value.PayloadReason) {
+		return errors.New("raw evidence payload reason is invalid")
+	}
+	return nil
+}
+func (value StoredEnvelope) Validate() error {
+	if err := value.ValidateMetadata(); err != nil {
+		return err
+	}
+
 	if value.PayloadState == PayloadCaptured || value.PayloadState == PayloadTruncated {
 		if len(value.PayloadMetadata) == 0 {
 			return errors.New("captured raw evidence has no payload metadata")
@@ -759,16 +778,6 @@ func (value StoredEnvelope) Validate() error {
 		}
 	} else if len(value.PayloadMetadata) != 0 || len(value.Body) != 0 {
 		return errors.New("uncaptured raw evidence carries a payload")
-	}
-	if value.DigestScope == DigestUnavailable {
-		if value.BodySHA256 != [sha256.Size]byte{} {
-			return errors.New("unavailable raw digest contains bytes")
-		}
-	} else if value.BodySHA256 == [sha256.Size]byte{} && value.BodyBytes != 0 {
-		return errors.New("raw evidence body digest is empty")
-	}
-	if value.PayloadReason != "" && !validReason(value.PayloadReason) {
-		return errors.New("raw evidence payload reason is invalid")
 	}
 	return nil
 }

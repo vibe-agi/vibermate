@@ -969,3 +969,27 @@ CREATE TABLE inspection_mirror_legacy_caps(
  through_sequence INTEGER NOT NULL CHECK(through_sequence>0 AND after_sequence<through_sequence),
  PRIMARY KEY(mirror_generation,archive_id,retention_days)
 ) STRICT;
+
+-- Source-qualified explicit reveal audits have no FK to a local envelope:
+-- their original envelope may exist only in a retained read-only archive.
+CREATE TABLE runtime_raw_inspection_reveal_audits(
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+ layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
+ source_set TEXT NOT NULL CHECK(length(source_set)=64 AND source_set NOT GLOB '*[^0-9a-f]*'),
+ source_generation INTEGER NOT NULL CHECK(source_generation>0),
+ source_id TEXT NOT NULL CHECK(length(CAST(source_id AS BLOB)) BETWEEN 1 AND 128),
+ recording_scope_kind TEXT NOT NULL CHECK(recording_scope_kind IN('','managed_run','manual_capture')),
+ recording_scope_id TEXT NOT NULL CHECK(length(CAST(recording_scope_id AS BLOB))<=128),
+ recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>=0),
+ visibility_revision INTEGER NOT NULL CHECK(visibility_revision>0),
+ usage_policy_revision INTEGER NOT NULL CHECK(usage_policy_revision>0),
+ envelope_id TEXT NOT NULL CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
+ exchange_id TEXT NOT NULL CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+ actor_id TEXT NOT NULL CHECK(length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 512),
+ outcome TEXT NOT NULL CHECK(outcome IN('succeeded','unavailable')),
+ occurred_at_unix_ms INTEGER NOT NULL CHECK(occurred_at_unix_ms>0),
+ CHECK((recording_scope_kind='' AND recording_scope_id='' AND recording_capture_generation=0) OR (recording_scope_kind<>'' AND recording_scope_id<>'' AND recording_capture_generation>0))
+) STRICT;
+CREATE INDEX runtime_raw_inspection_audits_scope ON runtime_raw_inspection_reveal_audits(recording_scope_kind,recording_scope_id,sequence);
+CREATE INDEX runtime_raw_inspection_audits_source ON runtime_raw_inspection_reveal_audits(source_id,source_generation,sequence);

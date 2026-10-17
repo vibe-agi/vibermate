@@ -118,6 +118,9 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, fmt.Errorf("delete Capture raw evidence: %w", err)
 	}
 	deletion.Envelopes = uint64(envelopes)
+	if _, err = transaction.ExecContext(operation, `DELETE FROM runtime_raw_inspection_reveal_audits WHERE recording_scope_kind=? AND recording_scope_id=?`, captureKind, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
 	if _, err := deleteNativeContents(operation, transaction, `operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, captureKind, captureID); err != nil {
 		return CaptureDeletion{}, err
 	}
@@ -351,6 +354,7 @@ var evidenceTables = []string{
 	"runtime_egress_attempts",
 	// Reveal audits cascade from here.
 	"runtime_raw_evidence_envelopes",
+	"runtime_raw_inspection_reveal_audits",
 	"runtime_evidence_bodies",
 	"runtime_evidence_chunks",
 	"runtime_exchange_contents",

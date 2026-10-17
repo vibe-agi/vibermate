@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,5 +200,79 @@ func TestInspectionBoundaryRefusesUnrelatedControlLayout(t *testing.T) {
 	}
 	if _, err = NewInspectionBoundary(control, catalog).Begin(context.Background()); !errors.Is(err, ErrInspectionUnavailable) {
 		t.Fatalf("unrelated authority accepted: %v", err)
+	}
+}
+
+// Controlled fixture publication only. Production bounded export and atomic
+// publication races are Task5; no control read remains open during these writes.
+func seedCompleteInspectionMirror(t *testing.T, current *ObservationStore, control *ControlStore) {
+	t.Helper()
+	ctx := context.Background()
+	snapshot, err := control.ReadInspectionSnapshot(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := control.UsagePolicyRepository().UsagePolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type relation struct {
+		source, columns, target string
+		rows                    [][]any
+	}
+	relations := []relation{{source: "recording_capture_fences", columns: "capture_kind,capture_id,generation,deleted", target: "inspection_mirror_fences"}, {source: "runtime_usage_retention_rules", columns: "retention_days,through_policy_revision", target: "inspection_mirror_usage_caps"}, {source: "runtime_usage_legacy_retention_caps", columns: "archive_id,retention_days,after_sequence,through_sequence", target: "inspection_mirror_legacy_caps"}}
+	for i := range relations {
+		r := &relations[i]
+		rows, err := control.store.reads.QueryContext(ctx, `SELECT `+r.columns+` FROM `+r.source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			v := make([]any, len(strings.Split(r.columns, ",")))
+			dest := make([]any, len(v))
+			for j := range v {
+				dest[j] = &v[j]
+			}
+			if err = rows.Scan(dest...); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			r.rows = append(r.rows, v)
+		}
+		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := current.store.database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"inspection_mirror_active", "inspection_mirror_fences", "inspection_mirror_usage_caps", "inspection_mirror_legacy_caps", "inspection_mirror_generations"} {
+		if _, err = tx.Exec(`DELETE FROM ` + table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var since any
+	if policy.CollectingSince != nil {
+		since = policy.CollectingSince.UnixMilli()
+	}
+	stamp := snapshot.Stamp
+	if _, err = tx.Exec(`INSERT INTO inspection_mirror_generations VALUES(1,?,?,?,?,?,?,?,?,?,?,1)`, stamp.LayoutID, stamp.ArchiveEpoch, stamp.VisibilityRevision, stamp.UsagePolicyRevision, policy.Enabled, policy.RetentionDays, since, len(relations[0].rows), len(relations[1].rows), len(relations[2].rows)); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range relations {
+		for _, row := range r.rows {
+			args := append([]any{1}, row...)
+			if _, err = tx.Exec(`INSERT INTO `+r.target+` VALUES(`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err = tx.Exec(`INSERT INTO inspection_mirror_active VALUES(1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

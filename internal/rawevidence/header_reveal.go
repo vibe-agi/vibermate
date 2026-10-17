@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"golang.org/x/net/http/httpguts"
@@ -23,9 +24,10 @@ func (request HeaderRevealRequest) Validate() error {
 }
 
 type RevealedHeader struct {
-	EnvelopeID string `json:"envelopeId"`
-	Name       string `json:"name"`
-	Value      string `json:"value"`
+	ExpiresAt  time.Time `json:"-"`
+	EnvelopeID string    `json:"envelopeId"`
+	Name       string    `json:"name"`
+	Value      string    `json:"value"`
 }
 
 type HeaderRevealer interface {
@@ -64,11 +66,22 @@ func (manager *Manager) RevealHeader(ctx context.Context, request HeaderRevealRe
 }
 
 func (manager *Manager) readHistoricalHeader(ctx context.Context, record StoredEnvelope, name string, source providerauth.HeaderReader) (RevealedHeader, error) {
-	if record.Layer != LayerProviderEgress || record.AccountID == "" || record.CredentialEpoch == 0 ||
-		!record.ExpiresAt.After(manager.clock.Now()) {
+	return VerifyStoredHeader(ctx, record, name, source, manager.redactor, manager.clock.Now())
+}
+
+// VerifyStoredHeader checks the exact source's historical fingerprint. This
+// produces an undisclosed candidate; its caller must durably audit and recheck
+// visibility before returning it to an inspection client.
+func VerifyStoredHeader(ctx context.Context, record StoredEnvelope, name string, source providerauth.HeaderReader, redactor Redactor, now time.Time) (RevealedHeader, error) {
+	if ctx == nil || source == nil || !redactor.bound() {
 		return RevealedHeader{}, ErrPayloadUnavailable
 	}
-	payload, err := manager.ReadPayload(record)
+
+	if record.Layer != LayerProviderEgress || record.AccountID == "" || record.CredentialEpoch == 0 ||
+		!record.ExpiresAt.After(now) {
+		return RevealedHeader{}, ErrPayloadUnavailable
+	}
+	payload, err := ReadStoredPayload(record, now)
 	if err != nil {
 		return RevealedHeader{}, ErrPayloadUnavailable
 	}
@@ -88,12 +101,12 @@ func (manager *Manager) readHistoricalHeader(ctx context.Context, record StoredE
 		if err != nil {
 			break
 		}
-		actual := manager.redactor.protectedField(field.Name, []string{value}, true).Redacted[0]
+		actual := redactor.protectedField(field.Name, []string{value}, true).Redacted[0]
 		expected := field.Redacted[0]
 		if len(value) > 16<<10 || actual.Bytes != expected.Bytes || !hmac.Equal([]byte(actual.Digest), []byte(expected.Digest)) {
 			break
 		}
-		return RevealedHeader{EnvelopeID: record.EnvelopeID, Name: http.CanonicalHeaderKey(field.Name), Value: value}, nil
+		return RevealedHeader{EnvelopeID: record.EnvelopeID, Name: http.CanonicalHeaderKey(field.Name), Value: value, ExpiresAt: record.ExpiresAt}, nil
 	}
 	return RevealedHeader{}, ErrPayloadUnavailable
 }

@@ -23,14 +23,14 @@ func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	if frozen := sha256.Sum256([]byte(schemaV2SQL)); hex.EncodeToString(frozen[:]) != revision2 {
 		t.Fatal("frozen v2 changed")
 	}
-	for _, role := range []struct{ sql, pin string }{{controlSchemaSQL, "dd257cc78c60e30e7e316dd33071dc5dc784d841b31b98e72ac30656cd1f9889"}, {observationSchemaSQL, "3f13bbf19c9593ea508b644367c8b00794407a70968f8fbe6575013baa5c499a"}} {
+	for _, role := range []struct{ sql, pin string }{{controlSchemaSQL, "dd257cc78c60e30e7e316dd33071dc5dc784d841b31b98e72ac30656cd1f9889"}, {observationSchemaSQL, "5024ae6317d03edbda93acaace0b121c7d9f60e78c9dda440ff9963c7ce4d2cf"}} {
 		digest := sha256.Sum256([]byte(role.sql))
 		if hex.EncodeToString(digest[:]) != role.pin {
 			t.Fatalf("unreleased role schema pin differs: %x", digest)
 		}
 	}
 	digest := sha256.Sum256([]byte(schemaSQL))
-	if schemaRevision != 3 || hex.EncodeToString(digest[:]) != "4f364ee701ae3296a3bd74980e7fd3d57c3fb6bf8fa69d0f71070e44675168ba" {
+	if schemaRevision != 3 || hex.EncodeToString(digest[:]) != "46c34de534bf51da60902bd7ff5743c3bd856b2c3715f6c6c86bdc84e49955e2" {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
 	}
 }

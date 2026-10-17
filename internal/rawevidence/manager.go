@@ -1020,8 +1020,14 @@ func (manager *Manager) ReadPayload(
 	if manager == nil || manager.clock == nil {
 		return Payload{}, errors.New("raw evidence reader is unavailable")
 	}
+	return ReadStoredPayload(record, manager.clock.Now())
+}
+
+// ReadStoredPayload decodes retained bytes without writer startup or mutation.
+// Explicit inspection callers must audit and recheck visibility before disclosure.
+func ReadStoredPayload(record StoredEnvelope, now time.Time) (Payload, error) {
 	// Visibility expires immediately even when physical maintenance is delayed.
-	if !record.ExpiresAt.After(manager.clock.Now()) {
+	if !record.ExpiresAt.After(now) {
 		return Payload{}, ErrEnvelopeNotFound
 	}
 	if record.PayloadState != PayloadCaptured &&

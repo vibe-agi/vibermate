@@ -143,7 +143,7 @@ func findImageFragment(raw json.RawMessage, fingerprint string, depth int, budge
 	return nil
 }
 
-func writeImagePreview(writer http.ResponseWriter, revealed rawevidence.RevealedEnvelope, fingerprint string) {
+func writeImagePreview(writer http.ResponseWriter, revealed rawevidence.RevealedEnvelope, fingerprint string, check func() error) {
 	preview, err := retainedImagePreview(revealed, fingerprint)
 	switch {
 	case errors.Is(err, errImageTooLarge):
@@ -154,6 +154,6 @@ func writeImagePreview(writer http.ResponseWriter, revealed rawevidence.Revealed
 		writeProblem(writer, http.StatusGone, "image_unavailable")
 	default:
 		defer clear(preview.Data)
-		writeJSON(writer, http.StatusOK, preview)
+		writeRawInspectionJSON(writer, preview, check)
 	}
 }
