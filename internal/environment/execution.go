@@ -251,24 +251,26 @@ type RequestFacts struct {
 }
 
 type RequestPlan struct {
-	resolvedEgress      egressprofile.Resolved
-	clientTool          *ClientToolPlan
-	environmentID       EnvironmentID
-	environmentRevision Revision
-	environmentDigest   CandidateDigest
-	contentRecording    ContentRecordingPolicy
-	policySet           PolicySet
-	endpoint            CompiledEndpointPlan
-	protocol            CompiledProtocolPlan
-	operation           protocolspec.ClientOperationDefinition
-	destinationKind     DestinationKind
-	egressProfile       egressprofile.Choice
-	transformPipeline   messagetransform.Pipeline
-	codecPlan           protocolspec.CodecPlan
-	wireProfile         wireprofile.CompiledUpstreamWireProfile
-	upstreamRoute       *CompiledRoutePlan
-	wireVariant         wireprofile.CompiledUpstreamWireVariant
-	originalOrigin      originidentity.ProviderOrigin
+	environmentDigestText string
+	environmentName       string
+	resolvedEgress        egressprofile.Resolved
+	clientTool            *ClientToolPlan
+	environmentID         EnvironmentID
+	environmentRevision   Revision
+	environmentDigest     CandidateDigest
+	contentRecording      ContentRecordingPolicy
+	policySet             PolicySet
+	endpoint              CompiledEndpointPlan
+	protocol              CompiledProtocolPlan
+	operation             protocolspec.ClientOperationDefinition
+	destinationKind       DestinationKind
+	egressProfile         egressprofile.Choice
+	transformPipeline     messagetransform.Pipeline
+	codecPlan             protocolspec.CodecPlan
+	wireProfile           wireprofile.CompiledUpstreamWireProfile
+	upstreamRoute         *CompiledRoutePlan
+	wireVariant           wireprofile.CompiledUpstreamWireVariant
+	originalOrigin        originidentity.ProviderOrigin
 }
 
 func (plan RequestPlan) EnvironmentID() EnvironmentID       { return plan.environmentID }
@@ -805,3 +807,18 @@ func cloneCompiledEndpoint(endpoint CompiledEndpointPlan) CompiledEndpointPlan {
 	}
 	return cloned
 }
+
+func (plan RequestPlan) EnvironmentName() string { return plan.environmentName }
+
+// ObservationReferences borrows scalar facts from the admitted immutable plan;
+// obtaining attribution must not clone executable route/transform collections.
+func (plan RequestPlan) ObservationReferences() (ClientEndpointID, Revision, ClientProtocolPlanID, Revision, UpstreamRouteID, Revision) {
+	var route UpstreamRouteID
+	var revision Revision
+	if plan.upstreamRoute != nil {
+		route, revision = plan.upstreamRoute.id, plan.upstreamRoute.revision
+	}
+	return plan.endpoint.ID(), plan.endpoint.Revision(), plan.protocol.ID(), plan.protocol.Revision(), route, revision
+}
+
+func (plan RequestPlan) EnvironmentDigestText() string { return plan.environmentDigestText }

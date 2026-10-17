@@ -1105,3 +1105,9 @@ func (terminal *providerPendingTerminal) Reject() error {
 	terminal.release = nil
 	return nil
 }
+
+func (terminal *providerPendingTerminal) BorrowDecodedResponse() protocolcore.Response {
+	terminal.mu.Lock()
+	defer terminal.mu.Unlock()
+	return terminal.response
+}

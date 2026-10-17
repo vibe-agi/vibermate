@@ -64,18 +64,10 @@ func New(options Options) (*Manager, error) {
 	}, nil
 }
 
-func (manager *Manager) Record(
-	ctx context.Context,
-	event Event,
-) (Record, error) {
+func (manager *Manager) Prepare(event Event) (Record, error) {
 	if err := event.Validate(); err != nil {
 		return Record{}, err
 	}
-	operation, finish, err := manager.begin(ctx)
-	if err != nil {
-		return Record{}, err
-	}
-	defer finish()
 	identifier := make([]byte, activityIDBytes)
 	if _, err := io.ReadFull(manager.random, identifier); err != nil {
 		return Record{}, fmt.Errorf("generate Activity ID: %w", err)
@@ -118,7 +110,7 @@ func (manager *Manager) Record(
 		transport := event.Transport.Clone()
 		record.Transport = &transport
 	}
-	return manager.repository.Append(operation, record)
+	return record, nil
 }
 
 func (manager *Manager) List(
@@ -319,3 +311,27 @@ func (manager *Manager) notifyLocked() {
 }
 
 var _ Runtime = (*Manager)(nil)
+
+type PreparedRecorder interface {
+	Prepare(Event) (Record, error)
+	RecordPrepared(context.Context, Record) (Record, error)
+}
+
+func (manager *Manager) Record(ctx context.Context, event Event) (Record, error) {
+	record, err := manager.Prepare(event)
+	if err != nil {
+		return Record{}, err
+	}
+	return manager.RecordPrepared(ctx, record)
+}
+func (manager *Manager) RecordPrepared(ctx context.Context, record Record) (Record, error) {
+	if err := record.validatePrepared(); err != nil {
+		return Record{}, err
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	defer finish()
+	return manager.repository.Append(operation, record)
+}

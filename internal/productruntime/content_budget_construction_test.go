@@ -36,7 +36,7 @@ func testContentBudgetFixtureConstruction(t *testing.T, label string, content, o
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := exchangeBuildRequest{bodyAdmission: f.runtime.bodyAdmission, ownerContext: context.Background(), actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: f.runtime.provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: f.runtime.contents, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations}
+	request := exchangeBuildRequest{recorder: f.runtime.recorder, bodyAdmission: f.runtime.bodyAdmission, ownerContext: context.Background(), actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: f.runtime.provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: f.runtime.contents, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations}
 	pipeline, err := buildConcurrentContentFixtureExchange(request)
 	if err != nil {
 		t.Fatal(err)

@@ -16,6 +16,7 @@ import (
 const SystemTransparentID EnvironmentID = "system_transparent"
 
 type EnvironmentSnapshot struct {
+	digestText      string
 	aggregate       Environment
 	digest          CandidateDigest
 	byOrigin        map[string]int
@@ -106,6 +107,7 @@ func (compiler Compiler) compile(input Environment, kind compilationKind) (Envir
 		byOrigin:        make(map[string]int, len(normalized.ClientEndpoints)),
 		compiledOrigins: compiledOrigins, compiled: compiled,
 	}
+	snapshot.digestText = snapshot.digest.String()
 	snapshot.system = system
 	for index, endpoint := range normalized.ClientEndpoints {
 		snapshot.byOrigin[endpoint.ClientOrigin.String()] = index
@@ -426,8 +428,8 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		)
 	}
 	return RequestPlan{
-		environmentID: snapshot.ID(), environmentRevision: snapshot.Revision(),
-		environmentDigest: snapshot.Digest(),
+		environmentID: snapshot.ID(), environmentRevision: snapshot.Revision(), environmentName: snapshot.Name(),
+		environmentDigest: snapshot.Digest(), environmentDigestText: snapshot.digestText,
 		contentRecording:  snapshot.aggregate.ContentRecording,
 		policySet:         snapshot.aggregate.EffectivePolicySet(),
 		endpoint:          endpoint,

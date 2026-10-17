@@ -100,7 +100,8 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 	runs := &frozenRunAuthorizer{
 		want: value,
 		evidence: capturerun.Evidence{
-			RunID:           "run-one",
+			RunID:         "run-one",
+			RuntimeUserID: "user.AAAAAAAAAAAAAAAAAAAAAAAAAAA", RuntimeUsername: "member",
 			ExecutableLabel: "claude",
 			Workspace:       testWorkspace(t),
 		},
@@ -125,6 +126,9 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 		admission.SourceLabel() != "claude" || runs.authorized != 1 ||
 		manuals.authorized != 0 {
 		t.Fatalf("admission = %#v, authorizations = %d", admission, runs.authorized)
+	}
+	if owner, ok := admission.RuntimeUserID(); !ok || owner != "user.AAAAAAAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("authorized evidence lost owner: %q %v", owner, ok)
 	}
 	if runID, ok := admission.CaptureRunID(); !ok || runID != "run-one" {
 		t.Fatalf("CaptureRun identity = %q, %v", runID, ok)
@@ -328,5 +332,15 @@ func TestManualCredentialSelectsOnlyManualAuthority(t *testing.T) {
 			runs.authorized,
 			manuals.authorized,
 		)
+	}
+}
+
+func TestManagedAdmissionPreservesTrustedRuntimeUser(t *testing.T) {
+	admission, err := NewManagedRun(ManagedRunEvidence{CaptureRunID: "run-owned", SourceLabel: "client", RuntimeUserID: "user.AAAAAAAAAAAAAAAAAAAAAAAAAAA", RuntimeUsername: "member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := admission.RuntimeUserID(); !ok || id != "user.AAAAAAAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("trusted owner dropped: %q %v", id, ok)
 	}
 }

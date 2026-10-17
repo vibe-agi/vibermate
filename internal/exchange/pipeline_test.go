@@ -1846,11 +1846,22 @@ func TestManagedResponsesStartGroupsExactCodexSessionBeforeTerminal(t *testing.T
 	}
 
 	starts := observer.startSnapshot()
+	if len(starts) != 3 {
+		t.Fatalf("start Conversations = %#v", starts)
+	}
+	refs := make([]agentconversation.Ref, len(starts))
+	for i := range starts {
+		var err error
+		refs[i], err = starts[i].Conversation.Materialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if len(starts) != 3 ||
-		starts[0].Conversation.Kind != agentconversation.KindMain ||
-		starts[0].Conversation.Evidence != agentconversation.EvidenceExplicitSession ||
-		starts[0].Conversation.ProjectionID != starts[1].Conversation.ProjectionID ||
-		starts[0].Conversation.ProjectionID == starts[2].Conversation.ProjectionID {
+		refs[0].Kind != agentconversation.KindMain ||
+		refs[0].Evidence != agentconversation.EvidenceExplicitSession ||
+		refs[0].ProjectionID != refs[1].ProjectionID ||
+		refs[0].ProjectionID == refs[2].ProjectionID {
 		t.Fatalf("start Conversations = %#v", starts)
 	}
 }

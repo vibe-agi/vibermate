@@ -70,6 +70,7 @@ func (authorizer *compositeAuthorizer) authorizeManaged(
 		Adapter:         evidence.Adapter,
 		Runtime:         evidence.Runtime,
 		RuntimeUsername: evidence.RuntimeUsername,
+		RuntimeUserID:   evidence.RuntimeUserID,
 	})
 	if err != nil {
 		return Admission{}, err

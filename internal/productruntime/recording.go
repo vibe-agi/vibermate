@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"math"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -22,6 +25,9 @@ import (
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
 type recordingItem struct {
+	metadata    *recordedMetadata
+	content     *exchangecontent.OwnedRecord
+	contentSink exchangecontent.SourceRecorder
 	kind        recording.Kind
 	stamp       recording.Stamp
 	connection  connectionevent.Event
@@ -30,6 +36,8 @@ type recordingItem struct {
 	bytes       int64
 }
 type observationRecorder struct {
+	reportFailure      func(string, error)
+	usagePolicy        atomic.Pointer[runtimeusage.CollectionPolicy]
 	budget             *recording.Budget
 	epoch              *recording.Epoch
 	connections        connectionevent.ScopedStore
@@ -217,12 +225,22 @@ func (r *observationRecorder) run() {
 				var err error
 				if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
+				} else if item.kind == recording.Activity {
+					err = item.metadata.persist(r.ctx, r.reportFailure)
+				} else if item.kind == recording.Content {
+					err = item.contentSink.RecordSource(r.ctx, item.content.Source())
+					if err != nil && r.reportFailure != nil {
+						r.reportFailure("response_content", err)
+					}
 				} else {
 					err = r.egress.PutScopedAttempt(r.ctx, item.stamp.Scope(), item.egress)
 				}
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
+					if errors.Is(err, runtimeusage.ErrObservationDiscarded) {
+						outcome = recording.Discarded
+					}
 				}
 			}
 			r.settle(item, outcome)
@@ -231,6 +249,9 @@ func (r *observationRecorder) run() {
 }
 func (r *observationRecorder) settle(item *recordingItem, outcome recording.Settlement) {
 	r.budget.RecordSettlement(item.kind, outcome, uint64(item.bytes))
+	if item.metadata != nil && item.metadata.usage != nil {
+		r.budget.RecordSettlement(recording.Usage, item.metadata.usageOutcome, item.metadata.usageBytes)
+	}
 	item.reservation.Release()
 	r.mu.Lock()
 	r.settled++
@@ -452,4 +473,58 @@ func (r *observationRecorder) prepareScope(ctx context.Context, raw rawEvidenceR
 		return nil, err
 	}
 	return fence, nil
+}
+
+func (r *observationRecorder) offerContent(ctx context.Context, s recording.Stamp, in exchangecontent.OwnInput, limits exchangecontent.SourceLimits, sink exchangecontent.SourceRecorder) (result recording.OfferResult) {
+	var bytes uint64
+	defer func() { r.budget.RecordOffer(recording.Content, result, bytes) }()
+	if !s.Current() {
+		return recording.DroppedStale
+	}
+	if sink == nil {
+		return recording.DroppedUnavailable
+	}
+	r.mu.Lock()
+	closed := r.closed || r.sealed
+	r.mu.Unlock()
+	if closed {
+		return recording.DroppedClosed
+	}
+	reservation, ok := r.budget.TryReserve(recording.Content, int64(unsafe.Sizeof(recordingItem{}))+int64(s.CaptureIDBytes())+1024)
+	if !ok {
+		return recording.DroppedCapacity
+	}
+	owned, err := exchangecontent.OwnWithin(ctx, in, limits, reservation)
+	if err != nil {
+		reservation.Release()
+		if errors.Is(err, exchangecontent.ErrOwnershipCapacity) {
+			return recording.DroppedCapacity
+		}
+		return recording.DroppedInvalid
+	}
+	bytes = owned.RetainedBytes() + uint64(unsafe.Sizeof(recordingItem{}))
+	item := &recordingItem{bytes: int64(bytes), kind: recording.Content, stamp: s, content: owned, contentSink: sink, reservation: reservation}
+	return r.enqueue(item)
+}
+
+// enqueue transfers the reservation only on acceptance; refusal releases it.
+func (r *observationRecorder) enqueue(item *recordingItem) recording.OfferResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.sealed {
+		item.reservation.Release()
+		return recording.DroppedClosed
+	}
+	if !item.stamp.Current() {
+		item.reservation.Release()
+		return recording.DroppedStale
+	}
+	select {
+	case r.queue <- item:
+		r.offered++
+		return recording.Accepted
+	default:
+		item.reservation.Release()
+		return recording.DroppedCapacity
+	}
 }

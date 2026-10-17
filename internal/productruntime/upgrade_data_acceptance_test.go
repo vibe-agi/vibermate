@@ -74,7 +74,6 @@ type task7Fixture struct {
 	annotations *clientannotation.Signer
 	proxy       proxyRuntime
 	transport   *http.Transport
-	diagnostics atomic.Int32
 	calls       atomic.Int32
 	response    string
 	inputs      []string
@@ -231,7 +230,7 @@ func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
 	task7Must(t, e)
 	decisions, e := toolpolicy.New(r.approvals)
 	task7Must(t, e)
-	request := exchangeBuildRequest{ownerContext: ctx, actions: r.offlineHold, accounts: r.accounts, provider: f.provider, toolDecisions: decisions, activities: r.activities, identities: r.conversationIDs, contents: r.contents, usage: r.storage.UsageRepository(), clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: f.annotations, reportObservationFailure: func(stage string, e error) { f.diagnostics.Add(1); t.Errorf("diagnostic %s: %v", stage, e) }}
+	request := exchangeBuildRequest{recorder: r.recorder, ownerContext: ctx, actions: r.offlineHold, accounts: r.accounts, provider: f.provider, toolDecisions: decisions, activities: r.activities, identities: r.conversationIDs, contents: r.contents, usage: r.storage.UsageRepository(), clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: f.annotations}
 	admission, e := captureadmission.NewAuthorizer(r.captureRuns, r.manualCaptures)
 	task7Must(t, e)
 	policy, e := (connectionpolicy.Snapshot{Revision: 1, Mode: connectionpolicy.ModeDenyUnknown, Rules: []connectionpolicy.Rule{{ID: "task7.chatgpt", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("chatgpt.com", 443)}}}).Compile()
@@ -303,7 +302,7 @@ func (f *task7Fixture) send(proxy *url.URL, credential string, inputs []string, 
 		f.t.Fatalf("generation status %d: %s", result.StatusCode, body)
 	}
 	task7Must(f.t, f.pipeline.Drain(f.ctx))
-	if f.diagnostics.Load() != 0 {
+	if recordingFailureCount(f.runtime) != 0 {
 		f.t.Fatal("recording diagnostics")
 	}
 }

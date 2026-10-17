@@ -233,3 +233,50 @@ func TestResponsesResourceAdmissionStrictCompatiblePhaseOrder(t *testing.T) {
 		t.Fatalf("phase/item report order changed: %+v", notices)
 	}
 }
+
+func TestTerminalObservationBorrowSurvivesDecisionWithoutCopy(t *testing.T) {
+	for _, approve := range []bool{false, true} {
+		codec, err := New(DefaultOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, _, err := codec.DecodeClientRequest([]byte(`{"model":"m","input":[{"role":"user","content":"q"}],"stream":true}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream, err := codec.NewProviderStream(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire := []byte("event: response.completed\ndata: " + `{"type":"response.completed","response":{"id":"r","object":"response","status":"completed","model":"m","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"original"}]}]}}` + "\n\n")
+		if _, err = stream.Feed(context.Background(), wire); err != nil {
+			t.Fatal(err)
+		}
+		clear(wire)
+		terminal, err := stream.FinishDecoded(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		copied := terminal.DecodedResponse()
+		copied.Blocks[0].Text = "mutated"
+		if n := testing.AllocsPerRun(10, func() {
+			if terminal.BorrowDecodedResponse().Blocks[0].Text != "original" {
+				t.Fatal("borrow aliases owned caller copy")
+			}
+		}); n != 0 {
+			t.Fatalf("observation copied response before recording admission: %v", n)
+		}
+		borrowed := terminal.BorrowDecodedResponse()
+		if approve {
+			_, err = terminal.Approve()
+		} else {
+			err = terminal.Reject()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if borrowed.Blocks[0].Text != "original" {
+			t.Fatal("decision invalidated observation borrow")
+		}
+	}
+}

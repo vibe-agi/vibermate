@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/accountselector"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -31,6 +32,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
@@ -100,7 +102,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		wantCredential = "Bearer original-long-session"
 	}
 	var calls atomic.Int32
-	var diagnostics atomic.Int32
+	diagnostics := func() int32 { return recordingFailureCount(f.runtime) }
 	var wantBody []byte
 	var items []map[string]string
 	const sentinel = "complete-long-session-final-sentinel-4111"
@@ -301,10 +303,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if concurrent != nil {
 		build = buildConcurrentContentFixtureExchange
 	}
-	pipeline, err := build(exchangeBuildRequest{bodyAdmission: f.runtime.bodyAdmission, ownerContext: ctx, actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: recorder, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations, reportObservationFailure: func(stage string, err error) {
-		diagnostics.Add(1)
-		t.Errorf("recording diagnostic: %s: %v", stage, err)
-	}})
+	pipeline, err := build(exchangeBuildRequest{recorder: f.runtime.recorder, bodyAdmission: f.runtime.bodyAdmission, ownerContext: ctx, actions: f.runtime.offlineHold, accounts: f.runtime.accounts, provider: provider, toolDecisions: decisions, activities: f.runtime.activities, identities: f.runtime.conversationIDs, contents: recorder, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: annotations})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +380,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	}
 	if four != nil {
 		lease.Release()
-		testDefaultFourHTTPExecutions(t, ctx, f, pipeline, body, four, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics.Load() }, count, sentinel)
+		testDefaultFourHTTPExecutions(t, ctx, f, pipeline, body, four, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics() }, count, sentinel)
 		return
 	}
 	if transformedHTTP != nil {
@@ -392,8 +391,8 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		if excess {
 			wantCalls = 0
 		}
-		if calls.Load() != wantCalls || diagnostics.Load() != 0 {
-			t.Fatalf("upstream=%d diagnostics=%d", calls.Load(), diagnostics.Load())
+		if calls.Load() != wantCalls || diagnostics() != 0 {
+			t.Fatalf("upstream=%d diagnostics=%d", calls.Load(), diagnostics())
 		}
 		return
 	}
@@ -401,13 +400,13 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if acceptance != nil {
 		acceptance.measureBody(t, body)
 	}
-	request, err := exchange.NewClientRequest("long-session-4111", plan, operation, body, exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithBodyLease(lease), exchange.WithOriginalHeaders(http.Header{"Authorization": {wantCredential}, "Content-Type": {"application/json"}}))
+	request, err := exchange.NewClientRequest("long-session-4111", plan, operation, body, exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithObservationStamp(f.runtime.recorder.ScopeStamp(captureidentity.Reference{})), exchange.WithBodyLease(lease), exchange.WithOriginalHeaders(http.Header{"Authorization": {wantCredential}, "Content-Type": {"application/json"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var result exchange.Result
 	if concurrent != nil {
-		testContentBudgetConcurrentExecutions(t, ctx, f, pipeline, request, lease, plan, operation, body, wantCredential, concurrent, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics.Load() }, count, sentinel)
+		testContentBudgetConcurrentExecutions(t, ctx, f, pipeline, request, lease, plan, operation, body, wantCredential, concurrent, acceptance.controls, func() int32 { return calls.Load() }, func() int32 { return diagnostics() }, count, sentinel)
 		return
 	}
 	if scenario == "tool_approval" {
@@ -446,11 +445,14 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		if !bytes.Contains(downstream.Bytes(), []byte("new_call")) {
 			t.Fatal("approved response tool was not released")
 		}
+		if err := f.runtime.recorder.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
 		projection, err := f.runtime.ExchangeContents().GetProjection(ctx, "long-session-4111", exchangecontent.RequestViewFull)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(projection.Request.Messages) != count || projection.Request.Messages[0].Blocks[0].CallID != "history_call" || projection.Response == nil || projection.Response.Blocks[0].CallID != "new_call" || diagnostics.Load() != 0 {
+		if len(projection.Request.Messages) != count || projection.Request.Messages[0].Blocks[0].CallID != "history_call" || projection.Response == nil || projection.Response.Blocks[0].CallID != "new_call" || diagnostics() != 0 {
 			t.Fatal("approved response/history evidence incomplete")
 		}
 		return
@@ -522,27 +524,26 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 				t.Fatal("caller/shutdown canceled real borrowed Source context")
 			}
 		}
-		lease.Release()
-		canceled, cancel := context.WithCancel(ctx)
-		cancel()
-		pipelineErr, gateErr := pipeline.Drain(canceled), f.runtime.bodyAdmission.Drain(canceled)
-		held.releaseOnce.Do(func() { close(held.release) })
+
 		var completed execution
 		select {
 		case completed = <-done:
 		case <-ctx.Done():
-			t.Fatal("Source completion watchdog: ", ctx.Err())
+			t.Fatal("forwarding waited for optional sink")
 		}
 		result, err = completed.result, completed.err
-		if !errors.Is(pipelineErr, context.Canceled) || !errors.Is(gateErr, context.Canceled) {
-			t.Fatalf("held real Source was refunded: Pipeline=%v gate=%v", pipelineErr, gateErr)
-		}
+		lease.Release()
 		if err := pipeline.Drain(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.runtime.bodyAdmission.Drain(ctx); err != nil {
 			t.Fatal(err)
 		}
+		held.releaseOnce.Do(func() { close(held.release) })
+		if err := f.runtime.recorder.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+
 	}
 	if scenario == "invalid_tail" || scenario == "original_invalid_tail" || scenario == "transform_expansion" || scenario == "cross_chat_invalid_tail" {
 		if err == nil || calls.Load() != 0 {
@@ -564,6 +565,9 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if acceptance != nil {
 		goRuntime.ReadMemStats(&projectionBefore)
 		projectionStart = time.Now()
+	}
+	if err := f.runtime.recorder.Flush(ctx); err != nil {
+		t.Fatal(err)
 	}
 	projection, err := f.runtime.ExchangeContents().GetProjection(ctx, "long-session-4111", exchangecontent.RequestViewFull)
 	if acceptance != nil {
@@ -596,8 +600,8 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if projection.Response == nil || projection.Response.ID != "resp_long" || len(projection.Response.Blocks) != 1 || projection.Response.Blocks[0].Text != "complete-reply" || !projection.Response.Usage.Output.Known || projection.Response.Usage.Output.Tokens != 1 {
 		t.Fatalf("Store response not complete: %+v", projection.Response)
 	}
-	if diagnostics.Load() != 0 {
-		t.Fatalf("recording diagnostics=%d", diagnostics.Load())
+	if diagnostics() != 0 {
+		t.Fatalf("recording diagnostics=%d", diagnostics())
 	}
 	t.Logf("upstream_calls=1 items=%d tail=%s Store_messages=%d", count, sentinel, len(projection.Request.Messages))
 }
@@ -677,3 +681,8 @@ func (d *longSessionDownstream) Write(_ context.Context, b []byte) (int, error) 
 }
 func (*longSessionDownstream) Keepalive(context.Context) error                     { return nil }
 func (*longSessionDownstream) Abort(context.Context, exchange.FailureNotice) error { return nil }
+
+func recordingFailureCount(r *Runtime) int32 {
+	s := r.recordingBudget.Snapshot()
+	return int32(s.ByKind[recording.Activity].Settlements[recording.Unconfirmed].Records + s.ByKind[recording.Content].Settlements[recording.Unconfirmed].Records + s.ByKind[recording.Usage].Settlements[recording.Unconfirmed].Records)
+}

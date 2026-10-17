@@ -335,6 +335,7 @@ func (pipeline *Pipeline) Execute(
 	} else {
 		if candidate.mode == providerauth.CredentialManaged {
 			result.AccountID = material.account.ID
+			result.AccountName = candidate.account.DisplayName
 			result.AccountRevision = material.account.Revision
 			result.CredentialEpoch = material.account.CredentialEpoch
 		}
@@ -589,7 +590,7 @@ func (pipeline *Pipeline) executeCandidate(
 				}
 				contentPath = candidatePath
 				decodedContent = &decoded
-				decodedForEvidence := decoded.Clone()
+				decodedForEvidence := decoded
 				captured.request = &decodedForEvidence
 				if request.plan.ContentRecording().Mode != environment.ContentRecordingOff {
 					pipeline.observeRequest(request, captured)
@@ -641,7 +642,7 @@ func (pipeline *Pipeline) executeCandidate(
 	if request.admitted == nil {
 		decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
 	}
-	decodedForEvidence := decoded.Clone()
+	decodedForEvidence := decoded
 	captured.request = &decodedForEvidence
 	pipeline.observeRequest(request, captured)
 	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequest(
@@ -1122,26 +1123,26 @@ func (pipeline *Pipeline) observeAttempt(
 	}
 	admission, hasAdmission := request.CaptureAdmission()
 	plan := request.plan
-	endpoint := plan.Endpoint()
-	protocolPlan := plan.ProtocolPlan()
-	routeID, routeRevision := requestPlanRouteRef(plan)
-	conversation := terminalConversationRef(request, captured)
+	endpointID, endpointRevision, protocolID, protocolRevision, routeID, routeRevision := plan.ObservationReferences()
+	conversation := terminalConversationFacts(request, captured)
 	observation := AttemptObservation{
+		EnvironmentName: plan.EnvironmentName(), AccountName: result.AccountName,
+		ObservationStamp:    request.observationStamp,
 		ExchangeID:          request.exchangeID,
 		OccurredAt:          pipeline.now().UTC(),
 		EnvironmentID:       plan.EnvironmentID(),
 		EnvironmentRevision: plan.EnvironmentRevision(),
-		EnvironmentDigest:   plan.EnvironmentDigest().String(),
-		EndpointID:          endpoint.ID(), EndpointRevision: endpoint.Revision(),
-		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
+		EnvironmentDigest:   plan.EnvironmentDigestText(),
+		EndpointID:          endpointID, EndpointRevision: endpointRevision,
+		ProtocolPlanID: protocolID, ProtocolPlanRevision: protocolRevision,
 		RouteID: routeID, RouteRevision: routeRevision,
 		AccountID: result.AccountID, AccountRevision: result.AccountRevision,
 		CredentialEpoch: result.CredentialEpoch, Admission: admission,
 		HasAdmission: hasAdmission, ConnectionID: request.connectionRef,
 		Outcome: result.Outcome, ReasonCode: ReasonOf(resultErr),
-		Presentation: result.Presentation, Transport: result.Transport.Clone(),
+		Presentation: result.Presentation, Transport: result.Transport,
 		Conversation:           conversation,
-		ClientProtocolEvidence: request.ClientProtocolEvidence(),
+		ClientProtocolEvidence: request.clientEvidence,
 	}
 	if captured != nil && captured.response != nil {
 		observation.ProviderResponseID = captured.response.ID
@@ -1176,15 +1177,13 @@ func (pipeline *Pipeline) observeStart(request ClientRequest, body []byte) {
 	}
 	admission, hasAdmission := request.CaptureAdmission()
 	plan := request.plan
-	endpoint := plan.Endpoint()
-	protocolPlan := plan.ProtocolPlan()
-	routeID, routeRevision := requestPlanRouteRef(plan)
-	conversation := agentconversation.Ref{}
-	evidence := request.ClientProtocolEvidence()
+	endpointID, endpointRevision, protocolID, protocolRevision, routeID, routeRevision := plan.ObservationReferences()
+	conversation := agentconversation.ProjectionFacts{}
+	evidence := request.clientEvidence
 	semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
 	if request.admitted != nil {
 		semanticRequest = *request.admitted
-		evidence = slices.Clone(semanticRequest.ProtocolEvidence)
+		evidence = semanticRequest.ProtocolEvidence
 	} else if pipeline.bodyAdmission == nil {
 		if protocolPath, selectErr := pipeline.protocolPaths.Select(
 			plan.CodecPlan(),
@@ -1192,10 +1191,7 @@ func (pipeline *Pipeline) observeStart(request ClientRequest, body []byte) {
 		); selectErr == nil {
 			if decoded, _, decodeErr := protocolPath.Client().DecodeRequest(body); decodeErr == nil {
 				semanticRequest = mergeClientProtocolEvidence(decoded, evidence)
-				evidence = append(
-					[]protocolcore.ProtocolEvidenceValue(nil),
-					semanticRequest.ProtocolEvidence...,
-				)
+				evidence = semanticRequest.ProtocolEvidence
 			}
 		}
 	}
@@ -1206,32 +1202,33 @@ func (pipeline *Pipeline) observeStart(request ClientRequest, body []byte) {
 			captureRunID, _ = admission.CaptureRunID()
 			sourceDisplayName = admission.SourceLabel()
 		}
-		candidate, projectErr := agentconversation.Project(agentconversation.ProjectionInput{
+		candidate, projectErr := agentconversation.PrepareProjection(agentconversation.ProjectionInput{
 			CaptureRunID:      captureRunID,
 			ExchangeID:        request.exchangeID,
 			SourceDisplayName: sourceDisplayName,
 			Request:           &semanticRequest,
 		})
 		if projectErr == nil &&
-			(candidate.Evidence == agentconversation.EvidenceExplicitSession ||
-				candidate.Evidence == agentconversation.EvidenceExplicitActor) {
+			(candidate.Evidence() == agentconversation.EvidenceExplicitSession ||
+				candidate.Evidence() == agentconversation.EvidenceExplicitActor) {
 			conversation = candidate
 		}
 	}
-	if conversation.ProjectionID == "" {
+	if conversation.Empty() {
 		var err error
-		conversation, err = agentconversation.Pending(request.exchangeID)
+		conversation, err = agentconversation.PendingFacts(request.exchangeID)
 		if err != nil {
 			return
 		}
 	}
 	observation := StartObservation{
+		ObservationStamp:    request.observationStamp,
 		ExchangeID:          request.exchangeID,
 		EnvironmentID:       plan.EnvironmentID(),
 		EnvironmentRevision: plan.EnvironmentRevision(),
-		EnvironmentDigest:   plan.EnvironmentDigest().String(),
-		EndpointID:          endpoint.ID(), EndpointRevision: endpoint.Revision(),
-		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
+		EnvironmentDigest:   plan.EnvironmentDigestText(),
+		EndpointID:          endpointID, EndpointRevision: endpointRevision,
+		ProtocolPlanID: protocolID, ProtocolPlanRevision: protocolRevision,
 		RouteID: routeID, RouteRevision: routeRevision,
 		Admission: admission, HasAdmission: hasAdmission,
 		ConnectionID:           request.connectionRef,
@@ -1281,10 +1278,10 @@ func mergeClientProtocolEvidence(
 	return merged
 }
 
-func terminalConversationRef(
+func terminalConversationFacts(
 	request ClientRequest,
 	captured *contentCapture,
-) agentconversation.Ref {
+) agentconversation.ProjectionFacts {
 	admission, admitted := request.CaptureAdmission()
 	captureRunID := ""
 	sourceDisplayName := "ViberMate runtime"
@@ -1300,11 +1297,11 @@ func terminalConversationRef(
 	}
 	// A rejected body does not erase independently validated ingress session
 	// identifiers. Keep the terminal failure in the same session as its start.
-	if decodedRequest == nil && len(request.ClientProtocolEvidence()) != 0 {
-		identity := protocolcore.Request{ProtocolEvidence: request.ClientProtocolEvidence()}
+	if decodedRequest == nil && len(request.clientEvidence) != 0 {
+		identity := protocolcore.Request{ProtocolEvidence: request.clientEvidence}
 		decodedRequest = &identity
 	}
-	ref, err := agentconversation.Project(agentconversation.ProjectionInput{
+	ref, err := agentconversation.PrepareProjection(agentconversation.ProjectionInput{
 		CaptureRunID:      captureRunID,
 		ExchangeID:        request.exchangeID,
 		SourceDisplayName: sourceDisplayName,
@@ -1316,7 +1313,7 @@ func terminalConversationRef(
 	}
 	// A structural projection failure must never erase the terminal Activity.
 	// Fall back to the narrowest provable boundary, which is this Exchange.
-	ref, _ = agentconversation.Project(agentconversation.ProjectionInput{
+	ref, _ = agentconversation.PrepareProjection(agentconversation.ProjectionInput{
 		ExchangeID: request.exchangeID,
 	})
 	return ref
@@ -1343,31 +1340,21 @@ func (pipeline *Pipeline) observeContent(
 		return
 	}
 	plan := request.plan
-	endpoint := plan.Endpoint()
-	protocolPlan := plan.ProtocolPlan()
-	routeID, routeRevision := requestPlanRouteRef(plan)
+	endpointID, endpointRevision, protocolID, protocolRevision, routeID, routeRevision := plan.ObservationReferences()
 	observation := ContentObservation{
-		ExchangeID:      request.exchangeID,
-		CaptureRunID:    request.CaptureRunRef(),
-		ManualCaptureID: request.ManualCaptureRef(),
-		EnvironmentID:   plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(),
-		EnvironmentDigest: plan.EnvironmentDigest().String(),
-		EndpointID:        endpoint.ID(), EndpointRevision: endpoint.Revision(),
-		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
+		ObservationStamp: request.observationStamp,
+		ExchangeID:       request.exchangeID,
+		CaptureRunID:     request.CaptureRunRef(),
+		ManualCaptureID:  request.ManualCaptureRef(),
+		EnvironmentID:    plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(),
+		EnvironmentDigest: plan.EnvironmentDigestText(),
+		EndpointID:        endpointID, EndpointRevision: endpointRevision,
+		ProtocolPlanID: protocolID, ProtocolPlanRevision: protocolRevision,
 		RouteID: routeID, RouteRevision: routeRevision,
 		Recording: plan.ContentRecording(), Request: *captured.request,
 	}
 	if captured.response != nil {
 		observation.Response = captured.response
-	}
-	// Candidate Source observation borrows immutable capture state until this
-	// synchronous call returns. Keep the legacy owned-handoff contract intact.
-	if pipeline.bodyAdmission == nil {
-		observation.Request = captured.request.Clone()
-		if captured.response != nil {
-			response := captured.response.Clone()
-			observation.Response = &response
-		}
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),
@@ -1380,11 +1367,8 @@ func (pipeline *Pipeline) observeContent(
 func requestPlanRouteRef(
 	plan environment.RequestPlan,
 ) (environment.UpstreamRouteID, environment.Revision) {
-	route, exists := plan.UpstreamRoute()
-	if !exists {
-		return "", 0
-	}
-	return route.ID(), route.Revision()
+	_, _, _, _, route, revision := plan.ObservationReferences()
+	return route, revision
 }
 
 func classifyClientRequestField(body []byte, failure error) ClientField {
@@ -1756,7 +1740,7 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
-	responseForEvidence := providerResponse.Clone()
+	responseForEvidence := providerResponse
 	captured.response = &responseForEvidence
 	return nil
 }
@@ -2361,8 +2345,7 @@ func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore
 		if decoder.response == nil {
 			return nil
 		}
-		cloned := decoder.response.Clone()
-		return &cloned
+		return decoder.response
 	}
 	decoder.finished = true
 	if decoder.failed || decoder.path == nil || decoder.request == nil {
@@ -2388,24 +2371,21 @@ func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore
 			reportDeepProtocolFailure("stream_finish", err)
 			return nil
 		}
-		response := terminal.DecodedResponse().Clone()
+		response := terminal.BorrowDecodedResponse()
 		_, _ = terminal.Approve()
 		decoder.response = &response
-		cloned := response.Clone()
-		return &cloned
+		return decoder.response
 	}
 	response, _, err := decoder.path.Backend().DecodeResponse(
-		decoder.request.Clone(),
+		*decoder.request,
 		decoder.body.Bytes(),
 	)
 	if err != nil {
 		reportDeepProtocolFailure("complete_response", err)
 		return nil
 	}
-	cloned := response.Clone()
-	decoder.response = &cloned
-	result := cloned.Clone()
-	return &result
+	decoder.response = &response
+	return decoder.response
 }
 
 func (pipeline *Pipeline) executeStream(
@@ -2952,7 +2932,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	if err := ledger.RecordTerminal(); err != nil {
 		return err
 	}
-	responseForEvidence := terminal.DecodedResponse().Clone()
+	responseForEvidence := terminal.BorrowDecodedResponse()
 	captured.response = &responseForEvidence
 	return nil
 }

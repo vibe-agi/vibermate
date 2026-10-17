@@ -24,7 +24,11 @@ func TestRejectedRequestRetainsExplicitSessionAtTerminal(t *testing.T) {
 	// The request body cannot be decoded. Only the already validated ingress
 	// metadata is available to the terminal projection.
 	request.admission = admission
-	ref := terminalConversationRef(request, nil)
+	facts := terminalConversationFacts(request, nil)
+	ref, err := facts.Materialize()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ref.Evidence != agentconversation.EvidenceExplicitSession {
 		t.Fatalf("terminal request lost session: %#v", ref)
 	}

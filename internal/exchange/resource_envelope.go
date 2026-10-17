@@ -46,29 +46,6 @@ func RequiredExecutionEnvelope(l exchangecontent.SourceLimits) (request, respons
 	}
 	const wire = uint64(providertransport.MaxProviderRequestBytes)
 	const responseWire = uint64(maxCompleteResponseBytes)
-	// Source write descriptors: transcript node, digest strings, map key and
-	// borrowed MessageSource/Header. Two capacities cover map/slice growth.
-	type node struct {
-		digest  string
-		parent  *string
-		message string
-		depth   int
-	}
-	type descriptor struct {
-		source exchangecontent.MessageSource
-		header exchangecontent.MessageHeader
-		slots  int
-	}
-	descriptors, err := checkedEnvelope([2]uint64{100001, 2 * (uint64(unsafe.Sizeof(node{})) + 3*64 + uint64(unsafe.Sizeof(descriptor{})) + uint64(unsafe.Sizeof("")) + 64)})
-	if err != nil {
-		return 0, 0, err
-	}
-	// One32MiB physical row, encoder destination (<2 rows), driver row copy.
-	// No canonical/history-sized buffer is constructed by PutSource.
-	record, err := checkedEnvelope([2]uint64{l.Scratch.PayloadBytes, 1}, [2]uint64{l.Scratch.StructureBytes, 1}, [2]uint64{exchangecontent.MaxEncodedBytes, 4}, [2]uint64{descriptors, 1})
-	if err != nil {
-		return 0, 0, err
-	}
 	// Active selector/transform bridge: escaped JSON grow old/new capacities
 	// (18 wire), body string + canonical input (2 wire). Header maps/arrays,
 	// context JSON/graph and metadata are separately bounded below.
@@ -96,7 +73,7 @@ func RequiredExecutionEnvelope(l exchangecontent.SourceLimits) (request, respons
 	// The larger original/managed branch retains at most six request-sized
 	// owners: admitted, mapped/evidence, decoder request, stream request,
 	// retaining client encoder and tool catalog. They are not cumulative stages.
-	request, err = checkedEnvelope([2]uint64{requestIR, 6}, [2]uint64{wire, 8}, [2]uint64{max(record, script, decode), 1})
+	request, err = checkedEnvelope([2]uint64{requestIR, 6}, [2]uint64{wire, 8}, [2]uint64{max(script, decode), 1})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -113,9 +90,5 @@ func RequiredExecutionEnvelope(l exchangecontent.SourceLimits) (request, respons
 	if err != nil {
 		return 0, 0, err
 	}
-	completion, err := checkedEnvelope([2]uint64{responseIR, 2}, [2]uint64{record, 1})
-	if err != nil {
-		return 0, 0, err
-	}
-	return request, max(stream, completion), nil
+	return request, stream, nil
 }

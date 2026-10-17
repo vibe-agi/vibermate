@@ -750,8 +750,13 @@ func (diagnosis Diagnosis) validate() error {
 }
 
 func (record Record) Validate() error {
-	if record.Sequence <= 0 ||
-		record.OccurredAt.IsZero() ||
+	if record.Sequence <= 0 {
+		return ErrInvalidEvent
+	}
+	return record.validatePrepared()
+}
+func (record Record) validatePrepared() error {
+	if record.OccurredAt.IsZero() ||
 		validateIdentity("Activity ID", record.ID, false) != nil {
 		return ErrInvalidEvent
 	}

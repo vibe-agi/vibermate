@@ -133,6 +133,15 @@ func applyUsageRetention(ctx context.Context, tx *sql.Tx, limit int) (bool, erro
 }
 
 func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observation) error {
+	return store.putUsage(ctx, value, nil)
+}
+func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation, collected *runtimeusage.CollectedObservation) error {
+	discard := func() error {
+		if collected != nil {
+			return runtimeusage.ErrObservationDiscarded
+		}
+		return nil
+	}
 	if err := value.Validate(); err != nil {
 		return err
 	}
@@ -151,60 +160,94 @@ func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observat
 		return err
 	}
 	if !policy.Enabled || policy.CollectingSince == nil || value.StartedAt.Before(*policy.CollectingSince) {
-		return nil
+		return discard()
 	}
-	value.UserID, value.Source = "", "proxy"
-	value.Attribution = &runtimeusage.Attribution{}
-	if value.CaptureRunID != "" {
-		var user, username sql.NullString
-		var localUser, machineID, gitJSON string
-		err := tx.QueryRowContext(operation, `SELECT runtime_user_id,runtime_username,local_user_label,machine_id,git_json
+	if collected == nil {
+		value.UserID, value.Source = "", "proxy"
+		value.Attribution = &runtimeusage.Attribution{}
+		if value.CaptureRunID != "" {
+			var user, username sql.NullString
+			var localUser, machineID, gitJSON string
+			err := tx.QueryRowContext(operation, `SELECT runtime_user_id,runtime_username,local_user_label,machine_id,git_json
 		 FROM capture_runs WHERE run_id=?`, value.CaptureRunID).Scan(&user, &username, &localUser, &machineID, &gitJSON)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		} // A deleted Capture must not reappear through a late callback.
-		if err != nil {
-			return err
-		}
-		value.UserID, value.Source = runtimeuser.UserID(user.String), "local"
-		if value.UserID != "" {
-			value.Source = "member"
-		}
-		run := capturerun.View{RuntimeUserID: value.UserID, RuntimeUsername: username.String, LocalUserLabel: localUser, MachineID: machineID}
-		if err := json.Unmarshal([]byte(gitJSON), &run.Runtime.GitAtLaunch); err != nil {
-			return err
-		}
-		if run.Runtime.GitAtLaunch != nil {
-			if err := run.Runtime.GitAtLaunch.Validate(); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return discard()
+			} // A deleted Capture must not reappear through a late callback.
+			if err != nil {
 				return err
 			}
+			value.UserID, value.Source = runtimeuser.UserID(user.String), "local"
+			if value.UserID != "" {
+				value.Source = "member"
+			}
+			run := capturerun.View{RuntimeUserID: value.UserID, RuntimeUsername: username.String, LocalUserLabel: localUser, MachineID: machineID}
+			if err := json.Unmarshal([]byte(gitJSON), &run.Runtime.GitAtLaunch); err != nil {
+				return err
+			}
+			if run.Runtime.GitAtLaunch != nil {
+				if err := run.Runtime.GitAtLaunch.Validate(); err != nil {
+					return err
+				}
+			}
+			value.Attribution = runtimeusage.CaptureAttribution(run)
+		} else if value.ManualCaptureID != "" {
+			var exists int
+			if err := tx.QueryRowContext(operation, `SELECT count(*) FROM manual_captures WHERE capture_id=?`, value.ManualCaptureID).Scan(&exists); err != nil {
+				return err
+			}
+			if exists == 0 {
+				return discard()
+			}
+			value.Source = "manual"
 		}
-		value.Attribution = runtimeusage.CaptureAttribution(run)
-	} else if value.ManualCaptureID != "" {
-		var exists int
-		if err := tx.QueryRowContext(operation, `SELECT count(*) FROM manual_captures WHERE capture_id=?`, value.ManualCaptureID).Scan(&exists); err != nil {
+		// Snapshot display labels, not credentials or user notes, so account/profile
+		// renames do not relabel past traffic. IDs remain the grouping key.
+		if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT name FROM environment_revisions WHERE environment_id=? AND revision=?),'')`, value.EnvironmentID, value.EnvironmentRevision).Scan(&value.EnvironmentName); err != nil {
 			return err
 		}
-		if exists == 0 {
-			return nil
+		if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT display_name FROM provider_accounts WHERE account_id=?),'')`, value.AccountID).Scan(&value.AccountName); err != nil {
+			return err
 		}
-		value.Source = "manual"
+	} else {
+		// Staged bridge: retain required current policy/deletion checks on this
+		// worker transaction, but never recover or replace frozen attribution.
+		if collected.PolicyRevision > policy.Revision || !collected.Stamp.Current() {
+			return discard()
+		}
+		if value.CaptureRunID != "" || value.ManualCaptureID != "" {
+			var exists int
+			if err := tx.QueryRowContext(operation, `SELECT (SELECT count(*) FROM capture_runs WHERE run_id=?)+(SELECT count(*) FROM manual_captures WHERE capture_id=?)`, value.CaptureRunID, value.ManualCaptureID).Scan(&exists); err != nil {
+				return err
+			}
+			if exists == 0 {
+				return discard()
+			}
+		}
 	}
-	// Snapshot display labels, not credentials or user notes, so account/profile
-	// renames do not relabel past traffic. IDs remain the grouping key.
-	if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT name FROM environment_revisions WHERE environment_id=? AND revision=?),'')`, value.EnvironmentID, value.EnvironmentRevision).Scan(&value.EnvironmentName); err != nil {
-		return err
-	}
-	if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT display_name FROM provider_accounts WHERE account_id=?),'')`, value.AccountID).Scan(&value.AccountName); err != nil {
-		return err
+	expiry := value.OccurredAt.Add(time.Duration(policy.RetentionDays) * 24 * time.Hour)
+	if collected != nil && collected.ExpiresAt.Before(expiry) {
+		expiry = collected.ExpiresAt
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_observations(exchange_id,capture_run_id,manual_capture_id,runtime_user_id,occurred_at_unix_ms,expires_at_unix_ms,observation_json) VALUES(?,?,?,?,?,?,?) ON CONFLICT(exchange_id) DO NOTHING`,
-		value.ExchangeID, value.CaptureRunID, value.ManualCaptureID, value.UserID, value.OccurredAt.UnixMilli(), value.OccurredAt.Add(time.Duration(policy.RetentionDays)*24*time.Hour).UnixMilli(), string(data)); err != nil {
+		value.ExchangeID, value.CaptureRunID, value.ManualCaptureID, value.UserID, value.OccurredAt.UnixMilli(), expiry.UnixMilli(), string(data)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// PutCollectedUsage is the typed worker-side bridge. The storage-role split
+// replaces this shared control transaction with the observation-only writer
+// and persisted consent/generation overlays; no producer invokes these queries.
+func (store *Store) PutCollectedUsage(ctx context.Context, collected runtimeusage.CollectedObservation) error {
+	if collected.PolicyRevision < 1 || !collected.ExpiresAt.After(collected.Value.OccurredAt) {
+		return errors.New("invalid collected usage")
+	}
+	if !collected.Stamp.Current() {
+		return runtimeusage.ErrObservationDiscarded
+	}
+	return store.putUsage(ctx, collected.Value, &collected)
 }

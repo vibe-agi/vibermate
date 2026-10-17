@@ -1032,7 +1032,6 @@ func ValidateProtocolEvidence(values []ProtocolEvidenceValue) error {
 	if len(values) > MaxProtocolEvidenceValues {
 		return errors.New("protocol evidence count is invalid")
 	}
-	seenNames := make(map[string]struct{}, len(values))
 	previous := ""
 	for index, value := range values {
 		if err := value.Validate(); err != nil {
@@ -1041,10 +1040,6 @@ func ValidateProtocolEvidence(values []ProtocolEvidenceValue) error {
 		if index > 0 && value.Name <= previous {
 			return errors.New("protocol evidence is not canonically ordered")
 		}
-		if _, duplicate := seenNames[value.Name]; duplicate {
-			return errors.New("protocol evidence name is duplicated")
-		}
-		seenNames[value.Name] = struct{}{}
 		previous = value.Name
 	}
 	return nil

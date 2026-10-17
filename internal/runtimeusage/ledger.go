@@ -3,6 +3,7 @@ package runtimeusage
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"strings"
 	"time"
 	"unicode"
@@ -112,3 +113,17 @@ type Repository interface {
 	SetUsagePolicy(context.Context, CollectionPolicy, time.Time) (CollectionPolicy, error)
 	ScanUsage(context.Context, AggregationQuery, runtimeuser.UserID, time.Time, func(UsageBucket) error) (AggregationResult, error)
 }
+
+// CollectedObservation freezes admitted attribution and the successful policy
+// revision at offer time. Stamp grants no execution or read authority.
+type CollectedObservation struct {
+	Value          Observation
+	PolicyRevision int64
+	ExpiresAt      time.Time
+	Stamp          recording.Stamp
+}
+type CollectedWriter interface {
+	PutCollectedUsage(context.Context, CollectedObservation) error
+}
+
+var ErrObservationDiscarded = errors.New("optional usage observation discarded")

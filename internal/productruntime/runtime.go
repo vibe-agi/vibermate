@@ -360,6 +360,7 @@ func startWithBuilders(
 		recorderBuilder = newObservationRecorder
 	}
 	recorder := recorderBuilder(ownerContext, recordingBudget, storageResult.store.ConnectionEventRepository().(connectionevent.ScopedStore), egressRepository.(egressaudit.ScopedAttemptStore))
+	recorder.reportFailure = tracker.failRecording
 	cleanups.register("observation recorder", func(ctx context.Context) error {
 		err := recorder.Shutdown(ctx)
 		if err != nil {
@@ -367,6 +368,15 @@ func startWithBuilders(
 		}
 		return err
 	})
+	usagePolicy, err := storageResult.store.UsageRepository().UsagePolicy(ctx)
+	if err != nil {
+		return fail("usage collection policy", err)
+	}
+	if err = usagePolicy.Validate(); err != nil {
+		return fail("usage collection policy", err)
+	}
+	recorder.publishUsagePolicy(usagePolicy)
+
 	runtimeEgress := newRuntimeEgressRepository(
 		egressRepository,
 		tracker,
@@ -768,13 +778,12 @@ func startWithBuilders(
 		identities:               storageResult.store.ConversationIdentityRepository(),
 		contents:                 contents,
 		usage:                    storageResult.store.UsageRepository(),
+		recorder:                 recorder,
 		clock:                    options.Clock,
 		hold:                     options.ExchangeHold,
 		annotations:              clientAnnotations,
 		rawEvidence:              rawEvidence,
 		reportRawEvidenceFailure: runtimeEgress.ReportRawEvidenceFailure,
-		// Recording gaps are warnings, not a reason to revoke Runtime readiness.
-		reportObservationFailure: tracker.failRecording,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err
@@ -1178,7 +1187,9 @@ func (r *Runtime) ConversationProjectionWriter() activity.ConversationProjection
 
 // ExchangeContents returns the separate, retention-bound semantic evidence
 // reader. Body-free Activity and egress journals never expose this content.
-func (r *Runtime) UsageRepository() runtimeusage.Repository { return r.storage.UsageRepository() }
+func (r *Runtime) UsageRepository() runtimeusage.Repository {
+	return recordingUsageRepository{Repository: r.storage.UsageRepository(), recorder: r.recorder}
+}
 
 func (r *Runtime) ExchangeContents() exchangecontent.Reader {
 	return r.contents

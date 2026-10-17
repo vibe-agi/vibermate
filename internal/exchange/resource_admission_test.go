@@ -248,7 +248,7 @@ func TestResourceEnvelopeBoundariesAndOverflow(t *testing.T) {
 	if err := policy.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*ResourcePolicy){func(p *ResourcePolicy) { p.RequestBytes-- }, func(p *ResourcePolicy) { p.ResponseBytes-- }, func(p *ResourcePolicy) { p.Content.Scratch.PayloadBytes-- }, func(p *ResourcePolicy) { p.Content.Scratch.StructureBytes-- }, func(p *ResourcePolicy) { p.ActiveBytes = p.SlotBytes - 1 }, func(p *ResourcePolicy) { p.Content.Semantic.Response.PayloadBytes = math.MaxInt64 }} {
+	for _, mutate := range []func(*ResourcePolicy){func(p *ResourcePolicy) { p.RequestBytes-- }, func(p *ResourcePolicy) { p.ResponseBytes-- }, func(p *ResourcePolicy) { p.ActiveBytes = p.SlotBytes - 1 }, func(p *ResourcePolicy) { p.Content.Semantic.Response.PayloadBytes = math.MaxInt64 }} {
 		copy := policy
 		mutate(&copy)
 		if err := copy.Validate(); err == nil {
@@ -399,5 +399,56 @@ func TestBodyLeaseValueCopiesShareReleaseAndExecutionState(t *testing.T) {
 	}
 	if err := copy.reserveConstructor(1); err == nil {
 		t.Fatal("copied released lease constructed a request")
+	}
+}
+
+func TestOptionalRecordingLimitsDoNotReduceExecutionConcurrency(t *testing.T) {
+	original := admissionTestPolicy(2)
+	small := original
+	small.Content.RetainedBytes, small.Content.CanonicalBytes, small.Content.StructureBytes = 1, 1, 1
+	small.Content.Scratch.PayloadBytes, small.Content.Scratch.StructureBytes = 1, 1
+	for _, policy := range []ResourcePolicy{original, small} {
+		request, response, err := RequiredExecutionEnvelope(policy.Content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request != original.RequestBytes || response != original.ResponseBytes {
+			t.Fatalf("optional recording changed execution envelope: %d/%d", request, response)
+		}
+		gate, err := NewBodyAdmission(policy)
+		if err != nil {
+			t.Fatalf("optional recording rejected execution: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		first, err := gate.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := gate.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first.Release()
+		second.Release()
+		cancel()
+	}
+}
+
+func TestFrozenExecutionPlanCarriesEnvironmentDisplayName(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{destination: environment.DestinationKindOriginal, backend: protocolspec.DialectAnthropicMessages})
+	if got := plan.EnvironmentName(); got != "Test" {
+		t.Fatalf("compiled display name dropped: %q", got)
+	}
+}
+
+func TestFrozenPlanDigestTextMatchesWithoutProducerAllocation(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{destination: environment.DestinationKindOriginal, backend: protocolspec.DialectAnthropicMessages})
+	want := plan.EnvironmentDigest().String()
+	if n := testing.AllocsPerRun(10, func() {
+		if plan.EnvironmentDigestText() != want {
+			t.Fatal("cached digest differs from admitted digest")
+		}
+	}); n != 0 {
+		t.Fatalf("producer allocated digest: %v", n)
 	}
 }

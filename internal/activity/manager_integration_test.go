@@ -307,3 +307,32 @@ func shutdownStore(t *testing.T, store *runtimepersistence.Store) {
 		t.Fatal(err)
 	}
 }
+
+func TestPreparedActivityHasProducerIdentityAndTimeBeforePersistence(t *testing.T) {
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	manager, err := activity.New(activity.DefaultOptions(store.ActivityRepository()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := manager.Prepare(activity.Event{Kind: activity.KindEnvironmentApplied, EnvironmentID: "env", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), SubjectID: "env", Status: activity.StatusSucceeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.ID == "" || prepared.OccurredAt.IsZero() || prepared.Sequence != 0 {
+		t.Fatalf("not prepared: %+v", prepared)
+	}
+	page, err := manager.List(context.Background(), activity.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatal("Prepare performed persistence")
+	}
+	stored, err := manager.RecordPrepared(context.Background(), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != prepared.ID || !stored.OccurredAt.Equal(prepared.OccurredAt) || stored.Sequence == 0 {
+		t.Fatalf("identity changed: %+v", stored)
+	}
+}

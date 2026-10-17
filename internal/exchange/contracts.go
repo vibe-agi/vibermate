@@ -1150,6 +1150,9 @@ type AccountLeaseAuthority interface {
 }
 
 type AttemptObservation struct {
+	EnvironmentName        string
+	AccountName            string
+	ObservationStamp       recording.Stamp
 	ProviderErrorCode      string
 	StartedAt              time.Time
 	OccurredAt             time.Time
@@ -1180,12 +1183,13 @@ type AttemptObservation struct {
 	ClientPath             string
 	Presentation           providertransport.WirePresentationEvidence
 	Transport              transportprofile.Evidence
-	Conversation           agentconversation.Ref
+	Conversation           agentconversation.ProjectionFacts
 	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 	ProviderResponseID     string
 }
 
 type StartObservation struct {
+	ObservationStamp       recording.Stamp
 	ExchangeID             string
 	EnvironmentID          environment.EnvironmentID
 	EnvironmentRevision    environment.Revision
@@ -1199,7 +1203,7 @@ type StartObservation struct {
 	Admission              captureadmission.Admission
 	HasAdmission           bool
 	ConnectionID           string
-	Conversation           agentconversation.Ref
+	Conversation           agentconversation.ProjectionFacts
 	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 }
 
@@ -1212,6 +1216,7 @@ type ExchangeObserver interface {
 // Exchange. It is independent from AttemptObservation so body-free audit
 // consumers cannot accidentally gain access to messages or tool arguments.
 type ContentObservation struct {
+	ObservationStamp     recording.Stamp
 	ExchangeID           string
 	CaptureRunID         string
 	ManualCaptureID      string
@@ -1606,6 +1611,7 @@ const (
 // Result is evidence for one logical Exchange and its provider attempts. It
 // does not expose the Environment plan handle or provider response body.
 type Result struct {
+	AccountName          string
 	ExchangeID           string
 	EnvironmentID        string
 	EnvironmentRevision  environment.Revision
