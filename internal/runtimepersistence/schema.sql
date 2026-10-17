@@ -1687,3 +1687,25 @@ CREATE TABLE recording_capture_fences(
  PRIMARY KEY(capture_kind,capture_id)
 ) STRICT;
 INSERT INTO runtime_storage_state VALUES(1,'transitional-monolith',1,1);
+
+CREATE TABLE acp_registrations(
+ run_id TEXT PRIMARY KEY REFERENCES capture_runs(run_id) ON DELETE CASCADE,
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0)
+) STRICT;
+
+CREATE TABLE acp_snapshots(
+ run_id TEXT NOT NULL CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0),
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ snapshot BLOB NOT NULL CHECK(length(snapshot)<=786432),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ final INTEGER NOT NULL CHECK(final IN(0,1)),
+ PRIMARY KEY(run_id,archive_epoch,capture_generation)
+) STRICT;

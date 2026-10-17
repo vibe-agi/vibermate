@@ -1008,7 +1008,8 @@ func startWithBuilders(
 		return nil
 	})
 	cleanups.register("retained capture authority admission", func(context.Context) error { retained.BeginShutdown(); return nil })
-	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPObservations(), captureRuns, assignments, environments, options.Clock)
+	recorder.acp = storageResult.store
+	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPRegistrations(), captureRuns, assignments, environments, options.Clock, acpobservation.RecordingOptions{Recorder: recorder, Scopes: recorder, Reader: storageResult.store.ACPSnapshots()})
 	if err != nil {
 		return fail("ACP observations", err)
 	}

@@ -2,6 +2,7 @@ package runtimepersistence
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"time"
@@ -49,8 +50,25 @@ func (s *ObservationStore) CaptureObservation(ctx context.Context, scope recordi
 // Called after successful admission/commit with already loaded facts. This
 // pure recording port performs no storage work and its refusal is irrelevant
 // to the authority result.
-func observeCapture(observer recording.CaptureObserver, scopes recording.ScopeIssuer, capture captureidentity.Reference, revision uint64, at time.Time) {
+func observeCapture(observer recording.CaptureObserver, scopes recording.ScopeIssuer, capture captureidentity.Reference, revision uint64, at time.Time, original recording.Fence) {
 	if observer != nil && scopes != nil {
-		observer.ObserveCapture(scopes.ScopeStamp(capture), recording.CaptureObservation{ObservedAt: at, CredentialRevision: revision})
+		stamp := scopes.ScopeStamp(capture)
+		if !stamp.Current() || stamp.Fence() != original || !stamp.MatchesCapture(capture) {
+			return
+		}
+		observer.ObserveCapture(stamp, recording.CaptureObservation{ObservedAt: at, CredentialRevision: revision})
 	}
 }
+
+// The same required authority SELECT freezes these scalar coordinates. Missing
+// optional coordinates suppress evidence; they do not create authority.
+type captureObservationScan struct {
+	row   *sql.Row
+	fence *recording.Fence
+}
+
+func (s captureObservationScan) Scan(dest ...any) error {
+	return s.row.Scan(append(dest, &s.fence.ArchiveEpoch, &s.fence.CaptureGeneration)...)
+}
+
+const captureObservationEpoch = `COALESCE((SELECT archive_epoch FROM runtime_storage_state WHERE singleton=1),0)`

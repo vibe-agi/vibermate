@@ -5,6 +5,7 @@ package acpobservation
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"math"
 	"unicode/utf8"
 
@@ -62,6 +63,7 @@ type Snapshot struct {
 }
 
 type Record struct {
+	Scope           recording.Scope                    `json:"-"`
 	RunID           string                             `json:"runId"`
 	Policy          environment.ContentRecordingPolicy `json:"policy"`
 	ExpiresAtMillis int64                              `json:"expiresAtMillis"`
@@ -88,9 +90,9 @@ func (snapshot Snapshot) Validate(content bool) error {
 		(snapshot.Final != (snapshot.ExitCode != nil)) || (snapshot.ExitCode != nil && (*snapshot.ExitCode < 0 || *snapshot.ExitCode > 255)) {
 		return ErrInvalid
 	}
-	sessions := map[string]bool{}
-	for _, session := range snapshot.Sessions {
-		if session.ID == "" || !textValid(session.ID, 512) || !textValid(session.CWD, 4096) || sessions[session.ID] {
+
+	for i, session := range snapshot.Sessions {
+		if session.ID == "" || !textValid(session.ID, 512) || !textValid(session.CWD, 4096) {
 			return ErrInvalid
 		}
 		switch session.Operation {
@@ -98,12 +100,23 @@ func (snapshot Snapshot) Validate(content bool) error {
 		default:
 			return ErrInvalid
 		}
-		sessions[session.ID] = true
+		for j := 0; j < i; j++ {
+			if snapshot.Sessions[j].ID == session.ID {
+				return ErrInvalid
+			}
+		}
 	}
 	total := 0
 	var previous uint64
 	for _, prompt := range snapshot.Prompts {
-		if prompt.Sequence <= previous || !sessions[prompt.SessionID] || !textValid(prompt.UserText, MaxTextBytes) || !textValid(prompt.AgentText, MaxTextBytes) {
+		found := false
+		for _, session := range snapshot.Sessions {
+			if session.ID == prompt.SessionID {
+				found = true
+				break
+			}
+		}
+		if prompt.Sequence <= previous || !found || !textValid(prompt.UserText, MaxTextBytes) || !textValid(prompt.AgentText, MaxTextBytes) {
 			return ErrInvalid
 		}
 		previous = prompt.Sequence
@@ -123,6 +136,47 @@ func (snapshot Snapshot) Validate(content bool) error {
 		total += len(prompt.UserText) + len(prompt.AgentText)
 	}
 	if total > MaxTextBytes || (!content && total != 0) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+// Registration is committed control state; its presence is independent of any
+// retained ACP snapshot. The fence is the original registration coordinates.
+type Registration struct {
+	RunID           string
+	Policy          environment.ContentRecordingPolicy
+	ExpiresAtMillis int64
+	Fence           recording.Fence
+}
+type RegistrationRepository interface {
+	Register(context.Context, Registration, int64) (Registration, error)
+	Registration(context.Context, string, int64) (Registration, error)
+	Markers(context.Context, []string) (map[string]bool, error)
+}
+type Recorder interface {
+	ObserveACP(recording.Stamp, Record) recording.OfferResult
+}
+type Writer interface {
+	PutACP(context.Context, Record) error
+}
+type Reader interface {
+	Read(context.Context, string, int64) (Record, error)
+}
+type RecordingOptions struct {
+	Recorder Recorder
+	Scopes   recording.ScopeIssuer
+	Reader   Reader
+}
+
+func (snapshot Snapshot) ValidatePolicy(policy environment.ContentRecordingPolicy) error {
+	if policy.Validate() != nil {
+		return ErrInvalid
+	}
+	if err := snapshot.Validate(policy.Mode == environment.ContentRecordingFull); err != nil {
+		return err
+	}
+	if policy.Mode == environment.ContentRecordingOff && (len(snapshot.Sessions) != 0 || len(snapshot.Prompts) != 0 || snapshot.Agent != (Agent{}) || snapshot.ProtocolVersion != 0 || snapshot.NeedsAuthentication) {
 		return ErrInvalid
 	}
 	return nil

@@ -945,3 +945,12 @@ CREATE TABLE recording_capture_fences(
 INSERT INTO runtime_usage_policy VALUES(1,0,90,1,NULL);
 
 INSERT INTO runtime_egress_default(singleton,revision) VALUES(1,1);
+
+CREATE TABLE acp_registrations(
+ run_id TEXT PRIMARY KEY REFERENCES capture_runs(run_id) ON DELETE CASCADE,
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0)
+) STRICT;

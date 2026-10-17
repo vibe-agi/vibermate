@@ -156,9 +156,6 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 			observer.Finish(done.result.ExitCode, done.err != nil)
 			if err := save(context.Background(), observer.Snapshot()); err != nil {
 				fmt.Fprintln(stderr, "vibermate: ACP finished, but the final observation could not be saved.")
-				if done.err == nil {
-					done.err = &acpProcessError{"final observation", err}
-				}
 			}
 			if authorityFailure != nil {
 				return max(done.result.ExitCode, 1), authorityFailure

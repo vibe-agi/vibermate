@@ -230,9 +230,10 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		return capturerun.DurableRecord{}, err
 	}
 	defer finish()
-	record, err := scanCaptureRun(repository.database.QueryRowContext(
+	var original recording.Fence
+	record, err := scanCaptureRun(captureObservationScan{row: repository.database.QueryRowContext(
 		operation,
-		`SELECT `+captureRunColumns+`
+		`SELECT `+captureRunColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='managed_run' AND capture_id=capture_runs.run_id AND deleted=0),0)
 		 FROM capture_runs
 		 WHERE proxy_capability_hash = ?
 		   AND state IN ('created', 'attached')
@@ -240,7 +241,7 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		digest[:],
 		toUnixMillis(now),
 		toUnixMillis(now),
-	))
+	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
 		return capturerun.DurableRecord{}, capturerun.ErrCapabilityRejected
 	}
@@ -249,7 +250,7 @@ func (repository *captureRunRepository) AuthorizeProxy(
 	}
 	// Authentication depends only on current control facts. Traffic display is
 	// optional evidence published by the admitted connection/exchange producer.
-	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, 0, now)
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, 0, now, original)
 	return record, nil
 }
 

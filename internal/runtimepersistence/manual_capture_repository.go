@@ -338,14 +338,15 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture expiry result: %w", err)
 	}
-	record, err := scanManualCapture(transaction.QueryRowContext(
+	var original recording.Fence
+	record, err := scanManualCapture(captureObservationScan{row: transaction.QueryRowContext(
 		operation,
-		`SELECT `+manualCaptureColumns+`
+		`SELECT `+manualCaptureColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='manual_capture' AND capture_id=manual_captures.capture_id AND deleted=0),0)
 		 FROM manual_captures WHERE proxy_credential_hash = ?
 		 AND state = 'active'
 		 AND (lifetime = 'until_revoked' OR expires_at_unix_ms > ?)`,
 		digest[:], toUnixMillis(now),
-	))
+	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
 		if expired > 0 {
 			if err := transaction.Commit(); err != nil {
@@ -360,7 +361,7 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	if err := transaction.Commit(); err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture authorization: %w", err)
 	}
-	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now)
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now, original)
 	return record, nil
 }
 

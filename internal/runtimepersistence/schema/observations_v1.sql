@@ -897,3 +897,16 @@ CREATE TABLE capture_observations(
  last_observed_at_unix_ms INTEGER NOT NULL CHECK(last_observed_at_unix_ms>=first_observed_at_unix_ms),
  PRIMARY KEY(capture_kind,capture_id,archive_epoch,capture_generation,credential_revision)
 ) STRICT;
+
+CREATE TABLE acp_snapshots(
+ run_id TEXT NOT NULL CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0),
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ snapshot BLOB NOT NULL CHECK(length(snapshot)<=786432),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ final INTEGER NOT NULL CHECK(final IN(0,1)),
+ PRIMARY KEY(run_id,archive_epoch,capture_generation)
+) STRICT;

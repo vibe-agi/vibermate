@@ -17,12 +17,17 @@ import (
 
 type captureRecordingProbe struct {
 	epoch        *recording.Epoch
+	advance      bool
+	generation   uint64
 	scopes       []recording.Scope
 	observations []recording.CaptureObservation
 }
 
 func (p *captureRecordingProbe) ScopeStamp(c captureidentity.Reference) recording.Stamp {
-	stamp, _ := recording.NewStamp(p.epoch, c, recording.Fence{ArchiveEpoch: 1, CaptureGeneration: 1})
+	if p.advance {
+		p.epoch.Advance(2)
+	}
+	stamp, _ := recording.NewStamp(p.epoch, c, recording.Fence{ArchiveEpoch: p.epoch.Value(), CaptureGeneration: max(p.generation, 1)})
 	return stamp
 }
 func (p *captureRecordingProbe) ObserveCapture(stamp recording.Stamp, v recording.CaptureObservation) recording.OfferResult {
@@ -86,6 +91,25 @@ func TestCaptureAuthorizationIgnoresFailedDisplayWrites(t *testing.T) {
 	}
 	if len(probe.observations) != 2 || probe.observations[0].CredentialRevision != 0 || probe.observations[1].CredentialRevision != 1 || probe.scopes[0].Capture.ID != grant.Run.ID || probe.scopes[1].Capture.ID != active.Capture.ID {
 		t.Fatalf("admitted authentication observations: %+v %+v", probe.scopes, probe.observations)
+	}
+	probe.advance = true
+	if _, err := runs.AuthorizeProxy(ctx, grant.ProxyCapability); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manual.AuthorizeProxy(ctx, active.Credential); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.observations) != 2 {
+		t.Fatal("old admission relabeled with a new recording epoch")
+	}
+	probe.advance = false
+	probe.epoch, _ = recording.NewEpoch(1)
+	probe.generation = 2
+	if _, err := manual.AuthorizeProxy(ctx, active.Credential); err != nil {
+		t.Fatal(err)
+	}
+	if len(probe.observations) != 2 {
+		t.Fatal("old admission relabeled with a new capture generation")
 	}
 	id, _ := manualcapture.ParseID(active.Capture.ID)
 	if _, err := manual.Revoke(ctx, manualcapture.RevokeCommand{Owner: manualcapture.NewLocalOwnerScope(), ID: id, ExpectedCredentialRevision: 1}); err != nil {

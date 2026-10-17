@@ -3,6 +3,7 @@ package productruntime
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
@@ -26,6 +27,7 @@ import (
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
 type recordingItem struct {
+	acp           *acpobservation.Record
 	capture       recording.CaptureObservation
 	nativeHistory *nativetool.RecordedHistory
 	nativeSink    nativetool.HistoryWriter
@@ -40,6 +42,7 @@ type recordingItem struct {
 	bytes         int64
 }
 type observationRecorder struct {
+	acp                acpobservation.Writer
 	capture            recording.CaptureWriter
 	nativeHistory      nativetool.HistoryWriter
 	reportFailure      func(string, error)
@@ -229,7 +232,9 @@ func (r *observationRecorder) run() {
 			outcome := recording.Discarded
 			if item.stamp.Current() && r.ctx.Err() == nil {
 				var err error
-				if item.kind == recording.Capture {
+				if item.kind == recording.ACP {
+					err = r.acp.PutACP(r.ctx, *item.acp)
+				} else if item.kind == recording.Capture {
 					err = r.capture.PutCaptureObservation(r.ctx, item.stamp.Scope(), item.capture)
 				} else if item.kind == recording.Native {
 					err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
@@ -248,7 +253,7 @@ func (r *observationRecorder) run() {
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
-					if errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict)) {
+					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict)) {
 						outcome = recording.Discarded
 					}
 				}
