@@ -52,7 +52,7 @@ final class AppCopy {
 
   static const _en = <String, String>{
     'error.control_timeout':
-        'The control request timed out. Refresh to check the latest state. Agent work continues; recorded data may be incomplete.',
+        'The control request timed out. The operation may already have completed. Refresh to check the latest state before deciding whether to retry. When loading records, this timeout alone does not show that Agent work failed.',
     'native.empty': 'No tool activity recorded',
     'native.readerUnavailable':
         'Tool activity cannot be read. Refresh this Capture.',
@@ -3119,7 +3119,8 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
-    'error.control_timeout': '控制请求超时。请刷新以查看最新状态。Agent 工作会继续；记录的数据可能不完整。',
+    'error.control_timeout':
+        '控制请求超时。操作可能已经完成。请先刷新并检查最新状态，再决定是否重试。读取记录时，仅凭此次超时无法判断 Agent 工作是否失败。',
     'native.empty': '尚未记录工具活动',
     'native.readerUnavailable': '工具活动暂时无法读取，请刷新此 Capture。',
     'native.loginUnknown': '尚未确认登录账号',
