@@ -2,13 +2,14 @@ package nativemcp
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
@@ -44,9 +45,9 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := f.store.EgressAttemptRepository().List(t.Context(), egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(page.Items) != 4 {
-		t.Fatalf("real audit fixture %+v %v", page, err)
+	page := nativeBackupDeliveries(t, f.db)
+	if len(page) != 4 {
+		t.Fatalf("real delivery fixture %d", len(page))
 	}
 	var bindingDigest, profileJSON, source string
 	var version, revision uint64
@@ -103,15 +104,15 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err != nil || actual.BindingDigest == nil || op.BindingDigest == nil || *actual.BindingDigest != *op.BindingDigest || actual.State != op.State {
 		t.Fatalf("backup changed actual native projection %+v %v", actual, err)
 	}
-	restoredPage, err := store.EgressAttemptRepository().List(t.Context(), egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(restoredPage.Items) != len(page.Items) {
-		t.Fatal("backup lost native audits", err)
+	restoredDB, err := sql.Open("sqlite", "file:"+filepath.Join(restored, "runtime.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i := range page.Items {
-		if restoredPage.Items[i].Attempt != page.Items[i].Attempt {
-			t.Fatal("backup changed physical audit frozen source/bytes/state")
-		}
+	defer restoredDB.Close()
+	if restoredPage := nativeBackupDeliveries(t, restoredDB); !reflect.DeepEqual(restoredPage, page) {
+		t.Fatal("backup changed required native delivery coordinates/outcomes")
 	}
+
 	// Actual Get above re-verifies the restored V2 digest against the profile
 	// row; additionally prove the selection is the exact prior global revision.
 	if bindingDigest == "" || profileJSON == "" || version != 2 || source != "global" || revision != 2 {
@@ -121,4 +122,38 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err != nil || setting.Revision != 2 {
 		t.Fatal("backup changed authored default setting", err)
 	}
+}
+
+func nativeBackupDeliveries(t *testing.T, db *sql.DB) [][]any {
+	t.Helper()
+	rows, err := db.Query(`SELECT * FROM native_tool_deliveries ORDER BY attempt_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all [][]any
+	for rows.Next() {
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range values {
+			if b, ok := v.([]byte); ok {
+				values[i] = append([]byte(nil), b...)
+			}
+		}
+		all = append(all, values)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return all
 }

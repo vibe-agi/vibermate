@@ -139,7 +139,7 @@ func TestNativeAcceptedGETURLSurvivesLaterDisconnect(t *testing.T) {
 	}
 	var state, reason string
 	var known bool
-	if err := f.db.QueryRow(`SELECT outcome,error_class,byte_counts_known FROM runtime_egress_attempts WHERE attempt_id=?`, stream.receipt.AttemptID()).Scan(&state, &reason, &known); err != nil || state != "failed" || reason != "transport_failed" || known {
+	if err := f.db.QueryRow(`SELECT outcome,error_class,byte_counts_known FROM native_tool_deliveries WHERE attempt_id=?`, stream.receipt.AttemptID()).Scan(&state, &reason, &known); err != nil || state != "failed" || reason != "transport_failed" || known {
 		t.Fatal("untruthful broken GET audit", state, reason, known, err)
 	}
 	before := f.transport.sends()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -216,7 +215,7 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 	type state struct {
 		approval            nativetool.Approval
 		operation           nativetool.Operation
-		audit               egressaudit.Page
+		audit               []any
 		key                 string
 		once, events, sends int
 	}
@@ -233,10 +232,16 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 		if err != nil {
 			t.Fatal(err)
 		}
-		out.audit, err = f.store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{ParentKind: egressaudit.ParentClientOperation, ParentID: child.id.String(), Limit: 10})
-		if err != nil {
+		var deliveries int
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, child.id).Scan(&deliveries); err != nil {
 			t.Fatal(err)
 		}
+		if deliveries == 1 {
+			out.audit = freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, child.id)
+		} else if deliveries != 0 {
+			t.Fatal("multiple physical native deliveries")
+		}
+
 		err = f.db.QueryRow(`SELECT idempotency_key,(SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_events WHERE operation_id=?) FROM native_tool_approvals WHERE approval_id=?`, child.id, child.id, a.ID).Scan(&out.key, &out.once, &out.events)
 		if err != nil {
 			t.Fatal(err)
@@ -293,7 +298,7 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 		}
 		completed = true
 		beforeHistory = snapshot()
-		if beforeHistory.once != 1 || len(beforeHistory.audit.Items) != 1 || beforeHistory.sends != 5 {
+		if beforeHistory.once != 1 || len(beforeHistory.audit) == 0 || beforeHistory.sends != 5 {
 			t.Fatal("callback did not produce exactly one once/audit/send")
 		}
 	}

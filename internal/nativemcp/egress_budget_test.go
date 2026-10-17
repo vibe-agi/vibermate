@@ -79,7 +79,7 @@ func TestNativeEffectiveFactCapacityRefusesBeforeBindStartOrSend(t *testing.T) {
 		}
 	}
 	var attempts int
-	if err := f.db.QueryRow(`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?`, request.id).Scan(&attempts); err != nil || attempts != 0 {
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, request.id).Scan(&attempts); err != nil || attempts != 0 {
 		t.Fatalf("capacity minted attempt=%d err=%v", attempts, err)
 	}
 	if got := nativeClaimLifetimeFacts(t, f).Budget; got != baseline {

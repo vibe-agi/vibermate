@@ -193,7 +193,7 @@ func TestNativeGETCallbackDenyReleasesParent(t *testing.T) {
 		t.Fatal("denied callback sent", got)
 	}
 	var once, audits int
-	if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, child.id, child.id).Scan(&once, &audits); err != nil || once != 0 || audits != 0 {
+	if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, child.id, child.id).Scan(&once, &audits); err != nil || once != 0 || audits != 0 {
 		t.Fatal("denied callback created a Start/physical audit", err)
 	}
 	requireNativeClaimAfterDrain(t, f.executor.(*executor), child.id, false)

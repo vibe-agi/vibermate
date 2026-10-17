@@ -325,7 +325,7 @@ func TestNativeExecutorApprovedCallHasDedicatedStartReceipt(t *testing.T) {
 	if err != nil || op.Capture != f.capture || op.Kind != nativetool.RequestToolsCall || op.ToolName != "read_file" || op.CredentialOwner != "original_client" || op.ApprovalID == nil {
 		t.Fatalf("real native projection %+v %v", op, err)
 	}
-	for _, table := range []string{"native_tool_once", "runtime_egress_attempts"} {
+	for _, table := range []string{"native_tool_once", "native_tool_deliveries"} {
 		var count int
 		query := `SELECT COUNT(*) FROM ` + table
 		if table == "native_tool_once" {

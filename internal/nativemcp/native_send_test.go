@@ -117,7 +117,7 @@ func TestNativeSendRequiresSameStoreCommittedReceipt(t *testing.T) {
 			var beforeOnce, beforeAudit []any
 			if condition != "zero" {
 				beforeOnce = freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, receipt.OperationID())
-				beforeAudit = freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())
+				beforeAudit = freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())
 			}
 			sent := e.sendCommitted(context.Background(), request, plan, receipt)
 			if token := sent.claim.token; token != nil && (token.ownerKey != 0 || token.sessionKey != 0 || token.physicalClass != nativeClaimUnbound) {
@@ -151,7 +151,7 @@ func TestNativeSendRequiresSameStoreCommittedReceipt(t *testing.T) {
 			if err == nil || f.transport.sends() > before+1 || sent.phase != nativeSendUnproven {
 				t.Fatal("copied receipt sent twice")
 			}
-			if condition != "zero" && (!reflect.DeepEqual(beforeOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, originalReceipt.OperationID())) || !reflect.DeepEqual(beforeAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, originalReceipt.OperationID()))) {
+			if condition != "zero" && (!reflect.DeepEqual(beforeOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, originalReceipt.OperationID())) || !reflect.DeepEqual(beforeAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, originalReceipt.OperationID()))) {
 				t.Fatal("refused receipt invocation rewrote its real once/audit")
 			}
 		})
@@ -172,7 +172,7 @@ func TestNativeSendPhaseConcurrentClaimAndReuse(t *testing.T) {
 		return nil, io.ErrUnexpectedEOF
 	}
 	before := f.transport.sends()
-	snapshot := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())
+	snapshot := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())
 	results := make(chan nativeSendResult, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -204,7 +204,7 @@ func TestNativeSendPhaseConcurrentClaimAndReuse(t *testing.T) {
 		t.Fatal("one-shot send phase lost")
 	}
 	again := e.sendCommitted(context.Background(), request, plan, receipt)
-	if again.phase != nativeSendUnproven || !errors.Is(again.err, nativetool.ErrReplay) || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())) {
+	if again.phase != nativeSendUnproven || !errors.Is(again.err, nativetool.ErrReplay) || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())) {
 		t.Fatal("later refusal zeroed an earlier entered attempt")
 	}
 }
@@ -242,9 +242,9 @@ func TestNativeSendPhaseBeforeClaimIsUnproven(t *testing.T) {
 				defer e.budget.release(remaining)
 			}
 			before := f.transport.sends()
-			snapshot := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())
+			snapshot := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())
 			result := e.sendCommitted(ctx, request, plan, receipt)
-			if result.err == nil || result.phase != nativeSendUnproven || f.transport.sends() != before || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())) {
+			if result.err == nil || result.phase != nativeSendUnproven || f.transport.sends() != before || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())) {
 				t.Fatal("preclaim refusal manufactured zero-effect authority")
 			}
 		})
@@ -426,7 +426,7 @@ func TestNativeUnsentProofCannotUndoIndependentRevocation(t *testing.T) {
 				if err := e.Revoke(context.Background(), f.capture, reason); err != nil {
 					t.Fatal(err)
 				}
-				snapshot := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, request.id)
+				snapshot := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, request.id)
 				release()
 				select {
 				case <-done:
@@ -435,7 +435,7 @@ func TestNativeUnsentProofCannotUndoIndependentRevocation(t *testing.T) {
 				}
 				facts := readFreshGETFacts(t, f, request.id)
 				scope, err := f.store.NativeToolRepository().GetScope(context.Background(), f.capture)
-				if err != nil || terminal.Outcome != OutcomeUncertain || facts.OperationState != "uncertain" || facts.AuditKnown != 0 || scope.State != "revoked" || !scope.ReplayBarrier || f.transport.sends() != before || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, request.id)) {
+				if err != nil || terminal.Outcome != OutcomeUncertain || facts.OperationState != "uncertain" || facts.AuditKnown != 0 || scope.State != "revoked" || !scope.ReplayBarrier || f.transport.sends() != before || !reflect.DeepEqual(snapshot, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, request.id)) {
 					t.Fatal("known-unsent path overwrote independent revocation")
 				}
 			})

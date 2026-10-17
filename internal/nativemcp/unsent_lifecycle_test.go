@@ -147,7 +147,7 @@ func testReadyUnsentLifecycle(t *testing.T, kind string, terminalFirst ...bool) 
 		if err != nil || op.State != "started" {
 			t.Fatal("original logical RPC did not remain live")
 		}
-		originalAudit = freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, original.id)
+		originalAudit = freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, original.id)
 		originalOnce = freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, original.id)
 		originalStream = targetSession.streams[original.id]
 		if originalStream == nil || originalStream.protocolCanceled {
@@ -245,7 +245,7 @@ func testReadyUnsentLifecycle(t *testing.T, kind string, terminalFirst ...bool) 
 	}
 	if kind == "cancel" || kind == "recovery" {
 		op, err := f.store.NativeToolRepository().Get(context.Background(), original.id)
-		if err != nil || op.State != "started" || originalStream.protocolCanceled || originalStream.context.Err() != nil || !reflect.DeepEqual(originalAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, original.id)) || !reflect.DeepEqual(originalOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, original.id)) {
+		if err != nil || op.State != "started" || originalStream.protocolCanceled || originalStream.context.Err() != nil || !reflect.DeepEqual(originalAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, original.id)) || !reflect.DeepEqual(originalOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, original.id)) {
 			t.Fatal("unsent cancellation/recovery affected original RPC")
 		}
 		if originalStream.attached || len(originalStream.events) != 1 || originalStream.events[0].id != "e1" {

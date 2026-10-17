@@ -132,13 +132,13 @@ func freshGETRow(t *testing.T, f *nativeFixture, query string, id nativetool.ID)
 func readFreshGETFacts(t *testing.T, f *nativeFixture, id nativetool.ID) freshGETFacts {
 	t.Helper()
 	var out freshGETFacts
-	err := f.db.QueryRow(`SELECT b.session_revision,b.catalog_generation,COALESCE(length(b.catalog_digest),0),s.revision,s.catalog_generation,COALESCE(length(s.catalog_digest),0),s.state,o.state,o.terminal_reason,o.bytes_in,o.bytes_out,a.outcome,a.error_class,a.byte_counts_known,a.bytes_in,a.bytes_out FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_sessions s USING(session_id) JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.operation_id=?`, id).Scan(&out.BindingRevision, &out.BindingGeneration, &out.BindingCatalogBytes, &out.SessionRevision, &out.SessionGeneration, &out.SessionCatalogBytes, &out.SessionState, &out.OperationState, &out.OperationReason, &out.BytesIn, &out.BytesOut, &out.AuditOutcome, &out.AuditReason, &out.AuditKnown, &out.AuditBytesIn, &out.AuditBytesOut)
+	err := f.db.QueryRow(`SELECT b.session_revision,b.catalog_generation,COALESCE(length(b.catalog_digest),0),s.revision,s.catalog_generation,COALESCE(length(s.catalog_digest),0),s.state,o.state,o.terminal_reason,o.bytes_in,o.bytes_out,a.outcome,a.error_class,a.byte_counts_known,a.bytes_in,a.bytes_out FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_sessions s USING(session_id) JOIN native_tool_once n USING(operation_id) JOIN native_tool_deliveries a USING(attempt_id) WHERE o.operation_id=?`, id).Scan(&out.BindingRevision, &out.BindingGeneration, &out.BindingCatalogBytes, &out.SessionRevision, &out.SessionGeneration, &out.SessionCatalogBytes, &out.SessionState, &out.OperationState, &out.OperationReason, &out.BytesIn, &out.BytesOut, &out.AuditOutcome, &out.AuditReason, &out.AuditKnown, &out.AuditBytesIn, &out.AuditBytesOut)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out.Binding = freshGETRow(t, f, `SELECT * FROM native_tool_bindings WHERE operation_id=?`, id)
 	out.Once = freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, id)
-	out.Audit = freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id)
+	out.Audit = freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, id)
 	return out
 }
 
