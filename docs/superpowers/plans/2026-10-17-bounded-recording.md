@@ -95,6 +95,7 @@ content.Release()
 **Files:**
 - Modify: `internal/rawevidence/manager.go`, `internal/rawevidence/types.go`, `internal/providertransport/client.go`, `internal/loopbackproxy/handler.go`, Raw construction in `internal/productruntime/runtime.go` and `builders.go`.
 - Modify: `internal/runtimepersistence/raw_evidence_repository.go` and its tests where writer sequence/settlement semantics require it; keep published frozen v1/v2 DDL unchanged.
+- Modify: Raw-only transform observation paths in `internal/exchange/pipeline.go`, `internal/exchange/message_transform.go`, and their focused transform recording tests. Preserve buffers needed for actual SSE decoding/scripts/output.
 - Create: `internal/rawevidence/capture_buffer.go`, `internal/rawevidence/capture_buffer_test.go`, `internal/rawevidence/admission_test.go`.
 - Extend existing Raw/provider/loopback tests covering request/response capture and saturation.
 
@@ -119,6 +120,7 @@ type CaptureMetadata struct {
     Headers http.Header
     ProtectedHeaderNames []string
     ContentType, ContentEncoding string
+    Representation string
 }
 type TerminalMetadata struct {
     Trailers http.Header
@@ -129,7 +131,11 @@ type TerminalMetadata struct {
 
 Context holds the existing identity/scope/frozen recording metadata; bytes observed and digest/prefix completeness are tracked by the buffer itself. Headers/trailers are borrowed only during the synchronous call. CaptureBuffer retains its reservation and owned redacted metadata from creation through worker settlement. A nil/disabled handle safely ignores calls. Reasons are validated local closed values under existing Raw rules, never arbitrary transport error strings.
 
-- [ ] **Step 1: Add tests that block the real writer seam while streaming continues.** Fill a small shared budget with multiple active buffers and one worker-held batch, then forward byte-exact local HTTP/SSE responses. Additional complete/request observations and buffer growth must promptly drop or retain an honest prefix; forwarded bytes must still complete before releasing the sink. Assert total item/byte ownership includes in-flight buffers, and no reservation leaks after failure/cancel/shutdown. Mutating a caller's input after TryObserve cannot change retained bytes. Finish must transfer owned storage without a second body-sized allocation.
+Raw transform-input observations are included. `streamMessageTransformer.input` and its `Input()` snapshot are consumed only by Raw history, so replace this uncharged accumulating copy with the same budgeted capture path. Remove eager clones in the three Raw transform observation helpers. Keep SSE decoder state, real script input/output owners and before/after headers needed for actual response envelopes. Preserve the `message_transform_input` / `message_transform_stream_input` representation labels. Add a disabled/saturated recorder test asserting exact transformed SSE bytes/headers and no uncharged optional input history.
+
+Staged compatibility: the existing trusted Context/scope adapter may bridge legacy producers until control publishes durable stamps. New stamped Try APIs reject zero/stale/mismatched stamps; the bridge adds no execution authority or unbounded lookup map. If one existing terminal fence protects both normal Finish and explicit erasure, retain that shared fence in this task rather than weaken deletion; storage Task 4 must separate normal Finish from administrative settlement before release. Keep any deprecated durable watermark as a truthful contiguous confirmed prefix, never the highest persisted sequence across gaps; settled/highest-persisted counters are distinct, and administrative settlement cannot wait forever on a prefix frozen by loss.
+
+- [x] **Step 1: Add tests that block the real writer seam while streaming continues.** Fill a small shared budget with multiple active buffers and one worker-held batch, then forward byte-exact local HTTP/SSE responses. Additional complete/request observations and buffer growth must promptly drop or retain an honest prefix; forwarded bytes must still complete before releasing the sink. Assert total item/byte ownership includes in-flight buffers, and no reservation leaks after failure/cancel/shutdown. Mutating a caller's input after TryObserve cannot change retained bytes. Finish must transfer owned storage without a second body-sized allocation.
 
 ```go
 // The sink closes entered then waits for release. Completion before release is
@@ -143,10 +149,10 @@ case <-time.After(2 * time.Second):
 }
 ```
 
-- [ ] **Step 2: Run focused new tests and record behavioral RED.** Existing Observe waits for semaphores and pre-Observe response buffers escape capacity; capture those failures without changing production first.
-- [ ] **Step 3: Reserve before clone/redaction/buffer growth and use nonblocking channel publication.** Remove eager recording-only Header/Body/Frames clones from producer wrappers. On capacity refusal, drop the copy or freeze a correctly labeled prefix while continuing actual I/O. Stop copying/hashing once the whole observation is dropped. Include frame metadata and grow-overlap capacities. Existing full-body/prefix/digest rules remain accurate.
-- [ ] **Step 4: Settle failed batches and release ownership.** A failed/ambiguous batch is counted and abandoned; no indefinite retry holding capacity. `ListExchange` reads committed rows without flushing a watermark. Replace the former contiguous-durable promise with accurately named settled/persisted counters; only explicit administrative barriers may wait. Persisting a later batch after an abandoned sequence range must succeed and retain exact later bytes: update repository sequencing validation as necessary instead of turning one dropped batch into permanent recording failure. A highest persisted sequence is not proof that all earlier records were stored. Add that recovery regression before changing the consumer contract. Shutdown closes admission, cancels worker I/O, abandons queued copies and joins the actual worker before releasing its resources; deadlines never pretend an in-flight worker has stopped.
-- [ ] **Step 5: Run affected Raw/provider/loopback tests plus focused race saturation/cancellation cases; commit.** Existing tests asserting synchronous immediate visibility must explicitly wait on recording inspection/test barriers, not add waits to production forwarding. Commit `fix: keep raw recording off the forwarding critical path`.
+- [x] **Step 2: Run focused new tests and record behavioral RED.** Existing Observe waits for semaphores and pre-Observe response buffers escape capacity; capture those failures without changing production first.
+- [x] **Step 3: Reserve before clone/redaction/buffer growth and use nonblocking channel publication.** Remove eager recording-only Header/Body/Frames clones from producer wrappers. On capacity refusal, drop the copy or freeze a correctly labeled prefix while continuing actual I/O. Stop copying/hashing once the whole observation is dropped. Include frame metadata and grow-overlap capacities. Existing full-body/prefix/digest rules remain accurate.
+- [x] **Step 4: Settle failed batches and release ownership.** A failed/ambiguous batch is counted and abandoned; no indefinite retry holding capacity. `ListExchange` reads committed rows without flushing a watermark. Replace the former contiguous-durable promise with accurately named settled/persisted counters; only explicit administrative barriers may wait. Persisting a later batch after an abandoned sequence range must succeed and retain exact later bytes: update repository sequencing validation as necessary instead of turning one dropped batch into permanent recording failure. A highest persisted sequence is not proof that all earlier records were stored. Add that recovery regression before changing the consumer contract. Shutdown closes admission, cancels worker I/O, abandons queued copies and joins the actual worker before releasing its resources; deadlines never pretend an in-flight worker has stopped.
+- [x] **Step 5: Run affected Raw/provider/loopback tests plus focused race saturation/cancellation cases; commit.** Existing tests asserting synchronous immediate visibility must explicitly wait on recording inspection/test barriers, not add waits to production forwarding. Commit `fix: keep raw recording off the forwarding critical path`.
 
 ### Task 3: Detach connection and ordinary egress history from forwarding
 
