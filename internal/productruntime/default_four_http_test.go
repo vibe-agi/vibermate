@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"sync"
@@ -45,6 +46,17 @@ func (s *fourHTTPContentSource) RecordSource(ctx context.Context, v *exchangecon
 		}
 	}
 	return s.sink.RecordSource(ctx, v)
+}
+func (s *fourHTTPContentSource) RecordScopedSource(ctx context.Context, scope recording.Scope, v *exchangecontent.Source) error {
+	if v.Metadata().Response == nil {
+		s.entered <- v.Metadata().ExchangeID
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, v)
 }
 
 type unreadDefaultHTTPBody struct {

@@ -224,6 +224,8 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		sqlTransactionCommitter{},
 	)
 	rawEvidence := newRawEvidenceRepository(database, operations)
+	rawEvidence.coordinates = role == nil || role.identity == observationSchemaIdentity
+	rawEvidence.requireScope = role != nil && role.identity == observationSchemaIdentity
 	runtimeUsers := newRuntimeUserRepository(database, operations)
 	if role != nil {
 		repository.identity = role.identity
@@ -245,7 +247,11 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		return fail(errors.Join(err, reads.Close()))
 	}
 	activityRepo := newActivityRepository(database, reads, operations)
+	activityRepo.coordinates = role == nil || role.identity == observationSchemaIdentity
+	activityRepo.requireScope = role != nil && role.identity == observationSchemaIdentity
 	exchangeContents := newExchangeContentRepository(database, reads, operations, contentLimits)
+	exchangeContents.coordinates = role == nil || role.identity == observationSchemaIdentity
+	exchangeContents.requireScope = role != nil && role.identity == observationSchemaIdentity
 	return &Store{
 		databasePath:       options.DatabasePath,
 		database:           database,

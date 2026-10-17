@@ -8,6 +8,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"testing"
 	"time"
@@ -121,6 +122,7 @@ func TestNativeObservationBodyGraphSharesRawRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 			raw := rawEvidenceRecordForTest("content-shared-raw", 1, rawevidence.LayerClientIngress, value.Body, []byte(`{"version":1,"headers":[]}`))
+			raw.RecordingFence = recording.Fence{ArchiveEpoch: value.Identity.Scope.Fence.ArchiveEpoch, CaptureGeneration: 1}
 			raw.ObservedAt = now
 			raw.ExpiresAt = now.Add(time.Hour)
 			if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {

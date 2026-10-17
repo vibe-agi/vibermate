@@ -311,3 +311,13 @@ func TestRuntimeJSONAndSSEFinishAndCloseBodiesWhileRecordingBlocked(t *testing.T
 		}
 	}
 }
+
+func (s *heldContentWriter) RecordScopedSource(ctx context.Context, _ recording.Scope, source *exchangecontent.Source) error {
+	return s.RecordSource(ctx, source)
+}
+func (s *failingPreparedActivity) RecordScopedPrepared(ctx context.Context, _ recording.Scope, r activity.Record) (activity.Record, error) {
+	return s.RecordPrepared(ctx, r)
+}
+func (s *metadataIdentityWriter) PutScopedConversationIdentity(ctx context.Context, _ recording.Scope, id string, v agentconversation.ClientIdentity) error {
+	return s.PutConversationIdentity(ctx, id, v)
+}

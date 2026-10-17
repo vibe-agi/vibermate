@@ -7,6 +7,8 @@ CREATE TABLE runtime_metadata(
 ) STRICT;
 
 CREATE TABLE "runtime_activities"(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
  workspace_id TEXT NOT NULL DEFAULT '',
  workspace_label TEXT NOT NULL DEFAULT '',
  capture_label TEXT NOT NULL DEFAULT '',
@@ -349,6 +351,10 @@ AFTER UPDATE OF chunk_manifest ON runtime_evidence_bodies BEGIN
 END;
 
 CREATE TABLE "runtime_exchange_agent_identities"(
+ recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('','managed_run','manual_capture')),
+ recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB))<=128),
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   client_kind TEXT NOT NULL CHECK(client_kind IN('claude', 'codex')),
@@ -440,6 +446,8 @@ CREATE TABLE runtime_exchange_content_transcripts(
 ) STRICT;
 
 CREATE TABLE runtime_exchange_contents(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   scope_kind TEXT NOT NULL DEFAULT ''
@@ -480,6 +488,8 @@ CREATE TABLE runtime_exchange_contents(
 ) STRICT;
 
 CREATE TABLE runtime_raw_evidence_envelopes(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   envelope_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
   writer_id TEXT NOT NULL
@@ -915,4 +925,47 @@ CREATE TABLE acp_snapshots(
  revision INTEGER NOT NULL CHECK(revision>0),
  final INTEGER NOT NULL CHECK(final IN(0,1)),
  PRIMARY KEY(run_id,archive_epoch,capture_generation)
+) STRICT;
+
+-- Read-side privacy mirror. Task5 stages bounded pages under an unpublished
+-- generation and atomically switches active only after complete version checks.
+CREATE TABLE inspection_mirror_generations(
+ generation INTEGER PRIMARY KEY CHECK(generation>0),
+ layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ visibility_revision INTEGER NOT NULL CHECK(visibility_revision>0),
+ usage_policy_revision INTEGER NOT NULL CHECK(usage_policy_revision>0),
+ usage_enabled INTEGER NOT NULL CHECK(usage_enabled IN(0,1)),
+ usage_retention_days INTEGER NOT NULL CHECK(usage_retention_days BETWEEN 1 AND 365),
+ usage_collecting_since_unix_ms INTEGER,
+ fence_count INTEGER NOT NULL CHECK(fence_count>=0),
+ current_cap_count INTEGER NOT NULL CHECK(current_cap_count BETWEEN 0 AND 365),
+ legacy_cap_count INTEGER NOT NULL CHECK(legacy_cap_count BETWEEN 0 AND 46720),
+ complete INTEGER NOT NULL CHECK(complete IN(0,1))
+) STRICT;
+CREATE TABLE inspection_mirror_active(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ generation INTEGER NOT NULL REFERENCES inspection_mirror_generations(generation)
+) STRICT;
+CREATE TABLE inspection_mirror_fences(
+ mirror_generation INTEGER NOT NULL REFERENCES inspection_mirror_generations(generation) ON DELETE CASCADE,
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0),
+ deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
+ PRIMARY KEY(mirror_generation,capture_kind,capture_id)
+) STRICT;
+CREATE TABLE inspection_mirror_usage_caps(
+ mirror_generation INTEGER NOT NULL REFERENCES inspection_mirror_generations(generation) ON DELETE CASCADE,
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 365),
+ through_policy_revision INTEGER NOT NULL CHECK(through_policy_revision>0),
+ PRIMARY KEY(mirror_generation,retention_days)
+) STRICT;
+CREATE TABLE inspection_mirror_legacy_caps(
+ mirror_generation INTEGER NOT NULL REFERENCES inspection_mirror_generations(generation) ON DELETE CASCADE,
+ archive_id TEXT NOT NULL CHECK(length(CAST(archive_id AS BLOB)) BETWEEN 1 AND 128),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 1 AND 365),
+ after_sequence INTEGER NOT NULL CHECK(after_sequence>=0),
+ through_sequence INTEGER NOT NULL CHECK(through_sequence>0 AND after_sequence<through_sequence),
+ PRIMARY KEY(mirror_generation,archive_id,retention_days)
 ) STRICT;

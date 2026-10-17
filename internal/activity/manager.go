@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const activityIDBytes = 20
@@ -337,4 +338,35 @@ func (manager *Manager) RecordPrepared(ctx context.Context, record Record) (Reco
 	}
 	defer finish()
 	return manager.repository.Append(operation, record)
+}
+
+// ScopedPreparedRecorder consumes the immutable scope admitted with the record.
+type ScopedPreparedRecorder interface {
+	Prepare(Event) (Record, error)
+	RecordScopedPrepared(context.Context, recording.Scope, Record) (Record, error)
+}
+type ScopedRepository interface {
+	AppendScoped(context.Context, recording.Scope, Record) (Record, error)
+}
+type ScopedConversationIdentityWriter interface {
+	PutScopedConversationIdentity(context.Context, recording.Scope, string, agentconversation.ClientIdentity) error
+}
+
+func (manager *Manager) RecordScopedPrepared(ctx context.Context, scope recording.Scope, record Record) (Record, error) {
+	if err := scope.Validate(); err != nil {
+		return Record{}, recording.ErrObservationDiscarded
+	}
+	if err := record.validatePrepared(); err != nil {
+		return Record{}, err
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	defer finish()
+	sink, ok := manager.repository.(ScopedRepository)
+	if !ok {
+		return Record{}, recording.ErrObservationDiscarded
+	}
+	return sink.AppendScoped(operation, scope, record)
 }

@@ -68,6 +68,33 @@ func (s *concurrentContentBudgetSource) RecordSource(ctx context.Context, source
 	}
 	return err
 }
+func (s *concurrentContentBudgetSource) RecordScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
+	request := source.Metadata().Response == nil
+	if request {
+		s.entered <- source.Metadata().ExchangeID
+		select {
+		case <-s.start:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if s.active.Add(1) == 2 {
+			s.overlapOnce.Do(func() { close(s.overlap) })
+		}
+		s.started <- struct{}{}
+	}
+	err := s.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source)
+	if request {
+		s.active.Add(-1)
+	}
+	if err == nil && request {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
 func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f accountReadFixture, pipeline exchangeRuntime, first exchange.ClientRequest, firstLease *exchange.BodyLease, plan environment.RequestPlan, operation exchange.ClientOperationEvidence, body []byte, credential string, source *concurrentContentBudgetSource, controls func(*Runtime) error, calls, diagnostics func() int32, count int, tail string) {
 	// This watchdog contains the selected fixture; content has its own finite
 	// context. Race mode explicitly verifies concurrency rather than default latency.
@@ -197,4 +224,8 @@ func TestRuntimeContentObservationDeadlineDoesNotOwnWriterLifetime(t *testing.T)
 	if b.Snapshot().ByKind[recording.Content].Settlements[recording.Unconfirmed].Records != 1 {
 		t.Fatal("actual writer failure unreported")
 	}
+}
+
+func (s *failingBudgetRecorder) RecordScopedSource(ctx context.Context, _ recording.Scope, source *exchangecontent.Source) error {
+	return s.RecordSource(ctx, source)
 }

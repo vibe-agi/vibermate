@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptrace"
@@ -37,6 +38,18 @@ func (r *transformHTTPRecorder) RecordSource(ctx context.Context, source *exchan
 		r.requests.Add(1)
 	}
 	if err := r.sink.RecordSource(ctx, source); err != nil {
+		return err
+	}
+	if source.Metadata().Response != nil {
+		r.completed <- source.Metadata().ExchangeID
+	}
+	return nil
+}
+func (r *transformHTTPRecorder) RecordScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
+	if source.Metadata().Response == nil {
+		r.requests.Add(1)
+	}
+	if err := r.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source); err != nil {
 		return err
 	}
 	if source.Metadata().Response != nil {

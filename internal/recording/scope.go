@@ -5,6 +5,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 )
 
+var ErrObservationDiscarded = errors.New("optional observation has no valid original recording scope")
+
 // Scope identifies persisted observation ownership, never execution authority.
 type Scope struct {
 	Capture captureidentity.Reference

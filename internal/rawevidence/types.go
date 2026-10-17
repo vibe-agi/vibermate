@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"slices"
 	"sort"
@@ -518,6 +520,7 @@ func DecodePayload(encodedMetadata, body []byte) (Payload, error) {
 // The payload is stored in the clear, and credential header values were removed
 // before it existed.
 type StoredEnvelope struct {
+	RecordingFence           recording.Fence
 	EnvelopeID               string
 	WriterID                 string
 	Watermark                uint64
@@ -649,7 +652,17 @@ func MetadataOf(value StoredEnvelope) EnvelopeMetadata {
 	}
 }
 
+func (value StoredEnvelope) RecordingScope() recording.Scope {
+	scope := recording.Scope{Fence: value.RecordingFence}
+	if value.ScopeKind != ScopeRuntime {
+		scope.Capture = captureidentity.Reference{Kind: captureidentity.Kind(value.ScopeKind), ID: value.ScopeID}
+	}
+	return scope
+}
 func (value StoredEnvelope) Validate() error {
+	if value.RecordingFence.ArchiveEpoch > maxSQLiteInteger || value.RecordingFence.CaptureGeneration > maxSQLiteInteger || value.RecordingFence != (recording.Fence{}) && value.RecordingScope().Validate() != nil {
+		return recording.ErrObservationDiscarded
+	}
 	if !validIdentity(value.EnvelopeID) || !validIdentity(value.WriterID) ||
 		value.Watermark == 0 || value.Watermark > maxSQLiteInteger ||
 		!value.Layer.Valid() ||

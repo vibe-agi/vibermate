@@ -22,7 +22,7 @@ type recordedMetadata struct {
 	usage        *runtimeusage.CollectedObservation
 	usageSink    runtimeusage.CollectedWriter
 	activity     activity.Record
-	activitySink activity.PreparedRecorder
+	activitySink activity.ScopedPreparedRecorder
 	identity     *agentconversation.ClientIdentity
 	identitySink activity.ConversationIdentityRepository
 }
@@ -162,7 +162,7 @@ func (o activityAttemptObserver) offerObserveTerminal(ctx context.Context, obser
 	return o.offerPrepared(observation.ObservationStamp, r, event, observation.ClientProtocolEvidence, observation.ProviderResponseID, o.collectUsage(observation, status))
 }
 func (o activityAttemptObserver) offerPrepared(stamp recording.Stamp, reservation *recording.Reservation, event activity.Event, evidence []protocolcore.ProtocolEvidenceValue, providerID string, usage *runtimeusage.CollectedObservation) error {
-	sink, ok := o.recorder.(activity.PreparedRecorder)
+	sink, ok := o.recorder.(activity.ScopedPreparedRecorder)
 	if !ok {
 		reservation.Release()
 		o.queue.budget.RecordOffer(recording.Activity, recording.DroppedUnavailable, 0)
@@ -196,11 +196,15 @@ func (o activityAttemptObserver) offerPrepared(stamp recording.Stamp, reservatio
 	}
 	return nil
 }
-func (m *recordedMetadata) persist(ctx context.Context, report func(string, error), policies *atomic.Pointer[runtimeusage.CollectionPolicy]) error {
-	_, activityErr := m.activitySink.RecordPrepared(ctx, m.activity)
+func (m *recordedMetadata) persist(ctx context.Context, scope recording.Scope, report func(string, error), policies *atomic.Pointer[runtimeusage.CollectionPolicy]) error {
+	_, activityErr := m.activitySink.RecordScopedPrepared(ctx, scope, m.activity)
 	var identityErr error
 	if m.identity != nil && m.identitySink != nil {
-		identityErr = m.identitySink.PutConversationIdentity(ctx, m.activity.SubjectID, *m.identity)
+		if sink, ok := m.identitySink.(activity.ScopedConversationIdentityWriter); ok {
+			identityErr = sink.PutScopedConversationIdentity(ctx, scope, m.activity.SubjectID, *m.identity)
+		} else {
+			identityErr = recording.ErrObservationDiscarded
+		}
 	}
 	var usageErr error
 	policy := policies.Load()

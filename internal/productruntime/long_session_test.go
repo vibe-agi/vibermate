@@ -658,6 +658,14 @@ func (h *heldLongSessionSource) RecordSource(ctx context.Context, s *exchangecon
 	}
 	return h.sink.RecordSource(ctx, s)
 }
+func (h *heldLongSessionSource) RecordScopedSource(ctx context.Context, scope recording.Scope, s *exchangecontent.Source) error {
+	if s.Metadata().Response != nil {
+		h.observed = ctx
+		close(h.entered)
+		<-h.release
+	}
+	return h.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, s)
+}
 
 type notifyingLongSessionSource struct {
 	exchangecontent.Recorder
@@ -667,6 +675,13 @@ type notifyingLongSessionSource struct {
 
 func (h *notifyingLongSessionSource) RecordSource(ctx context.Context, s *exchangecontent.Source) error {
 	err := h.sink.RecordSource(ctx, s)
+	if s.Metadata().Response == nil {
+		close(h.done)
+	}
+	return err
+}
+func (h *notifyingLongSessionSource) RecordScopedSource(ctx context.Context, scope recording.Scope, s *exchangecontent.Source) error {
+	err := h.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, s)
 	if s.Metadata().Response == nil {
 		close(h.done)
 	}

@@ -160,3 +160,7 @@ func TestDisablingUsageDropsQueuedCollectionWithoutControlLookup(t *testing.T) {
 		t.Fatal("re-enable revived old callback")
 	}
 }
+
+func (s *heldUsageActivity) RecordScopedPrepared(ctx context.Context, _ recording.Scope, r activity.Record) (activity.Record, error) {
+	return s.RecordPrepared(ctx, r)
+}

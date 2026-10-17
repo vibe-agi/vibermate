@@ -8,18 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type activityRepository struct {
-	database   *sql.DB
-	reads      *sql.DB
-	operations *operationGate
-	identityMu sync.Mutex
+	coordinates, requireScope bool
+	database                  *sql.DB
+	reads                     *sql.DB
+	operations                *operationGate
+	identityMu                sync.Mutex
 }
 
 var _ activity.Repository = (*activityRepository)(nil)
@@ -34,10 +37,17 @@ func newActivityRepository(
 	return &activityRepository{database: database, reads: reads, operations: operations}
 }
 
-func (repository *activityRepository) Append(
-	ctx context.Context,
-	record activity.Record,
-) (activity.Record, error) {
+func (repository *activityRepository) Append(ctx context.Context, record activity.Record) (activity.Record, error) {
+	return repository.appendScoped(ctx, recording.Scope{}, record, false)
+}
+func (repository *activityRepository) AppendScoped(ctx context.Context, scope recording.Scope, record activity.Record) (activity.Record, error) {
+	return repository.appendScoped(ctx, scope, record, true)
+}
+func (repository *activityRepository) appendScoped(ctx context.Context, scope recording.Scope, record activity.Record, provided bool) (activity.Record, error) {
+	if repository.requireScope && !provided || provided && (!repository.coordinates || !recordingScopeMatches(scope, record.CaptureRunID, record.ManualCaptureID)) {
+		return activity.Record{}, recording.ErrObservationDiscarded
+	}
+
 	candidate := record
 	candidate.Sequence = 1
 	if err := candidate.Validate(); err != nil {
@@ -58,9 +68,7 @@ func (repository *activityRepository) Append(
 	if record.Diagnosis != nil {
 		diagnosis = *record.Diagnosis
 	}
-	result, err := repository.database.ExecContext(
-		operation,
-		`INSERT INTO runtime_activities (
+	columns := `
 		     activity_id,
 		     occurred_at_unix_ms,
 		     kind,
@@ -95,8 +103,8 @@ func (repository *activityRepository) Append(
 		     client_field,
 		     client_path,
 		     transport_evidence_json, workspace_id, workspace_label, capture_label
-		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 `
+	arguments := []any{
 		record.ID,
 		toUnixMillis(record.OccurredAt),
 		string(record.Kind),
@@ -131,7 +139,12 @@ func (repository *activityRepository) Append(
 		diagnosis.ClientField,
 		diagnosis.ClientPath,
 		transportEvidence, record.WorkspaceID, record.WorkspaceLabel, record.CaptureLabel,
-	)
+	}
+	if repository.coordinates {
+		columns += ",recording_archive_epoch,recording_capture_generation"
+		arguments = append(arguments, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration)
+	}
+	result, err := repository.database.ExecContext(operation, `INSERT INTO runtime_activities (`+columns+`) VALUES (`+strings.TrimSuffix(strings.Repeat("?,", len(arguments)), ",")+`)`, arguments...)
 	if err != nil {
 		return activity.Record{}, fmt.Errorf("append Activity: %w", err)
 	}
@@ -380,11 +393,17 @@ func (repository *activityRepository) GetExchange(
 	return record, nil
 }
 
-func (repository *activityRepository) PutConversationIdentity(
-	ctx context.Context,
-	exchangeID string,
-	identity agentconversation.ClientIdentity,
-) error {
+func (repository *activityRepository) PutConversationIdentity(ctx context.Context, exchangeID string, identity agentconversation.ClientIdentity) error {
+	return repository.putScopedConversationIdentity(ctx, recording.Scope{}, exchangeID, identity, false)
+}
+func (repository *activityRepository) PutScopedConversationIdentity(ctx context.Context, scope recording.Scope, exchangeID string, identity agentconversation.ClientIdentity) error {
+	return repository.putScopedConversationIdentity(ctx, scope, exchangeID, identity, true)
+}
+func (repository *activityRepository) putScopedConversationIdentity(ctx context.Context, scope recording.Scope, exchangeID string, identity agentconversation.ClientIdentity, provided bool) error {
+	if repository.requireScope && !provided || provided && (!repository.coordinates || !validOriginalRecordingScope(scope)) {
+		return recording.ErrObservationDiscarded
+	}
+
 	identity = identity.Clone()
 	identity.ObservedAt = identity.ObservedAt.UTC().Truncate(time.Millisecond)
 	if identity.Validate() != nil || exchangeID == "" {
@@ -407,40 +426,27 @@ func (repository *activityRepository) PutConversationIdentity(
 	defer finish()
 	// The existence test and insertion must be one SQLite statement: an
 	// asynchronous indexer may finish after Capture deletion has committed.
-	result, err := repository.database.ExecContext(
-		operation,
-		`INSERT INTO runtime_exchange_agent_identities (
-		   exchange_id, client_kind, session_id, session_resumable,
-		   actor_id, actor_label, actor_type, actor_is_subagent,
-		   provider_response_id, provider_message_id,
-		   protocol_ids_json, attributes_json,
-		   evidence_source, confidence, observed_at_unix_ms
-		 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		   WHERE EXISTS (
-		     SELECT 1 FROM runtime_activities
-		     WHERE subject_id = ? AND kind IN ('exchange.started', 'exchange.completed')
-		   ) OR EXISTS (
-		     SELECT 1 FROM runtime_exchange_contents WHERE exchange_id = ?
-		   )
-		 ON CONFLICT(exchange_id) DO NOTHING`,
-		exchangeID,
-		identity.Client,
-		identity.SessionID,
-		identity.SessionResumable,
-		identity.ActorID,
-		identity.ActorLabel,
-		identity.ActorType,
-		identity.ActorIsSubagent,
-		identity.ProviderResponseID,
-		identity.ProviderMessageID,
-		string(protocolIDs),
-		string(attributes),
-		identity.Source,
-		identity.Confidence,
-		toUnixMillis(identity.ObservedAt),
-		exchangeID,
-		exchangeID,
-	)
+	columns := `exchange_id,client_kind,session_id,session_resumable,actor_id,actor_label,actor_type,actor_is_subagent,provider_response_id,provider_message_id,protocol_ids_json,attributes_json,evidence_source,confidence,observed_at_unix_ms`
+	args := []any{exchangeID, identity.Client, identity.SessionID, identity.SessionResumable, identity.ActorID, identity.ActorLabel, identity.ActorType, identity.ActorIsSubagent, identity.ProviderResponseID, identity.ProviderMessageID, string(protocolIDs), string(attributes), identity.Source, identity.Confidence, toUnixMillis(identity.ObservedAt)}
+	if repository.coordinates {
+		columns += ",recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation"
+		args = append(args, scope.Capture.Kind, scope.Capture.ID, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	activityWhere := `subject_id=? AND kind IN('exchange.started','exchange.completed')`
+	contentWhere := `exchange_id=?`
+	args = append(args, exchangeID)
+	if provided {
+		activityWhere += ` AND recording_archive_epoch=? AND recording_capture_generation=? AND CASE WHEN capture_run_id<>'' THEN 'managed_run' WHEN manual_capture_id<>'' THEN 'manual_capture' ELSE '' END=? AND CASE WHEN capture_run_id<>'' THEN capture_run_id ELSE manual_capture_id END=?`
+		args = append(args, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, scope.Capture.Kind, scope.Capture.ID)
+	}
+	args = append(args, exchangeID)
+	if provided {
+		contentWhere += ` AND recording_archive_epoch=? AND recording_capture_generation=? AND scope_kind=? AND scope_id=?`
+		args = append(args, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, scope.Capture.Kind, scope.Capture.ID)
+	}
+	result, err := repository.database.ExecContext(operation, `INSERT INTO runtime_exchange_agent_identities (`+columns+`) SELECT `+placeholders+` WHERE EXISTS(SELECT 1 FROM runtime_activities WHERE `+activityWhere+`) OR EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE `+contentWhere+`) ON CONFLICT(exchange_id) DO NOTHING`, args...)
+
 	if err != nil {
 		return fmt.Errorf("persist Exchange Agent identity: %w", err)
 	}
@@ -450,6 +456,13 @@ func (repository *activityRepository) PutConversationIdentity(
 	}
 	if affected == 1 {
 		return nil
+	}
+	if repository.coordinates {
+		var stored recording.Scope
+		err := repository.database.QueryRowContext(operation, `SELECT recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation FROM runtime_exchange_agent_identities WHERE exchange_id=?`, exchangeID).Scan(&stored.Capture.Kind, &stored.Capture.ID, &stored.Fence.ArchiveEpoch, &stored.Fence.CaptureGeneration)
+		if err != nil || stored != scope {
+			return recording.ErrObservationDiscarded
+		}
 	}
 	stored, err := repository.getConversationIdentity(operation, exchangeID)
 	if err != nil {

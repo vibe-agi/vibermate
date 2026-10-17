@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/recording"
@@ -59,7 +60,7 @@ type CaptureBuffer struct {
 // Keep this conservative reservation until settlement rather than pretending
 // len(encoded) bounds the temporary encoding workspace.
 func observationCharge(o Observation) int64 {
-	n := int64(32<<10) + int64(len(o.Body)) + int64(len(o.Frames))*1024
+	n := int64(32<<10) + 2*int64(unsafe.Sizeof(recording.Fence{})) + int64(len(o.Body)) + int64(len(o.Frames))*1024
 	for _, value := range []string{o.ScopeID, o.ExchangeID, o.ConnectionID, o.AttemptID, o.EnvironmentID, o.EnvironmentDigest, o.ClientEndpointID, o.UpstreamEndpointID, o.ProtocolPlanID, o.RouteID, o.AccountID, o.Method, o.Scheme, o.Authority, o.Path, o.RawQuery, o.ContentType, o.ContentEncoding, o.Representation} {
 		n += int64(len(value)) * 2
 	}

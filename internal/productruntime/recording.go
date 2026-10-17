@@ -35,7 +35,7 @@ type recordingItem struct {
 	nativeSink        nativetool.HistoryWriter
 	metadata          *recordedMetadata
 	content           *exchangecontent.OwnedRecord
-	contentSink       exchangecontent.SourceRecorder
+	contentSink       exchangecontent.ScopedSourceRecorder
 	kind              recording.Kind
 	stamp             recording.Stamp
 	connection        connectionevent.Event
@@ -248,9 +248,9 @@ func (r *observationRecorder) run() {
 				} else if item.kind == recording.Connection {
 					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
 				} else if item.kind == recording.Activity {
-					err = item.metadata.persist(r.ctx, r.reportFailure, &r.usagePolicy)
+					err = item.metadata.persist(r.ctx, item.stamp.Scope(), r.reportFailure, &r.usagePolicy)
 				} else if item.kind == recording.Content {
-					err = item.contentSink.RecordSource(r.ctx, item.content.Source())
+					err = item.contentSink.RecordScopedSource(r.ctx, item.stamp.Scope(), item.content.Source())
 					if err != nil && r.reportFailure != nil {
 						r.reportFailure("response_content", err)
 					}
@@ -260,7 +260,7 @@ func (r *observationRecorder) run() {
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
-					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict) || errors.Is(err, nativetool.ErrNotFound)) {
+					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind != recording.Activity && errors.Is(err, recording.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict) || errors.Is(err, nativetool.ErrNotFound)) {
 						outcome = recording.Discarded
 					}
 				}
@@ -503,7 +503,8 @@ func (r *observationRecorder) offerContent(ctx context.Context, s recording.Stam
 	if !s.Current() {
 		return recording.DroppedStale
 	}
-	if sink == nil {
+	scopedSink, supported := sink.(exchangecontent.ScopedSourceRecorder)
+	if !supported {
 		return recording.DroppedUnavailable
 	}
 	r.mu.Lock()
@@ -525,7 +526,7 @@ func (r *observationRecorder) offerContent(ctx context.Context, s recording.Stam
 		return recording.DroppedInvalid
 	}
 	bytes = owned.RetainedBytes() + uint64(unsafe.Sizeof(recordingItem{}))
-	item := &recordingItem{bytes: int64(bytes), kind: recording.Content, stamp: s, content: owned, contentSink: sink, reservation: reservation}
+	item := &recordingItem{bytes: int64(bytes), kind: recording.Content, stamp: s, content: owned, contentSink: scopedSink, reservation: reservation}
 	return r.enqueue(item)
 }
 

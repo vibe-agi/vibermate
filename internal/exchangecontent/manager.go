@@ -3,6 +3,7 @@ package exchangecontent
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"sync"
 	"time"
 )
@@ -336,3 +337,31 @@ func (manager *Manager) notifyLocked() {
 }
 
 var _ Runtime = (*Manager)(nil)
+
+// ScopedSourceRecorder preserves the original admission coordinates and the
+// synchronous Source borrow contract.
+type ScopedSourceRecorder interface {
+	RecordScopedSource(context.Context, recording.Scope, *Source) error
+}
+type ScopedSourceRepository interface {
+	PutScopedSource(context.Context, recording.Scope, *Source) error
+}
+
+func (manager *Manager) RecordScopedSource(ctx context.Context, scope recording.Scope, source *Source) error {
+	if err := scope.Validate(); err != nil {
+		return recording.ErrObservationDiscarded
+	}
+	if manager == nil || manager.limits == nil || source == nil || source.limits != *manager.limits || !source.metadata.ExpiresAt.After(manager.clock.Now().UTC()) {
+		return ErrInvalidEvidence
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	sink, ok := manager.repository.(ScopedSourceRepository)
+	if !ok {
+		return recording.ErrObservationDiscarded
+	}
+	return sink.PutScopedSource(operation, scope, source)
+}

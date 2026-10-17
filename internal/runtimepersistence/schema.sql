@@ -426,6 +426,8 @@ CREATE TABLE proxy_client_bindings(
   CHECK(updated_at_unix_ms >= created_at_unix_ms)
 ) STRICT;
 CREATE TABLE "runtime_activities"(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
  workspace_id TEXT NOT NULL DEFAULT '',
  workspace_label TEXT NOT NULL DEFAULT '',
  capture_label TEXT NOT NULL DEFAULT '',
@@ -761,6 +763,10 @@ AFTER UPDATE OF chunk_manifest ON runtime_evidence_bodies BEGIN
   ) WHERE true ON CONFLICT DO NOTHING;
 END;
 CREATE TABLE "runtime_exchange_agent_identities"(
+ recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('','managed_run','manual_capture')),
+ recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB))<=128),
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   client_kind TEXT NOT NULL CHECK(client_kind IN('claude', 'codex')),
@@ -846,6 +852,8 @@ CREATE TABLE runtime_exchange_content_transcripts(
   depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 100001)
 ) STRICT;
 CREATE TABLE runtime_exchange_contents(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   scope_kind TEXT NOT NULL DEFAULT ''
@@ -885,6 +893,8 @@ CREATE TABLE runtime_exchange_contents(
   (base_transcript_digest IS NOT NULL AND inherited_message_count > 0))
 ) STRICT;
 CREATE TABLE runtime_raw_evidence_envelopes(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   envelope_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
   writer_id TEXT NOT NULL

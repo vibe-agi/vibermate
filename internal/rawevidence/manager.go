@@ -553,6 +553,7 @@ func (manager *Manager) offer(observation Observation, stamp recording.Stamp) (W
 }
 
 func (manager *Manager) publish(draft StoredEnvelope, reservation *recording.Reservation, weight int64, stamp recording.Stamp) (Watermark, recording.OfferResult) {
+	draft.RecordingFence = stamp.Fence()
 	draft.WriterID = manager.writerID
 	draft.Watermark = 1
 	draft.EnvelopeID = manager.writerID + ".1"
@@ -947,6 +948,9 @@ func (manager *Manager) commit(
 	outcome := recording.Persisted
 	if err != nil {
 		outcome = recording.Unconfirmed
+		if errors.Is(err, recording.ErrObservationDiscarded) {
+			outcome = recording.Discarded
+		}
 	}
 	clear(records)
 	manager.settle(*batch, *batchBytes, outcome, err)

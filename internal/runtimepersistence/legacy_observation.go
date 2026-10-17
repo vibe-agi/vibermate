@@ -18,14 +18,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
 var (
-	ErrInspectionUnavailable = errors.New("inspection source unavailable")
+	ErrInspectionUnavailable = recording.ErrInspectionUnavailable
 	ErrInspectionSourceLimit = errors.New("inspection source inventory exceeds connection limit")
-	ErrInspectionChanged     = errors.New("inspection source generation changed")
+	ErrInspectionChanged     = recording.ErrInspectionChanged
 	ErrInspectionCursor      = errors.New("invalid inspection cursor")
 )
 
@@ -43,10 +44,7 @@ type InspectionCatalogOptions struct {
 	Concurrency    int
 	Timeout        time.Duration
 }
-type InspectionVersion struct {
-	SourceSet  string
-	Generation uint64
-}
+type InspectionVersion = recording.InspectionSourceVersion
 
 // The catalog shares only lazy read ownership. Domain adapters own their SQL,
 // identity winners, policy/visibility checks and bounded result projections.
