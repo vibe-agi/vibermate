@@ -46,6 +46,9 @@ func (r *Reservation) TryGrow(int64) bool
 func (r *Reservation) Shrink(int64)
 func (r *Reservation) Release()
 func (b *Budget) Snapshot() Statistics
+func (b *Budget) RecordOffer(Kind, OfferResult, uint64)
+type Settlement uint8 // Persisted, Discarded, Unconfirmed
+func (b *Budget) RecordSettlement(Kind, Settlement, uint64)
 
 // Neither a Fence nor a Stamp authorizes execution.
 type Fence struct { ArchiveEpoch, CaptureGeneration uint64 }
@@ -64,7 +67,9 @@ func (s Stamp) Fence() Fence
 
 The zero-value Stamp is invalid; a Runtime-wide token uses a zero Capture reference and nonzero archive epoch. Capture-bound tokens require a valid reference and positive generation. Each token retains the Runtime's Epoch pointer and the fixed epoch it was issued against; `Current` checks both revocation and equality with that atomic value. `Advance` accepts only a positive greater value and never walks tokens/queued items. Independent Runtime Epoch owners cannot revoke each other's stamps. Keep no global unbounded map or process-global epoch in this package. Scope token persistence/publication belongs to control composition in the storage plan. `Statistics` uses fixed fields/arrays for reserved records/bytes, accepted and drops by closed kind/reason, confirmed writes and unconfirmed writes; no IDs/URLs/error strings as metric labels. Document that Accepted is in-memory ownership, not durable confirmation.
 
-- [ ] **Step 1: Write concurrency/ownership tests first.** Reserve from two named lanes against one small Budget; fill it with one producer-owned, one queued and one worker-owned reservation. Another TryReserve/TryGrow must return immediately while owners remain held, and existing totals must stay unchanged on refusal. Release/transfer after dequeue must not free capacity early. Concurrent reservations never exceed limits; repeated Release is harmless; invalid negative/overflow arithmetic cannot change counters. Revoking a token makes old stamps stale without affecting another scope; advancing the Runtime epoch invalidates its old stamps without walking them or affecting a separate Runtime owner.
+Reservation methods account only ownership, not publication success. Producers call `RecordOffer` exactly once when their offer completes; workers call `RecordSettlement` once per accepted observation that finishes. The final argument is the retained observation byte count. Temporary workspace is reserved but does not count as another observation/offer. Unconfirmed commits remain distinct from known discarded copies. This separates allocation, queue admission and persistence counters without recursive logging or I/O.
+
+- [x] **Step 1: Write concurrency/ownership tests first.** Reserve from two named lanes against one small Budget; fill it with one producer-owned, one queued and one worker-owned reservation. Another TryReserve/TryGrow must return immediately while owners remain held, and existing totals must stay unchanged on refusal. Release/transfer after dequeue must not free capacity early. Concurrent reservations never exceed limits; repeated Release is harmless; invalid negative/overflow arithmetic cannot change counters. Revoking a token makes old stamps stale without affecting another scope; advancing the Runtime epoch invalidates its old stamps without walking them or affecting a separate Runtime owner.
 
 ```go
 budget, err := recording.NewBudget(recording.Limits{Records: 2, Bytes: 64})
@@ -81,14 +86,15 @@ if !content.TryGrow(32) { t.Fatal("released bytes were not reusable") }
 content.Release()
 ```
 
-- [ ] **Step 2: Run `go test -mod=readonly -p=1 ./internal/recording -count=1` and record RED.** Missing owner implementation is the expected initial failure; subsequent race tests must exercise real synchronization and totals, not private field shape.
-- [ ] **Step 3: Implement short in-memory critical sections only.** Reserve record and bytes atomically; no condition waits. On grow, account for the complete new backing allocation while the old buffer remains live, then shrink the old capacity after transfer. Reject invalid requests conservatively. Separate reserve/drop accounting from persistence acknowledgment so ambiguous writes are not falsely reported as definite loss.
-- [ ] **Step 4: Run package normal and race tests; self-review and commit.** Commit `feat: bound optional recording ownership without waiting`.
+- [x] **Step 2: Run `go test -mod=readonly -p=1 ./internal/recording -count=1` and record RED.** A missing API may initially fail compilation; add only the smallest compile stubs if necessary, then capture behavioral failures of ownership/limits/stamp invalidation before implementing the real synchronization. Subsequent race tests exercise actual synchronization and totals, not private field shape.
+- [x] **Step 3: Implement short in-memory critical sections only.** Reserve record and bytes atomically; no condition waits. On grow, account for the complete new backing allocation while the old buffer remains live, then shrink the old capacity after transfer. Reject invalid requests conservatively. Separate reserve/drop accounting from persistence acknowledgment so ambiguous writes are not falsely reported as definite loss.
+- [x] **Step 4: Run package normal and race tests; self-review and commit.** Commit `feat: bound optional recording ownership without waiting`.
 
 ### Task 2: Make Raw admission and streaming capture bounded and lossy
 
 **Files:**
 - Modify: `internal/rawevidence/manager.go`, `internal/rawevidence/types.go`, `internal/providertransport/client.go`, `internal/loopbackproxy/handler.go`, Raw construction in `internal/productruntime/runtime.go` and `builders.go`.
+- Modify: `internal/runtimepersistence/raw_evidence_repository.go` and its tests where writer sequence/settlement semantics require it; keep published frozen v1/v2 DDL unchanged.
 - Create: `internal/rawevidence/capture_buffer.go`, `internal/rawevidence/capture_buffer_test.go`, `internal/rawevidence/admission_test.go`.
 - Extend existing Raw/provider/loopback tests covering request/response capture and saturation.
 
@@ -139,7 +145,7 @@ case <-time.After(2 * time.Second):
 
 - [ ] **Step 2: Run focused new tests and record behavioral RED.** Existing Observe waits for semaphores and pre-Observe response buffers escape capacity; capture those failures without changing production first.
 - [ ] **Step 3: Reserve before clone/redaction/buffer growth and use nonblocking channel publication.** Remove eager recording-only Header/Body/Frames clones from producer wrappers. On capacity refusal, drop the copy or freeze a correctly labeled prefix while continuing actual I/O. Stop copying/hashing once the whole observation is dropped. Include frame metadata and grow-overlap capacities. Existing full-body/prefix/digest rules remain accurate.
-- [ ] **Step 4: Settle failed batches and release ownership.** A failed/ambiguous batch is counted and abandoned; no indefinite retry holding capacity. `ListExchange` reads committed rows without flushing a watermark. Replace the former contiguous-durable promise with accurately named settled/persisted counters; only explicit administrative barriers may wait. Shutdown closes admission, cancels worker I/O, abandons queued copies and joins the actual worker before releasing its resources; deadlines never pretend an in-flight worker has stopped.
+- [ ] **Step 4: Settle failed batches and release ownership.** A failed/ambiguous batch is counted and abandoned; no indefinite retry holding capacity. `ListExchange` reads committed rows without flushing a watermark. Replace the former contiguous-durable promise with accurately named settled/persisted counters; only explicit administrative barriers may wait. Persisting a later batch after an abandoned sequence range must succeed and retain exact later bytes: update repository sequencing validation as necessary instead of turning one dropped batch into permanent recording failure. A highest persisted sequence is not proof that all earlier records were stored. Add that recovery regression before changing the consumer contract. Shutdown closes admission, cancels worker I/O, abandons queued copies and joins the actual worker before releasing its resources; deadlines never pretend an in-flight worker has stopped.
 - [ ] **Step 5: Run affected Raw/provider/loopback tests plus focused race saturation/cancellation cases; commit.** Existing tests asserting synchronous immediate visibility must explicitly wait on recording inspection/test barriers, not add waits to production forwarding. Commit `fix: keep raw recording off the forwarding critical path`.
 
 ### Task 3: Detach connection and ordinary egress history from forwarding
