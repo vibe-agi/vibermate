@@ -101,7 +101,24 @@ func (b *CaptureBuffer) Finish(TerminalMetadata) recording.OfferResult
 func (b *CaptureBuffer) Discard()
 ```
 
-`CaptureMetadata` holds the existing Observation identity/scope/layer/protocol/header/status/timestamp/recording-policy fields, without Body/Frames; `TerminalMetadata` holds final time, total observed bytes, completion/truncation status and locally closed reason. Use actual existing Raw domain types for those fields, not strings replacing validated enums. CaptureBuffer retains its reservation and owned redacted metadata from creation through worker settlement. A nil/disabled handle safely ignores calls. The detailed design's DTO section supplies the current exact domain field mapping.
+```go
+type CaptureMetadata struct {
+    Context Context
+    Layer Layer
+    Method, Scheme, Authority, Path, RawQuery string
+    StatusCode int
+    Headers http.Header
+    ProtectedHeaderNames []string
+    ContentType, ContentEncoding string
+}
+type TerminalMetadata struct {
+    Trailers http.Header
+    Complete bool
+    IncompleteReason string
+}
+```
+
+Context holds the existing identity/scope/frozen recording metadata; bytes observed and digest/prefix completeness are tracked by the buffer itself. Headers/trailers are borrowed only during the synchronous call. CaptureBuffer retains its reservation and owned redacted metadata from creation through worker settlement. A nil/disabled handle safely ignores calls. Reasons are validated local closed values under existing Raw rules, never arbitrary transport error strings.
 
 - [ ] **Step 1: Add tests that block the real writer seam while streaming continues.** Fill a small shared budget with multiple active buffers and one worker-held batch, then forward byte-exact local HTTP/SSE responses. Additional complete/request observations and buffer growth must promptly drop or retain an honest prefix; forwarded bytes must still complete before releasing the sink. Assert total item/byte ownership includes in-flight buffers, and no reservation leaks after failure/cancel/shutdown. Mutating a caller's input after TryObserve cannot change retained bytes. Finish must transfer owned storage without a second body-sized allocation.
 
@@ -206,6 +223,8 @@ type CollectedWriter interface {
 The producer uses a reliably published `runtimeusage.CollectionPolicy` snapshot and admitted Capture/Environment/account facts already in memory. `PutCollectedUsage` initially supplies the same typed seam to the worker; the storage plan implements the observation-only transaction and consent overlays. Any legacy bridge is worker-side only and removed before release; never fabricate a trusted owner from a request label.
 
 Use the existing Source projection/sanitization and shape measurement, extending them with allocation accounting rather than implementing another sanitizer. Deep-own slices, byte buffers and string backing storage. Worker Source can only refer to OwnedRecord storage; no original request graph, extension reader or body lease remains. The caller transfers one reservation on accepted enqueue and releases it on refusal; worker releases after actual completion.
+
+Add explicit `ObservationStamp recording.Stamp` to the three existing Exchange observation structs in `internal/exchange/contracts.go` and propagate it from the frozen admitted request. A zero stamp means recording drops. Do not use context values, a per-event SQL lookup or an unbounded Exchange-ID lookup map to recover the scope. Runtime auxiliary actions use a valid current global archive stamp. The storage plan connects these tokens to persisted epoch/generation state.
 
 - [ ] **Step 1: Add borrowed-owner and saturation behavioral tests.** Offer request/response content, then mutate and release the producer objects while a sink is blocked; after release, the sink sees the original sanitized snapshot. Saturated recording capacity must allow real JSON and SSE results to finish before the sink is released and must let pipeline body owners close. Metadata-only mode never copies full content merely to discard it. Oversized optional content drops without reducing the live request's valid resource limit.
 - [ ] **Step 2: Observe RED, then implement bounded ownership.** Reserve item/preparation space before Source construction or sanitization scratch. Use nonallocating shape traversal to reject overlarge inputs. Charge every owned capacity and temporary overlap before allocation; insufficient capacity drops immediately. Worker encoder/driver scratch must be reserved separately from queued payloads, never wait for capacity held by its own queue.

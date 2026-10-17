@@ -60,7 +60,7 @@ if err != nil || ctx.Err() != nil { t.Fatalf("read exceeded budget: %v / %v", er
 
 **Files:**
 - Create: `internal/runlauncher/control_failure.go`, `internal/runlauncher/control_failure_test.go`.
-- Modify: `internal/runlauncher/control.go`, `cmd/vibermate/main.go`.
+- Modify: `internal/runlauncher/control.go`, `cmd/vibermate/main.go`, `locales/en-US.json`, `locales/zh-CN.json`.
 - Test: `internal/runlauncher/control_internal_test.go` if present (otherwise keep new focused tests in `control_failure_test.go`), `cmd/vibermate/main_test.go`.
 
 **Interfaces:**
@@ -82,7 +82,7 @@ func (failure *ControlCallFailure) SafeSummary() string {
 
 Stages are closed local values: `control`, `session_check`, `capture_create`, `process_attach`, `capture_heartbeat`, `capture_finish`, `acp_start`, `acp_publish`. Derive from locally constructed method/path; never include a run ID. Closed causes: `timeout`, `canceled`, `dns`, `connection_refused`, `connection_reset`, `tls`, `response_read`, `invalid_response`, `network`. Classify using `errors.Is/As`, not substring matching of raw errors. Allowlisted HTTP metadata keeps the same stage vocabulary.
 
-- [ ] **Step 1: Add failing behavioral tests.** A local control HTTP fixture times out during post-start attach; CLI stderr must include `stage=process_attach reason=timeout` as well as the existing supervision summary. A wrapped temporary network error must remain retryable; a definitive 403 remains non-retryable. An error containing a fake URL/credential sentinel must not print that sentinel. Exercise body read timeout and invalid JSON separately so stage/cause is not lost after response headers.
+- [x] **Step 1: Add failing behavioral tests.** A local control HTTP fixture times out during post-start attach; CLI stderr must include `stage=process_attach reason=timeout` as well as the existing supervision summary. A wrapped temporary network error must remain retryable; a definitive 403 remains non-retryable. An error containing a fake URL/credential sentinel must not print that sentinel. Exercise body read timeout and invalid JSON separately so stage/cause is not lost after response headers.
 
 ```go
 var call *ControlCallFailure
@@ -94,14 +94,15 @@ if got := call.SafeSummary(); got != "stage=process_attach reason=timeout" {
 }
 ```
 
-- [ ] **Step 2: Run the new tests and record the expected missing-stage/cause failure.** Use focused `go test -mod=readonly -p=1 ./internal/runlauncher ./cmd/vibermate -run 'Control.*Failure|.*Supervision.*Detail' -count=1`; adjust the regex to the actual added names and record it.
-- [ ] **Step 3: Wrap failures at `controlClient.jsonRequest` with the local stage, and render `SafeSummary` from the CLI using the existing localized detail template.** Keep `errors.Is/As` working through all wrappers and joins. Preserve cancellation exit 130 and existing child lifecycle behavior. HTTP response bodies remain bounded. No automatic retry of start or command execution is introduced.
-- [ ] **Step 4: Run affected launcher/CLI packages, self-review and commit.** Include transient heartbeat retry and HTTP rejection regression evidence. Commit message: `fix: explain capture control failures with safe stage details`.
+- [x] **Step 2: Run the new tests and record the expected missing-stage/cause failure.** Use focused `go test -mod=readonly -p=1 ./internal/runlauncher ./cmd/vibermate -run 'Control.*Failure|.*Supervision.*Detail' -count=1`; adjust the regex to the actual added names and record it.
+- [x] **Step 3: Wrap failures at `controlClient.jsonRequest` with the local stage, and render `SafeSummary` from the CLI using the existing localized detail template.** Reuse the existing locale key while changing its text to `Capture control request failed: {{details}}.` / `抓包控制请求失败：{{details}}。`; a timeout is not necessarily a server rejection. Add an observed failing rendered timeout assertion before changing these strings. Keep `errors.Is/As` working through all wrappers and joins. Preserve cancellation exit 130 and existing child lifecycle behavior. HTTP response bodies remain bounded. No automatic retry of start or command execution is introduced.
+- [x] **Step 4: Run affected launcher/CLI packages, self-review and commit.** Include transient heartbeat retry and HTTP rejection regression evidence. Commit message: `fix: explain capture control failures with safe stage details`.
 
 ### Task 3: Give UI reads a 30-second deadline and cancel the timed-out request
 
 **Files:**
 - Modify: `ui/flutter_app/lib/core/api/control_api.dart`, `ui/flutter_app/lib/features/workbench/workbench_controller.dart`, `ui/flutter_app/lib/core/i18n/app_copy.dart`.
+- Modify the Raw notice renderer in `ui/flutter_app/lib/features/workbench/conversation_timeline.dart` if returning localization keys; an untranslated key is not an actionable timeout message.
 - Test: `ui/flutter_app/test/control_api_http_test.dart`, `ui/flutter_app/test/control_api_session_test.dart`.
 - Create focused test: `ui/flutter_app/test/control_api_timeout_test.dart`.
 
@@ -120,8 +121,8 @@ final request = http.AbortableRequest(method, destination,
 // Closing HttpControlApi cancels every outstanding owned request.
 ```
 
-- [ ] **Step 1: Add failing async tests through `HttpControlApi`.** Use a controlled BaseClient that observes `Abortable.abortTrigger`, fake time where available, and a real local HTTP server for one cancellation check. Verify a response after 10 but before 30 seconds succeeds; a stalled headers/body attempt times out at 30 seconds and aborts; one timed-out request does not abort a concurrent request; slow trickle does not reset the total deadline; a late response cannot publish stale work. Continue to enforce existing maximum-body checks and session renewal behavior. Add a controller-level check for actionable localized timeout text.
-- [ ] **Step 2: Record RED, then implement the per-request owner.** Inspect the pinned `http-1.6.0` code in the local pub cache before using cancellation APIs. Bound/cancel the response subscription on failure, including declared-length rejection. Dispose cancels all owned requests and the renewal timer. Retired read retry remains at most once and mutating calls are not retried.
+- [ ] **Step 1: Add failing async tests through `HttpControlApi`.** Use a controlled BaseClient that observes `Abortable.abortTrigger`, fake time where available, and a real local HTTP server for one cancellation check. Verify a response after 10 but before 30 seconds succeeds; a stalled headers/body attempt times out at 30 seconds and aborts; one timed-out request does not abort a concurrent request; slow trickle does not reset the total deadline; a late response cannot publish stale work. Continue to enforce existing maximum-body checks and session renewal behavior. Verify actual Raw HTTP timeout presentation in both languages, not merely existence of a catalog key. Currently its InlineNotice renders the controller string directly; ensure generic timeout handling also remains intelligible at other affected controller error consumers.
+- [ ] **Step 2: Record RED, then implement the per-request owner.** Inspect the pinned `http-1.6.0` code in the local pub cache before using cancellation APIs. Bound/cancel the response subscription on failure, including declared-length rejection. Dispose cancels all owned requests and the renewal timer. Retired read retry remains at most once. Introduce no mutation retries; preserve the existing idempotent session-renewal protocol, including recovery from a lost renewal response.
 - [ ] **Step 3: Run the new timeout tests, existing control API HTTP/session tests, and relevant workbench tests once; run Dart formatting and targeted analyzer.** Use the repository's pinned Flutter invocation after reading its tool configuration. Record exact commands/results. Do not build or install the App.
 - [ ] **Step 4: Self-review and commit.** Commit message: `fix: cancel timed out workbench requests and explain recovery`. No new dependencies.
 

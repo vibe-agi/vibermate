@@ -115,6 +115,26 @@ Consume the predecessor's exact `runtimeusage.CollectedObservation` and `Collect
 - [ ] **Step 1: Add blocked/failing snapshot regressions.** Valid AuthorizeProxy succeeds even if first-observed recording fails. Real ACP child starts and preserves its successful exit while optional Create/Read/Save storage is unavailable. True revoked capability still stops it; temporary authority-store failure is unavailable, never 403. Native JSON/SSE result bytes arrive before a blocked PutContent is released; arguments/result copies cannot hold execution leases.
 - [ ] **Step 2: Record RED, then remove optional writes from authority checks.** Capture first-observed display data becomes an observation after successful authority admission; capture activity/history queries move to inspection. ACP registration rechecks the active run and created state in its control transaction; snapshots and final-save failures do not determine child exit. Do not weaken genuine process attachment, capability or native start receipt checks.
 - [ ] **Step 3: Freeze usage consent/attribution and extend the typed worker.** Disabling collection may conservatively drop queued old-policy observations; re-enabling does not revive callbacks older than CollectingSince. Keep original retention/expiry. Native/ACP arms are finite owned payloads with the same shared budget, not new workers or queues. Missing optional display names remain missing.
+
+```go
+// nativetool: observation only, never authorization for execution.
+type ContentPart string // tool_arguments | tool_result
+type ContentObservation struct {
+    OperationID ID
+    Capture captureidentity.Reference
+    Recording environment.ContentRecordingPolicy
+    ObservedAt time.Time
+    Part ContentPart
+    Body []byte // borrow ends before ObserveNativeContent returns
+}
+type ContentRecorder interface {
+    ObserveNativeContent(recording.Stamp, ContentObservation) recording.OfferResult
+}
+// acpobservation: snapshot copy only, no control marker authority.
+type Recorder interface {
+    ObserveACP(recording.Stamp, Record) recording.OfferResult
+}
+```
 - [ ] **Step 4: Run affected Capture/ACP/native-content/usage tests, focused race ownership checks and launcher regressions; commit.** Commit `fix: keep capture and tool results independent of saved logs`.
 
 ### Task 3: Verified owned role cutover and lazy legacy inspection
