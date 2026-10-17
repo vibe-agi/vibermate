@@ -17,8 +17,9 @@ var (
 // Guard owns one kernel-backed generation lock. The stable lock file is never
 // removed; releasing the open file description relinquishes ownership.
 type Guard struct {
-	path string
-	file *os.File
+	path          string
+	file          *os.File
+	directoryInfo os.FileInfo
 
 	mu          sync.RWMutex
 	releaseOnce sync.Once
@@ -40,7 +41,12 @@ func Acquire(path string) (*Guard, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Guard{path: path, file: file}, nil
+	directoryInfo, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !directoryInfo.IsDir() {
+		_ = releaseFile(file)
+		return nil, errors.New("generation lock directory unavailable")
+	}
+	return &Guard{path: path, file: file, directoryInfo: directoryInfo}, nil
 }
 
 func (guard *Guard) Path() string {
@@ -62,7 +68,19 @@ func (guard *Guard) OwnsDirectory(directory string) bool {
 	}
 	guard.mu.RLock()
 	defer guard.mu.RUnlock()
-	return guard.file != nil
+	if guard.file == nil {
+		return false
+	}
+	currentDirectory, err := os.Lstat(directory)
+	if err != nil || !currentDirectory.IsDir() || guard.directoryInfo == nil || !os.SameFile(guard.directoryInfo, currentDirectory) {
+		return false
+	}
+	currentLock, err := os.Lstat(guard.path)
+	if err != nil || !currentLock.Mode().IsRegular() {
+		return false
+	}
+	heldLock, err := guard.file.Stat()
+	return err == nil && os.SameFile(heldLock, currentLock)
 }
 
 // Release is idempotent and leaves the stable lock file in place.

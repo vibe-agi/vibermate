@@ -108,21 +108,11 @@ func ExtractControl(ctx context.Context, in ControlExtraction) (proof ControlExt
 	if _, err = out.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON; DELETE FROM runtime_usage_policy; DELETE FROM runtime_egress_default`); err != nil {
 		return proof, err
 	}
-	projections := sourceProjections
-	if proof.Source.Revision == 2 {
-		projections = append(projections, controlProjection{"native_tool_deliveries", "attempt_id,operation_id,connection_id,payload_class,target_origin,policy_id,policy_revision,rule_id,proxy_id,proxy_revision,selection_source,default_revision,started_at_unix_ms,completed_at_unix_ms,outcome,error_class,bytes_out,bytes_in,byte_counts_known", "attempt_id"})
-	}
+	projections := controlExtractionProjections()
 	deferred, err := deferExtractionTriggers(ctx, out)
 	if err != nil {
 		return proof, err
 	}
-	projections = append(projections,
-		controlProjection{"acp_registrations", "run_id,recording,retention_days,expires_at_unix_ms,archive_epoch,capture_generation", "run_id"},
-		controlProjection{"runtime_metadata", "singleton,schema_identity,schema_revision,initialized_at", "singleton"},
-		controlProjection{"runtime_storage_state", "singleton,layout_id,archive_epoch,visibility_revision", "singleton"},
-		controlProjection{"runtime_usage_legacy_retention_caps", "archive_id,retention_days,after_sequence,through_sequence", "archive_id,retention_days"},
-		controlProjection{"recording_capture_fences", "capture_kind,capture_id,generation,deleted", "capture_kind,capture_id"},
-	)
 	expected := sha256.New()
 	fingerprintPart(expected, 'V', []byte(fmt.Sprintf("control-extraction/v1/source-%d", proof.Source.Revision)))
 	for _, p := range projections {
@@ -185,6 +175,9 @@ func ExtractControl(ctx context.Context, in ControlExtraction) (proof ControlExt
 }
 
 func extractionQuery(p controlProjection, revision int64, in ControlExtraction) (string, []any) {
+	if revision == 1 && strings.HasPrefix(p.table, "native_tool_") || p.table == "runtime_usage_retention_rules" {
+		return `SELECT ` + strings.TrimSuffix(strings.Repeat("NULL,", len(strings.Split(p.columns, ","))), ",") + ` WHERE 0`, nil
+	}
 	switch p.table {
 	case "native_tool_deliveries":
 		return `SELECT a.attempt_id,a.parent_id,a.connection_id,a.payload_class,a.target_origin,a.policy_id,a.policy_revision,a.rule_id,a.proxy_id,a.proxy_revision,a.selection_source,a.default_revision,a.started_at_unix_ms,a.completed_at_unix_ms,a.outcome,a.error_class,a.bytes_out,a.bytes_in,a.byte_counts_known FROM native_tool_once w JOIN native_tool_operations o ON o.operation_id=w.operation_id JOIN runtime_egress_attempts a ON a.attempt_id=w.attempt_id ORDER BY a.attempt_id`, nil
