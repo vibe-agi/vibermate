@@ -188,7 +188,7 @@ func TestRemoteCreateCancellationKeepsInterruptOutcome(t *testing.T) {
 	if code != 130 || key != "" {
 		t.Fatalf("canceled code=%d key=%q stderr=%q", code, key, stderr.String())
 	}
-	if strings.Contains(stderr.String(), "control request rejected") {
+	if strings.Contains(stderr.String(), "Capture control request") {
 		t.Fatalf("cancellation reported as rejection: %q", stderr.String())
 	}
 }
