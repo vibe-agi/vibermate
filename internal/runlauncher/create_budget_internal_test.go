@@ -85,9 +85,9 @@ func TestTheControlTransportCoversTheWidestOperation(t *testing.T) {
 	}
 }
 
-// Create is the only control call that can contain a person. Lifecycle calls
-// keep the short budget, and must: giving them the create budget would let a
-// hung runtime hold an attach or a heartbeat for a minute and a half.
+// Create is the only control call that can contain a person. Heartbeat and
+// finalization keep their short budget. Initial process attachment has the
+// separate startup budget, while none of these borrow the full create budget.
 func TestOnlyCreateCarriesTheWideBudget(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +101,7 @@ func TestOnlyCreateCarriesTheWideBudget(t *testing.T) {
 	}
 	if defaultControlTimeout > 10*time.Second {
 		t.Fatalf(
-			"the ordinary control budget grew to %v; attach, heartbeat and "+
+			"the ordinary control budget grew to %v; heartbeat and "+
 				"finish contain no human step and must not wait like one",
 			defaultControlTimeout,
 		)
