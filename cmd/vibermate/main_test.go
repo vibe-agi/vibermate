@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientpath"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -747,5 +748,120 @@ func TestParseRunKeepsAnExplicitHTTPSServerWithoutFallingBack(t *testing.T) {
 	}
 	if parsed.server.Origin() != "https://vibermate.lan:9666" {
 		t.Fatalf("server = %q", parsed.server.Origin())
+	}
+}
+
+// A post-start timeout must keep the supervision summary and show a safe detail,
+// without printing run IDs, capabilities, origins, or untrusted response content.
+func TestCaptureSupervisionTimeoutDetail(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("requires a shell child")
+	}
+	t.Setenv("HOME", t.TempDir())
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "agent")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nread line\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	input, send, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer send.Close()
+	credential := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32))
+	const runID = "private-run-FAKE_CREDENTIAL"
+	var attached atomic.Bool
+	var finished atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/attach-process") {
+			_, _ = io.Copy(io.Discard, r.Body)
+		}
+		switch r.URL.Path {
+		case "/api/v1/capture-runs":
+			if r.Header.Get("Authorization") != "Bearer "+credential {
+				t.Error("missing control credential")
+			}
+			now := time.Now().UTC()
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(capturecontrol.LaunchGrant{
+				Run:             capturecontrol.CaptureRunView{ID: runID, ExecutableLabel: "agent", CWD: cwd, CreatedAt: now, ExpiresAt: now.Add(time.Minute), ClientAdapterState: clientadapter.StatusGeneric, ClientRecognition: clientadapter.RecognitionUnknown, CatalogRevision: 7},
+				CatalogRevision: 7, Recognition: clientadapter.RecognitionUnknown, LaunchRecipe: clientadapter.LaunchGeneric,
+				ExecutablePath: executable, ProxyAddress: "http://" + r.Host, ProxyDelivery: capturecontrol.ProxyDeliveryLocalListener,
+				ProxyToken: "proxy-FAKE_CREDENTIAL", RunCapability: "run-FAKE_CREDENTIAL", ProtectedAuthorities: []string{}, ManagedCredentialAuthorities: []string{},
+			})
+		case "/api/v1/capture-runs/" + runID + "/actions/attach-process":
+			var input capturecontrol.AttachRequest
+			// The launcher starts a real child before issuing this request.
+			if r.Header.Get(capturecontrol.RunCapabilityHeader) != "run-FAKE_CREDENTIAL" {
+				t.Error("missing run capability")
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ProcessID <= 0 {
+				t.Errorf("invalid child attachment: %+v %v", input, err)
+			}
+			attached.Store(true)
+			<-r.Context().Done()
+		case "/api/v1/capture-runs/" + runID + "/actions/finish":
+			finished.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	layout, err := runtimepath.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.RuntimeDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(localdiscovery.Session{Schema: localdiscovery.Schema, InstanceID: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x49}, 16)), ProcessID: os.Getpid(), BaseURL: server.URL, ControlCredential: credential, ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.CLIControlRecord, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	env := []string{"LANG=en_US.UTF-8", "PATH=" + directory + ":/usr/bin:/bin"}
+	code, key := executeContext(ctx, []string{"run", "--", executable}, env, input, &stdout, &stderr)
+	if code != 1 || key != "cli.error.captureSupervisionFailed" || !attached.Load() || !finished.Load() {
+		t.Fatalf("supervision lifecycle: code=%d key=%q attached=%t finished=%t stderr=%q", code, key, attached.Load(), finished.Load(), stderr.String())
+	}
+	// main renders the returned key; use the same localized renderer here.
+	if err := renderCLIMessage(env, &stderr, key, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "Capture control request failed: stage=process_attach reason=timeout.") || !strings.Contains(stderr.String(), "supervision") {
+		t.Fatalf("missing safe supervision detail: %q", stderr.String())
+	}
+	for _, secret := range []string{"FAKE_CREDENTIAL", credential, server.URL, runID} {
+		if strings.Contains(stderr.String(), secret) {
+			t.Fatalf("unsafe diagnostic: %q", stderr.String())
+		}
+	}
+}
+
+func TestControlTimeoutDetailUsesFailureWording(t *testing.T) {
+	for _, test := range []struct{ locale, want string }{
+		{"en_US.UTF-8", "Capture control request failed: stage=process_attach reason=timeout.\n"},
+		{"zh_CN.UTF-8", "抓包控制请求失败：stage=process_attach reason=timeout。\n"},
+	} {
+		t.Run(test.locale, func(t *testing.T) {
+			var stderr bytes.Buffer
+			err := renderCLIMessage([]string{"LANG=" + test.locale}, &stderr, "cli.error.controlFailureDetail", map[string]string{"details": "stage=process_attach reason=timeout"})
+			if err != nil || stderr.String() != test.want {
+				t.Fatalf("timeout classified as rejection: output=%q err=%v", stderr.String(), err)
+			}
+		})
 	}
 }

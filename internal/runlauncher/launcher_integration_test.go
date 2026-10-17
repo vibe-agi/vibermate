@@ -731,14 +731,21 @@ func TestLaunchArgv0Helper(t *testing.T) {
 func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	t.Parallel()
 
+	var redirected atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected.Store(true)
+	}))
+	defer target.Close()
 	server := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
 		request *http.Request,
 	) {
-		http.Redirect(writer, request, "http://example.invalid", http.StatusFound)
+		http.Redirect(writer, request, target.URL, http.StatusFound)
 	}))
 	defer server.Close()
+	var stdout bytes.Buffer
 	launcher, err := runlauncher.New(runlauncher.Config{
+		Stdout: &stdout,
 		Discovery: fixedDiscovery{session: localdiscovery.Session{
 			BaseURL:           server.URL,
 			ControlCredential: capability(0x51),
@@ -754,9 +761,16 @@ func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launcher.Run(context.Background(), transparentLaunch("echo")); err == nil ||
-		!strings.Contains(err.Error(), "redirect") {
-		t.Fatalf("Run() redirect error = %v", err)
+	code, err := launcher.Run(context.Background(), transparentLaunch("echo"))
+	var call *runlauncher.ControlCallFailure
+	var request *url.Error
+	if code != 1 || !errors.As(err, &call) || !errors.As(err, &request) ||
+		redirected.Load() || stdout.Len() != 0 {
+		t.Fatalf("redirect escaped control boundary: code=%d err=%v redirected=%t stdout=%q", code, err, redirected.Load(), stdout.String())
+	}
+	if call.SafeSummary() != "stage=capture_create reason=network" ||
+		strings.Contains(err.Error(), target.URL) || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("unsafe redirect diagnostic: %v", err)
 	}
 }
 
