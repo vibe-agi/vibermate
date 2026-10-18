@@ -66,7 +66,7 @@ func (repository *rawEvidenceRepository) AppendBatch(
 		return err
 	}
 	defer finish()
-	transaction, err := beginObservationTransaction(operation, repository.database)
+	transaction, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return fmt.Errorf("begin raw evidence batch: %w", err)
 	}
@@ -92,7 +92,7 @@ func (repository *rawEvidenceRepository) AppendBatch(
 	defer statement.Close()
 	for _, record := range records {
 		storedBodyDigest, bodyErr := storeEvidenceBody(
-			operation, transaction.Tx, record.Body,
+			operation, transaction, record.Body,
 		)
 		if bodyErr != nil {
 			return bodyErr
@@ -184,7 +184,7 @@ func (repository *rawEvidenceRepository) BeginWriterSession(
 		return rawevidence.Recovery{}, err
 	}
 	defer finish()
-	transaction, err := beginObservationTransaction(operation, repository.database)
+	transaction, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("begin raw evidence recovery: %w", err)
 	}
@@ -212,7 +212,7 @@ func (repository *rawEvidenceRepository) BeginWriterSession(
 	); err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("mark unclean raw evidence writers: %w", err)
 	}
-	purged, err := purgeExpiredRawEvidence(operation, transaction.Tx, toUnixMillis(now), expiredCleanupBatchSize)
+	purged, err := purgeExpiredRawEvidence(operation, transaction, toUnixMillis(now), expiredCleanupBatchSize)
 	if err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("recover expired raw evidence: %w", err)
 	}

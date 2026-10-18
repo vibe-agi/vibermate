@@ -489,19 +489,19 @@ func (r *connectionEventRepository) PutConnection(ctx context.Context, scope rec
 		return err
 	}
 	defer finish()
-	tx, err := beginObservationTransaction(operation, r.database)
+	tx, err := r.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	existing, err := readRecordingScope(operation, tx.Tx, "runtime_connection_events", "connection_id", event.ConnectionID)
+	existing, err := readRecordingScope(operation, tx, "runtime_connection_events", "connection_id", event.ConnectionID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if err == nil && existing != scope {
 		return errors.New("connection recording scope conflicts")
 	}
-	record, err := appendConnectionEvent(operation, tx.Tx, event)
+	record, err := appendConnectionEvent(operation, tx, event)
 	if err != nil {
 		return err
 	}

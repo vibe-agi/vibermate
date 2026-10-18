@@ -235,7 +235,7 @@ func (s *ObservationStore) purgeRecordingEvidence(ctx context.Context, control *
 				if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=FULL`); err != nil {
 					return err
 				}
-				tx, err := beginObservationOnConn(ctx, conn, nil)
+				tx, err := conn.BeginTx(ctx, nil)
 				if err != nil {
 					return err
 				}
@@ -254,11 +254,11 @@ func (s *ObservationStore) purgeRecordingEvidence(ctx context.Context, control *
 					var n int64
 					switch root.table {
 					case "runtime_raw_evidence_envelopes":
-						n, err = deleteRawEvidenceCompatible(ctx, tx.Tx, source.Current || publishedNativeRevision(source.Database.Revision), query)
+						n, err = deleteRawEvidenceCompatible(ctx, tx, source.Current || publishedNativeRevision(source.Database.Revision), query)
 					case "runtime_exchange_contents":
-						n, err = deleteExchangeContent(ctx, tx.Tx, query)
+						n, err = deleteExchangeContent(ctx, tx, query)
 					case "native_tool_contents":
-						n, err = deleteNativeContents(ctx, tx.Tx, root.key+` IN(SELECT `+strings.Trim(root.key, "()")+` FROM `+root.table+` r WHERE `+root.where+` LIMIT 100)`)
+						n, err = deleteNativeContents(ctx, tx, root.key+` IN(SELECT `+strings.Trim(root.key, "()")+` FROM `+root.table+` r WHERE `+root.where+` LIMIT 100)`)
 					default:
 						var r sql.Result
 						r, err = tx.ExecContext(ctx, query)

@@ -154,7 +154,7 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		return err
 	}
 	defer finish()
-	transaction, err := beginObservationTransaction(operation, repository.database)
+	transaction, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return fmt.Errorf("begin Exchange content transaction: %w", err)
 	}
@@ -171,7 +171,7 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 	}
 	completed, err := completeStoredExchangeContent(
 		operation,
-		transaction.Tx,
+		transaction,
 		manifest,
 		&encodedManifest,
 		transcript,
@@ -195,7 +195,7 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 	}
 	baseDigest, inherited, err := findStoredTranscriptBase(
 		operation,
-		transaction.Tx,
+		transaction,
 		scopeKind,
 		scopeID,
 		transcript.nodes,
@@ -205,16 +205,16 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		return err
 	}
 	if transcript.systemDigest != "" {
-		if err := writeMessage(operation, transaction.Tx, transcript.systemDigest); err != nil {
+		if err := writeMessage(operation, transaction, transcript.systemDigest); err != nil {
 			return err
 		}
 	}
 	for index := inherited; index < len(transcript.nodes); index++ {
 		node := transcript.nodes[index]
-		if err := writeMessage(operation, transaction.Tx, node.messageDigest); err != nil {
+		if err := writeMessage(operation, transaction, node.messageDigest); err != nil {
 			return err
 		}
-		if err := putStoredTranscriptNode(operation, transaction.Tx, node); err != nil {
+		if err := putStoredTranscriptNode(operation, transaction, node); err != nil {
 			return err
 		}
 	}
@@ -974,13 +974,13 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		return 0, err
 	}
 	defer finish()
-	transaction, err := beginObservationTransaction(operation, repository.database)
+	transaction, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin Exchange content purge: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
 	count, err := purgeExpiredExchangeContent(
-		operation, transaction.Tx, toUnixMillis(now.UTC()), -1,
+		operation, transaction, toUnixMillis(now.UTC()), -1,
 	)
 	if err != nil {
 		return 0, err

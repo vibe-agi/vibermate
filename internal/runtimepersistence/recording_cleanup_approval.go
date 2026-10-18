@@ -52,7 +52,7 @@ func (s *ObservationStore) ClassifyLegacyApproval(ctx context.Context, control *
 	perKind := map[activity.Kind]activity.Record{}
 	for _, source := range sources {
 		err = s.withCleanupSource(ctx, m, source, func(conn *sql.Conn, mirror string) error {
-			tx, err := beginObservationOnConn(ctx, conn, &sql.TxOptions{ReadOnly: true})
+			tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 			if err != nil {
 				return err
 			}
@@ -78,7 +78,7 @@ func (s *ObservationStore) ClassifyLegacyApproval(ctx context.Context, control *
 					}
 				}
 			}
-			scope, positive, err := cleanupExchangeScope(ctx, tx.Tx, source, candidate.ExchangeID, s.store.exchangeContents.limits, perKind)
+			scope, positive, err := cleanupExchangeScope(ctx, tx, source, candidate.ExchangeID, s.store.exchangeContents.limits, perKind)
 			if err != nil {
 				return err
 			}
@@ -315,7 +315,7 @@ func (s *ObservationStore) PurgeRecordingLegacyApprovals(ctx context.Context, co
 				if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=FULL`); err != nil {
 					return err
 				}
-				tx, err := beginObservationOnConn(ctx, conn, nil)
+				tx, err := conn.BeginTx(ctx, nil)
 				if err != nil {
 					return err
 				}
@@ -330,7 +330,7 @@ func (s *ObservationStore) PurgeRecordingLegacyApprovals(ctx context.Context, co
 				if !sameCleanupApproval(candidate, copy) {
 					return ErrInspectionChanged
 				}
-				n, err = deleteCounted(ctx, tx.Tx, `DELETE FROM main.tool_approvals WHERE approval_id=? AND kind='tool_intent'`, candidate.ID)
+				n, err = deleteCounted(ctx, tx, `DELETE FROM main.tool_approvals WHERE approval_id=? AND kind='tool_intent'`, candidate.ID)
 				if err != nil {
 					return err
 				}

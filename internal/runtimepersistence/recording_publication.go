@@ -148,7 +148,7 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 	defer finish()
 	// Only the fixed optional publisher writes these relations. Serialize calls
 	// on this owner as well, so an abandoned generation cannot be activated.
-	tx, err := beginObservationTransaction(operation, s.store.database)
+	tx, err := s.store.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 		if len(page.rows) > 256 || page.relation < 0 || page.relation > 2 {
 			return ErrInspectionUnavailable
 		}
-		tx, err = beginObservationTransaction(operation, s.store.database)
+		tx, err = s.store.database.BeginTx(operation, nil)
 		if err != nil {
 			return err
 		}
@@ -209,12 +209,12 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 	if err = control.RecheckInspectionStamp(operation, st); err != nil {
 		return err
 	}
-	tx, err = beginObservationTransaction(operation, s.store.database)
+	tx, err = s.store.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = readRecordingDenialCoverage(operation, tx.Tx, "main", st); err != nil {
+	if _, err = readRecordingDenialCoverage(operation, tx, "main", st); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(operation, `UPDATE inspection_mirror_generations SET fence_count=?,current_cap_count=?,legacy_cap_count=?,complete=1 WHERE generation=?`, counts[0], counts[1], counts[2], generation); err != nil {
@@ -223,7 +223,7 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 	if _, err = tx.ExecContext(operation, `INSERT INTO inspection_mirror_active VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation`, generation); err != nil {
 		return err
 	}
-	if err = installRecordingWriterCoverage(operation, tx.Tx, st); err != nil {
+	if err = installRecordingWriterCoverage(operation, tx, st); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(operation, `UPDATE recording_admission_state SET enforced=1,verified_data_version=(SELECT data_version FROM pragma_data_version),required_denial_count=?,required_denial_hash=? WHERE singleton=1`, st.DenialCount, st.DenialHash[:]); err != nil {

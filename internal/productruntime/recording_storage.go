@@ -49,6 +49,7 @@ type recordingStorage struct {
 	dataGuard           *instanceguard.Guard
 	publish             func(context.Context, string, string, *instanceguard.Guard) error
 	closeErr            error
+	recordingErr        error
 	unsafeMaintenance   atomic.Bool
 	paused              atomic.Bool
 	maintenanceRequests chan recordingMaintenanceRequest
@@ -192,7 +193,8 @@ func (s *recordingStorage) run() {
 		if err != nil {
 			s.tracker.recordingState(RecordingDegraded)
 			if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
-				s.closeErr = err
+				s.recordingErr = errors.Join(s.recordingErr, err)
+				s.tracker.failRecording("raw_evidence", err)
 				s.invalidateRecordingSource()
 				break
 			}
@@ -253,7 +255,7 @@ func (s *recordingStorage) run() {
 		s.current.Store(nil)
 		// Stop both finite workers; an uncooperative sink stays owned here.
 		_ = s.recorder.Shutdown(context.Background())
-		s.closeErr = errors.Join(s.closeErr, sinks.raw.Shutdown(context.Background()))
+		s.closeRaw(sinks.raw)
 		s.mu.Lock()
 		for s.active != 0 {
 			changed := s.changed
@@ -280,10 +282,12 @@ func (s *recordingStorage) run() {
 	// Catalog.Close cancels reads immediately, and retains leases until actual
 	// external credential/audit I/O returns, including cancellation-ignoring I/O.
 	s.closeErr = errors.Join(s.closeErr, s.catalog.Close(context.Background()))
-	if s.closeErr == nil {
+	if s.closeErr == nil && s.recordingErr == nil {
 		s.tracker.recordingState(RecordingDisabled)
 	} else {
 		s.tracker.recordingState(RecordingDegraded)
+	}
+	if s.closeErr != nil {
 		s.tracker.recordingCleanupPending()
 	}
 }
@@ -335,9 +339,9 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 	defer func() {
 		if result != nil {
 			if raw != nil {
-				_ = raw.Shutdown(context.Background())
+				s.closeRaw(raw)
 			}
-			_ = store.Shutdown(context.Background())
+			s.closeErr = errors.Join(s.closeErr, store.Shutdown(context.Background()))
 		}
 	}()
 	if err = s.refreshMirror(store); err != nil {
@@ -599,4 +603,22 @@ func (s *recordingStorage) invalidateRecordingSource() {
 	cancel()
 	_ = s.catalog.Close(canceled)
 	s.tracker.recordingState(RecordingDegraded)
+}
+
+// Only this provenance-known Raw API separates marker persistence from worker
+// ownership. Unknown/fake implementations keep their complete shutdown error;
+// no sentinel filtering can discard a mixed actual close/wait failure.
+func (s *recordingStorage) closeRaw(raw rawEvidenceRuntime) {
+	if port, ok := raw.(interface {
+		ShutdownOwned(context.Context) (rawevidence.ShutdownResult, error)
+	}); ok {
+		result, ownershipErr := port.ShutdownOwned(context.Background())
+		s.closeErr = errors.Join(s.closeErr, ownershipErr)
+		if result.FinalizationError != nil {
+			s.recordingErr = errors.Join(s.recordingErr, result.FinalizationError)
+			s.tracker.failRecording("raw_evidence", result.FinalizationError)
+		}
+		return
+	}
+	s.closeErr = errors.Join(s.closeErr, raw.Shutdown(context.Background()))
 }

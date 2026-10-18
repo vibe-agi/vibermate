@@ -244,7 +244,7 @@ func (repository *egressAttemptRepository) Recover(
 	}
 	defer finish()
 
-	transaction, err := beginObservationTransaction(operation, repository.database)
+	transaction, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin EgressAttempt recovery: %w", err)
 	}
@@ -573,7 +573,7 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 		return err
 	}
 	defer finish()
-	tx, err := beginObservationTransaction(operation, repository.database)
+	tx, err := repository.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}
@@ -588,11 +588,11 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 		}
 	}
 	if repository.observationOnly {
-		if err := checkRecordingReplayAdmission(operation, tx.Tx, scope); err != nil {
+		if err := checkRecordingReplayAdmission(operation, tx, scope); err != nil {
 			return err
 		}
 	}
-	priorScope, scopeErr := readRecordingScope(operation, tx.Tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
+	priorScope, scopeErr := readRecordingScope(operation, tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
 	if scopeErr != nil && !errors.Is(scopeErr, sql.ErrNoRows) {
 		return scopeErr
 	}
@@ -601,7 +601,7 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 	}
 	existing, err := scanEgressAttempt(tx.QueryRowContext(operation, egressAttemptSelect+" WHERE attempt_id = ?", attempt.ID()))
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err = appendEgressAttempt(operation, tx.Tx, validated); err != nil {
+		if _, err = appendEgressAttempt(operation, tx, validated); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -618,7 +618,7 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 		return err
 	}
 	if attempt.Terminal() {
-		if _, err = completeEgressAttempt(operation, tx.Tx, attempt); err != nil {
+		if _, err = completeEgressAttempt(operation, tx, attempt); err != nil {
 			return err
 		}
 	}

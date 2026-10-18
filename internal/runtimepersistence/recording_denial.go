@@ -128,7 +128,7 @@ func (s *ObservationStore) certifyRecordingIdentities(ctx context.Context, contr
 	}
 	defer finish()
 	var certificate recordingDenialCertificate
-	err = fullSynchronousObservationTransaction(operation, s.store.database, func(tx *sql.Tx) error {
+	err = fullSynchronousTransaction(operation, s.store.database, func(tx *sql.Tx) error {
 		var err error
 		certificate, err = readRecordingDenialCoverage(operation, tx, "main", snapshot.Stamp)
 		if err != nil {
@@ -187,13 +187,7 @@ func (s *ControlStore) certifyRecordingDenials(ctx context.Context, previous rec
 	})
 }
 
-func fullSynchronousTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) error {
-	return fullSynchronousOwnedTransaction(ctx, db, work, false)
-}
-func fullSynchronousObservationTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) error {
-	return fullSynchronousOwnedTransaction(ctx, db, work, true)
-}
-func fullSynchronousOwnedTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error, observation bool) (result error) {
+func fullSynchronousTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) (result error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
@@ -208,20 +202,13 @@ func fullSynchronousOwnedTransaction(ctx context.Context, db *sql.DB, work func(
 		_, err := conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA synchronous=NORMAL`)
 		result = errors.Join(result, err)
 	}()
-	txContext := ctx
-	if observation {
-		txContext = context.WithoutCancel(ctx)
-	}
-	tx, err := conn.BeginTx(txContext, nil)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if err = work(tx); err != nil {
 		return err
-	}
-	if observation && ctx.Err() != nil {
-		return ctx.Err()
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("certify recording privacy state: %w", err)

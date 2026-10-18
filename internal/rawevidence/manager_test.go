@@ -1179,3 +1179,50 @@ func (repository *memoryRepository) snapshot() []StoredEnvelope {
 	defer repository.mu.Unlock()
 	return slices.Clone(repository.records)
 }
+
+type heldFinalizationRepository struct {
+	*memoryRepository
+	entered, release chan struct{}
+	err              error
+}
+
+func (r *heldFinalizationRepository) CloseWriterSession(context.Context, string, time.Time) error {
+	close(r.entered)
+	<-r.release
+	return r.err
+}
+func TestShutdownOwnedSeparatesFinalizationAfterActualWorkerJoin(t *testing.T) {
+	sentinel := errors.New("writer session marker unavailable")
+	repository := &heldFinalizationRepository{memoryRepository: &memoryRepository{}, entered: make(chan struct{}), release: make(chan struct{}), err: sentinel}
+	manager, err := Open(t.Context(), Options{Repository: repository, Random: bytes.NewReader(bytes.Repeat([]byte{0x59}, 64)), Clock: fixedClock{value: time.Unix(1_790_000_000, 0).UTC()}, Config: DefaultConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { close(repository.release) }) }
+	defer func() { release(); _ = manager.Shutdown(context.Background()) }()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	result, err := manager.ShutdownOwned(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || result.FinalizationError != nil {
+		t.Fatalf("held actual finalization owner misreported: %+v %v", result, err)
+	}
+	select {
+	case <-manager.done:
+	default:
+		t.Fatal("marker attempted before worker joined")
+	}
+	select {
+	case <-manager.shutdownDone:
+		t.Fatal("held finalization I/O reported complete")
+	default:
+	}
+	release()
+	result, err = manager.ShutdownOwned(context.Background())
+	if err != nil || !errors.Is(result.FinalizationError, sentinel) {
+		t.Fatalf("joined metadata/ownership channels mixed: %+v %v", result, err)
+	}
+	if err = manager.Shutdown(context.Background()); !errors.Is(err, sentinel) {
+		t.Fatal("low-level Shutdown hid marker failure", err)
+	}
+}

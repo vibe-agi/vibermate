@@ -129,9 +129,9 @@ type Manager struct {
 	stats    Statistics
 	recovery Recovery
 
-	shutdownOnce sync.Once
-	shutdownDone chan struct{}
-	shutdownErr  error
+	shutdownOnce    sync.Once
+	shutdownDone    chan struct{}
+	finalizationErr error
 }
 
 type scopeKey struct {
@@ -697,9 +697,23 @@ func (manager *Manager) Statistics() Statistics {
 	return manager.stats
 }
 
+// ShutdownResult reports optional marker persistence only after the actual Raw
+// worker has joined. It is not a resource-close or delivery-durability result.
+type ShutdownResult struct{ FinalizationError error }
+
+// Shutdown preserves the low-level API's explicit finalization error. Runtime
+// composition uses ShutdownOwned to keep that outcome separate from ownership.
 func (manager *Manager) Shutdown(ctx context.Context) error {
+	result, err := manager.ShutdownOwned(ctx)
+	return errors.Join(err, result.FinalizationError)
+}
+
+// ShutdownOwned seals/discards and joins the worker, then attempts the optional
+// writer-session marker. Caller wait failure remains in the ownership channel.
+func (manager *Manager) ShutdownOwned(ctx context.Context) (ShutdownResult, error) {
+
 	if manager == nil || ctx == nil {
-		return errors.New("raw evidence shutdown context is incomplete")
+		return ShutdownResult{}, errors.New("raw evidence shutdown context is incomplete")
 	}
 	manager.shutdownOnce.Do(func() {
 		// Seal synchronously: a canceled caller must not stop the worker before
@@ -715,17 +729,17 @@ func (manager *Manager) Shutdown(ctx context.Context) error {
 	})
 	select {
 	case <-manager.shutdownDone:
-		return manager.shutdownErr
+		return ShutdownResult{FinalizationError: manager.finalizationErr}, nil
 	case <-ctx.Done():
 		manager.cancelWorker(ctx.Err())
-		return fmt.Errorf("wait for raw evidence shutdown: %w", ctx.Err())
+		return ShutdownResult{}, fmt.Errorf("wait for raw evidence shutdown: %w", ctx.Err())
 	}
 }
 
 func (manager *Manager) executeShutdown(ctx context.Context) {
 	manager.cancelWorker(errors.New("raw evidence writer stopped"))
 	<-manager.done // Actual I/O ownership survives a caller timeout.
-	manager.shutdownErr = manager.repository.CloseWriterSession(ctx, manager.writerID, manager.clock.Now().UTC())
+	manager.finalizationErr = manager.repository.CloseWriterSession(ctx, manager.writerID, manager.clock.Now().UTC())
 	close(manager.shutdownDone)
 }
 

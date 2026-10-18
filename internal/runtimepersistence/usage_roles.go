@@ -74,7 +74,7 @@ func (s *Store) PutCollectedUsage(ctx context.Context, v runtimeusage.CollectedO
 	if !v.Stamp.Current() {
 		return runtimeusage.ErrObservationDiscarded
 	}
-	tx, err := beginObservationTransaction(operation, s.database)
+	tx, err := s.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}

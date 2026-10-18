@@ -28,7 +28,7 @@ func (s *ObservationStore) RepairConversation(ctx context.Context, repair activi
 	repo := s.store.activityRepo
 	repo.identityMu.Lock()
 	defer repo.identityMu.Unlock()
-	tx, err := beginObservationTransaction(operation, s.store.database)
+	tx, err := s.store.database.BeginTx(operation, nil)
 	if err != nil {
 		return err
 	}

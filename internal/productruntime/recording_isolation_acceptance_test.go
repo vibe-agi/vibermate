@@ -19,9 +19,12 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -305,4 +308,102 @@ func TestRuntimeActualInspectionReadAndMaintenanceDoNotHoldForwarding(t *testing
 	exerciseAcceptanceCaptureControls(t, r)
 	assertOriginalForwardReply(t, f, run.start(t).join(t), false)
 	lease.Complete(true)
+}
+
+func TestRuntimeRawSessionMarkerFailureIsRecordingHealthAfterActualShutdown(t *testing.T) {
+	r := startTestRuntime(t, testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
+	waitRecording(t, r)
+	writerID := r.recordingStorage.current.Load().raw.Statistics().WriterID
+	path := r.recordingStorage.options.DatabasePath
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TRIGGER task7_refuse_marker BEFORE UPDATE OF state ON runtime_raw_evidence_writer_sessions WHEN NEW.state='closed' BEGIN SELECT RAISE(ABORT,'task7 marker finalization refused'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	err = r.Shutdown(t.Context())
+	if err != nil {
+		t.Errorf("optional marker failure escaped ownership boundary: %v", err)
+	}
+	select {
+	case <-r.ShutdownDone():
+	default:
+		t.Fatal("actual owner still active")
+	}
+	status := r.Status()
+	if status.State != RuntimeStateStopped || status.Recording.State != RecordingDegraded || status.RecordingFailure == nil || !status.RecordingFailure.Valid() || status.Recording.CleanupPending {
+		t.Errorf("marker loss misreported ownership/health: %+v", status)
+	}
+	data, err := runtimedata.Acquire(r.paths.DataDirectory())
+	if err != nil {
+		t.Fatal("runtime data guard retained", err)
+	}
+	defer data.Release()
+	host, err := instanceguard.Acquire(filepath.Join(r.paths.DataDirectory(), "server.lock"))
+	if err != nil {
+		t.Fatal("host guard retained", err)
+	}
+	defer host.Release()
+	inspection, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Close()
+	var state string
+	if err = inspection.QueryRow(`SELECT state FROM runtime_raw_evidence_writer_sessions WHERE writer_id=?`, writerID).Scan(&state); err != nil || state != "open" {
+		t.Fatalf("failed marker fabricated clean recording: %q %v", state, err)
+	}
+}
+
+func TestRuntimePrivacyInitializationFailureIsRecordingHealthAfterOwnedClose(t *testing.T) {
+	entered := make(chan struct{})
+	var once sync.Once
+	r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recoverEgress: func(context.Context, egressaudit.Repository, time.Time) error {
+		once.Do(func() { close(entered) })
+		return errors.Join(runtimepersistence.ErrRecordingPrivacyUnavailable, errors.New("synthetic initialization privacy refusal"))
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err = r.Shutdown(t.Context()); err != nil {
+		t.Errorf("optional privacy failure became ownership failure: %v", err)
+	}
+	status := r.Status()
+	if status.State != RuntimeStateStopped || status.Recording.State != RecordingDegraded || status.RecordingFailure == nil || !status.RecordingFailure.Valid() || status.Recording.CleanupPending {
+		t.Fatalf("privacy loss did not remain separate and visible: %+v", status)
+	}
+}
+
+type splitRawShutdownFixture struct {
+	rawEvidenceRuntime
+	finalization, ownership error
+}
+
+func (f splitRawShutdownFixture) ShutdownOwned(context.Context) (rawevidence.ShutdownResult, error) {
+	return rawevidence.ShutdownResult{FinalizationError: f.finalization}, f.ownership
+}
+
+type unsplitRawShutdownFixture struct {
+	rawEvidenceRuntime
+	err error
+}
+
+func (f unsplitRawShutdownFixture) Shutdown(context.Context) error { return f.err }
+func TestOptionalFinalizationCannotMaskMixedOwnershipFailure(t *testing.T) {
+	marker := errors.New("marker metadata failed")
+	actual := errors.New("actual owned close failed")
+	owner := &recordingStorage{tracker: newStatusTracker("synthetic", hostcontract.KindDesktop, time.Now().UTC())}
+	mixed := errors.Join(runtimepersistence.ErrInspectionUnavailable, actual)
+	owner.closeRaw(splitRawShutdownFixture{finalization: marker, ownership: mixed})
+	if !errors.Is(owner.recordingErr, marker) || !errors.Is(owner.closeErr, actual) || !errors.Is(owner.closeErr, runtimepersistence.ErrInspectionUnavailable) || errors.Is(owner.closeErr, marker) {
+		t.Fatalf("mixed error provenance lost: recording=%v ownership=%v", owner.recordingErr, owner.closeErr)
+	}
+	owner.closeRaw(unsplitRawShutdownFixture{err: runtimepersistence.ErrInspectionUnavailable})
+	if !errors.Is(owner.closeErr, runtimepersistence.ErrInspectionUnavailable) {
+		t.Fatal("unknown shutdown error was filtered")
+	}
 }
