@@ -54,7 +54,7 @@ func TestOriginalAccountNativeTurnStateFiltersMalformedAndHopHeaders(t *testing.
 				case "space":
 					target.Set(codexTurnStateHeader, "bad token")
 				case "nonascii":
-					target.Set(codexTurnStateHeader, "雪")
+					target.Set(codexTurnStateHeader, "\u96ea")
 				case "oversized":
 					target.Set(codexTurnStateHeader, strings.Repeat("x", 8193))
 				case "hop":
