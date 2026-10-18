@@ -472,3 +472,76 @@ func TestRuntimeActualRawInitializationRefusalHasNoPhantomOwnership(t *testing.T
 		guard.Release()
 	}
 }
+
+func TestRuntimeRepeatedActualRawInitializationFailureRetainsFirstCause(t *testing.T) {
+	ready := make(chan *Runtime, 1)
+	type causes struct{ first, later error }
+	observed := make(chan causes, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	attempts := 0
+	var first error
+	r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{openObservations: func(ctx context.Context, options runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error) {
+		attempts++
+		if attempts == 2 {
+			owner := <-ready
+			first = owner.recordingStorage.recordingErr
+			ready <- owner
+		}
+		if attempts == 3 {
+			owner := <-ready
+			observed <- causes{first, owner.recordingStorage.recordingErr}
+			<-release
+			return nil, context.Canceled
+		}
+		if _, err := os.Stat(options.DatabasePath); err == nil {
+			db, err := sql.Open("sqlite", options.DatabasePath)
+			if err != nil {
+				return nil, err
+			}
+			_, err = db.Exec(`DROP TRIGGER IF EXISTS reject_repeat_raw_start`)
+			closeErr := db.Close()
+			if err != nil || closeErr != nil {
+				return nil, errors.Join(err, closeErr)
+			}
+		}
+		store, err := runtimepersistence.OpenObservations(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("sqlite", options.DatabasePath)
+		if err != nil {
+			store.Shutdown(context.Background())
+			return nil, err
+		}
+		_, err = db.Exec(`CREATE TRIGGER reject_repeat_raw_start BEFORE INSERT ON runtime_raw_evidence_writer_sessions BEGIN SELECT RAISE(ABORT,'repeated actual Raw initialization refusal'); END`)
+		closeErr := db.Close()
+		if err != nil || closeErr != nil {
+			store.Shutdown(context.Background())
+			return nil, errors.Join(err, closeErr)
+		}
+		return store, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready <- r
+	defer func() { unblock(); shutdownRuntime(t, r) }()
+	select {
+	case got := <-observed:
+		if got.first == nil || got.later != got.first {
+			t.Errorf("repeated Raw initialization accumulated health cause: first=%v later=%v", got.first, got.later)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("two actual Raw SQL refusals not observed")
+	}
+	unblock()
+	if err = r.Shutdown(t.Context()); err != nil {
+		t.Fatal("Raw retry failure became ownership failure", err)
+	}
+	if status := r.Status(); status.State != RuntimeStateStopped || status.RecordingFailure == nil || status.Recording.CleanupPending {
+		t.Fatalf("retry failure health/ownership: %+v", status)
+	}
+}
