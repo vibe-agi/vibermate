@@ -465,7 +465,8 @@ func expectedArtifactPaths(
 			frameworksDirectory,
 			"FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
 		),
-		"launcher": filepath.Join(macOSDirectory, "vibermate"),
+		"launcher":       filepath.Join(macOSDirectory, "vibermate"),
+		"vibermate-xray": filepath.Join(macOSDirectory, "vibermate-xray"),
 		"file-selector-framework": filepath.Join(frameworksDirectory,
 			"file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
 		"url-launcher-framework": filepath.Join(frameworksDirectory,
@@ -479,6 +480,7 @@ func expectedArtifactPaths(
 		"file-selector-framework",
 		"url-launcher-framework",
 		"launcher",
+		"vibermate-xray",
 	} {
 		path, err := directExecutable(paths[role], role)
 		if err != nil {
@@ -602,12 +604,13 @@ func verifyDesktopBuildManifest(
 		"url-launcher-framework":  artifacts["url-launcher-framework"].SHA256,
 		"vibermate":               artifacts["launcher"].SHA256,
 		"vibermated":              artifacts["daemon"].SHA256,
+		"vibermate-xray":          artifacts["vibermate-xray"].SHA256,
 	}
 	if len(manifest.NestedCodeSHA256) != len(wanted) {
 		return errors.New("Desktop build manifest nested-code digest set is incomplete")
 	}
 	for name, digest := range wanted {
-		if manifest.NestedCodeSHA256[name] != digest {
+		if !validSHA256(digest) || manifest.NestedCodeSHA256[name] != digest {
 			return errors.New("Desktop build manifest does not bind verified nested code")
 		}
 	}

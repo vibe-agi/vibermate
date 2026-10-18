@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1000,7 +1001,8 @@ func validFixture(
 		"flutter-macos-framework": filepath.Join(
 			bundle, "Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
 		),
-		"launcher": filepath.Join(macOSDirectory, "vibermate"),
+		"launcher":       filepath.Join(macOSDirectory, "vibermate"),
+		"vibermate-xray": filepath.Join(macOSDirectory, "vibermate-xray"),
 	}
 	for role, path := range artifactPaths {
 		if role == "desktop-app-bundle" || role == "desktop-build-manifest" {
@@ -1015,8 +1017,9 @@ func validFixture(
 		}
 		artifactPaths[role] = canonical
 	}
-	configurationDigests := make(map[string]string, len(requiredConfigurationDigests))
-	for _, name := range requiredConfigurationDigests {
+	inventory := producerInventoryFixture(t)
+	configurationDigests := make(map[string]string, len(inventory.Configuration))
+	for _, name := range inventory.Configuration {
 		path := filepath.Join(sourceRoot, filepath.FromSlash(name))
 		writeRegularFixture(t, path, "fixture configuration "+name+"\n", 0o644)
 		evidence, err := DigestArtifact("configuration "+name, path)
@@ -1042,32 +1045,13 @@ func validFixture(
 		Go: runtimeToolchains.Go, Flutter: runtimeToolchains.Flutter,
 		Dart: runtimeToolchains.Dart, Xcode: runtimeToolchains.Xcode,
 	}
-	daemon, err := DigestArtifact("daemon", artifactPaths["daemon"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	launcher, err := DigestArtifact("launcher", artifactPaths["launcher"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	appFramework, err := DigestArtifact("app-framework", artifactPaths["app-framework"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	flutterFramework, err := DigestArtifact(
-		"flutter-macos-framework",
-		artifactPaths["flutter-macos-framework"],
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileSelector, err := DigestArtifact("file-selector-framework", artifactPaths["file-selector-framework"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	urlLauncher, err := DigestArtifact("url-launcher-framework", artifactPaths["url-launcher-framework"])
-	if err != nil {
-		t.Fatal(err)
+	nestedDigests := make(map[string]string)
+	for name, relative := range inventory.Nested {
+		evidence, err := DigestArtifact(name, filepath.Join(bundle, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nestedDigests[name] = evidence.SHA256
 	}
 	manifest := desktopBuildManifest{
 		Schema: DesktopBuildManifestSchemaV3,
@@ -1078,14 +1062,7 @@ func validFixture(
 		},
 		Toolchains:          buildTools,
 		ConfigurationSHA256: configurationDigests,
-		NestedCodeSHA256: map[string]string{
-			"app-framework":           appFramework.SHA256,
-			"file-selector-framework": fileSelector.SHA256,
-			"flutter-macos-framework": flutterFramework.SHA256,
-			"url-launcher-framework":  urlLauncher.SHA256,
-			"vibermated":              daemon.SHA256,
-			"vibermate":               launcher.SHA256,
-		},
+		NestedCodeSHA256:    nestedDigests,
 	}
 	manifestPayload, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -1097,8 +1074,13 @@ func validFixture(
 		string(append(manifestPayload, '\n')),
 		0o644,
 	)
-	artifacts := make([]ArtifactProvenance, len(requiredArtifactRoles))
-	for index, role := range requiredArtifactRoles {
+	roles := make([]string, 0, len(artifactPaths))
+	for role := range artifactPaths {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	artifacts := make([]ArtifactProvenance, len(roles))
+	for index, role := range roles {
 		var evidence ArtifactProvenance
 		if role == "desktop-app-bundle" {
 			evidence, err = DigestBundle(bundle)
@@ -1283,4 +1265,23 @@ func addUnknownJSONField(
 
 func digest(index int) string {
 	return fmt.Sprintf("%064x", index)
+}
+
+func producerInventoryFixture(t *testing.T) struct {
+	Configuration []string          `json:"configuration"`
+	Nested        map[string]string `json:"nested"`
+} {
+	t.Helper()
+	var inventory struct {
+		Configuration []string          `json:"configuration"`
+		Nested        map[string]string `json:"nested"`
+	}
+	payload, err := os.ReadFile("testdata/desktop-build-inventory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(payload, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	return inventory
 }

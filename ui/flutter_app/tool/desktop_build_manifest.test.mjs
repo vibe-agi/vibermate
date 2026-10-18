@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { validateMacOSBuildVersions } from "./verify_macos_build_versions.mjs";
 import {
   flutterDesktopBuildConfigurationNames,
@@ -159,4 +160,16 @@ test("exact Flutter revision is authoritative across installation channels", () 
       { expectedVersion, expectedRevision },
     ),
   );
+});
+
+// Both Go consumers execute this captured inventory; drift in the actual
+// producer must fail this gate even when their shared old fixtures still pass.
+test("acceptance consumers use the actual producer configuration and nested inventory", () => {
+  const inventory = JSON.parse(readFileSync(new URL(
+    "../../../internal/acceptancereport/testdata/desktop-build-inventory.json", import.meta.url,
+  ), "utf8"));
+  assert.deepEqual(inventory, {
+    configuration: flutterDesktopBuildConfigurationNames,
+    nested: flutterDesktopNestedCode,
+  });
 });
