@@ -42,6 +42,11 @@ func (s *Store) PutACP(ctx context.Context, r acpobservation.Record) (writeErr e
 		return err
 	}
 	defer tx.Rollback()
+	if s.observationOnly {
+		if err := checkRecordingReplayAdmission(operation, tx, r.Scope); err != nil {
+			return err
+		}
+	}
 	var old []byte
 	var revision uint64
 	var final bool

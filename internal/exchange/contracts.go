@@ -1271,6 +1271,7 @@ func (decision ToolDecision) validate() error {
 // ToolDecisionRequest is an immutable complete decision group. Parallel tool
 // calls from one provider terminal are never split into independent decisions.
 type ToolDecisionRequest struct {
+	originalScope       recording.Scope
 	nativeOperation     nativetool.ID
 	nativeBinding       *nativetool.Binding
 	nativeContext       ToolDecisionContext
@@ -1417,6 +1418,17 @@ func NewToolDecisionRequest(
 		intents: cloneToolIntents(intents),
 	}, nil
 }
+
+// WithOriginalScope carries already-frozen required admission facts. It does
+// not inspect optional recording availability, reservations, or token liveness.
+func (request ToolDecisionRequest) WithOriginalScope(scope recording.Scope) (ToolDecisionRequest, error) {
+	if request.nativeOperation != "" || request.exchangeID == "" || scope.Validate() != nil {
+		return ToolDecisionRequest{}, errors.New("invalid original tool approval scope")
+	}
+	request.originalScope = scope
+	return request, nil
+}
+func (request ToolDecisionRequest) OriginalScope() recording.Scope { return request.originalScope }
 
 func (request ToolDecisionRequest) ExchangeID() string {
 	return request.exchangeID

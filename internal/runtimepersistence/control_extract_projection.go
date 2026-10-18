@@ -29,7 +29,7 @@ var controlProjections = []controlProjection{
 	{"runtime_user_login_sessions", "session_id,user_id,token_digest,machine_id,device_name,created_at_unix_ms,expires_at_unix_ms,revoked_at_unix_ms", "session_id"},
 	{"runtime_user_policies", "user_id,all_environments,allowed_environment_ids_json,daily_agent_api_call_warning,daily_token_warning", "user_id"},
 	{"runtime_users", "user_id,username,password_hash,state,created_at_unix_ms,updated_at_unix_ms", "user_id"},
-	{"tool_approvals", "approval_id,revision,kind,exchange_id,environment_id,environment_revision,environment_digest,route_id,route_revision,subject_refs_json,subject_labels_json,target_host,target_port,aggregate_key,request_count,waiter_count,state,decision,decision_scope,decision_reason,decision_idempotency_key,created_at_unix_ms,expires_at_unix_ms,resolved_at_unix_ms", "approval_id"},
+	{"tool_approvals", "approval_id,revision,kind,exchange_id,environment_id,environment_revision,environment_digest,route_id,route_revision,subject_refs_json,subject_labels_json,target_host,target_port,aggregate_key,request_count,waiter_count,state,decision,decision_scope,decision_reason,decision_idempotency_key,created_at_unix_ms,expires_at_unix_ms,resolved_at_unix_ms,owner_kind,owner_capture_kind,owner_capture_id,owner_archive_epoch,owner_capture_generation", "approval_id"},
 	{"upstream_endpoints", "endpoint_id,display_name,origin,realm_id,backend_protocols_json,capabilities_json,drivers_json,state,revision,created_at_unix_ms,updated_at_unix_ms", "endpoint_id"},
 }
 

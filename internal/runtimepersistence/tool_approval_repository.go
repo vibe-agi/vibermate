@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -40,9 +42,12 @@ const toolApprovalColumns = `
 	expires_at_unix_ms,
 	resolved_at_unix_ms`
 
+const toolApprovalOwnershipColumns = `owner_kind,owner_capture_kind,owner_capture_id,owner_archive_epoch,owner_capture_generation`
+
 type toolApprovalRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	controlOwnership bool
+	database         *sql.DB
+	operations       *operationGate
 }
 
 var _ toolapproval.Repository = (*toolApprovalRepository)(nil)
@@ -89,54 +94,52 @@ func (repository *toolApprovalRepository) Create(
 		return err
 	}
 	defer finish()
-	_, err = repository.database.ExecContext(
-		operation,
-		`INSERT INTO tool_approvals (
-		     approval_id,
-		     revision,
-		     exchange_id,
-		     environment_id,
-		     environment_revision,
-		     environment_digest,
-		     route_id,
-		     route_revision,
-		     kind,
-		     subject_refs_json,
-		     subject_labels_json,
-		     target_host,
-		     target_port,
-		     aggregate_key,
-		     request_count,
-		     waiter_count,
-		     state,
-		     created_at_unix_ms,
-		     expires_at_unix_ms
-		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.ID,
-		record.Revision,
-		record.ExchangeID,
-		record.EnvironmentID.String(),
-		record.EnvironmentRevision,
-		environmentDigest,
-		record.RouteID.String(),
-		record.RouteRevision,
-		string(record.Kind),
-		callIDs,
-		names,
-		record.Target.Host,
-		int64(record.Target.Port),
-		record.AggregateKey,
-		int64(record.RequestCount),
-		int64(record.WaiterCount),
-		string(record.State),
-		toUnixMillis(record.CreatedAt),
-		toUnixMillis(record.ExpiresAt),
-	)
+	columns := `approval_id,revision,exchange_id,environment_id,environment_revision,environment_digest,route_id,route_revision,kind,subject_refs_json,subject_labels_json,target_host,target_port,aggregate_key,request_count,waiter_count,state,created_at_unix_ms,expires_at_unix_ms`
+	args := []any{record.ID, record.Revision, record.ExchangeID, record.EnvironmentID.String(), record.EnvironmentRevision, environmentDigest, record.RouteID.String(), record.RouteRevision, string(record.Kind), callIDs, names, record.Target.Host, int64(record.Target.Port), record.AggregateKey, int64(record.RequestCount), int64(record.WaiterCount), string(record.State), toUnixMillis(record.CreatedAt), toUnixMillis(record.ExpiresAt)}
+	if repository.controlOwnership {
+		if record.Kind == toolapproval.KindToolIntent && record.OwnerKind == toolapproval.OwnershipUnknown {
+			return toolapproval.ErrInvalidApproval
+		}
+		if record.Kind != toolapproval.KindToolIntent {
+			record.OwnerKind = toolapproval.OwnershipShared
+		}
+		columns += `,owner_kind,owner_capture_kind,owner_capture_id,owner_archive_epoch,owner_capture_generation`
+		args = append(args, string(record.OwnerKind), record.OwnerScope.Capture.Kind, record.OwnerScope.Capture.ID, record.OwnerScope.Fence.ArchiveEpoch, record.OwnerScope.Fence.CaptureGeneration)
+	}
+	query := `INSERT INTO tool_approvals (` + columns + `) SELECT ` + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	if repository.controlOwnership && record.Kind == toolapproval.KindToolIntent {
+		query += ` WHERE EXISTS(SELECT 1 FROM runtime_storage_state WHERE singleton=1 AND archive_epoch=?)`
+		args = append(args, record.OwnerScope.Fence.ArchiveEpoch)
+		if record.OwnerKind == toolapproval.OwnershipCapture {
+			query += ` AND EXISTS(SELECT 1 FROM recording_capture_fences f WHERE f.capture_kind=? AND f.capture_id=? AND f.generation=? AND f.deleted=0)`
+			args = append(args, record.OwnerScope.Capture.Kind, record.OwnerScope.Capture.ID, record.OwnerScope.Fence.CaptureGeneration)
+			if record.OwnerScope.Capture.Kind == captureidentity.KindManualCapture {
+				query += ` AND EXISTS(SELECT 1 FROM manual_captures WHERE capture_id=? AND state='active' AND (expires_at_unix_ms IS NULL OR expires_at_unix_ms>?))`
+			} else {
+				query += ` AND EXISTS(SELECT 1 FROM capture_runs WHERE run_id=? AND state IN('created','attached') AND expires_at_unix_ms>?)`
+			}
+			args = append(args, record.OwnerScope.Capture.ID, toUnixMillis(record.CreatedAt))
+		}
+	}
+	result, err := repository.database.ExecContext(operation, query, args...)
 	if err != nil {
 		return fmt.Errorf("insert tool approval: %w", err)
 	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return toolapproval.ErrRevisionConflict
+	}
 	return nil
+}
+
+func (repository *toolApprovalRepository) columns() string {
+	if repository.controlOwnership {
+		return toolApprovalColumns + `,` + toolApprovalOwnershipColumns
+	}
+	return toolApprovalColumns + `,'','','',0,0`
 }
 
 func (repository *toolApprovalRepository) Get(
@@ -165,7 +168,7 @@ func (repository *toolApprovalRepository) List(
 	defer finish()
 	rows, err := repository.database.QueryContext(
 		operation,
-		`SELECT `+toolApprovalColumns+`
+		`SELECT `+repository.columns()+`
 		 FROM tool_approvals
 		 WHERE (? = '' OR state = ?)
 		 ORDER BY
@@ -217,7 +220,7 @@ func (repository *toolApprovalRepository) Decide(
 	}()
 	replayed, replayErr := scanToolApproval(transaction.QueryRowContext(
 		operation,
-		`SELECT `+toolApprovalColumns+`
+		`SELECT `+repository.columns()+`
 		 FROM tool_approvals
 		 WHERE decision_idempotency_key = ?`,
 		command.IdempotencyKey,
@@ -242,6 +245,25 @@ func (repository *toolApprovalRepository) Decide(
 		current.Revision != command.ExpectedRevision ||
 		!now.Before(current.ExpiresAt) {
 		return current, toolapproval.ErrRevisionConflict
+	}
+	if repository.controlOwnership {
+		active, err := approvalOwnerActive(operation, transaction, current, now)
+		if err != nil {
+			return toolapproval.Record{}, err
+		}
+		if !active {
+			if _, err = transaction.ExecContext(operation, `UPDATE tool_approvals SET state='canceled',revision=revision+1,decision_reason='approval_owner_revoked',resolved_at_unix_ms=max(?,created_at_unix_ms) WHERE approval_id=? AND state='pending'`, now.UnixMilli(), current.ID); err != nil {
+				return toolapproval.Record{}, err
+			}
+			canceled, err := repository.get(operation, transaction, current.ID)
+			if err != nil {
+				return toolapproval.Record{}, err
+			}
+			if err = transaction.Commit(); err != nil {
+				return toolapproval.Record{}, err
+			}
+			return canceled, nil
+		}
 	}
 	state := toolapproval.StateDenied
 	if command.Decision == toolapproval.DecisionAllowOnce {
@@ -410,7 +432,7 @@ func (repository *toolApprovalRepository) get(
 ) (toolapproval.Record, error) {
 	record, err := scanToolApproval(query.QueryRowContext(
 		ctx,
-		`SELECT `+toolApprovalColumns+`
+		`SELECT `+repository.columns()+`
 		 FROM tool_approvals
 		 WHERE approval_id = ?`,
 		approvalID,
@@ -465,8 +487,12 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 		&createdAt,
 		&expiresAt,
 		&resolvedAt,
+		&record.OwnerKind, &record.OwnerScope.Capture.Kind, &record.OwnerScope.Capture.ID, &record.OwnerScope.Fence.ArchiveEpoch, &record.OwnerScope.Fence.CaptureGeneration,
 	); err != nil {
 		return toolapproval.Record{}, err
+	}
+	if record.OwnerKind == "unknown" {
+		record.OwnerKind = toolapproval.OwnershipUnknown
 	}
 	hasBinding := record.ExchangeID != "" || environmentID != "" ||
 		environmentRevision != 0 || len(environmentDigest) != 0 ||

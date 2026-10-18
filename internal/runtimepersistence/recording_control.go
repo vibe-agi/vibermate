@@ -92,6 +92,11 @@ func (s *ControlStore) DeleteCapture(ctx context.Context, kind, id string) (rele
 	if released.Approvals, err = deleteCounted(operation, tx, `DELETE FROM native_tool_approvals WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, kind, id); err != nil {
 		return resourcedeletion.Released{}, err
 	}
+	generalApprovals, err := deleteCounted(operation, tx, `DELETE FROM tool_approvals WHERE owner_kind='capture' AND owner_capture_kind=? AND owner_capture_id=?`, kind, id)
+	if err != nil {
+		return resourcedeletion.Released{}, err
+	}
+	released.Approvals += generalApprovals
 	if _, err = tx.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
 		return resourcedeletion.Released{}, err
 	}

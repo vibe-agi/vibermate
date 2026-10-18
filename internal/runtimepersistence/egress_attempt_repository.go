@@ -587,6 +587,11 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 			return recording.ErrObservationDiscarded
 		}
 	}
+	if repository.observationOnly {
+		if err := checkRecordingReplayAdmission(operation, tx, scope); err != nil {
+			return err
+		}
+	}
 	priorScope, scopeErr := readRecordingScope(operation, tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
 	if scopeErr != nil && !errors.Is(scopeErr, sql.ErrNoRows) {
 		return scopeErr

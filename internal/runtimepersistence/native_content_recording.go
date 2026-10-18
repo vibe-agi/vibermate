@@ -63,6 +63,9 @@ func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.Co
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkRecordingReplayAdmission(operation, tx, v.Identity.Scope); err != nil {
+		return err
+	}
 	existing, _, err := scanNativeContent(tx.QueryRowContext(operation, `SELECT `+nativeContentColumns+` FROM native_tool_contents WHERE operation_id=? LIMIT 1`, v.Identity.OperationID))
 	if err == nil && existing.Identity != v.Identity {
 		return nativetool.ErrConflict

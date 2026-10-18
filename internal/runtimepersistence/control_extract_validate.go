@@ -30,7 +30,7 @@ func validateExtractedControl(ctx context.Context, tx *sql.Tx) error {
 		{`SELECT endpoint_id,display_name,origin,realm_id,backend_protocols_json,capabilities_json,drivers_json,state,revision,created_at_unix_ms,updated_at_unix_ms FROM upstream_endpoints`, func(r *sql.Rows) error { _, err := scanUpstreamEndpoint(r); return err }},
 		{`SELECT transform_id,revision,collection_id,display_name,request_javascript,response_javascript,published_at_unix_ms FROM code_library_transform_revisions`, func(r *sql.Rows) error { _, err := scanCodeLibraryTransformRevision(r); return err }},
 		{`SELECT selector_id,revision,collection_id,display_name,javascript,published_at_unix_ms FROM code_library_account_selector_revisions`, func(r *sql.Rows) error { _, err := scanCodeLibraryAccountSelectorRevision(r); return err }},
-		{`SELECT ` + toolApprovalColumns + ` FROM tool_approvals`, func(r *sql.Rows) error { _, err := scanToolApproval(r); return err }},
+		{`SELECT ` + toolApprovalColumns + `,` + toolApprovalOwnershipColumns + ` FROM tool_approvals`, func(r *sql.Rows) error { _, err := scanToolApproval(r); return err }},
 		{`SELECT capture_kind,capture_id,environment_id,environment_revision,environment_digest,assignment_revision,source,launch_environment_id,launch_environment_revision,launch_environment_digest,protected_authorities_json,managed_authorities_json,launch_authority_digest,client_target_origin,client_target_canonical_origin,updated_at_unix_ms FROM capture_environment_assignments`, func(r *sql.Rows) error { _, err := scanCaptureAssignment(r); return err }},
 		{`SELECT environment_id,revision FROM environment_revisions`, func(r *sql.Rows) error {
 			var id string

@@ -203,6 +203,7 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 	egressRepo := newEgressAttemptRepository(database, operations)
 	egressRepo.observationOnly = role != nil && role.identity == observationSchemaIdentity
 	approvalRepo := newToolApprovalRepository(database, operations)
+	approvalRepo.controlOwnership = role != nil && role.identity == controlSchemaIdentity
 	connectionRules := newConnectionRuleRepository(database, operations)
 	environments := newEnvironmentRepository(
 		database,

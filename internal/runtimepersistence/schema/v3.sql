@@ -477,6 +477,11 @@ CREATE TABLE runtime_users(
 ) STRICT;
 
 CREATE TABLE tool_approvals(
+  owner_kind TEXT NOT NULL DEFAULT 'unknown' CHECK(owner_kind IN('unknown','shared','global','capture')),
+  owner_capture_kind TEXT NOT NULL DEFAULT '' CHECK(owner_capture_kind IN('','managed_run','manual_capture')),
+  owner_capture_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(owner_capture_id AS BLOB))<=128),
+  owner_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(owner_archive_epoch>=0),
+  owner_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(owner_capture_generation>=0),
   approval_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(approval_id AS BLOB)) BETWEEN 1 AND 512),
   revision INTEGER NOT NULL
@@ -547,6 +552,11 @@ AND length(decision_idempotency_key) >= 16
 AND resolved_at_unix_ms > 0) OR(state IN('canceled', 'expired') AND decision = ''
 AND decision_scope = '' AND length(decision_reason) > 0
 AND decision_idempotency_key = '' AND resolved_at_unix_ms > 0))
+,
+ CHECK((owner_kind IN('unknown','shared') AND owner_capture_kind='' AND owner_capture_id='' AND owner_archive_epoch=0 AND owner_capture_generation=0) OR
+ (owner_kind='global' AND kind='tool_intent' AND owner_capture_kind='' AND owner_capture_id='' AND owner_archive_epoch>0 AND owner_capture_generation=0) OR
+ (owner_kind='capture' AND kind='tool_intent' AND owner_capture_kind<>'' AND owner_capture_id<>'' AND owner_archive_epoch>0 AND owner_capture_generation>0)),
+ CHECK(owner_kind<>'shared' OR kind<>'tool_intent')
 ) STRICT;
 
 CREATE TABLE "upstream_endpoints"(
@@ -987,3 +997,5 @@ CREATE TABLE recording_denial_coverage(
  chain_hash BLOB NOT NULL CHECK(length(chain_hash)=32)
 ) STRICT;
 INSERT INTO recording_denial_coverage VALUES(1,0,zeroblob(32));
+
+CREATE INDEX tool_approvals_owner ON tool_approvals(owner_kind,owner_capture_kind,owner_capture_id,owner_archive_epoch,owner_capture_generation,state);

@@ -571,6 +571,9 @@ func startWithBuilders(
 		}
 		return fail("tool approval recovery", buildErr)
 	}
+	if owner, ok := approvals.(toolapproval.CaptureCanceler); ok {
+		nativeRevoker.installApprovals(owner)
+	}
 	cleanups.register("tool approval component", approvals.Shutdown)
 	toolDecisions, err := toolpolicy.New(approvals)
 	if err != nil {

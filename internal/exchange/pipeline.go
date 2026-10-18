@@ -3030,6 +3030,19 @@ func (pipeline *Pipeline) decideTools(
 			err,
 		)
 	}
+	// Captured ownership comes from sealed required admission even if optional
+	// logging was unavailable. An explicitly frozen global value is separate
+	// from missing provenance; unknown standalone fixtures stay unknown.
+	original := request.observationStamp.Scope()
+	if admission, ok := request.CaptureAdmission(); ok {
+		original = admission.RecordingScope()
+	}
+	if original.Validate() == nil {
+		decisionRequest, err = decisionRequest.WithOriginalScope(original)
+		if err != nil {
+			return newFailure(ReasonToolDecisionUnavailable, request.exchangeID, 0, err)
+		}
+	}
 	decision, err := pipeline.toolDecisions.Decide(ctx, decisionRequest)
 	if err != nil {
 		return newFailure(

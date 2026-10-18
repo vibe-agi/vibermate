@@ -227,6 +227,13 @@ func (authority *Authority) Decide(
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(authority.config.DecisionTimeout),
 	}
+	if original := request.OriginalScope(); original.Validate() == nil {
+		record.OwnerScope = original
+		record.OwnerKind = OwnershipGlobal
+		if original.Capture.Kind != "" {
+			record.OwnerKind = OwnershipCapture
+		}
+	}
 	if err := record.Validate(); err != nil {
 		return exchange.ToolDecision{}, err
 	}

@@ -200,6 +200,20 @@ func extractionQuery(p controlProjection, revision int64, in ControlExtraction) 
 			return `SELECT 1,1,NULL,NULL`, nil
 		}
 	}
+	if p.table == "tool_approvals" {
+		columns := strings.Split(p.columns, ",")
+		for i, column := range columns {
+			switch column {
+			case "owner_kind":
+				columns[i] = `CASE WHEN kind='tool_intent' THEN 'unknown' ELSE 'shared' END`
+			case "owner_capture_kind", "owner_capture_id":
+				columns[i] = `''`
+			case "owner_archive_epoch", "owner_capture_generation":
+				columns[i] = `0`
+			}
+		}
+		return `SELECT ` + strings.Join(columns, ",") + ` FROM tool_approvals ORDER BY approval_id`, nil
+	}
 	if p.table == "native_tool_operations" {
 		columns := strings.Split(p.columns, ",")
 		for i, column := range columns {

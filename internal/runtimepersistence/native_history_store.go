@@ -120,6 +120,9 @@ func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.Re
 		return err
 	}
 	defer tx.Rollback()
+	if err := checkRecordingReplayAdmission(operation, tx, h.Scope); err != nil {
+		return err
+	}
 	p := h.Observation.Operation
 	existing, err := scanNativeHistory(tx.QueryRowContext(operation, `SELECT `+nativeHistoryColumns+` FROM native_history_snapshots WHERE operation_id=? AND operation_revision=?`, p.ID, p.Revision))
 	if err == nil {
