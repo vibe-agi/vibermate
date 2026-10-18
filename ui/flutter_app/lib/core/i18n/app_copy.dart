@@ -472,6 +472,25 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         'Allow this Runtime to refresh OAuth credentials when needed. Imports start off; OAuth sign-in starts on. Turning this off does not sign out or prevent manual refresh.',
     'provider_accounts.egress.label': 'Account network exit',
+    'provider_accounts.daybreak_blue.toggle': 'Use Daybreak Blue',
+    'provider_accounts.daybreak_blue.detail':
+        'When enabled, use Daybreak Blue for supported models on this account, including when the client requests standard mode. When off, follow the client’s request. Support is checked through the selected linked service.',
+    'provider_accounts.daybreak_blue.loading':
+        'Checking Daybreak Blue support…',
+    'provider_accounts.daybreak_blue.supported_one': 'Supported by 1 model',
+    'provider_accounts.daybreak_blue.supported': 'Supported by {count} models',
+    'provider_accounts.daybreak_blue.unsupported':
+        'No models currently advertise Daybreak Blue support.',
+    'provider_accounts.daybreak_blue.unknown':
+        'Support unknown: this service did not provide model capabilities.',
+    'provider_accounts.daybreak_blue.unavailable':
+        'Support check unavailable. Your saved preference is unchanged.',
+    'provider_accounts.daybreak_blue.unlinked':
+        'Link this account to a ChatGPT service to check support.',
+    'provider_accounts.daybreak_blue.credential_unavailable':
+        'A usable account credential is required to check support.',
+    'provider_accounts.daybreak_blue.refresh': 'Refresh support',
+    'provider_accounts.daybreak_blue.retry': 'Retry support check',
     'provider_accounts.egress.detail':
         'Overrides the traffic profile for this account, including model calls, OAuth refresh, quota and history. Applies to new requests; a failed exit never falls back to direct. Manage exits in Settings → Network exits.',
     'provider_accounts.egress.inherit': 'Follow traffic profile',
@@ -3430,6 +3449,20 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         '允许当前 Runtime 按需刷新 OAuth 凭据。新导入默认关闭，OAuth 登录默认开启。关闭不会退出账号，也不影响手动刷新。',
     'provider_accounts.egress.label': '账号网络出口',
+    'provider_accounts.daybreak_blue.toggle': '启用 Daybreak Blue',
+    'provider_accounts.daybreak_blue.detail':
+        '开启后，此账号支持的模型使用 Daybreak Blue，优先于客户端请求的 standard 模式。关闭后遵循客户端请求。支持情况通过当前选中的关联服务查询。',
+    'provider_accounts.daybreak_blue.loading': '正在查询 Daybreak Blue 支持情况…',
+    'provider_accounts.daybreak_blue.supported_one': '1 个模型支持',
+    'provider_accounts.daybreak_blue.supported': '{count} 个模型支持',
+    'provider_accounts.daybreak_blue.unsupported': '当前没有模型声明支持 Daybreak Blue。',
+    'provider_accounts.daybreak_blue.unknown': '支持情况未知：此服务未提供模型能力信息。',
+    'provider_accounts.daybreak_blue.unavailable': '暂时无法查询支持情况，已保存的偏好保持不变。',
+    'provider_accounts.daybreak_blue.unlinked': '请将此账号关联到 ChatGPT 服务后查询支持情况。',
+    'provider_accounts.daybreak_blue.credential_unavailable':
+        '需要可用的账号凭据才能查询支持情况。',
+    'provider_accounts.daybreak_blue.refresh': '刷新支持情况',
+    'provider_accounts.daybreak_blue.retry': '重试查询',
     'provider_accounts.egress.detail':
         '优先于流量策略，统一用于此账号的模型调用、OAuth 刷新、额度和历史查询。从下一次请求生效；出口失败不会回退直连。请在「设置 → 网络出口方案」管理可选方案。',
     'provider_accounts.egress.inherit': '跟随流量策略',

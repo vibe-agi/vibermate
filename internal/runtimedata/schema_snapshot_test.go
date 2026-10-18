@@ -275,6 +275,11 @@ func seedSnapshotAuthority(t *testing.T, source string) (provideraccount.Account
 // Compare every logical row independently of SQLite page layout/checkpointing.
 func snapshotTestRows(t *testing.T, directory string) []string {
 	t.Helper()
+	return snapshotTestRowsWithColumns(t, directory, nil)
+}
+
+func snapshotTestRowsWithColumns(t *testing.T, directory string, selectedColumns map[string][]string) []string {
+	t.Helper()
 	u := url.URL{Scheme: "file", Path: filepath.Join(directory, "runtime.db"), RawQuery: "mode=ro"}
 	database, err := sql.Open("sqlite", u.String())
 	if err != nil {
@@ -298,7 +303,15 @@ func snapshotTestRows(t *testing.T, directory string) []string {
 	}
 	var result []string
 	for _, table := range tables {
-		rows, err := database.Query(fmt.Sprintf("SELECT * FROM %q", table))
+		projection := "*"
+		if columns := selectedColumns[table]; len(columns) != 0 {
+			quoted := make([]string, len(columns))
+			for index, column := range columns {
+				quoted[index] = fmt.Sprintf("%q", column)
+			}
+			projection = strings.Join(quoted, ",")
+		}
+		rows, err := database.Query(fmt.Sprintf("SELECT %s FROM %q", projection, table))
 		if err != nil {
 			t.Fatal(err)
 		}

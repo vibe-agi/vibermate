@@ -26,10 +26,11 @@ func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 		t.Fatalf("create: %+v %v", result, err)
 	}
 	loaded, exists, err := store.ProviderAccountRepository().Load(ctx, account.ID)
-	if err != nil || !exists || loaded.AutomaticRefresh || loaded.SettingsRevision != 1 {
+	if err != nil || !exists || loaded.AutomaticRefresh || loaded.DaybreakBlueEnabled || loaded.SettingsRevision != 1 {
 		t.Fatalf("explicit consent changed: %+v %v", loaded, err)
 	}
 	account.AutomaticRefresh = true
+	account.DaybreakBlueEnabled = true
 	account.SettingsRevision = 2
 	account.EgressProfile = egressprofile.Direct()
 	account.EgressProfile.ID = "profile.us"
@@ -49,6 +50,15 @@ func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 	loaded, exists, err = store.ProviderAccountRepository().Load(ctx, account.ID)
 	if err != nil || !exists || loaded != account {
 		t.Fatalf("restart changed settings: %+v %v", loaded, err)
+	}
+	account.DaybreakBlueEnabled = false
+	account.SettingsRevision = 3
+	if result, err := store.ProviderAccountRepository().WriteSettings(ctx, 2, account); err != nil || result.Outcome != provideraccount.CommitCommitted {
+		t.Fatalf("clear Daybreak Blue: %+v %v", result, err)
+	}
+	loaded, exists, err = store.ProviderAccountRepository().Load(ctx, account.ID)
+	if err != nil || !exists || loaded != account {
+		t.Fatalf("opt-out was not stored: %+v %v", loaded, err)
 	}
 	if result, err := store.ProviderAccountRepository().Delete(ctx, account.ID, 1); err != nil || result.Outcome != provideraccount.CommitCommitted {
 		t.Fatalf("delete: %+v %v", result, err)

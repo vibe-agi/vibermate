@@ -15,12 +15,14 @@ func (handler *Handler) setProviderAccountSettings(writer http.ResponseWriter, r
 	body, bodyErr := readJSONBody(request)
 	defer clear(body)
 	var input struct {
-		AutomaticRefresh *bool           `json:"automaticRefresh"`
-		EgressProfile    json.RawMessage `json:"egressProfile"`
+		AutomaticRefresh    *bool           `json:"automaticRefresh"`
+		EgressProfile       json.RawMessage `json:"egressProfile"`
+		DaybreakBlueEnabled json.RawMessage `json:"daybreakBlueEnabled"`
 	}
 	id, idErr := provideraccount.NewID(request.PathValue("accountId"))
 	if headerErr != nil || bodyErr != nil || idErr != nil || expected >= provideraccount.MaxRevision ||
-		decodeStrictJSON(body, &input) != nil || input.AutomaticRefresh == nil || len(input.EgressProfile) == 0 || request.URL.RawQuery != "" {
+		decodeStrictJSON(body, &input) != nil || input.AutomaticRefresh == nil || len(input.EgressProfile) == 0 || request.URL.RawQuery != "" ||
+		(len(input.DaybreakBlueEnabled) != 0 && string(input.DaybreakBlueEnabled) != "true" && string(input.DaybreakBlueEnabled) != "false") {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -47,7 +49,17 @@ func (handler *Handler) setProviderAccountSettings(writer http.ResponseWriter, r
 				return problemResponse(classifyEgressProfileError(err))
 			}
 		}
-		view, err := handler.accounts.SetSettings(request.Context(), provideraccount.SettingsCommand{ID: id, ExpectedRevision: expected, EgressProfile: profile, AutomaticRefresh: *input.AutomaticRefresh})
+		daybreakBlueEnabled := string(input.DaybreakBlueEnabled) == "true"
+		if len(input.DaybreakBlueEnabled) == 0 {
+			// Older clients replace the original settings without knowing this
+			// preference. Preserve it under the same settings-revision CAS.
+			current, err := handler.accounts.Get(request.Context(), id)
+			if err != nil {
+				return problemResponse(classifyProviderAccountError(err))
+			}
+			daybreakBlueEnabled = current.Account.DaybreakBlueEnabled
+		}
+		view, err := handler.accounts.SetSettings(request.Context(), provideraccount.SettingsCommand{ID: id, ExpectedRevision: expected, EgressProfile: profile, AutomaticRefresh: *input.AutomaticRefresh, DaybreakBlueEnabled: daybreakBlueEnabled})
 		if err != nil {
 			return problemResponse(classifyProviderAccountError(err))
 		}

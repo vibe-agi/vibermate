@@ -438,6 +438,9 @@ func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {
 		}
 	}
 	var wrong int64
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM provider_accounts WHERE daybreak_blue_enabled<>0`).Scan(&wrong); err != nil || wrong != 0 {
+		return ErrUnsupportedSchema
+	}
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_connection_events WHERE inspection_purpose<>''`).Scan(&wrong); err != nil || wrong != 0 {
 		return ErrUnsupportedSchema
 	}

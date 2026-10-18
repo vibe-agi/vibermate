@@ -32,6 +32,7 @@ CREATE TABLE "provider_accounts"(
   settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
   egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(CAST(egress_profile_json AS BLOB))<=69632),
   automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
+  daybreak_blue_enabled INTEGER NOT NULL DEFAULT 0 CHECK(daybreak_blue_enabled IN (0,1)),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
   driver_ref TEXT NOT NULL

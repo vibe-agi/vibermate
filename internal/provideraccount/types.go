@@ -112,11 +112,12 @@ type Account struct {
 	Revision            uint64
 	// Settings are frozen when a lease is acquired, independently of the
 	// identity revision embedded in published routes. A zero profile inherits.
-	SettingsRevision uint64
-	EgressProfile    egressprofile.ProfileRevision
-	AutomaticRefresh bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	SettingsRevision    uint64
+	EgressProfile       egressprofile.ProfileRevision
+	AutomaticRefresh    bool
+	DaybreakBlueEnabled bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (account Account) Validate() error {
@@ -131,6 +132,7 @@ func (account Account) Validate() error {
 		account.SettingsRevision == 0 || account.SettingsRevision > MaxRevision ||
 		(account.EgressProfile != (egressprofile.ProfileRevision{}) && account.EgressProfile.Validate() != nil) ||
 		(account.AutomaticRefresh && !account.SupportsAutomaticRefresh()) ||
+		(account.DaybreakBlueEnabled && !account.SupportsDaybreakBlue()) ||
 		account.SecretRef.String() == "" ||
 		account.CreatedAt.IsZero() || account.UpdatedAt.IsZero() ||
 		account.UpdatedAt.Before(account.CreatedAt) {
@@ -149,6 +151,13 @@ func (account Account) Validate() error {
 
 func (account Account) SupportsAutomaticRefresh() bool {
 	return account.Driver == providerauth.CodexOAuthDriverRef()
+}
+
+// SupportsDaybreakBlue reports where the owner may store this preference.
+// It does not establish the account's entitlement for any request model.
+func (account Account) SupportsDaybreakBlue() bool {
+	return upstreamendpoint.IsChatGPTCodexOrigin(account.Origin) &&
+		(account.Driver == providerauth.CodexOAuthDriverRef() || account.Driver == providerauth.StaticHeaderDriverRef())
 }
 
 func (account Account) CompatibleEndpoint(endpoint upstreamendpoint.Endpoint) bool {

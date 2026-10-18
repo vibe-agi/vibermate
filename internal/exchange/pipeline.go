@@ -562,6 +562,7 @@ func (pipeline *Pipeline) executeCandidate(
 			}
 		}
 		frozenRequest, err := pipeline.newProviderRequest(
+			ctx,
 			request,
 			selection,
 			credential,
@@ -706,6 +707,7 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 	}
 	frozenRequest, err := pipeline.newProviderRequest(
+		ctx,
 		request,
 		selection,
 		credential,
@@ -802,6 +804,7 @@ func decodeBoundedContent(body []byte, contentEncoding string) ([]byte, error) {
 }
 
 func (pipeline *Pipeline) newProviderRequest(
+	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
 	credential credentialMaterial,
@@ -865,7 +868,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		options.SecretRef = credential.secret
 		options.AuthDriverRef = credential.driver
 	}
-	return providertransport.NewRequest(options)
+	return pipeline.finalizeAccountDaybreak(ctx, options)
 }
 
 func newProviderRawEvidenceContext(

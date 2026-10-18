@@ -34,8 +34,9 @@ func TestDatagramRejectsPreviousPrivateV2WithoutMutation(t *testing.T) {
 }
 
 // Reconstruct the exact historical candidate, retaining the original digest
-// assertion; current storage-capacity edits must not rewrite that history.
+// assertion; current schema edits must not rewrite that history.
 func beforeExpandedProfileStorage(schema string) string {
+	schema = strings.Replace(schema, "  daybreak_blue_enabled INTEGER NOT NULL DEFAULT 0 CHECK(daybreak_blue_enabled IN (0,1)),\n", "", 1)
 	schema = strings.Replace(schema, "BETWEEN 2 AND 65536 AND json_valid(CAST(policy_json AS TEXT))", "BETWEEN 2 AND 8192 AND json_valid(CAST(policy_json AS TEXT))", 1)
 	schema = strings.Replace(schema, "length(CAST(egress_profile_json AS BLOB))<=69632", "length(egress_profile_json)<=4096", 1)
 	return strings.Replace(schema, "BETWEEN 2 AND 69632 AND json_valid(profile_json)", "BETWEEN 2 AND 16384 AND json_valid(profile_json)", 1)

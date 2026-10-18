@@ -138,15 +138,17 @@ type Reader interface {
 }
 
 type Model struct {
-	ID                string `json:"id"`
-	DisplayName       string `json:"displayName"`
-	OwnedBy           string `json:"ownedBy"`
-	VerifiedAvailable bool   `json:"verifiedAvailable"`
-	ContextLimit      int64  `json:"contextLimit"`
-	OutputLimit       int64  `json:"outputLimit"`
+	AvailableCyberPrograms []string `json:"availableCyberPrograms"`
+	ID                     string   `json:"id"`
+	DisplayName            string   `json:"displayName"`
+	OwnedBy                string   `json:"ownedBy"`
+	VerifiedAvailable      bool     `json:"verifiedAvailable"`
+	ContextLimit           int64    `json:"contextLimit"`
+	OutputLimit            int64    `json:"outputLimit"`
 }
 
 func (model Model) clone() Model {
+	model.AvailableCyberPrograms = slices.Clone(model.AvailableCyberPrograms)
 	return model
 }
 

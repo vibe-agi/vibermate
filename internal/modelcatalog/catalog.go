@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
+
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -196,13 +198,14 @@ type endpointCatalog struct {
 }
 
 type endpointModel struct {
-	ID              string          `json:"id"`
-	Slug            json.RawMessage `json:"slug"`
-	DisplayName     string          `json:"display_name"`
-	OwnedBy         string          `json:"owned_by"`
-	MaxModelLength  int64           `json:"max_model_len"`
-	ContextWindow   int64           `json:"context_window"`
-	MaxOutputTokens int64           `json:"max_output_tokens"`
+	AvailableAccessPrograms json.RawMessage `json:"available_access_programs"`
+	ID                      string          `json:"id"`
+	Slug                    json.RawMessage `json:"slug"`
+	DisplayName             string          `json:"display_name"`
+	OwnedBy                 string          `json:"owned_by"`
+	MaxModelLength          int64           `json:"max_model_len"`
+	ContextWindow           int64           `json:"context_window"`
+	MaxOutputTokens         int64           `json:"max_output_tokens"`
 }
 
 func (service *Service) discoverEndpoint(
@@ -259,9 +262,18 @@ func (service *Service) discoverEndpoint(
 		if contextLimit == 0 {
 			contextLimit = item.ContextWindow
 		}
+		var cyberPrograms []string
+		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) {
+			var err error
+			cyberPrograms, err = cyberaccess.ParsePrograms(item.AvailableAccessPrograms)
+			if err != nil {
+				return nil, ErrInvalidCatalog
+			}
+		}
 		models = append(models, Model{
 			ID: item.ID, DisplayName: item.DisplayName, OwnedBy: item.OwnedBy,
 			ContextLimit: contextLimit, OutputLimit: item.MaxOutputTokens,
+			AvailableCyberPrograms: cyberPrograms,
 		})
 	}
 	sort.Slice(models, func(left, right int) bool { return models[left].ID < models[right].ID })

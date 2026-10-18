@@ -11,6 +11,7 @@ import '../../core/i18n/app_copy.dart';
 import 'provider_account_editor.dart';
 import 'provider_account_note_editor.dart';
 import 'provider_account_token_details.dart';
+import 'provider_account_daybreak_blue.dart';
 import 'provider_account_facts.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
@@ -466,6 +467,13 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ProviderAccountTokenDetails(account: account, copy: copy),
+                  if (isChatGPTCodexOrigin(Uri.parse(account.credentialOrigin)))
+                    ProviderAccountDaybreakBlue(
+                      account: account,
+                      linkedEndpoints: linkedEndpoints,
+                      controller: controller,
+                      copy: copy,
+                    ),
                   if (_supportsQuota(account) || account.kind == 'codex_oauth')
                     ProviderAccountFactsPanel(
                       account: account,

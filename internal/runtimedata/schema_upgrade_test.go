@@ -137,7 +137,13 @@ func upgradeGuards(t *testing.T, source string) (*instanceguard.Guard, *instance
 func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	source := frozenUpgradeFixture(t)
 	owner, host := upgradeGuards(t, source)
-	before := snapshotTestRows(t, source)
+	// Compare every frozen-v1 account field; the new preference is checked
+	// independently below rather than comparing arrays of different columns.
+	legacyColumns := map[string][]string{"provider_accounts": {
+		"account_id", "display_name", "credential_origin", "endpoint_associations", "association_revision", "note", "note_revision",
+		"settings_revision", "egress_profile_json", "automatic_refresh", "realm_id", "driver_ref", "secret_reference", "state", "revision", "created_at_unix_ms", "updated_at_unix_ms",
+	}}
+	before := snapshotTestRowsWithColumns(t, source, legacyColumns)
 	private := snapshotTestFiles(t, source)
 	target := filepath.Join(filepath.Dir(source), "private-snapshot")
 	runner := newSchemaUpgradeRunner()
@@ -167,7 +173,7 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	if _, exists, err := readSchemaUpgradeReceipt(source); err != nil || exists {
 		t.Fatal("committed receipt not consumed")
 	}
-	after := snapshotTestRows(t, source)
+	after := snapshotTestRowsWithColumns(t, source, legacyColumns)
 	filter := func(rows []string) []string {
 		var result []string
 		for _, row := range rows {
@@ -185,9 +191,14 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	}
 	var defaults int
 	defaultErr := db.QueryRow(`SELECT count(*) FROM runtime_egress_default WHERE singleton=1 AND revision=1 AND egress_id IS NULL AND egress_revision IS NULL`).Scan(&defaults)
+	var optedIn int
+	daybreakErr := db.QueryRow(`SELECT count(*) FROM provider_accounts WHERE daybreak_blue_enabled<>0`).Scan(&optedIn)
 	db.Close()
 	if defaultErr != nil || defaults != 1 {
 		t.Fatalf("upgrade default seed %d %v", defaults, defaultErr)
+	}
+	if daybreakErr != nil || optedIn != 0 {
+		t.Fatalf("upgrade invented Daybreak Blue consent %d %v", optedIn, daybreakErr)
 	}
 	if fmt.Sprint(filter(before)) != fmt.Sprint(filter(after)) {
 		t.Fatal("old logical rows changed")

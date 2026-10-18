@@ -55,6 +55,8 @@ type AccountRef struct {
 	CredentialEpoch  uint64
 	RealmID          string
 	SettingsRevision uint64
+	// DaybreakBlueEnabled is the owner's preference frozen for this lease.
+	DaybreakBlueEnabled bool
 	// EgressProfile is the effective, immutable network path for this lease.
 	EgressProfile  egressprofile.ProfileRevision
 	ResolvedEgress egressprofile.Resolved

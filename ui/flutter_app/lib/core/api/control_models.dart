@@ -2351,6 +2351,7 @@ final class UpstreamModel {
     required this.verifiedAvailable,
     required this.contextLimit,
     required this.outputLimit,
+    this.availableCyberPrograms,
   });
 
   factory UpstreamModel.fromJson(Object? json, String path) {
@@ -2366,6 +2367,7 @@ final class UpstreamModel {
         'contextLimit',
         'outputLimit',
       },
+      optional: const {'availableCyberPrograms'},
     );
     final id = requireString(value, 'id', path);
     final displayName = requireStringValue(value, 'displayName', path);
@@ -2382,6 +2384,11 @@ final class UpstreamModel {
       verifiedAvailable: requireBoolean(value, 'verifiedAvailable', path),
       contextLimit: requireInteger(value, 'contextLimit', path, minimum: 0),
       outputLimit: requireInteger(value, 'outputLimit', path, minimum: 0),
+      availableCyberPrograms: value['availableCyberPrograms'] == null
+          ? null
+          : List.unmodifiable(
+              requireStringList(value, 'availableCyberPrograms', path),
+            ),
     );
   }
 
@@ -2391,6 +2398,9 @@ final class UpstreamModel {
   final bool verifiedAvailable;
   final int contextLimit;
   final int outputLimit;
+
+  /// Null means the endpoint did not provide capability evidence.
+  final List<String>? availableCyberPrograms;
 }
 
 /// A point-in-time model catalog for exactly one upstream Endpoint.
@@ -2880,6 +2890,7 @@ final class ProviderAccount {
     this.tokenInfo,
     this.settingsRevision = 1,
     this.automaticRefresh = false,
+    this.daybreakBlueEnabled = false,
     this.supportsAutomaticRefresh = false,
     this.egressProfile,
   });
@@ -2910,7 +2921,7 @@ final class ProviderAccount {
         'supportsAutomaticRefresh',
         'egressProfile',
       },
-      optional: const {'codexOAuth', 'tokenInfo'},
+      optional: const {'codexOAuth', 'tokenInfo', 'daybreakBlueEnabled'},
     );
     final note = requireStringValue(value, 'note', path);
     final noteRevision = requireInteger(value, 'noteRevision', path);
@@ -3015,6 +3026,9 @@ final class ProviderAccount {
         minimum: 1,
       ),
       automaticRefresh: automaticRefresh,
+      daybreakBlueEnabled: value.containsKey('daybreakBlueEnabled')
+          ? requireBoolean(value, 'daybreakBlueEnabled', path)
+          : false,
       supportsAutomaticRefresh: supportsAutomaticRefresh,
       egressProfile: value['egressProfile'] == null
           ? null
@@ -3044,6 +3058,7 @@ final class ProviderAccount {
   final ProviderTokenInfo? tokenInfo;
   final int settingsRevision;
   final bool automaticRefresh;
+  final bool daybreakBlueEnabled;
   final bool supportsAutomaticRefresh;
   final EgressProfileRevision? egressProfile;
 
@@ -3075,6 +3090,7 @@ final class ProviderAccount {
         tokenInfo: tokenInfo,
         settingsRevision: settingsRevision,
         automaticRefresh: automaticRefresh,
+        daybreakBlueEnabled: daybreakBlueEnabled,
         supportsAutomaticRefresh: supportsAutomaticRefresh,
         egressProfile: egressProfile,
       );
@@ -3099,6 +3115,7 @@ final class ProviderAccount {
     tokenInfo: tokenInfo,
     settingsRevision: settingsRevision,
     automaticRefresh: automaticRefresh,
+    daybreakBlueEnabled: daybreakBlueEnabled,
     supportsAutomaticRefresh: supportsAutomaticRefresh,
     egressProfile: egressProfile,
   );
@@ -3107,6 +3124,7 @@ final class ProviderAccount {
     required int settingsRevision,
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    bool? daybreakBlueEnabled,
   }) => ProviderAccount(
     id: id,
     displayName: displayName,
@@ -3127,6 +3145,7 @@ final class ProviderAccount {
     tokenInfo: tokenInfo,
     settingsRevision: settingsRevision,
     automaticRefresh: automaticRefresh,
+    daybreakBlueEnabled: daybreakBlueEnabled ?? this.daybreakBlueEnabled,
     supportsAutomaticRefresh: supportsAutomaticRefresh,
     egressProfile: egressProfile,
   );

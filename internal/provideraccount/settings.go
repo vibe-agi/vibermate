@@ -10,18 +10,20 @@ import (
 )
 
 type SettingsCommand struct {
-	ID               ID
-	ExpectedRevision uint64
-	EgressProfile    egressprofile.ProfileRevision
-	AutomaticRefresh bool
+	ID                  ID
+	ExpectedRevision    uint64
+	EgressProfile       egressprofile.ProfileRevision
+	AutomaticRefresh    bool
+	DaybreakBlueEnabled bool
 }
 
 func (account Account) credentialScope(realm string, epoch uint64, resolved egressprofile.Resolved) providerauth.AccountRef {
 	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
-		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: resolved.Profile(), ResolvedEgress: resolved}
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: resolved.Profile(), ResolvedEgress: resolved,
+		DaybreakBlueEnabled: account.DaybreakBlueEnabled}
 }
 
-// CredentialScope freezes the account profile for callers without a resolved exit.
+// CredentialScope freezes account settings for callers without a resolved exit.
 func (account Account) CredentialScope(realm string, epoch uint64, fallback egressprofile.ProfileRevision) providerauth.AccountRef {
 	if fallback == (egressprofile.ProfileRevision{}) {
 		fallback = egressprofile.Direct()
@@ -33,7 +35,8 @@ func (account Account) CredentialScope(realm string, epoch uint64, fallback egre
 	}
 	resolved, _ := egressprofile.RestoreResolved(fallback, source, 0)
 	return providerauth.AccountRef{ID: account.ID.String(), Revision: account.Revision,
-		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback, ResolvedEgress: resolved}
+		CredentialEpoch: epoch, RealmID: realm, SettingsRevision: account.SettingsRevision, EgressProfile: fallback, ResolvedEgress: resolved,
+		DaybreakBlueEnabled: account.DaybreakBlueEnabled}
 }
 
 func (manager *Manager) BindEgressProfiles(profiles egressprofile.Controller) error {
@@ -189,7 +192,7 @@ func (manager *Manager) setSettings(ctx context.Context, command SettingsCommand
 		manager.mu.Unlock()
 		return ErrRevisionConflict
 	}
-	if account.EgressProfile.Equal(command.EgressProfile) && account.AutomaticRefresh == command.AutomaticRefresh {
+	if account.EgressProfile.Equal(command.EgressProfile) && account.AutomaticRefresh == command.AutomaticRefresh && account.DaybreakBlueEnabled == command.DaybreakBlueEnabled {
 		manager.mu.Unlock()
 		return nil
 	}
@@ -197,6 +200,7 @@ func (manager *Manager) setSettings(ctx context.Context, command SettingsCommand
 	candidate.SettingsRevision++
 	candidate.EgressProfile = command.EgressProfile
 	candidate.AutomaticRefresh = command.AutomaticRefresh
+	candidate.DaybreakBlueEnabled = command.DaybreakBlueEnabled
 	candidate.UpdatedAt = manager.clock.Now().UTC()
 	if err := candidate.Validate(); err != nil {
 		manager.mu.Unlock()
