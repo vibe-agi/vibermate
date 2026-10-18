@@ -1411,10 +1411,7 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("ProductRuntime shutdown context is nil")
 	}
-	r.shutdownOnce.Do(func() {
-		r.status.beginStopping()
-		go r.executeShutdown()
-	})
+	r.BeginShutdown()
 
 	select {
 	case <-r.shutdownDone:
@@ -1429,6 +1426,15 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("wait for ProductRuntime shutdown: %w", ctx.Err())
 	}
+}
+
+// BeginShutdown starts the existing cleanup owner without joining it. Host
+// rollback uses this before joining handlers that may need Runtime cancellation.
+func (r *Runtime) BeginShutdown() {
+	r.shutdownOnce.Do(func() {
+		r.status.beginStopping()
+		go r.executeShutdown()
+	})
 }
 
 func (r *Runtime) executeShutdown() {

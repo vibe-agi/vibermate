@@ -132,6 +132,13 @@ type Host struct {
 // Start establishes both listeners and every route before atomically
 // publishing local control discovery. The returned Host is externally ready.
 func Start(ctx context.Context, options Options) (*Host, error) {
+	return startWithConstructors(ctx, options, productruntime.Start, serverhost.Attach)
+}
+
+func startWithConstructors(ctx context.Context, options Options,
+	startRuntime func(context.Context, productruntime.Options) (*productruntime.Runtime, error),
+	attachServer func(context.Context, serverhost.AttachOptions) (*serverhost.Host, error),
+) (*Host, error) {
 	if ctx == nil {
 		return nil, errors.New("Desktop Host startup context is nil")
 	}
@@ -151,6 +158,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire Desktop generation: %w", err)
 	}
+	var runtime *productruntime.Runtime
 	var rollback startupRollback
 	rollback.register("generation lock", func(context.Context) error {
 		return guard.Release()
@@ -161,10 +169,23 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			options.ShutdownTimeout,
 		)
 		defer cancel()
-		return nil, errors.Join(
-			fmt.Errorf("start Desktop Host stage %q: %w", stage, root),
-			rollback.run(rollbackContext),
-		)
+		cause := fmt.Errorf("start Desktop Host stage %q: %w", stage, root)
+		// Initiate cancellation before joining attached handlers. The single
+		// failed-start owner keeps the rollback stack and generation guard until
+		// actual cleanup returns, independently of the caller's wait budget.
+		if runtime != nil {
+			runtime.BeginShutdown()
+		}
+		cleanup := rollback
+		rollback = startupRollback{}
+		done := make(chan error, 1)
+		go func() { done <- cleanup.run(context.WithoutCancel(ctx)) }()
+		select {
+		case cleanupErr := <-done:
+			return nil, errors.Join(cause, cleanupErr)
+		case <-rollbackContext.Done():
+			return nil, errors.Join(cause, rollbackContext.Err())
+		}
 	}
 	options.Runtime.ConsumePendingRootReset = true
 	discovery, err := localdiscovery.NewPublisher(
@@ -201,11 +222,15 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("capability separation", errors.New("random capabilities collided"))
 	}
 
-	runtime, err := productruntime.Start(ctx, options.Runtime)
+	runtime, err = startRuntime(ctx, options.Runtime)
 	if err != nil {
 		return fail("ProductRuntime", err)
 	}
-	rollback.register("ProductRuntime", runtime.Shutdown)
+	rollback.register("ProductRuntime", func(cleanupContext context.Context) error {
+		err := runtime.Shutdown(cleanupContext)
+		<-runtime.ShutdownDone()
+		return err
+	})
 	rootTrust, err := desktoptrust.NewOptionalProduction(
 		desktoptrust.ProductionOptions{
 			OwnerContext: ctx,
@@ -243,11 +268,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		remoteOptions.ShutdownTimeout = options.ShutdownTimeout
 		remoteOptions.ResolveLocalIdentities = true
 		remoteOptions.VLESSAvailable = options.Runtime.VLESSExecutable != ""
-		remoteServer, err = serverhost.Attach(ctx, remoteOptions)
+		remoteServer, err = attachServer(ctx, remoteOptions)
 		if err != nil {
 			return fail("remote Runtime Server", err)
 		}
-		rollback.register("remote Runtime Server", remoteServer.Shutdown)
+		rollback.register("remote Runtime Server", remoteServer.JoinAttachedShutdown)
 	}
 
 	proxyListener, err := listenLoopback(ctx, options.ProxyListenAddress)

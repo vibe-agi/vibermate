@@ -71,6 +71,14 @@ func TestServerHostRetainsGenerationUntilTimedOutShutdownCanFinish(t *testing.T)
 		t.Fatalf("generation probe error = %v", probeErr)
 	}
 
+	// Public Shutdown must retain its default bound even though failed Desktop
+	// startup now has a separate actual attached-host join.
+	started := time.Now()
+	if err := host.Shutdown(context.Background()); !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 500*time.Millisecond {
+		close(release)
+		t.Fatalf("public attached shutdown lost its default budget: %v", err)
+	}
+
 	close(release)
 	<-requestDone
 	secondContext, cancelSecond := context.WithTimeout(context.Background(), time.Second)

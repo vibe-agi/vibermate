@@ -6,6 +6,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"sync"
+	"sync/atomic"
 )
 
 // recordingMaintenanceLease is the narrow Task5 handoff. It owns actual writer
@@ -21,7 +22,7 @@ type recordingMaintenanceRequest struct {
 	ctx        context.Context
 	generation uint64
 	ready      chan recordingMaintenanceResult
-	claimed    chan struct{}
+	handoff    *recordingMaintenanceHandoff
 }
 type recordingMaintenanceResult struct {
 	lease recordingMaintenanceLease
@@ -44,23 +45,24 @@ func (s *recordingStorage) BeginMaintenance(ctx context.Context, generation uint
 	if ctx == nil {
 		return nil, recording.ErrInspectionUnavailable
 	}
-	request := recordingMaintenanceRequest{ctx: ctx, generation: generation, ready: make(chan recordingMaintenanceResult, 1), claimed: make(chan struct{})}
+	request := recordingMaintenanceRequest{ctx: ctx, generation: generation, ready: make(chan recordingMaintenanceResult, 1), handoff: &recordingMaintenanceHandoff{claimed: make(chan struct{})}}
 	select {
 	case s.maintenanceRequests <- request:
 	case <-ctx.Done():
+		request.handoff.abandon()
 		return nil, ctx.Err()
 	case <-s.done:
+		request.handoff.abandon()
 		return nil, recording.ErrInspectionUnavailable
 	}
 	select {
 	case result := <-request.ready:
-		if result.lease != nil {
-			close(request.claimed)
-		}
-		return result.lease, result.err
+		return claimRecordingMaintenance(request, result)
 	case <-ctx.Done():
+		request.handoff.abandon()
 		return nil, ctx.Err()
 	case <-s.done:
+		request.handoff.abandon()
 		return nil, recording.ErrInspectionUnavailable
 	}
 }
@@ -95,10 +97,16 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 		lease := &recordingMaintenance{store: sinks.store, catalog: token, completed: make(chan bool, 1)}
 		request.ready <- recordingMaintenanceResult{lease: lease}
 		select {
-		case <-request.claimed:
+		case <-request.handoff.claimed:
 			usable = <-lease.completed // actual mutation owner, not caller context
 		case <-request.ctx.Done():
+			if !request.handoff.abandon() {
+				usable = <-lease.completed
+			}
 		case <-s.ctx.Done():
+			if !request.handoff.abandon() {
+				usable = <-lease.completed
+			}
 		}
 	} else {
 		request.ready <- recordingMaintenanceResult{err: err}
@@ -144,4 +152,33 @@ func (s *recordingStorage) waitActive(ctx context.Context) error {
 		s.mu.Lock()
 	}
 	return nil
+}
+
+// The delivery boundary is separate so a received buffered result is not by
+// itself treated as a claim by callers.
+type recordingMaintenanceHandoff struct {
+	claimed chan struct{}
+	state   atomic.Uint32 // 0 pending, 1 claimed, 2 abandoned
+}
+
+func (h *recordingMaintenanceHandoff) claim() bool {
+	if !h.state.CompareAndSwap(0, 1) {
+		return false
+	}
+	close(h.claimed)
+	return true
+}
+
+// Cancellation loses once claimed, even if its select case wins delivery.
+func (h *recordingMaintenanceHandoff) abandon() bool {
+	return h.state.CompareAndSwap(0, 2) || h.state.Load() == 2
+}
+func claimRecordingMaintenance(request recordingMaintenanceRequest, result recordingMaintenanceResult) (recordingMaintenanceLease, error) {
+	if result.lease != nil && !request.handoff.claim() {
+		if err := request.ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, recording.ErrInspectionUnavailable
+	}
+	return result.lease, result.err
 }

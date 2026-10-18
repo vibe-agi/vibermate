@@ -540,6 +540,21 @@ func (host *Host) Failure() error {
 }
 
 func (host *Host) Shutdown(ctx context.Context) error {
+	return host.shutdownWithContext(ctx, true)
+}
+
+// JoinAttachedShutdown joins actual attached listener/handler cleanup using the
+// supplied context, without adding the public Shutdown default timeout. The
+// Runtime owner must initiate Runtime shutdown before this join. This method
+// cannot transfer or shut down an independently owned Runtime.
+func (host *Host) JoinAttachedShutdown(ctx context.Context) error {
+	if host != nil && host.ownsRuntime {
+		return errors.New("actual attached shutdown requires an attached Runtime Server")
+	}
+	return host.shutdownWithContext(ctx, false)
+}
+
+func (host *Host) shutdownWithContext(ctx context.Context, bounded bool) error {
 	if host == nil {
 		return nil
 	}
@@ -562,7 +577,7 @@ func (host *Host) Shutdown(ctx context.Context) error {
 
 	shutdownContext := ctx
 	var cancel context.CancelFunc
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+	if _, hasDeadline := ctx.Deadline(); bounded && !hasDeadline {
 		shutdownContext, cancel = context.WithTimeout(ctx, host.shutdown)
 		defer cancel()
 	}
