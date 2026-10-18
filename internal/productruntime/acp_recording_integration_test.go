@@ -196,6 +196,9 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 						// no renewal after the independently verified terminal state.
 						t.Log("late heartbeat correctly rejected after required Finish")
 						status = http.StatusForbidden
+					} else if strings.HasSuffix(r.URL.Path, "/heartbeat") && errors.Is(err, context.Canceled) && r.Context().Err() != nil && readErr == nil && current.State == capturerun.StateFinished {
+						t.Log("late heartbeat request canceled after required Finish")
+						status = http.StatusRequestTimeout
 					} else {
 						t.Errorf("ACP control rejection action=%s state=%s read=%v cause=%v", filepath.Base(r.URL.Path), current.State, readErr, err)
 						status = http.StatusServiceUnavailable

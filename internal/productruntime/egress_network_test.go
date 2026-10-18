@@ -785,7 +785,16 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		}
 	}
 	WaitRecordingTestRuntime(t, r)
-	requestContext, cancelRequest := context.WithCancel(t.Context())
+	var requestContext context.Context
+	var cancelRequest context.CancelFunc
+	if managedHold && managedFailure == "" {
+		// Two separately held/probed stages share one bounded caller budget.
+		// A short HTTP-wide timer must not race the manual control sequence.
+		requestContext, cancelRequest = context.WithTimeout(t.Context(), 30*time.Second)
+		client.Timeout = 0
+	} else {
+		requestContext, cancelRequest = context.WithCancel(t.Context())
+	}
 	defer cancelRequest()
 	request, err := http.NewRequestWithContext(requestContext, method, "https://chatgpt.com"+path, strings.NewReader(body))
 	if err != nil {
@@ -1370,9 +1379,12 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		if resumeErr == nil && managedFailure == "" {
 			// Existing Hold semantics require a separate concrete probe for the
 			// model target queued after the resumed credential refresh.
-			modelObservation, stop := context.WithTimeout(t.Context(), time.Second)
+			modelObservation, stop := context.WithCancel(requestContext)
 			for (gate.Snapshot().State != offlinehold.StateHeld || gate.Snapshot().QueuedRequests != 1) && modelObservation.Err() == nil {
-				runtime.Gosched()
+				select {
+				case <-modelObservation.Done():
+				case <-time.After(10 * time.Millisecond):
+				}
 			}
 			stop()
 			modelTargets := gate.PendingProbeTargets()

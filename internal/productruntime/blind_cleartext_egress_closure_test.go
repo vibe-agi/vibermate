@@ -218,7 +218,9 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 	}
 	// Allocate Store paths before cleanup, so TempDir cannot remove live SQL files.
 	options := testOptions(t, hostcontract.Desktop(), gate)
-	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	setup, cancelSetup := context.WithTimeout(t.Context(), 30*time.Second)
+	t.Cleanup(cancelSetup)
+	ctx, cancel := setup, cancelSetup
 	f := &b4Fixture{observations: &cleartextOfferLog{attempts: make(map[string]egressaudit.Attempt)}, t: t, ctx: ctx, cancel: cancel, gate: gate, port: port, target: fmt.Sprintf("blind.fixture:%d", port), resolvedTarget: fmt.Sprintf("127.0.0.1:%d", port)}
 	var cleanupOnce sync.Once
 	cleanup := func() {
@@ -443,6 +445,12 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 	if recorder == nil {
 		WaitRecordingTestRuntime(t, f.r)
 	}
+	// Required construction/configuration and the positive mirror premise do
+	// not consume the eight-second measured traffic budget. Runtime retains
+	// its own WithoutCancel owner; partial setup still owns cancellation/join.
+	cancelSetup()
+	ctx, cancel = context.WithTimeout(t.Context(), 8*time.Second)
+	f.ctx, f.cancel = ctx, cancel
 	f.auth = "Basic " + base64.StdEncoding.EncodeToString([]byte("capture:"+grant.Credential.Value()))
 	f.server = httptest.NewUnstartedServer(f.r.ProxyHandler())
 	f.server.Config.BaseContext = func(net.Listener) context.Context {

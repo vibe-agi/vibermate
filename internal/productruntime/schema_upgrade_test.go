@@ -1,6 +1,7 @@
 package productruntime
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -133,7 +134,7 @@ func TestSchemaSwitchCurrent3NeedsNoWritableParent(t *testing.T) {
 	runtime.Shutdown(context.Background())
 }
 
-func TestSchemaSwitchPublished2NeedsOwnedSnapshotAndStarts3(t *testing.T) {
+func TestSchemaSwitchPublished2DirectCutoverPreservesArchiveWithoutSiblingWrites(t *testing.T) {
 	for _, writable := range []bool{false, true} {
 		t.Run(fmt.Sprint(writable), func(t *testing.T) {
 			options := schemaStartupV1(t)
@@ -156,27 +157,40 @@ func TestSchemaSwitchPublished2NeedsOwnedSnapshotAndStarts3(t *testing.T) {
 				}
 				defer os.Chmod(parent, 0700)
 			}
-			runtime, err := Start(context.Background(), options)
-			if writable {
+			original, err := os.ReadFile(options.Paths.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := Start(t.Context(), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer shutdownRuntime(t, runtime)
+			layout, err := runtimedata.ReadStorageLayout(options.Paths.DataDirectory())
+			if err != nil || len(layout.Archives) != 1 || runtime.Status().SchemaRevision != 3 {
+				t.Fatalf("direct control3 cutover: %+v %v", layout, err)
+			}
+			archived := filepath.Join(options.Paths.DataDirectory(), layout.Archives[0].RelativeDirectory, "runtime.db")
+			preserved, err := os.ReadFile(archived)
+			if err != nil || !bytes.Equal(original, preserved) {
+				t.Fatal("original runtime2 archive bytes changed", err)
+			}
+			state, err := runtimepersistence.InspectSchema(t.Context(), archived, time.Second)
+			if err != nil || state.Identity != "vibermate-runtime" || state.Revision != 2 {
+				t.Fatalf("original runtime2 identity lost: %+v %v", state, err)
+			}
+			if _, err = runtimepersistence.InspectControl(t.Context(), options.Paths.DatabasePath(), layout.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err = runtime.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"runtime-data.lock", "server.lock"} {
+				guard, err := instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), name))
 				if err != nil {
-					t.Fatal(err)
+					t.Fatal("cutover guard retained", err)
 				}
-				defer runtime.Shutdown(context.Background())
-				if runtime.Status().SchemaRevision != 3 {
-					t.Fatal("v2 not upgraded")
-				}
-				return
-			}
-			if runtime != nil {
-				runtime.Shutdown(context.Background())
-				t.Fatal("v2 started without rollback snapshot")
-			}
-			if !errors.Is(err, runtimedata.ErrSchemaUpgradeIncomplete) {
-				t.Fatalf("snapshot failure: %v", err)
-			}
-			state, err := runtimepersistence.InspectSchema(context.Background(), options.Paths.DatabasePath(), time.Second)
-			if err != nil || state.Revision != 2 {
-				t.Fatal("failed snapshot changed v2")
+				guard.Release()
 			}
 		})
 	}

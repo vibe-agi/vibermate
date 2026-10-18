@@ -72,6 +72,7 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 	f.runtime.exchanges = pipeline
 	defer func() { f.runtime.exchanges = old }()
 	proxy := f.serveProxy(t)
+	WaitRecordingTestRuntime(t, f.runtime)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ExpectContinueTimeout: time.Hour}
@@ -132,6 +133,9 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 	if err := f.runtime.recorder.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// The real controls above create another Capture while the writer is held.
+	// Only post-producer inspection waits for that new visibility mirror.
+	waitRecordingMirror(t, f.runtime)
 	collecting := true
 	for collecting {
 		select {

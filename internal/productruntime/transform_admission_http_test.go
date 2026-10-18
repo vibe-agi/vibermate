@@ -31,6 +31,7 @@ type transformHTTPRecorder struct {
 	sink      exchangecontent.SourceRecorder
 	completed chan string
 	requests  atomic.Int32
+	t         *testing.T
 }
 
 func (r *transformHTTPRecorder) RecordSource(ctx context.Context, source *exchangecontent.Source) error {
@@ -50,6 +51,7 @@ func (r *transformHTTPRecorder) RecordScopedSource(ctx context.Context, scope re
 		r.requests.Add(1)
 	}
 	if err := r.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source); err != nil {
+		r.t.Logf("transform actual scoped writer rejected response=%t scopeValid=%v cause=%v", source.Metadata().Response != nil, scope.Validate(), err)
 		return err
 	}
 	if source.Metadata().Response != nil {
@@ -64,6 +66,7 @@ func testTransformHTTPExecution(t *testing.T, ctx context.Context, f accountRead
 	f.runtime.exchanges = pipeline
 	defer func() { f.runtime.exchanges = old }()
 	proxy := f.serveProxy(t)
+	WaitRecordingTestRuntime(t, f.runtime)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ExpectContinueTimeout: time.Hour}
@@ -127,6 +130,7 @@ func testTransformHTTPExecution(t *testing.T, ctx context.Context, f accountRead
 		if waitingBody.reads.Load() != 0 || recorder.requests.Load() != 0 {
 			t.Fatal("mixed-plan waiter read a body or recorded before admission")
 		}
+		t.Log("transform phase: canceled waiter joined with unread body")
 		// The next request proceeds only after the larger reservation drains.
 		for _, lease := range held {
 			lease.Release()
@@ -158,9 +162,11 @@ func testTransformHTTPExecution(t *testing.T, ctx context.Context, f accountRead
 	if err != nil || response.StatusCode != 200 || !bytes.Contains(got, []byte("complete-reply")) {
 		t.Fatalf("composed HTTP status=%d body=%s error=%v", response.StatusCode, got, err)
 	}
+	t.Log("transform phase: actual HTTP result returned")
 	if err := pipeline.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
+	t.Log("transform phase: actual pipeline drained; awaiting retained response callback")
 	var id string
 	select {
 	case id = <-recorder.completed:
