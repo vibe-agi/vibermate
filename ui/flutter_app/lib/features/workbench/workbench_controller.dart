@@ -902,6 +902,8 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStorageLocation? storageLocation;
   RuntimeStorageLocation? previousStorageLocation;
   bool storageLocationLoading = false;
+  int _storageLocationGeneration = 0;
+  bool _storageLocationRefreshRequested = false;
   bool storageLocationFailed = false;
   bool storageCleanupRunning = false;
   bool storageArchivePreviewLoading = false;
@@ -2063,25 +2065,40 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refreshStorageLocation() async {
-    if (_disposed || storageLocationLoading) return;
+    if (_disposed) return;
+    if (storageLocationLoading) {
+      _storageLocationRefreshRequested = true;
+      return;
+    }
     storageLocationLoading = true;
-    storageLocationFailed = false;
-    notifyListeners();
     try {
-      final location = await _api.storageLocation();
-      if (_disposed) return;
-      previousStorageLocation = storageLocation;
-      storageLocation = location;
-      if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
-          !location.cleanupPreview.cleanupPending &&
-          location.lastCleanup != null) {
-        storageCleanupNotice = location.lastCleanup!.countsIncomplete
-            ? 'settings.storage.cleanup_partial'
-            : 'settings.storage.cleanup_complete';
-      }
-    } catch (_) {
-      if (_disposed) return;
-      storageLocationFailed = true;
+      do {
+        _storageLocationRefreshRequested = false;
+        final generation = _storageLocationGeneration;
+        storageLocationFailed = false;
+        notifyListeners();
+        try {
+          final location = await _api.storageLocation();
+          if (_disposed) return;
+          // Cleanup acceptance invalidates both the statistics and certificate
+          // from earlier reads. The owner drains the queued fresh read below.
+          if (generation != _storageLocationGeneration) continue;
+          previousStorageLocation = storageLocation;
+          storageLocation = location;
+          if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
+              !location.cleanupPreview.cleanupPending &&
+              location.lastCleanup != null) {
+            storageCleanupNotice = location.lastCleanup!.countsIncomplete
+                ? 'settings.storage.cleanup_partial'
+                : 'settings.storage.cleanup_complete';
+          }
+        } catch (_) {
+          if (_disposed) return;
+          if (generation == _storageLocationGeneration) {
+            storageLocationFailed = true;
+          }
+        }
+      } while (_storageLocationRefreshRequested && !_disposed);
     } finally {
       if (!_disposed) {
         storageLocationLoading = false;
@@ -2104,6 +2121,7 @@ final class WorkbenchController extends ChangeNotifier
         throw const ControlContractException('storage cleanup is unavailable');
       }
       if (outcome.deleted) {
+        ++_storageLocationGeneration;
         storageCleanupNotice = outcome.released?.cleanupPending == true
             ? 'settings.storage.cleanup_pending'
             : outcome.released?.countsIncomplete == true

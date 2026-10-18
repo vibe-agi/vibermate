@@ -66,6 +66,161 @@ void main() {
       findsNothing,
     );
   });
+  testWidgets(
+    'pre-acceptance cleanup certificate cannot complete a newer cleanup',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final snapshots = _CompletedCleanupApi(fixture);
+      final pendingLocation = await snapshots.storageLocation();
+      snapshots.completed = true;
+      final oldCompletedLocation = await snapshots.storageLocation();
+      final freshCompletedLocation = await snapshots.storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.storageLocation = pendingLocation;
+      final refresh = controller.refreshStorageLocation();
+      expect(api.reads, hasLength(1));
+
+      final outcome = await controller.cleanupExpiredEvidence();
+      expect(outcome.deleted, isTrue);
+      expect(controller.storageCleanupRunning, isFalse);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      // Concurrent demand must coalesce with the acceptance refresh.
+      await controller.refreshStorageLocation();
+      await controller.refreshStorageLocation();
+      api.reads.first.complete(oldCompletedLocation);
+      await tester.pump();
+
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(controller.previousStorageLocation, isNull);
+      expect(controller.storageLocation!.cleanupPreview.cleanupPending, isTrue);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(api.reads, hasLength(2));
+      api.reads.last.complete(freshCompletedLocation);
+      await refresh;
+
+      expect(controller.storageLocation, same(freshCompletedLocation));
+      expect(controller.previousStorageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_partial',
+      );
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocationFailed, isFalse);
+      expect(api.reads, hasLength(2));
+    },
+  );
+  testWidgets(
+    'obsolete storage error drains a fresh read and preserves failure recovery',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final pendingLocation = await _CompletedCleanupApi(
+        fixture,
+      ).storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.storageLocation = pendingLocation;
+      final refresh = controller.refreshStorageLocation();
+      await controller.cleanupExpiredEvidence();
+      api.reads.first.completeError(StateError('obsolete statistics failed'));
+      await tester.pump();
+
+      expect(controller.storageLocationFailed, isFalse);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      expect(api.reads, hasLength(2));
+      api.reads.last.completeError(StateError('fresh statistics failed'));
+      await refresh;
+      expect(controller.storageLocationFailed, isTrue);
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+
+      final retry = controller.refreshStorageLocation();
+      expect(controller.storageLocationLoading, isTrue);
+      expect(controller.storageLocationFailed, isFalse);
+      api.reads.last.complete(pendingLocation);
+      await retry;
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocationFailed, isFalse);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+    },
+  );
+  for (final disposeDuringFreshRead in [false, true]) {
+    testWidgets(
+      'disposed storage refresh does not deliver or drain further reads '
+      'fresh=$disposeDuringFreshRead',
+      (tester) async {
+        final fixture = PreviewControlApi();
+        final snapshots = _CompletedCleanupApi(fixture);
+        final pendingLocation = await snapshots.storageLocation();
+        snapshots.completed = true;
+        final completedLocation = await snapshots.storageLocation();
+        final api = _QueuedCleanupStatisticsApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        controller.storageLocation = pendingLocation;
+        final refresh = controller.refreshStorageLocation();
+        await controller.cleanupExpiredEvidence();
+        if (disposeDuringFreshRead) {
+          api.reads.first.complete(completedLocation);
+          await tester.pump();
+          expect(api.reads, hasLength(2));
+          await controller.refreshStorageLocation();
+        }
+        controller.dispose();
+        api.reads.last.completeError(
+          StateError('statistics returned after disposal'),
+        );
+        await refresh;
+        await controller.refreshStorageLocation();
+
+        expect(api.reads, hasLength(disposeDuringFreshRead ? 2 : 1));
+        expect(controller.storageLocation, same(pendingLocation));
+        expect(controller.previousStorageLocation, isNull);
+        expect(controller.storageLocationFailed, isFalse);
+        expect(
+          controller.storageCleanupNotice,
+          'settings.storage.cleanup_pending',
+        );
+      },
+    );
+  }
   test('cleanup acceptance does not await held optional statistics', () async {
     final fixture = PreviewControlApi();
     final api = _HeldCleanupStatisticsApi(fixture);
@@ -3008,5 +3163,17 @@ final class _HeldCleanupStatisticsApi extends _PendingCleanupApi {
   Future<RuntimeStorageLocation> storageLocation() {
     entered.complete();
     return returned.future;
+  }
+}
+
+final class _QueuedCleanupStatisticsApi extends _PendingCleanupApi {
+  _QueuedCleanupStatisticsApi(super.delegate);
+  final reads = <Completer<RuntimeStorageLocation>>[];
+
+  @override
+  Future<RuntimeStorageLocation> storageLocation() {
+    final read = Completer<RuntimeStorageLocation>();
+    reads.add(read);
+    return read.future;
   }
 }
