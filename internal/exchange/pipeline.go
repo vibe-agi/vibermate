@@ -688,6 +688,9 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		headers = original
 	}
+	if originalAccountNativePassthrough(request, selection, credential.mode) {
+		replaceCodexTurnToken(headers, nonHopCodexTurnToken(headers))
+	}
 	providerPath := upstreamendpoint.ProviderRelativePath(
 		selection.target.Origin(), encodedProvider.RelativePath(),
 	)
@@ -702,6 +705,10 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
 	}
+	if originalAccountNativePassthrough(request, selection, credential.mode) {
+		replaceCodexTurnToken(transformedHeaders, nonHopCodexTurnToken(transformedHeaders))
+	}
+
 	if selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
 		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
 		refreshChatGPTRoutingHint(transformedHeaders, encodedProvider.Body(), transformedBody)
@@ -1637,7 +1644,7 @@ func (pipeline *Pipeline) executeComplete(
 	if transformTurn.HasResponse() {
 		// Opaque state is exposed to a native client only after its ownership
 		// binding has been recorded. Scripts cannot revive a stripped token.
-		logicalHeaders.Del("X-Codex-Turn-State")
+		replaceCodexTurnToken(logicalHeaders, "")
 		if state := responseHeaders.Get("X-Codex-Turn-State"); state != "" {
 			logicalHeaders.Set("X-Codex-Turn-State", state)
 		}
@@ -2594,7 +2601,7 @@ func (pipeline *Pipeline) executeStream(
 			)
 		}
 		responseHeaders := response.Header.Clone()
-		responseHeaders.Del("X-Codex-Turn-State")
+		replaceCodexTurnToken(responseHeaders, "")
 		metadata := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
 		if state := metadata.Get("X-Codex-Turn-State"); state != "" {
 			responseHeaders.Set("X-Codex-Turn-State", state)
@@ -2980,6 +2987,11 @@ func normalizeNativeTransformedEnvelope(
 	}
 	headers := envelope.Headers()
 	rewriteMappedModelHeaders(headers, decoded.RequestedModel, decoded.EffectiveModel)
+	if originalAccountNativePassthrough(request, selection, frozen.CredentialMode()) {
+		// This metadata was already strictly filtered from the original response;
+		// scripts cannot supply a routing token or create managed continuity state.
+		replaceCodexTurnToken(headers, nonHopCodexTurnToken(metadata))
+	}
 	if account, managed := frozen.AccountRef(); managed && account.Validate() == nil {
 		// Turn state is hidden from scripts by the credential redaction boundary.
 		// Restore only the already ownership-validated native metadata, never script

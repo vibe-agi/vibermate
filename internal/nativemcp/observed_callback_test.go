@@ -1,6 +1,7 @@
 package nativemcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
@@ -452,7 +454,15 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("denial question %d missing", i+1)
+				var dump bytes.Buffer
+				_ = pprof.Lookup("goroutine").WriteTo(&dump, 2)
+				t.Log(dump.String())
+				select {
+				case terminal := <-done:
+					t.Fatalf("denial question %d missing: state=%s approval=%v read=%v terminal=%+v", i+1, op.State, op.ApprovalID, err, terminal)
+				default:
+					t.Fatalf("denial question %d missing: state=%s approval=%v read=%v child still running", i+1, op.State, op.ApprovalID, err)
+				}
 			}
 			time.Sleep(time.Millisecond)
 		}

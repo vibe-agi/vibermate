@@ -18,7 +18,7 @@ func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := UpgradeRevision2(context.Background(), Revision2MigrationInput{Database: verified, ReconcileTimeout: time.Second})
+	result, err := UpgradeRevision2(context.Background(), Revision2MigrationInput{Database: verified})
 	if err != nil || !result.Committed {
 		t.Fatalf("upgrade: %+v %v", result, err)
 	}

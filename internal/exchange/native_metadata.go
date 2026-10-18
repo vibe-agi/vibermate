@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -131,6 +132,32 @@ func codexTurnToken(headers http.Header) string {
 	return values[0]
 }
 
+// Passthrough is an explicit frozen route/credential decision, never inferred
+// from an absent or invalid managed AccountRef. Original Destination is separate.
+func originalAccountNativePassthrough(request ClientRequest, selection frozenSelection, mode providerauth.CredentialMode) bool {
+	return !selection.original && isNativeCodexSelection(request, selection) && mode == providerauth.CredentialClientPassthrough && selection.accountPolicy.Mode() == environment.AccountSelectionOriginal
+}
+func nonHopCodexTurnToken(headers http.Header) string {
+	for _, value := range headerValuesFold(headers, "Connection") {
+		for _, name := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(name), codexTurnStateHeader) {
+				return ""
+			}
+		}
+	}
+	return codexTurnToken(headers)
+}
+func replaceCodexTurnToken(headers http.Header, token string) {
+	for name := range headers {
+		if strings.EqualFold(name, codexTurnStateHeader) {
+			delete(headers, name)
+		}
+	}
+	if token != "" {
+		headers.Set(codexTurnStateHeader, token)
+	}
+}
+
 func (pipeline *Pipeline) replayCodexTurnState(request ClientRequest, selection frozenSelection, account providerauth.AccountRef, decoded protocolcore.Request, headers http.Header) {
 	binding, ok := codexTurnBinding(request, selection, account, decoded)
 	if !ok {
@@ -201,11 +228,15 @@ func (pipeline *Pipeline) managedResponseHeaders(request ClientRequest, selectio
 	if isNativeCodexSelection(request, selection) {
 		rewriteMappedModelHeaders(headers, decoded.RequestedModel, decoded.EffectiveModel)
 	}
-	token := codexTurnToken(headers)
-	headers.Del(codexTurnStateHeader)
+	token := nonHopCodexTurnToken(source)
+	replaceCodexTurnToken(headers, "")
 	account, _ := frozen.AccountRef()
 	if isNativeCodexSelection(request, selection) {
 		scopeManagedModelETag(headers, request, selection, account)
+	}
+	if originalAccountNativePassthrough(request, selection, frozen.CredentialMode()) {
+		replaceCodexTurnToken(headers, token)
+		return headers
 	}
 	binding, ok := codexTurnBinding(request, selection, account, decoded)
 	if token == "" || !ok {
