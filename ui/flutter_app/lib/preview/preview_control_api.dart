@@ -943,7 +943,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
       productBuild: _productBuild,
       state: 'initialized',
       host: 'desktop',
-      schemaRevision: 1,
+      schemaRevision: 3,
       storage: 'healthy',
       environmentProjection: 'healthy',
       unavailableEnvironments: null,

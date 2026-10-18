@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,16 +13,20 @@ import (
 )
 
 func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
-	fixture := populatedV1MigrationFixture(t)
-	result, err := UpgradeRevision1(context.Background(), fixture.input(t))
+	fixture := populatedV2MigrationFixture(t, false)
+	verified, err := VerifyRevision2MigrationDatabase(context.Background(), filepath.Join(fixture.source, "runtime.db"), filepath.Join(fixture.snapshot, "runtime.db"), fixture.owner, fixture.snapshotOwner, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := UpgradeRevision2(context.Background(), Revision2MigrationInput{Database: verified, ReconcileTimeout: time.Second})
 	if err != nil || !result.Committed {
 		t.Fatalf("upgrade: %+v %v", result, err)
 	}
 	fixture.assertLegacyPreserved(t)
 	store := openTestStore(t, filepath.Join(fixture.source, "runtime.db"))
-	defer shutdownTestStore(t, store)
+	defer closeFrozenV1Store(t, store)
 	account, exists, err := store.ProviderAccountRepository().Load(context.Background(), "native-legacy")
-	if err != nil || !exists || account.CyberAccessProgram != cyberaccess.Standard || account.SettingsRevision != 1 || account.Revision != 1 {
+	if err != nil || !exists || account.CyberAccessProgram != cyberaccess.Standard || account.SettingsRevision != 8 || account.Revision != 1 {
 		t.Fatalf("upgrade changed existing consent or revision: %+v %v", account, err)
 	}
 	var preference string
@@ -33,15 +36,15 @@ func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
 	if _, err := store.database.Exec(`UPDATE provider_accounts SET cyber_access_program='daybreak_red'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrationAdditionsEmpty(context.Background(), store.database); !errors.Is(err, ErrUnsupportedSchema) {
+	if err := revision2AdditionsStandard(context.Background(), store.database); !errors.Is(err, ErrUnsupportedSchema) {
 		t.Fatalf("migration certification accepted invented opt-in: %v", err)
 	}
 }
 
-func TestEarlierPrivateV2WithoutCyberAccessIsRejectedUnchanged(t *testing.T) {
+func TestUnsupportedPrivateV2WithUnpublishedColumnIsRejectedUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	database := openSQLiteForTest(t, path)
-	previous := strings.Replace(schemaV2SQL, "  cyber_access_program TEXT NOT NULL DEFAULT 'standard' CHECK(cyber_access_program IN ('standard','daybreak_blue','daybreak_red')),\n", "", 1)
+	previous := schemaSQL
 	nativeExec(t, database, previous)
 	nativeExec(t, database, `INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',2,'2026-10-03T00:00:00Z')`)
 	nativeExec(t, database, `INSERT INTO provider_accounts(account_id,display_name,credential_origin,endpoint_associations,association_revision,settings_revision,egress_profile_json,automatic_refresh,realm_id,driver_ref,secret_reference,state,revision,created_at_unix_ms,updated_at_unix_ms) VALUES('preserved','Preserved','https://chatgpt.com','[]',1,1,'{}',0,'openai.chatgpt','static_header','secret://provider-account/preserved','active',1,1,1)`)

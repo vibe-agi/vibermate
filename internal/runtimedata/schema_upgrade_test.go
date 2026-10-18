@@ -191,14 +191,9 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	}
 	var defaults int
 	defaultErr := db.QueryRow(`SELECT count(*) FROM runtime_egress_default WHERE singleton=1 AND revision=1 AND egress_id IS NULL AND egress_revision IS NULL`).Scan(&defaults)
-	var nonstandard int
-	preferenceErr := db.QueryRow(`SELECT count(*) FROM provider_accounts WHERE cyber_access_program<>'standard'`).Scan(&nonstandard)
 	db.Close()
 	if defaultErr != nil || defaults != 1 {
 		t.Fatalf("upgrade default seed %d %v", defaults, defaultErr)
-	}
-	if preferenceErr != nil || nonstandard != 0 {
-		t.Fatalf("upgrade invented a nonstandard cyber preference %d %v", nonstandard, preferenceErr)
 	}
 	if fmt.Sprint(filter(before)) != fmt.Sprint(filter(after)) {
 		t.Fatal("old logical rows changed")
@@ -212,13 +207,13 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 			t.Fatalf("private file changed %s", name)
 		}
 	}
-	// Marker consumption precedes ordinary changes, which must not be compared
-	// to the historical snapshot on later normal2 startups.
-	store := openBackupStore(t, filepath.Join(source, "runtime.db"))
-	if _, err := store.ConnectionRuleRepository().Load(context.Background()); err != nil {
-		t.Fatal(err)
+	// The old API remains a frozen-v2 boundary. Inspect it offline; current
+	// Store admission requires the separately owned second stage.
+	state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(source, "runtime.db"), time.Second)
+	if err != nil || state.Revision != 2 {
+		t.Fatalf("legacy receipt result %+v %v", state, err)
 	}
-	shutdownBackupStore(t, store)
+
 	if _, err := UpgradeSchemaOwned(context.Background(), source, filepath.Join(filepath.Dir(source), "still-unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("normal2 emitted upgrade"); return nil }); err != nil {
 		t.Fatal(err)
 	}

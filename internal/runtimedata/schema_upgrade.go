@@ -32,7 +32,8 @@ type schemaUpgradeReceipt struct {
 	FromRevision  int64  `json:"fromRevision"`
 	ToRevision    int64  `json:"toRevision"`
 	Snapshot      string `json:"snapshot"`
-	LegacyDigest  string `json:"legacyDigest"`
+	LegacyDigest  string `json:"legacyDigest,omitempty"`
+	SourceDigest  string `json:"sourceDigest,omitempty"`
 	Status        string `json:"status"`
 }
 type schemaUpgradeRunner struct {
@@ -104,7 +105,7 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 		if err := emit(SchemaUpgradeRunning); err != nil {
 			return fail(err)
 		}
-		if !validSchemaUpgradeReceipt(receipt, source) {
+		if receipt.Schema != "runtime-schema-upgrade-receipt/v1" || !validSchemaUpgradeReceipt(receipt, source) {
 			return fail(ErrBackupInvalid)
 		}
 		snapshotOwner, snapshotHost, err := lockSchemaSnapshot(receipt.Snapshot)
@@ -250,10 +251,24 @@ func schemaUpgradeNeedsPreparation(source string) (bool, error) {
 	return db.Size() >= 128*1024*1024 && wal.Size() > 32, nil
 }
 func validSchemaUpgradeReceipt(r schemaUpgradeReceipt, source string) bool {
-	if r.Schema != "runtime-schema-upgrade-receipt/v1" || r.Source != source || r.FromRevision != 1 || r.ToRevision != 2 || (r.Status != "pending" && r.Status != "committed") || len(r.LegacyDigest) != 64 {
+	digestText := r.LegacyDigest
+	switch r.Schema {
+	case "runtime-schema-upgrade-receipt/v1":
+		if r.FromRevision != 1 || r.ToRevision != 2 || r.SourceDigest != "" {
+			return false
+		}
+	case "runtime-schema-upgrade-receipt/v2":
+		if r.FromRevision != 2 || r.ToRevision != 3 || r.LegacyDigest != "" {
+			return false
+		}
+		digestText = r.SourceDigest
+	default:
 		return false
 	}
-	digest, err := hex.DecodeString(r.LegacyDigest)
+	if r.Source != source || (r.Status != "pending" && r.Status != "committed") || len(digestText) != 64 {
+		return false
+	}
+	digest, err := hex.DecodeString(digestText)
 	if err != nil || bytes.Equal(digest, make([]byte, 32)) {
 		return false
 	}
@@ -292,15 +307,56 @@ func readSchemaUpgradeReceipt(source string) (schemaUpgradeReceipt, bool, error)
 	if err != nil || !os.SameFile(info, opened) {
 		return receipt, true, ErrBackupInvalid
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64*1024))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&receipt); err != nil {
+	encoded, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	if err != nil || len(encoded) > 64*1024 {
+		return receipt, true, ErrBackupInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return receipt, true, ErrBackupInvalid
+	}
+	fields := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return receipt, true, ErrBackupInvalid
+		}
+		key, ok := token.(string)
+		if !ok || fields[key] {
+			return receipt, true, ErrBackupInvalid
+		}
+		fields[key] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return receipt, true, ErrBackupInvalid
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
 		return receipt, true, ErrBackupInvalid
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return receipt, true, ErrBackupInvalid
 	}
+	decoder = json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, true, ErrBackupInvalid
+	}
+	digestKey := "legacyDigest"
+	if receipt.Schema == "runtime-schema-upgrade-receipt/v2" {
+		digestKey = "sourceDigest"
+	}
+	if len(fields) != 8 {
+		return receipt, true, ErrBackupInvalid
+	}
+	for _, key := range []string{"schema", "source", "initializedAt", "fromRevision", "toRevision", "snapshot", digestKey, "status"} {
+		if !fields[key] {
+			return receipt, true, ErrBackupInvalid
+		}
+	}
+
 	return receipt, true, nil
 }
 func writeSchemaUpgradeReceipt(ctx context.Context, source string, receipt schemaUpgradeReceipt) error {

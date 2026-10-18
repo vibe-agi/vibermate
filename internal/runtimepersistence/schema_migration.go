@@ -152,13 +152,16 @@ type legacyTable struct {
 
 func quoteMigrationIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 func legacyTables(ctx context.Context) ([]legacyTable, error) {
+	return frozenMigrationTables(ctx, schemaV1SQL)
+}
+func frozenMigrationTables(ctx context.Context, frozen string) ([]legacyTable, error) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, schemaV1SQL); err != nil {
+	if _, err := db.ExecContext(ctx, frozen); err != nil {
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name`)
@@ -211,7 +214,10 @@ func fingerprintPart(h hash.Hash, tag byte, b []byte) {
 // Memory is bounded by one row (the frozen schema bounds each body). The SQL
 // sorter is file-backed and capped; no whole-table or whole-DB materialization.
 func legacyFingerprint(ctx context.Context, q schemaQueryer) ([32]byte, error) {
-	tables, err := legacyTables(ctx)
+	return frozenFingerprint(ctx, q, schemaV1SQL)
+}
+func frozenFingerprint(ctx context.Context, q schemaQueryer, frozen string) ([32]byte, error) {
+	tables, err := frozenMigrationTables(ctx, frozen)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -438,9 +444,6 @@ func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {
 		}
 	}
 	var wrong int64
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM provider_accounts WHERE cyber_access_program<>'standard'`).Scan(&wrong); err != nil || wrong != 0 {
-		return ErrUnsupportedSchema
-	}
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM runtime_connection_events WHERE inspection_purpose<>''`).Scan(&wrong); err != nil || wrong != 0 {
 		return ErrUnsupportedSchema
 	}

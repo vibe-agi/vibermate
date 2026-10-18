@@ -23,11 +23,11 @@ func TestNativeResponseTransformPreservesNormalizedModelHeaders(t *testing.T) {
 				if reported == "mapped-model" {
 					wantModel = "codex-client-alias"
 				}
-				if baseline.Get("Openai-Model") != wantModel || !strings.HasPrefix(baseline.Get("X-Models-Etag"), `"vibermate-models-v1-`) {
+				if baseline.Get("Openai-Model") != wantModel || baseline.Get("X-Openai-Model") != wantModel || !strings.HasPrefix(baseline.Get("X-Models-Etag"), `"vibermate-models-v1-`) {
 					t.Fatalf("ordinary response did not expose native model metadata: %v", baseline)
 				}
 				transformed := runNativeModelHeaderResponse(t, streaming, false, reported, `"provider-catalog"`, `response.headers["x-transform-marker"] = "ran";`)
-				if transformed.Get("Openai-Model") != wantModel {
+				if transformed.Get("Openai-Model") != wantModel || transformed.Get("X-Openai-Model") != wantModel {
 					t.Errorf("transformed model = %q, want %q", transformed.Get("Openai-Model"), wantModel)
 				}
 				// The transform path must use the same once-scoped validator as the
@@ -104,6 +104,7 @@ func runNativeModelHeaderResponse(t *testing.T, streaming, originalAccount bool,
 		response = streamResponse(http.StatusOK, strings.NewReader("event: response.completed\ndata: "+string(data)+"\n\n"))
 	}
 	response.Header.Set("Openai-Model", reported)
+	response.Header.Set("X-Openai-Model", reported)
 	response.Header.Set("X-Request-Id", "trace-original")
 	if tag != "" {
 		response.Header.Set("X-Models-Etag", tag)
@@ -140,7 +141,7 @@ func runNativeModelHeaderResponse(t *testing.T, streaming, originalAccount bool,
 		for _, item := range raw.snapshot() {
 			if item.Layer == rawevidence.LayerTransformResponseInput {
 				found = true
-				if item.Headers.Get("Openai-Model") != reported || item.Headers.Get("X-Models-Etag") != tag || !bytes.Contains(item.Body, []byte(`"model":"`+reported+`"`)) {
+				if item.Headers.Get("Openai-Model") != reported || item.Headers.Get("X-Openai-Model") != reported || item.Headers.Get("X-Models-Etag") != tag || !bytes.Contains(item.Body, []byte(`"model":"`+reported+`"`)) {
 					t.Fatalf("transform input audit lost upstream identity: headers=%v body=%s", item.Headers, item.Body)
 				}
 			}

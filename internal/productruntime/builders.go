@@ -72,7 +72,7 @@ func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
-	if _, err := runtimedata.UpgradeSchemaOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
+	if _, err := runtimedata.UpgradeSchemaToCurrentOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
 		return storageBuildResult{}, err
 	}
 	if err := ctx.Err(); err != nil {

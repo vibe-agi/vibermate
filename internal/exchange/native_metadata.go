@@ -32,7 +32,7 @@ func nativeResponseHeaders(source http.Header) http.Header {
 		allowed := false
 		switch lower {
 		case "x-request-id", "request-id", "retry-after", "retry-after-ms", "x-should-retry", "x-models-etag",
-			"openai-model", "x-reasoning-included", "x-codex-turn-state",
+			"openai-model", "x-openai-model", "x-reasoning-included", "x-codex-turn-state",
 			"x-codex-promo-message", "x-codex-rate-limit-reached-type",
 			"x-codex-credits-has-credits", "x-codex-credits-unlimited", "x-codex-credits-balance",
 			"x-codex-safety-buffering-enabled", "x-codex-safety-buffering-faster-model":

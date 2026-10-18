@@ -2981,6 +2981,17 @@ func normalizeNativeTransformedEnvelope(
 	headers := envelope.Headers()
 	rewriteMappedModelHeaders(headers, decoded.RequestedModel, decoded.EffectiveModel)
 	if account, managed := frozen.AccountRef(); managed && account.Validate() == nil {
+		// Turn state is hidden from scripts by the credential redaction boundary.
+		// Restore only the already ownership-validated native metadata, never script
+		// output or an unbound upstream header.
+		for name := range headers {
+			if strings.EqualFold(name, codexTurnStateHeader) {
+				delete(headers, name)
+			}
+		}
+		if token := codexTurnToken(metadata); token != "" {
+			headers.Set(codexTurnStateHeader, token)
+		}
 		original := upstreamservice.ModelValidator(before, "X-Models-Etag")
 		retained := upstreamservice.ModelValidator(headers, "X-Models-Etag")
 		for name := range headers {
