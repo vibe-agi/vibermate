@@ -851,7 +851,7 @@ func TestCaptureSupervisionTimeoutDetail(t *testing.T) {
 func TestControlTimeoutDetailUsesFailureWording(t *testing.T) {
 	for _, test := range []struct{ locale, want string }{
 		{"en_US.UTF-8", "Capture control request failed: stage=process_attach reason=timeout.\n"},
-		{"zh_CN.UTF-8", "抓包控制请求失败：stage=process_attach reason=timeout。\n"},
+		{"zh_CN.UTF-8", "\u6293\u5305\u63a7\u5236\u8bf7\u6c42\u5931\u8d25\uff1astage=process_attach reason=timeout\u3002\n"},
 	} {
 		t.Run(test.locale, func(t *testing.T) {
 			var stderr bytes.Buffer
