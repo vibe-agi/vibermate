@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"modernc.org/sqlite"
@@ -74,4 +75,23 @@ func sqliteDSN(databasePath string, busyTimeout time.Duration, readOnly bool) st
 	query.Set("_error_rc", "true")
 	databaseURL.RawQuery = query.Encode()
 	return databaseURL.String()
+}
+
+// A live observation owner may certify connection-local data_version. Never
+// silently replace that writer connection and reset its mutation detector;
+// failure requires a fresh optional owner and full privacy recertification.
+type observationWriterConnector struct {
+	driver.Connector
+	opened atomic.Bool
+}
+
+func (c *observationWriterConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	if !c.opened.CompareAndSwap(false, true) {
+		return nil, ErrInspectionUnavailable
+	}
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		c.opened.Store(false)
+	}
+	return conn, err
 }

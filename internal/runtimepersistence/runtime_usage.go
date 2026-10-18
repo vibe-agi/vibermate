@@ -94,7 +94,7 @@ func (store *Store) setUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 		}
 	}
 	if controlOnly {
-		if err := requestRecordingCleanup(operation, tx); err != nil {
+		if err := requestRecordingCleanup(operation, tx, now); err != nil {
 			return runtimeusage.CollectionPolicy{}, err
 		}
 	}

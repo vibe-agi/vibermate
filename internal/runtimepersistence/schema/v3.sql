@@ -974,6 +974,16 @@ CREATE TABLE recording_cleanup_state(
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
  requested_revision INTEGER NOT NULL CHECK(requested_revision>=0),
  completed_revision INTEGER NOT NULL CHECK(completed_revision>=0 AND completed_revision<=requested_revision),
- source_generation INTEGER NOT NULL CHECK(source_generation>0)
+ source_generation INTEGER NOT NULL CHECK(source_generation>0),
+ cutoff_unix_ms INTEGER NOT NULL CHECK(cutoff_unix_ms>=0),
+ active_revision INTEGER NOT NULL CHECK(active_revision=0 OR (active_revision>completed_revision AND active_revision<=requested_revision)),
+ active_cutoff_unix_ms INTEGER NOT NULL CHECK((active_revision=0 AND active_cutoff_unix_ms=0) OR (active_revision>0 AND active_cutoff_unix_ms>0))
 ) STRICT;
-INSERT INTO recording_cleanup_state VALUES(1,0,0,1);
+INSERT INTO recording_cleanup_state VALUES(1,0,0,1,0,0,0);
+
+CREATE TABLE recording_denial_coverage(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ identity_count INTEGER NOT NULL CHECK(identity_count>=0),
+ chain_hash BLOB NOT NULL CHECK(length(chain_hash)=32)
+) STRICT;
+INSERT INTO recording_denial_coverage VALUES(1,0,zeroblob(32));

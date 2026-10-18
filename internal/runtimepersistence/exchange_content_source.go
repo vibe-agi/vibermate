@@ -29,13 +29,15 @@ type storedSourceMessage struct {
 
 // PutSource is deliberately concrete until the Manager handoff is activated.
 // A nil constructor policy cannot use it to bypass legacy Record admission.
-func (repository *exchangeContentRepository) PutSource(ctx context.Context, source *exchangecontent.Source) error {
+func (repository *exchangeContentRepository) PutSource(ctx context.Context, source *exchangecontent.Source) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	return repository.putScopedSource(ctx, recording.Scope{}, source, false)
 }
 func (repository *exchangeContentRepository) PutScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
 	return repository.putScopedSource(ctx, scope, source, true)
 }
-func (repository *exchangeContentRepository) putScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source, provided bool) error {
+func (repository *exchangeContentRepository) putScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source, provided bool) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if repository.requireScope && !provided || provided && (!repository.coordinates || !validOriginalRecordingScope(scope)) {
 		return recording.ErrObservationDiscarded
 	}

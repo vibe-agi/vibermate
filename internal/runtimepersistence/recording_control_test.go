@@ -121,3 +121,67 @@ func TestRecordingDeletedScopeRemainsHiddenAfterBothRolesRestart(t *testing.T) {
 		t.Fatalf("lost pending cleanup: %+v %v", state, err)
 	}
 }
+
+func TestRecordingCleanupClaimPreservesNewerWantedWork(t *testing.T) {
+	control := inspectionControlFixture(t)
+	api, ok := any(control).(interface {
+		RequestRecordingCleanup(context.Context, time.Time) error
+		ClaimRecordingCleanup(context.Context) (uint64, uint64, int64, error)
+		CompleteRecordingCleanup(context.Context, uint64, uint64) error
+	})
+	if !ok {
+		t.Fatal("resumable coalesced cleanup claim unavailable")
+	}
+	now := time.Now().UTC()
+	if err := api.RequestRecordingCleanup(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	target, generation, cutoff, err := api.ClaimRecordingCleanup(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != 1 || generation != 2 || cutoff != now.UnixMilli() {
+		t.Fatalf("claim coordinates: %d/%d/%d", target, generation, cutoff)
+	}
+	if err = api.RequestRecordingCleanup(t.Context(), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	again, nextGeneration, nextCutoff, err := api.ClaimRecordingCleanup(t.Context())
+	if err != nil || again != target || nextGeneration != generation || nextCutoff != cutoff {
+		t.Fatal("unfinished owner was overtaken")
+	}
+	if err = api.CompleteRecordingCleanup(t.Context(), target, generation+1); err == nil {
+		t.Fatal("wrong generation completed cleanup")
+	}
+	if err = api.CompleteRecordingCleanup(t.Context(), target, generation); err != nil {
+		t.Fatal(err)
+	}
+	state, err := control.RecordingCleanupState(t.Context())
+	if err != nil || state.CompletedRevision != 1 || state.RequestedRevision != 2 {
+		t.Fatalf("new work falsely acknowledged: %+v %v", state, err)
+	}
+	target, generation, cutoff, err = api.ClaimRecordingCleanup(t.Context())
+	if err != nil || target != 2 || generation != 3 || cutoff != now.Add(time.Second).UnixMilli() {
+		t.Fatalf("next owner lost wanted work: %d/%d/%d %v", target, generation, cutoff, err)
+	}
+}
+
+func TestRecordingMissingCleanupStateCannotAcknowledgeIntent(t *testing.T) {
+	control := inspectionControlFixture(t)
+	nativeExec(t, control.store.database, `DELETE FROM recording_cleanup_state`)
+	if err := control.RequestRecordingCleanup(t.Context(), time.Now().UTC()); err == nil {
+		t.Fatal("missing reliable obligation acknowledged as published")
+	}
+	policy, err := control.UsagePolicyRepository().UsagePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.RetentionDays = 7
+	if _, err = control.UsagePolicyRepository().SetUsagePolicy(t.Context(), policy, time.Now().UTC()); err == nil {
+		t.Fatal("policy change lost its cleanup obligation")
+	}
+	retained, err := control.UsagePolicyRepository().UsagePolicy(t.Context())
+	if err != nil || retained.Revision != policy.Revision {
+		t.Fatal("failed intent partially committed policy")
+	}
+}

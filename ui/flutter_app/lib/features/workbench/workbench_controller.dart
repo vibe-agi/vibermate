@@ -3793,6 +3793,12 @@ final class WorkbenchController extends ChangeNotifier
         (error.status != 409 && error.status != 422)) {
       return;
     }
+    _clearActivityInspection();
+    errorMessage = _describeError(error);
+    notifyListeners();
+  }
+
+  void _clearActivityInspection() {
     _activityInspectionGeneration++;
     // These are optional projections of one source/visibility view. Required
     // Capture selection, assignments, and approvals retain their own owners.
@@ -3811,11 +3817,10 @@ final class WorkbenchController extends ChangeNotifier
     _summaryBodiesAbsent = false;
     captureActivitiesLoading = false;
     detailLoading = false;
-    errorMessage = _describeError(error);
-    notifyListeners();
   }
 
   void _invalidateEvidenceCaches() {
+    _clearActivityInspection();
     _discardNativeReader();
     _discardNativeApprovals();
     _exchangeLoadGeneration += 1;

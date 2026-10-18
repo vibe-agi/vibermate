@@ -48,7 +48,8 @@ func (repository *rawEvidenceRepository) AppendBatch(
 	ctx context.Context,
 	records []rawevidence.StoredEnvelope,
 	now time.Time,
-) error {
+) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if len(records) == 0 || now.IsZero() {
 		return errors.New("raw evidence batch is empty")
 	}

@@ -13,7 +13,8 @@ import (
 // RepairConversation modifies only the exact surviving current Activity root
 // selected by inspection. The lifecycle owner excludes maintenance and closes
 // the source token around this transaction; no control connection is borrowed.
-func (s *ObservationStore) RepairConversation(ctx context.Context, repair activity.ConversationRepair) error {
+func (s *ObservationStore) RepairConversation(ctx context.Context, repair activity.ConversationRepair) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	r := repair.Root
 	identity := repair.Identity.Clone()
 	if !r.Current || r.Scope.Validate() != nil || r.Sequence <= 0 || r.ActivityID == "" || r.ExchangeID == "" || !r.Token.Control.Valid() || r.Token.Control.ArchiveEpoch != r.Scope.Fence.ArchiveEpoch || identity.Validate() != nil {

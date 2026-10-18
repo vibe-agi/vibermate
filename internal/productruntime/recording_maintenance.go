@@ -111,6 +111,13 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 	} else {
 		request.ready <- recordingMaintenanceResult{err: err}
 	}
+	if usable && token != nil {
+		// The caller has returned all real I/O, but a boolean is not a privacy
+		// certificate. Revalidate and arm this exact writer before releasing leases.
+		if err := sinks.store.PublishInspectionMirror(s.ctx, s.control); err != nil {
+			usable = false
+		}
+	}
 	if !usable {
 		s.unsafeMaintenance.Store(true)
 		// Unknown/post-mutation failure must never reopen this catalog or writer.

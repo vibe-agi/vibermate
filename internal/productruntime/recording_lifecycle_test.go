@@ -128,6 +128,7 @@ func TestRuntimeFinishDoesNotAwaitAcceptedRecording(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: grant.Run.ID}
+	waitRecordingMirror(t, r)
 	evidence, e := r.captureRuns.AuthorizeProxy(context.Background(), grant.ProxyCapability)
 	if e != nil {
 		t.Fatal(e)
@@ -501,6 +502,7 @@ func TestRuntimeRawFacadeRetainsBoundedCapturePort(t *testing.T) {
 func TestRuntimeActualHTTPUsesBoundedRawFacade(t *testing.T) {
 	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin"})
 	waitRecording(t, f.r)
+	waitRecordingMirror(t, f.r)
 	reply := f.send(context.Background(), "POST", semanticOriginalPath, semanticOriginalBody)
 	if reply.Err != nil || reply.Status != 200 {
 		t.Fatalf("real forwarded response: %d %v", reply.Status, reply.Err)

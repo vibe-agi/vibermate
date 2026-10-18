@@ -16,6 +16,8 @@ var ErrInspectionChanged = errors.New("inspection visibility or source generatio
 type InspectionStamp struct {
 	LayoutID                                              string
 	ArchiveEpoch, VisibilityRevision, UsagePolicyRevision uint64
+	DenialCount                                           uint64
+	DenialHash                                            [32]byte
 }
 type InspectionSourceVersion struct {
 	SourceSet  string
@@ -35,7 +37,7 @@ type VisibilitySnapshot struct {
 }
 
 func (s InspectionStamp) Valid() bool {
-	return len(s.LayoutID) > 0 && len(s.LayoutID) <= 128 && utf8.ValidString(s.LayoutID) && s.ArchiveEpoch > 0 && s.ArchiveEpoch <= math.MaxInt64 && s.VisibilityRevision > 0 && s.VisibilityRevision <= math.MaxInt64 && s.UsagePolicyRevision > 0 && s.UsagePolicyRevision <= math.MaxInt64
+	return s.DenialCount <= math.MaxInt64 && ((s.DenialCount == 0) == (s.DenialHash == ([32]byte{}))) && len(s.LayoutID) > 0 && len(s.LayoutID) <= 128 && utf8.ValidString(s.LayoutID) && s.ArchiveEpoch > 0 && s.ArchiveEpoch <= math.MaxInt64 && s.VisibilityRevision > 0 && s.VisibilityRevision <= math.MaxInt64 && s.UsagePolicyRevision > 0 && s.UsagePolicyRevision <= math.MaxInt64
 }
 func (s VisibilitySnapshot) Allows(scope Scope) bool {
 	if !s.Stamp.Valid() || scope.Validate() != nil || scope.Fence.ArchiveEpoch != s.Stamp.ArchiveEpoch {

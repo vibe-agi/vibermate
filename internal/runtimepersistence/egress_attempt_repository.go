@@ -41,8 +41,9 @@ const egressAttemptSelect = `SELECT
 	 FROM runtime_egress_attempts`
 
 type egressAttemptRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	observationOnly bool
+	database        *sql.DB
+	operations      *operationGate
 }
 
 var _ egressaudit.Repository = (*egressAttemptRepository)(nil)
@@ -552,7 +553,8 @@ func (repository *egressAttemptRepository) PutScopedAttempt(ctx context.Context,
 	}
 	return repository.putAttempt(ctx, scope, attempt)
 }
-func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) error {
+func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if attempt.Purpose() == egressaudit.PurposeClientToolService {
 		return errors.New("native execution requires its control transaction")
 	}
@@ -576,6 +578,15 @@ func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope
 		return err
 	}
 	defer tx.Rollback()
+	if repository.observationOnly {
+		var denied bool
+		if err := tx.QueryRowContext(operation, `SELECT EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=?) OR (kind='connection' AND identity=?) OR (kind='exchange' AND identity=?))`, attempt.ID(), attempt.ConnectionID(), attempt.Parent().ExchangeID).Scan(&denied); err != nil {
+			return err
+		}
+		if denied {
+			return recording.ErrObservationDiscarded
+		}
+	}
 	priorScope, scopeErr := readRecordingScope(operation, tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
 	if scopeErr != nil && !errors.Is(scopeErr, sql.ErrNoRows) {
 		return scopeErr

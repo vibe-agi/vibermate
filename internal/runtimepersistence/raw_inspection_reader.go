@@ -361,7 +361,8 @@ func (r *RawInspectionReader) RevealHeader(ctx context.Context, q rawevidence.He
 	}
 	return result, nil
 }
-func (s *ObservationStore) AppendLocatedRevealAudit(ctx context.Context, a rawevidence.LocatedRevealAudit) error {
+func (s *ObservationStore) AppendLocatedRevealAudit(ctx context.Context, a rawevidence.LocatedRevealAudit) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if err := a.Validate(); err != nil {
 		return err
 	}

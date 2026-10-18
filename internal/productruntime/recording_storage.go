@@ -147,6 +147,11 @@ func (s *recordingStorage) run() {
 		sinks, err := s.initialize()
 		if err != nil {
 			s.tracker.recordingState(RecordingDegraded)
+			if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
+				s.closeErr = err
+				s.invalidateRecordingSource()
+				break
+			}
 			timer := time.NewTimer(time.Second)
 			select {
 			case <-s.ctx.Done():
@@ -171,6 +176,11 @@ func (s *recordingStorage) run() {
 				if !s.unsafeMaintenance.Load() {
 					if err := s.refreshMirror(sinks.store); err != nil {
 						s.tracker.recordingState(RecordingDegraded)
+						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
+							s.invalidateRecordingSource()
+						}
+					} else {
+						s.tracker.recordingState(RecordingAvailable)
 					}
 				}
 			case request := <-s.maintenanceRequests:
@@ -485,6 +495,11 @@ func (s *recordingStorage) refreshMirror(store *runtimepersistence.ObservationSt
 	if err != nil {
 		return err
 	}
+	if s.publishedMirror.Valid() {
+		if err = store.CheckRecordingWriter(s.ctx); err != nil {
+			return err
+		}
+	}
 	if snapshot.Stamp == s.publishedMirror {
 		return nil
 	}
@@ -493,4 +508,16 @@ func (s *recordingStorage) refreshMirror(store *runtimepersistence.ObservationSt
 	}
 	s.publishedMirror = snapshot.Stamp
 	return nil
+}
+
+func (s *recordingStorage) invalidateRecordingSource() {
+	s.unsafeMaintenance.Store(true)
+	s.paused.Store(true)
+	s.recorder.mu.Lock()
+	s.recorder.sealed = true
+	s.recorder.mu.Unlock()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = s.catalog.Close(canceled)
+	s.tracker.recordingState(RecordingDegraded)
 }

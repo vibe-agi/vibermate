@@ -41,3 +41,23 @@ func TestRuntimeOwnerPublishesAndRefreshesCompleteMirror(t *testing.T) {
 	}
 	assertReadable()
 }
+
+// Persistence-intent fixtures wait for the actual fixed owner, never seed a
+// permissive fixture mirror or make production Capture creation await history.
+func waitRecordingMirror(t *testing.T, r *Runtime) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := r.connectionInspection.List(t.Context(), connectionevent.PageRequest{Limit: 1}); err == nil {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("actual complete mirror did not catch up")
+		case <-tick.C:
+		}
+	}
+}

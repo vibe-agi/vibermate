@@ -49,7 +49,7 @@ func (s *auditInspectionRead) egressCandidates(q egressaudit.PageRequest, p *ins
 	where, filters := egressInspectionFilter(q)
 	for i := range s.lease.sources {
 		table := fmt.Sprintf("s%d.runtime_egress_attempts", i)
-		ids = append(ids, `SELECT attempt_id FROM `+table+` WHERE `+where)
+		ids = append(ids, `SELECT attempt_id FROM `+table+` WHERE `+where+` AND NOT EXISTS(SELECT 1 FROM `+s.current+`.recording_denials d WHERE (d.kind='attempt' AND d.identity=attempt_id) OR (d.kind='connection' AND d.identity=connection_id) OR (d.kind='exchange' AND d.identity=parent_exchange_id))`)
 		args = append(args, filters...)
 		publications = append(publications, fmt.Sprintf(`SELECT %d AS ordinal,sequence,attempt_id,(outcome<>'') AS terminal FROM %s WHERE attempt_id IN(SELECT attempt_id FROM ids)`, i, table))
 	}

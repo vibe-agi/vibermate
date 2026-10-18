@@ -476,7 +476,8 @@ func scanConnectionEvent(
 	return record, nil
 }
 
-func (r *connectionEventRepository) PutConnection(ctx context.Context, scope recording.Scope, event connectionevent.Event) error {
+func (r *connectionEventRepository) PutConnection(ctx context.Context, scope recording.Scope, event connectionevent.Event) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if err := scope.Validate(); err != nil {
 		return err
 	}

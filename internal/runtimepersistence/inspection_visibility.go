@@ -36,9 +36,14 @@ func (s *ControlStore) ReadInspectionSnapshot(ctx context.Context, refs []captur
 	}
 	defer tx.Rollback()
 	var epoch, visibility, policy int64
-	if err = tx.QueryRowContext(operation, `SELECT s.layout_id,s.archive_epoch,s.visibility_revision,p.revision FROM runtime_storage_state s JOIN runtime_usage_policy p ON p.singleton=s.singleton WHERE s.singleton=1`).Scan(&snapshot.Stamp.LayoutID, &epoch, &visibility, &policy); err != nil {
+	var denialHash []byte
+	if err = tx.QueryRowContext(operation, `SELECT s.layout_id,s.archive_epoch,s.visibility_revision,p.revision,d.identity_count,d.chain_hash FROM runtime_storage_state s JOIN runtime_usage_policy p ON p.singleton=s.singleton JOIN recording_denial_coverage d ON d.singleton=s.singleton WHERE s.singleton=1`).Scan(&snapshot.Stamp.LayoutID, &epoch, &visibility, &policy, &snapshot.Stamp.DenialCount, &denialHash); err != nil {
 		return snapshot, errors.Join(ErrInspectionUnavailable, err)
 	}
+	if len(denialHash) != 32 {
+		return snapshot, ErrInspectionUnavailable
+	}
+	copy(snapshot.Stamp.DenialHash[:], denialHash)
 	if epoch <= 0 || visibility <= 0 || policy <= 0 {
 		return snapshot, ErrInspectionUnavailable
 	}
@@ -157,6 +162,10 @@ func readInspectionMirror(ctx context.Context, tx *sql.Tx, alias string, expecte
 		return mirror, ErrInspectionUnavailable
 	}
 	mirror.Stamp.ArchiveEpoch, mirror.Stamp.VisibilityRevision, mirror.Stamp.UsagePolicyRevision = uint64(epoch), uint64(visibility), uint64(policy)
+	if _, err = readRecordingDenialCoverage(ctx, tx, alias, expected); err != nil {
+		return mirror, err
+	}
+	mirror.Stamp.DenialCount, mirror.Stamp.DenialHash = expected.DenialCount, expected.DenialHash
 	if !mirror.Stamp.Valid() || mirror.Stamp != expected {
 		return mirror, ErrInspectionUnavailable
 	}

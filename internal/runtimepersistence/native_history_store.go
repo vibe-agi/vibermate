@@ -104,7 +104,8 @@ func scanNativeHistory(row interface{ Scan(...any) error }) (nativetool.Recorded
 	p.MetadataExpiresAt = o.MetadataExpiresAt
 	return h, validateNativeHistory(h)
 }
-func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.RecordedHistory) error {
+func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.RecordedHistory) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	h = canonicalNativeHistory(h)
 	if err := validateNativeHistory(h); err != nil {
 		return err

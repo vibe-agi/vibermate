@@ -143,7 +143,11 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		return nil, err
 	}
 
-	database := sql.OpenDB(newSQLiteConnector(options.DatabasePath, options.BusyTimeout))
+	connector := newSQLiteConnector(options.DatabasePath, options.BusyTimeout)
+	if role != nil && role.identity == observationSchemaIdentity {
+		connector = &observationWriterConnector{Connector: connector}
+	}
+	database := sql.OpenDB(connector)
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
 
@@ -197,6 +201,7 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 	)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
+	egressRepo.observationOnly = role != nil && role.identity == observationSchemaIdentity
 	approvalRepo := newToolApprovalRepository(database, operations)
 	connectionRules := newConnectionRuleRepository(database, operations)
 	environments := newEnvironmentRepository(

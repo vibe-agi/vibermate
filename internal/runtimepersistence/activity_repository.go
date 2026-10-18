@@ -43,7 +43,8 @@ func (repository *activityRepository) Append(ctx context.Context, record activit
 func (repository *activityRepository) AppendScoped(ctx context.Context, scope recording.Scope, record activity.Record) (activity.Record, error) {
 	return repository.appendScoped(ctx, scope, record, true)
 }
-func (repository *activityRepository) appendScoped(ctx context.Context, scope recording.Scope, record activity.Record, provided bool) (activity.Record, error) {
+func (repository *activityRepository) appendScoped(ctx context.Context, scope recording.Scope, record activity.Record, provided bool) (written activity.Record, writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if repository.requireScope && !provided || provided && (!repository.coordinates || !recordingScopeMatches(scope, record.CaptureRunID, record.ManualCaptureID)) {
 		return activity.Record{}, recording.ErrObservationDiscarded
 	}
@@ -396,7 +397,8 @@ func (repository *activityRepository) GetExchange(
 func (repository *activityRepository) PutConversationIdentity(ctx context.Context, exchangeID string, identity agentconversation.ClientIdentity) error {
 	return repository.putScopedConversationIdentity(ctx, recording.Scope{}, exchangeID, identity, false)
 }
-func (repository *activityRepository) PutScopedConversationIdentity(ctx context.Context, scope recording.Scope, exchangeID string, identity agentconversation.ClientIdentity) error {
+func (repository *activityRepository) PutScopedConversationIdentity(ctx context.Context, scope recording.Scope, exchangeID string, identity agentconversation.ClientIdentity) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	return repository.putScopedConversationIdentity(ctx, scope, exchangeID, identity, true)
 }
 func (repository *activityRepository) putScopedConversationIdentity(ctx context.Context, scope recording.Scope, exchangeID string, identity agentconversation.ClientIdentity, provided bool) error {

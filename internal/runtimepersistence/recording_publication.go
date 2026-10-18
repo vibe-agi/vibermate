@@ -44,9 +44,14 @@ func (s *ControlStore) ExportInspectionPage(ctx context.Context, expected record
 	}
 	defer tx.Rollback()
 	var stamp recording.InspectionStamp
-	if err = tx.QueryRowContext(operation, `SELECT s.layout_id,s.archive_epoch,s.visibility_revision,p.revision FROM runtime_storage_state s JOIN runtime_usage_policy p USING(singleton) WHERE s.singleton=1`).Scan(&stamp.LayoutID, &stamp.ArchiveEpoch, &stamp.VisibilityRevision, &stamp.UsagePolicyRevision); err != nil {
+	var denialHash []byte
+	if err = tx.QueryRowContext(operation, `SELECT s.layout_id,s.archive_epoch,s.visibility_revision,p.revision,d.identity_count,d.chain_hash FROM runtime_storage_state s JOIN runtime_usage_policy p USING(singleton) JOIN recording_denial_coverage d USING(singleton) WHERE s.singleton=1`).Scan(&stamp.LayoutID, &stamp.ArchiveEpoch, &stamp.VisibilityRevision, &stamp.UsagePolicyRevision, &stamp.DenialCount, &denialHash); err != nil {
 		return page, err
 	}
+	if len(denialHash) != 32 {
+		return page, ErrInspectionUnavailable
+	}
+	copy(stamp.DenialHash[:], denialHash)
 	if stamp != expected {
 		return page, ErrInspectionChanged
 	}
@@ -129,6 +134,9 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 	if err != nil {
 		return err
 	}
+	if err = s.verifyRecordingDenialCoverage(ctx, snapshot.Stamp); err != nil {
+		return err
+	}
 	page, err := export(ctx, snapshot.Stamp, InspectionExportCursor{})
 	if err != nil {
 		return err
@@ -206,10 +214,19 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = readRecordingDenialCoverage(operation, tx, "main", st); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(operation, `UPDATE inspection_mirror_generations SET fence_count=?,current_cap_count=?,legacy_cap_count=?,complete=1 WHERE generation=?`, counts[0], counts[1], counts[2], generation); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(operation, `INSERT INTO inspection_mirror_active VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation`, generation); err != nil {
+		return err
+	}
+	if err = installRecordingWriterCoverage(operation, tx, st); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(operation, `UPDATE recording_admission_state SET enforced=1,verified_data_version=(SELECT data_version FROM pragma_data_version),required_denial_count=?,required_denial_hash=? WHERE singleton=1`, st.DenialCount, st.DenialHash[:]); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(operation, `DELETE FROM inspection_mirror_generations WHERE generation<>?`, generation); err != nil {

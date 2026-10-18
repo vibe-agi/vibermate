@@ -14,7 +14,8 @@ import (
 func validCaptureObservation(scope recording.Scope, revision uint64) bool {
 	return scope.Validate() == nil && scope.Capture != (captureidentity.Reference{}) && revision <= math.MaxInt64 && ((scope.Capture.Kind == captureidentity.KindManagedRun && revision == 0) || (scope.Capture.Kind == captureidentity.KindManualCapture && revision > 0))
 }
-func (s *ObservationStore) PutCaptureObservation(ctx context.Context, scope recording.Scope, v recording.CaptureObservation) error {
+func (s *ObservationStore) PutCaptureObservation(ctx context.Context, scope recording.Scope, v recording.CaptureObservation) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if !validCaptureObservation(scope, v.CredentialRevision) || v.ObservedAt.UnixMilli() <= 0 {
 		return errors.New("invalid Capture observation")
 	}

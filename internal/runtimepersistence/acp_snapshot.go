@@ -16,10 +16,12 @@ type acpSnapshotReader struct{ store *Store }
 
 func (s *ObservationStore) ACPSnapshots() acpobservation.Reader { return s.store.ACPSnapshots() }
 func (s *Store) ACPSnapshots() acpobservation.Reader            { return acpSnapshotReader{s} }
-func (s *ObservationStore) PutACP(ctx context.Context, r acpobservation.Record) error {
+func (s *ObservationStore) PutACP(ctx context.Context, r acpobservation.Record) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	return s.store.PutACP(ctx, r)
 }
-func (s *Store) PutACP(ctx context.Context, r acpobservation.Record) error {
+func (s *Store) PutACP(ctx context.Context, r acpobservation.Record) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if r.Scope.Validate() != nil || r.Scope.Capture.Kind != captureidentity.KindManagedRun || r.Scope.Capture.ID != r.RunID || r.Snapshot.ValidatePolicy(r.Policy) != nil {
 		return acpobservation.ErrInvalid
 	}

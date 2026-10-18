@@ -34,6 +34,13 @@ type connectionInspectionCandidate struct {
 }
 
 func (s *auditInspectionRead) connectionSource(id string) (int, error) {
+	var denied bool
+	if err := s.tx.QueryRowContext(s.lease.ctx, `SELECT EXISTS(SELECT 1 FROM `+s.current+`.recording_denials WHERE kind='connection' AND identity=?)`, id).Scan(&denied); err != nil {
+		return -1, err
+	}
+	if denied {
+		return -1, nil
+	}
 	winner := -1
 	for ordinal := range s.lease.sources {
 		var present bool
@@ -72,9 +79,9 @@ func (s *auditInspectionRead) connectionCandidates(q connectionevent.PageRequest
 	args := []any{}
 	for ordinal := range s.lease.sources {
 		table := fmt.Sprintf("s%d.runtime_connection_events", ordinal)
-		candidate := `SELECT connection_id FROM ` + table
+		candidate := `SELECT connection_id FROM ` + table + ` WHERE NOT EXISTS(SELECT 1 FROM ` + s.current + `.recording_denials d WHERE d.kind='connection' AND d.identity=connection_id)`
 		if q.IngressID != "" {
-			candidate += ` WHERE ingress_id=?`
+			candidate += ` AND ingress_id=?`
 			args = append(args, q.IngressID)
 		}
 		ids = append(ids, candidate)

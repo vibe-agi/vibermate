@@ -17,6 +17,37 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  for (final clear in [false, true]) {
+    test(
+      'explicit deletion invalidates late nested inspection $clear',
+      () async {
+        final fixture = PreviewControlApi();
+        final api = _DeletionInspectionApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        final target = controller.data!.captures.firstWhere((c) => !c.running);
+        await controller.selectCapture(target.key);
+        final id = controller.selectedCapturePage!.items.first.id;
+        final pending = controller.loadToolResults(id, 'call', cursor: 'old');
+        final expected = expectLater(pending, throwsA(isA<ControlProblem>()));
+        final outcome = clear
+            ? await controller.clearEvidence()
+            : await controller.deleteCapture(target.key);
+        expect(outcome?.deleted, isTrue);
+        api.tools.complete(
+          const ToolResultPage(items: [], nextCursor: 'stale'),
+        );
+        await expected;
+      },
+    );
+  }
+
   test(
     'initial dashboard and pending approvals complete while optional detail waits',
     () async {
@@ -2765,4 +2796,25 @@ final class _HeldInitialDetailApi extends _UsageTrackingApi {
     approvalReads += 1;
     return super.pendingApprovals();
   }
+}
+
+final class _DeletionInspectionApi extends _UsageTrackingApi {
+  _DeletionInspectionApi(super.delegate);
+  final tools = Completer<ToolResultPage>();
+  @override
+  Future<DeletionOutcome> deleteCapture(String key) =>
+      delegate.deleteCapture(key);
+  @override
+  Future<DeletionOutcome> clearEvidence() async => const DeletionOutcome(
+    deleted: true,
+    holderCount: 0,
+    holders: [],
+    released: null,
+  );
+  @override
+  Future<ToolResultPage> toolResults(
+    String id,
+    String callId, {
+    String? cursor,
+  }) => tools.future;
 }

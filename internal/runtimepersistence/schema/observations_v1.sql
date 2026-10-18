@@ -993,3 +993,254 @@ CREATE TABLE runtime_raw_inspection_reveal_audits(
 ) STRICT;
 CREATE INDEX runtime_raw_inspection_audits_scope ON runtime_raw_inspection_reveal_audits(recording_scope_kind,recording_scope_id,sequence);
 CREATE INDEX runtime_raw_inspection_audits_source ON runtime_raw_inspection_reveal_audits(source_id,source_generation,sequence);
+
+-- Fresh standalone observation owners are unarmed. The production complete
+-- publisher durably arms admission before exposing any writer. Losing active
+-- mirror metadata after arming fails closed, including within sink transactions.
+CREATE TABLE recording_admission_state(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ enforced INTEGER NOT NULL CHECK(enforced IN(0,1)),
+ verified_data_version INTEGER NOT NULL CHECK(verified_data_version>=0),
+ required_denial_count INTEGER NOT NULL CHECK(required_denial_count>=0),
+ required_denial_hash BLOB NOT NULL CHECK(length(required_denial_hash)=32)
+) STRICT;
+INSERT INTO recording_admission_state VALUES(1,0,0,0,zeroblob(32));
+CREATE TRIGGER recording_scope_runtime_connection_events_insert BEFORE INSERT ON runtime_connection_events
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_connection_events_update BEFORE UPDATE ON runtime_connection_events
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_egress_attempts_insert BEFORE INSERT ON runtime_egress_attempts
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_egress_attempts_update BEFORE UPDATE ON runtime_egress_attempts
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_exchange_agent_identities_insert BEFORE INSERT ON runtime_exchange_agent_identities
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_exchange_agent_identities_update BEFORE UPDATE ON runtime_exchange_agent_identities
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_usage_observations_insert BEFORE INSERT ON runtime_usage_observations
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_usage_observations_update BEFORE UPDATE ON runtime_usage_observations
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_raw_inspection_reveal_audits_insert BEFORE INSERT ON runtime_raw_inspection_reveal_audits
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_raw_inspection_reveal_audits_update BEFORE UPDATE ON runtime_raw_inspection_reveal_audits
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.recording_scope_kind)='' AND (NEW.recording_scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.recording_scope_kind) AND f.capture_id=(NEW.recording_scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_activities_insert BEFORE INSERT ON runtime_activities
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((CASE WHEN NEW.capture_run_id<>'' THEN 'managed_run' WHEN NEW.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END)='' AND (CASE WHEN NEW.capture_run_id<>'' THEN NEW.capture_run_id ELSE NEW.manual_capture_id END)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(CASE WHEN NEW.capture_run_id<>'' THEN 'managed_run' WHEN NEW.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END) AND f.capture_id=(CASE WHEN NEW.capture_run_id<>'' THEN NEW.capture_run_id ELSE NEW.manual_capture_id END) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_activities_update BEFORE UPDATE ON runtime_activities
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((CASE WHEN NEW.capture_run_id<>'' THEN 'managed_run' WHEN NEW.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END)='' AND (CASE WHEN NEW.capture_run_id<>'' THEN NEW.capture_run_id ELSE NEW.manual_capture_id END)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(CASE WHEN NEW.capture_run_id<>'' THEN 'managed_run' WHEN NEW.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END) AND f.capture_id=(CASE WHEN NEW.capture_run_id<>'' THEN NEW.capture_run_id ELSE NEW.manual_capture_id END) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_exchange_contents_insert BEFORE INSERT ON runtime_exchange_contents
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.scope_kind)='' AND (NEW.scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.scope_kind) AND f.capture_id=(NEW.scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_exchange_contents_update BEFORE UPDATE ON runtime_exchange_contents
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.scope_kind)='' AND (NEW.scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.scope_kind) AND f.capture_id=(NEW.scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_raw_evidence_envelopes_insert BEFORE INSERT ON runtime_raw_evidence_envelopes
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((CASE WHEN NEW.scope_kind='runtime' THEN '' ELSE NEW.scope_kind END)='' AND (NEW.scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(CASE WHEN NEW.scope_kind='runtime' THEN '' ELSE NEW.scope_kind END) AND f.capture_id=(NEW.scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_runtime_raw_evidence_envelopes_update BEFORE UPDATE ON runtime_raw_evidence_envelopes
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((CASE WHEN NEW.scope_kind='runtime' THEN '' ELSE NEW.scope_kind END)='' AND (NEW.scope_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(CASE WHEN NEW.scope_kind='runtime' THEN '' ELSE NEW.scope_kind END) AND f.capture_id=(NEW.scope_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_history_snapshots_insert BEFORE INSERT ON native_history_snapshots
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_history_snapshots_update BEFORE UPDATE ON native_history_snapshots
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_inspection_index_insert BEFORE INSERT ON native_inspection_index
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_inspection_index_update BEFORE UPDATE ON native_inspection_index
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_tool_contents_insert BEFORE INSERT ON native_tool_contents
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_native_tool_contents_update BEFORE UPDATE ON native_tool_contents
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.recording_archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.recording_archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.recording_capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.recording_capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_capture_observations_insert BEFORE INSERT ON capture_observations
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_capture_observations_update BEFORE UPDATE ON capture_observations
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.archive_epoch=g.archive_epoch AND
+ (((NEW.capture_kind)='' AND (NEW.capture_id)='' AND NEW.capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=(NEW.capture_kind) AND f.capture_id=(NEW.capture_id) AND f.capture_generation=NEW.capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_acp_snapshots_insert BEFORE INSERT ON acp_snapshots
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.archive_epoch=g.archive_epoch AND
+ ((('managed_run')='' AND (NEW.run_id)='' AND NEW.capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=('managed_run') AND f.capture_id=(NEW.run_id) AND f.capture_generation=NEW.capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_scope_acp_snapshots_update BEFORE UPDATE ON acp_snapshots
+ WHEN coalesce((SELECT enforced FROM recording_admission_state WHERE singleton=1),1)=1
+ AND NEW.archive_epoch>0 AND NOT EXISTS(SELECT 1 FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation)
+ WHERE a.singleton=1 AND g.complete=1 AND NEW.archive_epoch=g.archive_epoch AND
+ ((('managed_run')='' AND (NEW.run_id)='' AND NEW.capture_generation=0) OR EXISTS(
+ SELECT 1 FROM inspection_mirror_fences f WHERE f.mirror_generation=g.generation
+ AND f.capture_kind=('managed_run') AND f.capture_id=(NEW.run_id) AND f.capture_generation=NEW.capture_generation AND f.deleted=0)))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+
+-- Negative privacy membership is payload-free and never retired by a TTL.
+-- Its size is O(affected typed identities), not an ordinary-record outbox.
+CREATE TABLE recording_denials(
+ sequence INTEGER PRIMARY KEY CHECK(sequence>0),
+ kind TEXT NOT NULL CHECK(kind IN('usage','attempt','connection','exchange')),
+ identity TEXT NOT NULL CHECK(length(CAST(identity AS BLOB)) BETWEEN 1 AND 512),
+ chain_hash BLOB NOT NULL CHECK(length(chain_hash)=32),
+ UNIQUE(kind,identity)
+) STRICT;
+CREATE TRIGGER recording_usage_denied BEFORE INSERT ON runtime_usage_observations
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE kind='usage' AND identity=NEW.exchange_id)
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_connection_events_insert BEFORE INSERT ON runtime_connection_events
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='connection' AND identity=NEW.connection_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_connection_events_update BEFORE UPDATE ON runtime_connection_events
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='connection' AND identity=NEW.connection_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_egress_attempts_insert BEFORE INSERT ON runtime_egress_attempts
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=NEW.attempt_id) OR (kind='connection' AND identity=NEW.connection_id) OR (kind='exchange' AND identity=NEW.parent_exchange_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_egress_attempts_update BEFORE UPDATE ON runtime_egress_attempts
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=NEW.attempt_id) OR (kind='connection' AND identity=NEW.connection_id) OR (kind='exchange' AND identity=NEW.parent_exchange_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_raw_evidence_envelopes_insert BEFORE INSERT ON runtime_raw_evidence_envelopes
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=NEW.attempt_id) OR (kind='connection' AND identity=NEW.connection_id) OR (kind='exchange' AND identity=NEW.exchange_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;
+CREATE TRIGGER recording_denial_runtime_raw_evidence_envelopes_update BEFORE UPDATE ON runtime_raw_evidence_envelopes
+ WHEN EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=NEW.attempt_id) OR (kind='connection' AND identity=NEW.connection_id) OR (kind='exchange' AND identity=NEW.exchange_id))
+ BEGIN SELECT RAISE(ABORT,'recording_scope_discarded'); END;

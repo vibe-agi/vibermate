@@ -43,7 +43,8 @@ func scanNativeContent(row interface{ Scan(...any) error }) (nativetool.ContentO
 // PutNativeContent publishes one self-contained immutable envelope/body graph
 // with discovery in the same observation transaction. No authority lookup,
 // history predecessor, session, lease or control foreign key is involved.
-func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.ContentObservation) error {
+func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.ContentObservation) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if v.Identity.Validate() != nil || !nativeContentPart(string(v.Part)) || len(v.Body) == 0 || len(v.Body) > 16<<20 || v.ObservedAt.Before(v.Identity.CreatedAt) {
 		return nativetool.ErrInvalid
 	}
