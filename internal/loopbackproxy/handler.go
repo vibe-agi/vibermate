@@ -1212,7 +1212,7 @@ func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *ht
 		writeReason(writer, http.StatusServiceUnavailable, "account_read_unavailable", "")
 		return
 	}
-	result, err := handler.accountReads.ReadCaptured(request.Context(), plan, accountoperation.Source{ConnectionID: connectionID, OperationID: operationID, ObservationStamp: stamp})
+	result, err := handler.accountReads.ReadCaptured(request.Context(), plan, accountoperation.Source{ConnectionID: connectionID, OperationID: operationID, RawQuery: request.URL.RawQuery, ObservationStamp: stamp})
 	if err != nil {
 		status, reason := http.StatusBadGateway, ReasonCode("account_read_unavailable")
 		if errors.Is(err, environment.ErrAccountReadAmbiguous) {
@@ -1229,6 +1229,9 @@ func (handler *Handler) serveAccountRead(writer http.ResponseWriter, request *ht
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
+	if result.ETag != "" {
+		writer.Header().Set("Etag", result.ETag)
+	}
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(result.Body)
 }
@@ -2280,7 +2283,7 @@ func exchangeStatus(err error) int {
 	switch exchange.ReasonOf(err) {
 	case exchange.ReasonInvalidExchangeRequest:
 		return http.StatusBadRequest
-	case exchange.ReasonUnsupportedClientInput:
+	case exchange.ReasonUnsupportedClientInput, exchange.ReasonCyberAccessProgramUnavailable:
 		return http.StatusUnprocessableEntity
 	case exchange.ReasonProviderStatusRejected:
 		// Keep the provider's retry signal intact. In particular, Anthropic uses

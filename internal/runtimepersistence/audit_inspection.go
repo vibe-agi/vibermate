@@ -143,7 +143,7 @@ func (s *auditInspectionRead) legacyProofs(ordinal int, kind string, ids []strin
 	for _, link := range []struct{ kind, column string }{{"attempt", "attempt_id"}, {"connection", "connection_id"}, {"exchange", "exchange_id"}} {
 		roots = append(roots, `SELECT n.kind,n.id,r.scope_kind,r.scope_id,0 FROM nodes n JOIN `+alias+`.runtime_raw_evidence_envelopes r ON n.kind='`+link.kind+`' AND r.`+link.column+`=n.id WHERE r.scope_kind<>'runtime' OR r.scope_id<>''`)
 	}
-	if s.lease.sources[ordinal].Database.Revision == 2 {
+	if publishedNativeRevision(s.lease.sources[ordinal].Database.Revision) {
 		roots = append(roots, `SELECT n.kind,n.id,w.capture_kind,w.capture_id,(length(w.replay_key)<>32 OR length(w.intent_digest)<>32 OR length(w.operation_id)<>32 OR w.operation_id GLOB '*[^0-9a-f]*' OR w.claimed_at_unix_ms<=0 OR w.authority_revision<=0) FROM nodes n JOIN `+alias+`.native_tool_once w ON n.kind='attempt' AND w.attempt_id=n.id`)
 	}
 	cte += `, roots(node_kind,node_id,capture_kind,capture_id,bad) AS(` + strings.Join(roots, ` UNION ALL `) + `), owners(node_kind,node_id,capture_kind,capture_id,bad) AS(

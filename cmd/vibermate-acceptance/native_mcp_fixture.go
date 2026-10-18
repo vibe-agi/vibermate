@@ -1081,10 +1081,11 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 			default:
 				t.Logf("no buffered client response before missing approval")
 			}
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: pendingCapture, Limit: 100})
+			page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: pendingCapture, Limit: 100})
 			if err == nil {
 				seen := map[nativetool.ID]bool{}
-				for _, op := range page.Items {
+				for _, observed := range page.Items {
+					op := observed.Operation
 					if seen[op.ID] {
 						continue
 					}
@@ -1152,7 +1153,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal("launcher did not retain the selected published profile")
 	}
 	if scenario == "off" {
-		page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+		page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: capture, Limit: 100})
 		if err != nil || len(page.Items) != 0 || nativeCount.Load() != 0 || toolResponse["error"] == nil {
 			t.Fatal("OFF did not prevent native registration and call")
 		}
@@ -1167,12 +1168,13 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		}
 		deadline := time.Now().Add(time.Second)
 		for time.Now().Before(deadline) {
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+			page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: capture, Limit: 100})
 			if err != nil {
 				t.Fatal(err)
 			}
 			unique := map[nativetool.ID]nativetool.Operation{}
-			for _, operation := range page.Items {
+			for _, observed := range page.Items {
+				operation := observed.Operation
 				if operation.Kind == nativetool.RequestToolsCall {
 					unique[operation.ID] = operation
 				}
@@ -1276,12 +1278,13 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		}
 		if scenario == "sse_reconnect" {
 			verifyNativeStreamSQL(ctx, t, paths.DataDirectory(), capture, !streamObserve)
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+			page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: capture, Limit: 100})
 			if err != nil {
 				t.Fatal("stream reply page unavailable")
 			}
 			seen := map[nativetool.ID]bool{}
-			for _, op := range page.Items {
+			for _, observed := range page.Items {
+				op := observed.Operation
 				if op.Kind == nativetool.RequestServerReply && !seen[op.ID] {
 					seen[op.ID] = true
 					management.verifyMetadata(ctx, op)

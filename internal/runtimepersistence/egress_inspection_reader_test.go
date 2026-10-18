@@ -32,8 +32,8 @@ func newEgressInspectionFixture(t *testing.T, revisions ...int) *egressInspectio
 	t.Helper()
 	options, current := inspectionSourcesFixture(t)
 	options.Timeout = 5 * time.Second
-	if len(revisions) > 0 && revisions[0] == 1 {
-		path, db := extractionFixture(t, 1)
+	if len(revisions) > 0 && (revisions[0] == 1 || revisions[0] == 3) {
+		path, db := extractionFixture(t, revisions[0])
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -44,7 +44,7 @@ func newEgressInspectionFixture(t *testing.T, revisions ...int) *egressInspectio
 		if err = os.WriteFile(filepath.Join(options.Root, "archives/legacy/runtime.db"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		options.Sources[0].Database.Revision = 1
+		options.Sources[0].Database.Revision = int64(revisions[0])
 	}
 	control := inspectionControlFixture(t)
 	nativeExec(t, control.store.database, `INSERT INTO recording_capture_fences VALUES('managed_run','audit-a',1,0),('managed_run','audit-b',1,0)`)
@@ -76,7 +76,7 @@ func (f *egressInspectionFixture) put(t *testing.T, current bool, a egressaudit.
 			t.Fatal(err)
 		}
 		seedFrozenV1EgressAttempt(t, &Store{database: f.legacy}, start)
-		if f.reader.catalog.sources[0].Database.Revision == 2 {
+		if publishedNativeRevision(f.reader.catalog.sources[0].Database.Revision) {
 			nativeExec(t, f.legacy, `UPDATE runtime_egress_attempts SET selection_source=?,default_revision=? WHERE attempt_id=?`, a.Decision().SelectionSource, a.Decision().DefaultRevision, a.ID())
 		} else if a.Decision().SelectionSource != "" || a.Decision().DefaultRevision != 0 {
 			t.Fatal("nonlegacy selection in v1 fixture")
@@ -419,5 +419,58 @@ func TestAuditInspectionOwnershipGraphLimitRefusesBeforePublication(t *testing.T
 	page, err := f.reader.List(context.Background(), egressaudit.PageRequest{Limit: 1, ExchangeID: a.Parent().ExchangeID})
 	if !errors.Is(err, ErrInspectionSourceLimit) || len(page.Items) != 0 || page.NextCursor != "" {
 		t.Fatalf("truncated ownership proof produced partial page: %+v %v", page, err)
+	}
+}
+
+func TestEgressInspectionPublishedRuntime3NativeOnceOwnership(t *testing.T) {
+	for _, mode := range []string{"native-once", "native-label-only", "runtime-global", "runtime-captured", "fake-runtime"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newEgressInspectionFixture(t, 3)
+			var a egressaudit.Attempt
+			if strings.HasPrefix(mode, "native") {
+				a = nativeAuditFixture(t, "native-owned-audit")
+				f.put(t, false, a)
+				if mode == "native-once" {
+					nativeExec(t, f.legacy, `INSERT INTO native_tool_scopes VALUES('managed_run','audit-a',1,1,'closed',1,100);INSERT INTO native_tool_once VALUES('managed_run','audit-a',randomblob(32),'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',randomblob(32),'native-owned-audit',1,1)`)
+				}
+			} else {
+				input := normalizedEgressStart(providerAttempt(t, "global-owned-audit"))
+				input.ConnectionID = ""
+				input.Purpose = egressaudit.PurposeUpdate
+				input.PayloadClass = egressaudit.PayloadRuntime
+				input.Parent = egressaudit.ParentRef{Kind: egressaudit.ParentRuntimeAction, ID: "update-action"}
+				input.Decision.Authority = egressaudit.AuthorityRuntime
+				input.Decision.AccountID = ""
+				input.Decision.AccountSettingsRevision = 0
+				var err error
+				a, err = egressaudit.New(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.put(t, false, a)
+				if mode == "runtime-captured" {
+					f.rawRoot(t, a, "audit-a")
+					nativeExec(t, f.control.store.database, `UPDATE recording_capture_fences SET deleted=1 WHERE capture_id='audit-a'`)
+					seedCompleteInspectionMirror(t, f.current, f.control)
+				}
+				if mode == "fake-runtime" {
+					nativeExec(t, f.legacy, `UPDATE runtime_egress_attempts SET connection_id='client-connection'`)
+				}
+			}
+			page, err := f.reader.List(context.Background(), egressaudit.PageRequest{Limit: 10})
+			if mode == "fake-runtime" {
+				if err == nil {
+					t.Fatalf("malformed global-looking audit hidden/promoted: %+v", page)
+				}
+				return
+			}
+			want := 0
+			if mode == "native-once" || mode == "runtime-global" {
+				want = 1
+			}
+			if err != nil || len(page.Items) != want {
+				t.Fatalf("provenance %s: %+v %v", mode, page, err)
+			}
+		})
 	}
 }

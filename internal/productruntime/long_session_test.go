@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	goRuntime "runtime"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -33,6 +36,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
@@ -95,7 +99,35 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if acceptance != nil {
 		count = acceptance.count
 	}
+	var stopped *Runtime
+	if scenario == "original_invalid_tail" {
+		// Registered before fixture cleanup: verify actual owner return and both
+		// directory guards even when the reported optional-writer close fails.
+		t.Cleanup(func() {
+			if stopped == nil {
+				return
+			}
+			select {
+			case <-stopped.ShutdownDone():
+			default:
+				t.Error("invalid-tail shutdown did not join actual cleanup")
+				return
+			}
+			owner, err := runtimedata.Acquire(stopped.paths.DataDirectory())
+			if err != nil {
+				t.Fatalf("invalid-tail required directory still owned: %v", err)
+			}
+			defer owner.Release()
+			host, err := instanceguard.Acquire(filepath.Join(stopped.paths.DataDirectory(), "server.lock"))
+			if err != nil {
+				t.Fatalf("invalid-tail host directory still owned: %v", err)
+			}
+			defer host.Release()
+			t.Log("invalid-tail actual shutdown joined; runtime and host guards reacquired")
+		})
+	}
 	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
+	stopped = f.runtime
 	wantCredential := "Bearer " + f.token
 	if original {
 		f.aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].AccountPolicy = environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountSelectionOriginal}
@@ -374,9 +406,19 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		payload["tools"] = []any{map[string]any{"type": "function", "name": "f", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}
 	}
 	body, err := json.Marshal(payload)
-	wantBody = body
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantBody = body
+	if !original && !crossChat {
+		// Preserve the exact complete native history while accounting for the
+		// managed account's explicit mode; client recording still uses body.
+		providerPayload := maps.Clone(payload)
+		providerPayload["access_programs"] = map[string]string{"cyber": "standard"}
+		wantBody, err = json.Marshal(providerPayload)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if four != nil {
 		lease.Release()

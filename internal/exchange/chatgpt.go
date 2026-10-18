@@ -14,7 +14,7 @@ import (
 )
 
 // Codex's HTTP Responses request contract is defined by
-// openai/codex@ac192cd7937b0d73edc6dffe009940ae53782dd4:
+// openai/codex@83086188ae0614bd882818ff1aa23f3194962012 (rust-v0.163.0):
 // codex-rs/codex-api/src/endpoint/responses.rs and core/src/client.rs.
 // These are protocol fields, not account credentials. Only copy them between
 // native Codex endpoints, before scripts and the selected account's Set/Delete
@@ -41,6 +41,20 @@ func nativeChatGPTProtocolHeaders(request ClientRequest, selection frozenSelecti
 			if values := headerValuesFold(source, name); len(values) != 0 {
 				headers[name] = slices.Clone(values)
 			}
+		}
+	}
+	// These native mode selectors have closed wire vocabularies. A single exact
+	// value is enough to bound them; ambiguous values never become upstream roles.
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{
+		{"X-Openai-Internal-Codex-Responses-Lite", []string{"true"}},
+		{"X-Codex-Guardian", []string{"reviewer", "classifier"}},
+	} {
+		values := headerValuesFold(source, field.name)
+		if !hop[strings.ToLower(field.name)] && len(values) == 1 && slices.Contains(field.values, values[0]) {
+			headers.Set(field.name, values[0])
 		}
 	}
 	return headers

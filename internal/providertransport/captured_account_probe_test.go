@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -21,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // Test-only bridge: the external package assembles real Store/Manager authority
@@ -60,7 +62,16 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 	newSpec := func(t *testing.T, origin, path, accountID string, history bool) runtimeFetchSpec {
 		plan, lease := acquire(t, origin, path, accountID, history, profile)
 		t.Cleanup(lease.Release)
-		request, err := NewCapturedAccountRead(plan, lease, "connection.captured-probe", "operation.captured-probe")
+		epoch, _ := recording.NewEpoch(7)
+		stamp, err := recording.NewStamp(epoch, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "probe-capture"}, recording.Fence{ArchiveEpoch: 7, CaptureGeneration: 9})
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := ""
+		if path == "/backend-api/codex/models" {
+			query = "client_version=0.163.0"
+		}
+		request, err := NewCapturedAccountRead(plan, lease, "connection.captured-probe", "operation.captured-probe", query, stamp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,13 +83,19 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 		if !ok {
 			t.Fatal("real Manager lease has no account")
 		}
-		return runtimeFetchSpec{purpose: egressaudit.PurposeRouteOperation, targetRef: request.targetRef, target: target, relativePath: request.read.Path(), credential: lease, method: http.MethodGet, captured: request.captured, account: account, resolved: account.ResolvedEgress}
+		return runtimeFetchSpec{purpose: egressaudit.PurposeRouteOperation, targetRef: request.targetRef, target: target, relativePath: request.read.Path(), credential: lease, method: http.MethodGet, captured: request.captured, account: account, resolved: account.ResolvedEgress, modelCatalog: request.read.IsModelDirectory(), rawQuery: request.read.RawQuery()}
 	}
 	for _, origin := range []string{"https://chatgpt.com", "https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex"} {
-		for _, path := range []string{"/backend-api/wham/usage", "/backend-api/wham/profiles/me"} {
+		for _, path := range []string{"/backend-api/wham/usage", "/backend-api/wham/profiles/me", "/backend-api/codex/models"} {
 			t.Run(origin+path, func(t *testing.T) {
 				spec := newSpec(t, origin, path, "captured-b", true)
 				plan := spec.captured.plan
+				if spec.captured.observationStamp.Fence() != (recording.Fence{ArchiveEpoch: 7, CaptureGeneration: 9}) {
+					t.Fatal("probe lost original stamp")
+				}
+				if path == "/backend-api/codex/models" && spec.rawQuery != "client_version=0.163.0" {
+					t.Fatal("probe lost closed model query")
+				}
 				target, err := client.runtimeProbeTarget(t.Context(), spec)
 				if err != nil {
 					t.Fatal(err)

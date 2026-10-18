@@ -73,8 +73,12 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 	if ctx == nil || now.IsZero() || now.Location() != time.UTC {
 		return layout, ErrTarget
 	}
-	work, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
+	work := ctx
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		work, cancel = context.WithTimeout(ctx, 15*time.Minute)
+		defer cancel()
+	}
 	if err := checkStorageOwnership(work, owned); err != nil {
 		return layout, err
 	}
@@ -88,12 +92,7 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 	if err != nil {
 		return layout, err
 	}
-	upgrade := func() error {
-		if progress != nil {
-			return progress(SchemaUpgradeRunning)
-		}
-		return work.Err()
-	}
+	upgrade := work.Err
 	if !pending {
 		declared, err := ReadStorageLayout(root)
 		if err == nil {
@@ -121,6 +120,11 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 		}
 		if discriminator.Schema == "runtime-schema-upgrade-receipt/v1" {
 			if _, err = UpgradeSchemaOwned(work, root, "", owned.Runtime, owned.Host, now, 15*time.Minute, nil); err != nil {
+				return layout, err
+			}
+			pending = false
+		} else if discriminator.Schema == "runtime-schema-upgrade-receipt/v2" {
+			if _, err = upgradeRevision2Owned(work, root, "", owned.Runtime, owned.Host, now, 15*time.Minute, nil); err != nil {
 				return layout, err
 			}
 			pending = false
@@ -153,7 +157,7 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 		if err != nil {
 			return layout, err
 		}
-		if state.Revision != 0 && state.Revision != 1 && state.Revision != 2 {
+		if state.Revision != 0 && state.Revision != 1 && state.Revision != 2 && state.Revision != 3 {
 			return layout, runtimepersistence.ErrUnsupportedSchema
 		}
 		files, err := cutoverInventory(work, root)

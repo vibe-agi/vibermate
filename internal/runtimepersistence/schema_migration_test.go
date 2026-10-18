@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -93,9 +94,7 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 	ref, _ := secretstore.ParseReference("secret://provider-account/native-legacy")
 	account := provideraccount.Account{ID: "native-legacy", DisplayName: "Legacy", Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now}
 	account.EgressProfile = egressprofile.Direct()
-	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1ProviderAccount(t, store, account)
 	candidate := environmentFixture(t, "native-legacy", 1)
 	candidate.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}
 	seedFrozenV1Environment(t, store, candidate, now)
@@ -122,6 +121,26 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 // Frozen legacy builders cannot use the current repository's new v2 columns.
 // Preserve every original field; this is fixture creation, never a runtime
 // fallback or a schema rewrite.
+func seedFrozenV1ProviderAccount(t *testing.T, store *Store, account provideraccount.Account) {
+	t.Helper()
+	if account.Validate() != nil || account.CyberAccessProgram != cyberaccess.Standard {
+		t.Fatal("nonlegacy account in frozen v1 fixture")
+	}
+	profile := []byte("{}")
+	if account.EgressProfile != (egressprofile.ProfileRevision{}) {
+		var err error
+		profile, err = json.Marshal(account.EgressProfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := store.database.Exec(`INSERT INTO provider_accounts(account_id,display_name,credential_origin,endpoint_associations,association_revision,realm_id,driver_ref,secret_reference,state,revision,created_at_unix_ms,updated_at_unix_ms,note,note_revision,settings_revision,egress_profile_json,automatic_refresh) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		account.ID.String(), account.DisplayName, account.Origin.String(), account.Associations.String(), account.AssociationRevision, account.RealmID, account.Driver.String(), account.SecretRef.String(), string(account.State), account.Revision, account.CreatedAt.UnixMilli(), account.UpdatedAt.UnixMilli(), account.Note, account.NoteRevision, account.SettingsRevision, string(profile), account.AutomaticRefresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func seedFrozenV1EgressAttempt(t *testing.T, store *Store, a egressaudit.Attempt) {
 	t.Helper()
 	if a.Decision().SelectionSource != "" || a.Decision().DefaultRevision != 0 || a.Terminal() {

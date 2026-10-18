@@ -80,6 +80,7 @@ func NameIsCredential(name string) bool {
 	normalized := strings.ToLower(name)
 	if normalized == "authorization" ||
 		normalized == "proxy-authorization" ||
+		normalized == "x-codex-turn-state" ||
 		normalized == "cookie" || normalized == "set-cookie" ||
 		strings.Contains(normalized, "api-key") ||
 		strings.Contains(normalized, "apikey") ||

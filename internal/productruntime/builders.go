@@ -77,7 +77,7 @@ func buildStorage(
 	}
 	timeout := request.upgradeTimeout
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = 15 * time.Minute
 	}
 	upgrade, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

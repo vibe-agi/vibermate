@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// Published v1/v2 are immutable. The unreleased v3 candidate is pinned here
-// until storage-role isolation finalizes the control/observation bootstraps.
+// Published runtime1/2/3 are immutable. Current role and combined test adapter
+// definitions are separately pinned.
 func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	t.Parallel()
 	const revision1 = "393b7d67f8ffd1952fc516a150e1a2a68707b67536fbc2e7f5a7f17208424cb1"
@@ -23,15 +23,21 @@ func TestSchemaRevisionTracksSchemaFile(t *testing.T) {
 	if frozen := sha256.Sum256([]byte(schemaV2SQL)); hex.EncodeToString(frozen[:]) != revision2 {
 		t.Fatal("frozen v2 changed")
 	}
-	for _, role := range []struct{ sql, pin string }{{controlSchemaSQL, "208ea45d8dba6eaf970ddf282e812fde2b57e9122f3125fc8598d4e7fb0a5784"}, {observationSchemaSQL, "ed9fc1e5f71ca1801789d84488810df23872c0de520dea6360ad5573267899bd"}} {
+	for _, role := range []struct{ sql, pin string }{{controlSchemaSQL, "19c6eda3cd83a8f7836446835164367db49f60573c88aca561e6c381b92cc10a"}, {observationSchemaSQL, "ed9fc1e5f71ca1801789d84488810df23872c0de520dea6360ad5573267899bd"}} {
 		digest := sha256.Sum256([]byte(role.sql))
 		if hex.EncodeToString(digest[:]) != role.pin {
 			t.Fatalf("unreleased role schema pin differs: %x", digest)
 		}
 	}
 	digest := sha256.Sum256([]byte(schemaSQL))
-	if schemaRevision != 3 || hex.EncodeToString(digest[:]) != "46c34de534bf51da60902bd7ff5743c3bd856b2c3715f6c6c86bdc84e49955e2" {
+	if schemaRevision != 3 || hex.EncodeToString(digest[:]) != "65fcdece1879048a88f19105fef70e45c354c1d827b5ec70ab7e5a2de4c11313" {
 		t.Fatalf("schema.sql changed (sha256 %x) without a schemaRevision bump", digest)
+	}
+	for _, pin := range []struct{ sql, want string }{{schemaRuntimeV3SQL, "377f9b8af48bd097be77be685de56d5a1af7bb55bb781c20c4bd1bdfefff71a7"}, {migration001To002SQL, "a6bf36f011aa987c2862e45b22d23c6f48d75a3d6f408b50ac9c440c5bd5d90c"}, {migration002To003SQL, "ab85f5c3228ae203d69a2a095b8b9c15d2a051434f1e70c6b42c1c10f3aaf7ff"}} {
+		actual := sha256.Sum256([]byte(pin.sql))
+		if hex.EncodeToString(actual[:]) != pin.want {
+			t.Fatalf("published migration changed: %x", actual)
+		}
 	}
 }
 

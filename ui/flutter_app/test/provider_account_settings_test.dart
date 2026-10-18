@@ -40,14 +40,17 @@ void main() {
       addTearDown(api.close);
       final imported = await _import(api);
       expect(imported.automaticRefresh, isFalse);
+      expect(imported.cyberAccessProgram, 'standard');
       expect(imported.supportsAutomaticRefresh, isTrue);
       final configured = await api.setProviderAccountSettings(
         imported,
         egressProfile: EgressProfileRevision.direct,
         automaticRefresh: false,
+        cyberAccessProgram: 'daybreak_blue',
       );
       final refreshed = await api.refreshProviderAccountCredential(configured);
       expect(refreshed.automaticRefresh, isFalse);
+      expect(refreshed.cyberAccessProgram, 'daybreak_blue');
       expect(refreshed.settingsRevision, configured.settingsRevision);
       expect(refreshed.egressProfile, EgressProfileRevision.direct);
       expect(refreshed.credentialEpoch, configured.credentialEpoch + 1);
@@ -186,9 +189,11 @@ final class _DelayedFactsApi extends Fake implements ControlApi {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) => preview.setProviderAccountSettings(
     account,
     egressProfile: egressProfile,
     automaticRefresh: automaticRefresh,
+    cyberAccessProgram: cyberAccessProgram,
   );
 }

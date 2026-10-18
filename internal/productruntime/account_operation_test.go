@@ -14,6 +14,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/accountoperation"
 	"github.com/vibe-agi/vibermate/internal/accountselector"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -26,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -50,6 +52,9 @@ func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertranspor
 	wire.mu.Lock()
 	wire.requests = append(wire.requests, request.Clone(request.Context()))
 	wire.mu.Unlock()
+	if request.URL.Path == "/backend-api/codex/models" {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "Etag": {`"catalog-global"`}, "Set-Cookie": {"upstream-cookie"}}, Body: io.NopCloser(strings.NewReader(managedCodexCatalogFixture))}, transportprofile.Evidence{}, nil
+	}
 	if request.URL.Path == "/backend-api/wham/rate-limit-reset-credits/consume" {
 		body, err := io.ReadAll(request.Body)
 		_ = request.Body.Close()
@@ -191,6 +196,10 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 
 func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef, resources ...exchange.ResourcePolicy) accountReadFixture {
 	t.Helper()
+	return newAccountReadFixtureWithBuilders(t, driver, runtimeBuildOverrides{}, resources...)
+}
+func newAccountReadFixtureWithBuilders(t *testing.T, driver providerauth.DriverRef, overrides runtimeBuildOverrides, resources ...exchange.ResourcePolicy) accountReadFixture {
+	t.Helper()
 	ctx := context.Background()
 	gate, err := offlinehold.New(offlinehold.Config{MaxHeldRequests: 8, MaxHeldBytes: 1 << 20, MaxHoldDuration: time.Second, ReleaseConcurrency: 2})
 	if err != nil {
@@ -200,7 +209,12 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 	if len(resources) != 0 {
 		options.Resources = &resources[0]
 	}
-	runtime := startTestRuntime(t, options)
+	startup, cancelStartup := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelStartup()
+	runtime, err := startWithBuilders(startup, options, overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-B"}}`, time.Now().Add(time.Hour).Unix()))) + ".synthetic"
 	credentialBytes := token
@@ -286,7 +300,9 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 
 func TestCapturedAccountReadUsesFixedAccountBeforeAnyGeneration(t *testing.T) {
 	f := newAccountReadFixture(t)
-	result, err := f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
+	waitRecording(t, f.runtime)
+	waitRecordingMirror(t, f.runtime)
+	result, err := f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +314,9 @@ func TestCapturedAccountReadUsesFixedAccountBeforeAnyGeneration(t *testing.T) {
 	}
 	if string(result.Body) == "" || !strings.Contains(string(result.Body), `"account_id":"workspace-B"`) {
 		t.Fatal("native account response was rewritten to impersonate the original client")
+	}
+	if err := f.runtime.recorder.Flush(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	page, err := f.runtime.EgressAttempts().List(context.Background(), egressaudit.PageRequest{ConnectionID: "connection.fixture"})
 	if err != nil || len(page.Items) != 1 {
@@ -330,7 +349,7 @@ func TestCapturedAccountReadDoesNotRunAnUnboundTurnSelector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.reader.ReadCaptured(context.Background(), plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
+	_, err = f.reader.ReadCaptured(context.Background(), plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
 	if !errors.Is(err, environment.ErrAccountReadAmbiguous) || len(f.wire.requests) != 0 {
 		t.Fatal("control query selected a dynamic account without a Turn")
 	}
@@ -343,7 +362,7 @@ func TestCapturedAccountReadRechecksRevokedAssociation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
+	_, err = f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
 	if !errors.Is(err, provideraccount.ErrEndpointMismatch) || len(f.wire.requests) != 0 {
 		t.Fatal("revoked account link still authorized an account query")
 	}
@@ -360,7 +379,7 @@ func TestOwnerCanReadUnlinkedAccountWithoutGivingCapturesPermission(t *testing.T
 	if err != nil || result.Facts.AccountID != f.account.Account.ID.String() {
 		t.Fatalf("owner cannot inspect independent account: %v", err)
 	}
-	_, err = f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
+	_, err = f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
 	if !errors.Is(err, provideraccount.ErrEndpointMismatch) || len(f.wire.requests) != 1 {
 		t.Fatal("owner read granted new Capture authority")
 	}
@@ -387,7 +406,7 @@ func TestCapturedAccountReadUsesANewCredentialEpochWithoutChangingAccount(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
+	result, err := f.reader.ReadCaptured(context.Background(), f.plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "operation.fixture"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +433,7 @@ func TestCapturedHistoryRequiresItsOwnFrozenRoutePermission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := f.reader.ReadCaptured(context.Background(), plan, accountoperation.Source{ConnectionID: "connection.fixture", OperationID: "history.fixture"})
+		result, err := f.reader.ReadCaptured(context.Background(), plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.fixture", OperationID: "history.fixture"})
 		if !allowed {
 			if !errors.Is(err, upstreamservice.ErrHistoryDenied) || len(f.wire.requests) != 0 {
 				t.Fatal("model route authority leaked account-wide history")
@@ -435,7 +454,7 @@ func TestAccountReadCanceledDuringOfflineHoldDoesNotDialOrLeakLeases(t *testing.
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := f.reader.ReadCaptured(ctx, f.plan, accountoperation.Source{ConnectionID: "connection.held", OperationID: "read.held"})
+		_, err := f.reader.ReadCaptured(ctx, f.plan, accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.held", OperationID: "read.held"})
 		done <- err
 	}()
 	deadline := time.After(time.Second)
@@ -495,7 +514,7 @@ func TestParallelOwnerAndCapturedReadsCannotExchangeAccounts(t *testing.T) {
 			expectedID, expectedWorkspace := "managed-b", "workspace-B"
 			if index%2 == 0 {
 				result, err = f.reader.ReadCaptured(context.Background(), f.plan,
-					accountoperation.Source{ConnectionID: "connection.concurrent", OperationID: fmt.Sprintf("read.%d", index)})
+					accountoperation.Source{ObservationStamp: f.runtime.recorder.ScopeStamp(captureidentity.Reference{}), ConnectionID: "connection.concurrent", OperationID: fmt.Sprintf("read.%d", index)})
 			} else {
 				expectedID, expectedWorkspace = "managed-c", "workspace-C"
 				result, err = f.reader.ReadOwned(context.Background(), "managed-c", upstreamservice.CodexRateLimits)
@@ -525,4 +544,68 @@ func TestParallelOwnerAndCapturedReadsCannotExchangeAccounts(t *testing.T) {
 			t.Fatal("credential crossed account scope")
 		}
 	}
+}
+
+// The closed model query and admitted stamp survive the Reader and real transport,
+// including a delete/epoch change between the start and terminal observations.
+func TestCapturedModelsPreserveOriginalNonOneStampWithUnavailableRecording(t *testing.T) {
+	f := newAccountReadFixture(t)
+	compiler, err := productionEnvironmentCompiler(f.runtime.accounts, f.runtime.endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := compiler.Compile(f.aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, _ := originidentity.ParseClientOrigin("https://chatgpt.com")
+	plan, err := snapshot.ResolveRequest(origin, environment.RequestFacts{Target: protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/codex/models", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, _ := recording.NewEpoch(7)
+	stamp, err := recording.NewStamp(epoch, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "original-capture"}, recording.Fence{ArchiveEpoch: 7, CaptureGeneration: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed []recording.Stamp
+	audit := accountReadObservationFunc(func(s recording.Stamp, a egressaudit.Attempt) recording.OfferResult {
+		if !s.SameScope(stamp) || !a.ObservationStamp().SameScope(stamp) {
+			t.Error("captured model audit regenerated its original stamp")
+		}
+		observed = append(observed, s)
+		if !a.Terminal() {
+			epoch.Advance(8)
+		}
+		return recording.DroppedUnavailable
+	})
+	auth, err := providertransport.NewStaticBearerAuthenticator(f.secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := providertransport.NewClient(providertransport.ClientOptions{Coordinator: f.runtime.offlineHold, Authenticators: []providertransport.Authenticator{auth}, Transport: f.wire, InstanceIDs: NewCryptographicInstanceIDSource(), Audit: audit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Shutdown(context.Background())
+	reader, err := accountoperation.New(accountoperation.Options{Accounts: f.runtime.accounts, Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reader.ReadCaptured(t.Context(), plan, accountoperation.Source{ConnectionID: "original-connection", OperationID: "original-models", RawQuery: "client_version=0.163.0", ObservationStamp: stamp})
+	if err != nil || string(result.Body) != managedCodexCatalogFixture {
+		t.Fatalf("recording affected managed read: %v", err)
+	}
+	if len(observed) != 2 || observed[1].Current() || observed[1].Fence().CaptureGeneration != 9 {
+		t.Fatalf("terminal lost deleted original stamp: %+v", observed)
+	}
+	if len(f.wire.requests) != 1 || f.wire.requests[0].URL.RawQuery != "client_version=0.163.0" {
+		t.Fatal("closed original model query lost")
+	}
+}
+
+type accountReadObservationFunc func(recording.Stamp, egressaudit.Attempt) recording.OfferResult
+
+func (f accountReadObservationFunc) ObserveEgress(s recording.Stamp, a egressaudit.Attempt) recording.OfferResult {
+	return f(s, a)
 }

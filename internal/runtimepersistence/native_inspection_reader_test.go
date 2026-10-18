@@ -95,7 +95,7 @@ func TestNativeInspectionContentOnlyTailAndVisibility(t *testing.T) {
 
 // This copies released-format historical bytes before the catalog's first
 // acquisition. No archived authority or live lifecycle method serves reads.
-func nativeInspectionLegacyFixture(t *testing.T) (*NativeInspectionReader, *ObservationStore, *ControlStore, nativetool.Operation) {
+func nativeInspectionLegacyFixture(t *testing.T, revisions ...int) (*NativeInspectionReader, *ObservationStore, *ControlStore, nativetool.Operation) {
 	t.Helper()
 	ctx := context.Background()
 	old, id, _ := nativeLifecycleFixtureRecording(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 30})
@@ -106,6 +106,10 @@ func nativeInspectionLegacyFixture(t *testing.T) (*NativeInspectionReader, *Obse
 	}
 	path, db := legacyNativeFixture(t, old)
 	nativeExec(t, db, `UPDATE native_tool_events SET sequence=sequence+1000`)
+	if len(revisions) > 0 && revisions[0] == 3 {
+		nativeExec(t, db, migration002To003SQL)
+		nativeExec(t, db, `UPDATE runtime_metadata SET schema_revision=3`)
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +128,9 @@ func nativeInspectionLegacyFixture(t *testing.T) (*NativeInspectionReader, *Obse
 		t.Fatal(err)
 	}
 	options, current := inspectionSourcesFixture(t)
+	if len(revisions) > 0 {
+		options.Sources[0].Database.Revision = int64(revisions[0])
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -330,4 +337,20 @@ type nativeFinalExpiryVisibility struct {
 func (v *nativeFinalExpiryVisibility) RecheckInspectionStamp(ctx context.Context, s recording.InspectionStamp) error {
 	v.beforeCheck()
 	return v.ControlStore.RecheckInspectionStamp(ctx, s)
+}
+
+func TestNativeInspectionPublishedRuntime3PreservesHistoryAndBody(t *testing.T) {
+	reader, _, _, op := nativeInspectionLegacyFixture(t, 3)
+	page, err := reader.Page(t.Context(), nativetool.InspectionPageRequest{Capture: op.Capture, Limit: 199})
+	if err != nil || len(page.Items) == 0 {
+		t.Fatalf("native3 page %+v %v", page, err)
+	}
+	got, err := reader.Get(t.Context(), op.Capture, op.ID)
+	if err != nil || got.Operation.ID != op.ID || got.Result == nil {
+		t.Fatalf("native3 detail %+v %v", got, err)
+	}
+	body, err := reader.ReadContent(t.Context(), nativetool.InspectionContentRequest{Token: got.Token, Capture: op.Capture, OperationID: op.ID, Part: nativetool.ContentToolResult, Descriptor: *got.Result, Limit: 128 << 10})
+	if err != nil || string(body) != "legacy retained body" {
+		t.Fatalf("native3 body %q %v", body, err)
+	}
 }

@@ -24,9 +24,22 @@ function assertRaceGate(source) {
   assert.match(job, /^    runs-on: ubuntu-latest$/mu);
   assert.match(job, /^    timeout-minutes: 120$/mu);
   const strategy = job.match(/^    strategy:\n(?:(?!^    \S)[\s\S])*/mu)?.[0];
-  assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence, rest]');
+  assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence-migration, persistence-rest, rest]');
   assert.match(job, /^      - run: bash tool\/test-race-shard\.sh \$\{\{ matrix\.shard \}\}$/mu);
-  assert.doesNotMatch(job, /\bif:|continue-on-error|\boptional\b|\bretry\b|\|\||\bGOFLAGS\b/u);
+  assert.doesNotMatch(job, /continue-on-error|\boptional\b|\bretry\b|\|\||\bGOFLAGS\b/u);
+  assert.doesNotMatch(job, /^    if:/mu);
+  const steps = job.split(/^      - /mu).slice(1);
+  const conditional = steps.filter(step => /^        if:/mu.test(step));
+  assert.equal(conditional.length, 2);
+  assert.match(conditional[0], /^uses: actions\/setup-node@/u);
+  assert.match(conditional[0], /^        if: startsWith\(matrix.shard, 'persistence-'\)$/mu);
+  assert.match(conditional[1], /^uses: actions\/upload-artifact@/u);
+  assert.match(conditional[1], /^        if: always\(\) && startsWith\(matrix.shard, 'persistence-'\)$/mu);
+  const coverage = source.match(/^  race-coverage:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)?.[0];
+  assert.ok(coverage, 'persistence manifest comparison gate is required');
+  assert.match(coverage, /^    needs: race$/mu);
+  assert.match(coverage, /node tool\/persistence-race-partition\.mjs compare/u);
+  assert.doesNotMatch(coverage, /\bif:|continue-on-error|\|\|/u);
   for (const value of [
     'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
     'actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16',
@@ -35,27 +48,31 @@ function assertRaceGate(source) {
   ]) assert.ok(job.includes(value), value);
 }
 
-test('aggregate short race remains an unconditional bounded three-shard CI gate', () => {
+test('aggregate short race remains an unconditional bounded CI gate with complete persistence partitions', () => {
   assertRaceGate(ci);
 });
 
 test('race gate rejects omitted shards, cancellation, optional execution, and changed containment', () => {
   assertRaceGate(ci);
   const mutations = [
-    ['[native, persistence, rest]', '[native, rest]'],
+    ['[native, persistence-migration, persistence-rest, rest]', '[native, rest]'],
     ['fail-fast: false', 'fail-fast: true'],
     ['    strategy:', '    if: false\n    strategy:'],
     ['    strategy:', '    continue-on-error: true\n    strategy:'],
     ['timeout-minutes: 120', 'timeout-minutes: 180'],
+    ['      - run: bash tool/test-race-shard.sh ${{ matrix.shard }}', "      - run: bash tool/test-race-shard.sh ${{ matrix.shard }}\n        if: startsWith(matrix.shard, 'persistence-')"],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'make test-race'],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh native'],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh ${{ matrix.shard }} || true'],
-    ['        shard: [native, persistence, rest]', '        shard: [native, persistence, rest]\n        exclude:\n          - shard: persistence'],
+    ['        shard: [native, persistence-migration, persistence-rest, rest]', '        shard: [native, persistence-migration, persistence-rest, rest]\n        exclude:\n          - shard: persistence-migration'],
   ];
   const job = ci.match(/^  race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)[0];
   for (const [before, after] of mutations) {
     assert.ok(job.includes(before), `mutation must apply: ${before}`);
     assert.throws(() => assertRaceGate(ci.replace(job, job.replace(before, after))), undefined, after);
+  }
+  for (const replacement of ['    needs: []', '    needs: race\n    if: false', '    needs: race\n    continue-on-error: true']) {
+    assert.throws(() => assertRaceGate(ci.replace('    needs: race\n', replacement+'\n')));
   }
 });
 

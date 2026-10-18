@@ -76,7 +76,7 @@ func (codec responsesClientCodec) EncodeSourceResponse(
 			return nil, protocolcore.TranslationReport{},
 				errors.New("Responses-compatible response model is invalid")
 		}
-		if reportedModel != request.RequestedModel {
+		if reportedModel == request.EffectiveModel {
 			model, err := json.Marshal(request.RequestedModel)
 			if err != nil {
 				return nil, protocolcore.TranslationReport{}, err

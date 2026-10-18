@@ -126,7 +126,7 @@ func inspectionInventory(layout string, sources []InspectionSource) ([]Inspectio
 				return nil, "", ErrInvalidDatabasePath
 			}
 		} else {
-			if strings.ContainsAny(s.ID, "/\\\x00") || s.ID == "." || s.ID == ".." || s.RelativePath != "archives/"+s.ID+"/runtime.db" || s.Database.Identity != schemaIdentity || (s.Database.Revision != 1 && s.Database.Revision != 2) {
+			if strings.ContainsAny(s.ID, "/\\\x00") || s.ID == "." || s.ID == ".." || s.RelativePath != "archives/"+s.ID+"/runtime.db" || s.Database.Identity != schemaIdentity || (s.Database.Revision != 1 && !publishedNativeRevision(s.Database.Revision)) {
 				return nil, "", ErrInvalidDatabasePath
 			}
 			initialized, err := time.Parse(time.RFC3339Nano, s.Database.InitializedAt)
@@ -398,6 +398,8 @@ func inspectAttachedObservation(ctx context.Context, conn *sql.Conn, alias, layo
 	schemas := []string{schemaV1SQL}
 	if source.Current {
 		schemas = []string{observationSchemaSQL}
+	} else if source.Database.Revision == 3 {
+		schemas = []string{schemaRuntimeV3SQL, schemaV2SQL + "\n" + migration002To003SQL, schemaV1SQL + "\n" + migration001To002SQL + "\n" + migration002To003SQL}
 	} else if source.Database.Revision == 2 {
 		schemas = []string{schemaV2SQL, schemaV1SQL + "\n" + migration001To002SQL}
 	}

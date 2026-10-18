@@ -22,7 +22,7 @@ var controlProjections = []controlProjection{
 	{"environment_revisions", "environment_id,revision,name,state,format_version,payload_json,candidate_digest,published_at_unix_ms", "environment_id,revision"},
 	{"machine_registrations", "machine_registration_id,machine_id,binding_id,binding_revision,revision,state,display_name,created_at_unix_ms,updated_at_unix_ms", "machine_registration_id"},
 	{"manual_captures", "capture_id,owner_kind,owner_id,display_name,client_class,lifetime,state,credential_revision,proxy_credential_hash,observation,created_at_unix_ms,updated_at_unix_ms,expires_at_unix_ms,last_observed_at_unix_ms", "capture_id"},
-	{"provider_accounts", "account_id,display_name,credential_origin,endpoint_associations,association_revision,note,note_revision,settings_revision,egress_profile_json,automatic_refresh,realm_id,driver_ref,secret_reference,state,revision,created_at_unix_ms,updated_at_unix_ms", "account_id"},
+	{"provider_accounts", "account_id,display_name,credential_origin,endpoint_associations,association_revision,note,note_revision,settings_revision,egress_profile_json,automatic_refresh,cyber_access_program,realm_id,driver_ref,secret_reference,state,revision,created_at_unix_ms,updated_at_unix_ms", "account_id"},
 	{"proxy_client_bindings", "binding_id,revision,state,display_name,allowed_ingress_scopes_json,allowed_environment_ids_json,quota_policy_id,allowed_grant_kinds,created_at_unix_ms,updated_at_unix_ms", "binding_id"},
 	{"runtime_egress_default", "singleton,revision,egress_id,egress_revision", "singleton"},
 	{"runtime_usage_policy", "singleton,enabled,retention_days,revision,collecting_since_unix_ms", "singleton"},

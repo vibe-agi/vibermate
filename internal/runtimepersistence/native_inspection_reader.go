@@ -131,7 +131,7 @@ func (r *NativeInspectionReader) Page(ctx context.Context, q nativetool.Inspecti
 		alias := fmt.Sprintf("s%d", ordinal)
 		if source.Current {
 			projections = append(projections, fmt.Sprintf(`SELECT %d AS source,position,operation_id FROM %s.native_inspection_index WHERE capture_kind=? AND capture_id=?`, ordinal, alias))
-		} else if source.Database.Revision == 2 {
+		} else if publishedNativeRevision(source.Database.Revision) {
 			projections = append(projections, fmt.Sprintf(`SELECT %d AS source,MAX(e.sequence) AS position,o.operation_id FROM %s.native_tool_operations o JOIN %s.native_tool_events e ON e.operation_id=o.operation_id WHERE o.capture_kind=? AND o.capture_id=? GROUP BY o.operation_id`, ordinal, alias, alias))
 		} else {
 			continue
@@ -245,7 +245,7 @@ func (r *NativeInspectionReader) get(s *nativeInspectionRead, c captureidentity.
 	}
 	for ordinal, source := range s.lease.sources {
 		alias := fmt.Sprintf("s%d", ordinal)
-		if !source.Current && source.Database.Revision != 2 {
+		if !source.Current && !publishedNativeRevision(source.Database.Revision) {
 			continue
 		}
 		historySQL := legacyNativeHistorySQL(alias)

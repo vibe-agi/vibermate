@@ -57,6 +57,8 @@ type runtimeFetchSpec struct {
 	targetRef    string
 	target       Target
 	relativePath string
+	rawQuery     string
+	modelCatalog bool
 	credential   providerauth.Lease
 	method       string
 	body         []byte
@@ -310,9 +312,10 @@ func (client *Client) fetchRuntimeJSON(
 	}
 
 	requestURL := url.URL{
-		Scheme: spec.target.Origin().Scheme(),
-		Host:   spec.target.HTTPAuthority(),
-		Path:   spec.relativePath,
+		Scheme:   spec.target.Origin().Scheme(),
+		Host:     spec.target.HTTPAuthority(),
+		Path:     spec.relativePath,
+		RawQuery: spec.rawQuery,
 	}
 	var requestBody io.Reader = bytes.NewReader(nil)
 	var sensitiveBody *clearingRequestBody
@@ -361,7 +364,7 @@ func (client *Client) fetchRuntimeJSON(
 			return nil, fmt.Errorf("finalize runtime fetch authentication: %w", err)
 		}
 	}
-	if spec.purpose == egressaudit.PurposeUpstreamModelDiscovery {
+	if (spec.purpose == egressaudit.PurposeUpstreamModelDiscovery || spec.modelCatalog) && spec.rawQuery == "" {
 		request.URL.RawQuery = upstreamendpoint.ModelsQuery(spec.target.Origin(), request.Header)
 	}
 

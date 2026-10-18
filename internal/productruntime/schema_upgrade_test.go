@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
@@ -77,8 +78,8 @@ func TestSchemaSwitchSecondHostCannotEnter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Shutdown(context.Background())
-	if phases < 1 || runtime.Status().SchemaRevision != 3 {
-		t.Fatal("startup did not perform one verified upgrade")
+	if phases != 1 || runtime.Status().SchemaRevision != 3 {
+		t.Fatal("startup did not perform one owned storage cutover")
 	}
 	policy, err := runtime.storage.UsagePolicyRepository().UsagePolicy(context.Background())
 	if err != nil || policy.Enabled || policy.RetentionDays != 90 {
@@ -110,7 +111,7 @@ func TestSchemaSwitchDeadlineCannotActivateBackground(t *testing.T) {
 	}
 }
 
-func TestSchemaSwitchCurrent2NeedsNoWritableParent(t *testing.T) {
+func TestSchemaSwitchCurrent3NeedsNoWritableParent(t *testing.T) {
 	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
 	runtime, err := Start(context.Background(), options)
 	if err != nil {
@@ -127,7 +128,78 @@ func TestSchemaSwitchCurrent2NeedsNoWritableParent(t *testing.T) {
 	options.OfflineHold = &coordinatorDouble{}
 	runtime, err = Start(context.Background(), options)
 	if err != nil {
-		t.Fatalf("healthy current2 required sibling writes: %v", err)
+		t.Fatalf("healthy current3 required sibling writes: %v", err)
 	}
 	runtime.Shutdown(context.Background())
+}
+
+func TestSchemaSwitchPublished2NeedsOwnedSnapshotAndStarts3(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		t.Run(fmt.Sprint(writable), func(t *testing.T) {
+			options := schemaStartupV1(t)
+			migration, err := os.ReadFile("../runtimepersistence/migrations/001_to_002.sql")
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", options.Paths.DatabasePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(string(migration) + `;UPDATE runtime_metadata SET schema_revision=2`); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			parent := filepath.Dir(options.Paths.DataDirectory())
+			if !writable {
+				if err := os.Chmod(parent, 0500); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(parent, 0700)
+			}
+			runtime, err := Start(context.Background(), options)
+			if writable {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer runtime.Shutdown(context.Background())
+				if runtime.Status().SchemaRevision != 3 {
+					t.Fatal("v2 not upgraded")
+				}
+				return
+			}
+			if runtime != nil {
+				runtime.Shutdown(context.Background())
+				t.Fatal("v2 started without rollback snapshot")
+			}
+			if !errors.Is(err, runtimedata.ErrSchemaUpgradeIncomplete) {
+				t.Fatalf("snapshot failure: %v", err)
+			}
+			state, err := runtimepersistence.InspectSchema(context.Background(), options.Paths.DatabasePath(), time.Second)
+			if err != nil || state.Revision != 2 {
+				t.Fatal("failed snapshot changed v2")
+			}
+		})
+	}
+}
+
+func TestSchemaSwitchStartupKeepsSingleBootstrapBudgetFrame(t *testing.T) {
+	options := schemaStartupV1(t)
+	frames := 0
+	// This is the Desktop daemon's closed progress contract: a second storage
+	// frame is rejected, and cannot extend the one existing readiness budget.
+	options.SchemaUpgradeProgress = func(runtimedata.SchemaUpgradePhase) error {
+		frames++
+		if frames > 1 {
+			return errors.New("duplicate storage preparation")
+		}
+		return nil
+	}
+	runtime, err := Start(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Shutdown(context.Background())
+	if frames != 1 || runtime.Status().SchemaRevision != 3 {
+		t.Fatalf("frames=%d revision=%d", frames, runtime.Status().SchemaRevision)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,7 +160,7 @@ func TestOwnedStorageProgressAndSingleDeadline(t *testing.T) {
 	reachedCopy := false
 	runner.copyFile = func(work context.Context, _, _ string, _ os.FileInfo) error {
 		reachedCopy = true
-		if !reflect.DeepEqual(phases, []StoragePhase{SchemaUpgradePreparing, SchemaUpgradeRunning}) {
+		if !reflect.DeepEqual(phases, []StoragePhase{SchemaUpgradePreparing}) {
 			t.Fatalf("copy precedes upgrade phase: %v", phases)
 		}
 		actual, _ := work.Deadline()
@@ -539,7 +540,7 @@ func TestOwnedStorageSlowCopyUsesUpgradeDeadlineAndBothGuards(t *testing.T) {
 		return work.Err()
 	}
 	runner.copyFile = func(work context.Context, _, _ string, _ os.FileInfo) error {
-		if !reflect.DeepEqual(phases, []StoragePhase{SchemaUpgradePreparing, SchemaUpgradeRunning}) {
+		if !reflect.DeepEqual(phases, []StoragePhase{SchemaUpgradePreparing}) {
 			return errors.New("upgrade phase did not precede slow copy")
 		}
 		d, ok := work.Deadline()
@@ -724,5 +725,34 @@ func TestOwnedStorageActivatedReceiptRefusesDamagedCurrentControl(t *testing.T) 
 				t.Fatalf("failed reconciliation consumed receipt: %v", err)
 			}
 		})
+	}
+}
+
+func TestOwnedStorageReconcilesPublishedV2ReceiptBeforeRoleCutover(t *testing.T) {
+	source := frozenRevision2UpgradeFixture(t)
+	owner, host := upgradeGuards(t, source)
+	runner := newRevision2UpgradeRunner()
+	runner.upgradeDatabase = func(ctx context.Context, in runtimepersistence.Revision2MigrationInput) (runtimepersistence.MigrationResult, error) {
+		result, err := runtimepersistence.UpgradeRevision2(ctx, in)
+		if err != nil {
+			return result, err
+		}
+		return result, runtimepersistence.ErrMigrationOutcomeUnknown
+	}
+	target := filepath.Join(filepath.Dir(source), "pending-role-snapshot")
+	if _, err := runner.upgrade(t.Context(), source, target, owner, host, time.Now().UTC(), time.Minute, nil); !errors.Is(err, ErrSchemaUpgradeIncomplete) {
+		t.Fatalf("pending fixture: %v", err)
+	}
+	before := snapshotTestFiles(t, target)
+	var phases []StoragePhase
+	layout, err := PrepareStorageOwned(t.Context(), OwnedStorage{Directory: source, Runtime: owner, Host: host}, time.Now().UTC(), func(p StoragePhase) error { phases = append(phases, p); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(phases) != 1 || len(layout.Archives) != 1 || layout.Archives[0].Database.Revision != 3 {
+		t.Fatalf("lost receipt boundary: phases=%v layout=%+v", phases, layout)
+	}
+	if fmt.Sprint(before) != fmt.Sprint(snapshotTestFiles(t, target)) {
+		t.Fatal("rollback source mutated")
 	}
 }

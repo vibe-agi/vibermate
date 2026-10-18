@@ -80,7 +80,7 @@ func validStorageLayout(l StorageLayout) bool {
 	seen := map[string]bool{}
 	for _, a := range l.Archives {
 		initialized, err := time.Parse(time.RFC3339Nano, a.Database.InitializedAt)
-		if !validStorageID(a.ID) || seen[a.ID] || a.RelativeDirectory != filepath.ToSlash(filepath.Join("archives", a.ID)) || a.Database.Identity != "vibermate-runtime" || (a.Database.Revision != 1 && a.Database.Revision != 2) || err != nil || initialized.IsZero() || initialized.Location() != time.UTC {
+		if !validStorageID(a.ID) || seen[a.ID] || a.RelativeDirectory != filepath.ToSlash(filepath.Join("archives", a.ID)) || a.Database.Identity != "vibermate-runtime" || (a.Database.Revision != 1 && a.Database.Revision != 2 && a.Database.Revision != 3) || err != nil || initialized.IsZero() || initialized.Location() != time.UTC {
 			return false
 		}
 		seen[a.ID] = true

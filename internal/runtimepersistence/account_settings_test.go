@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -17,7 +18,14 @@ import (
 func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	store := openTestStore(t, path)
+	open := func() *Store {
+		control, err := OpenControl(ctx, ControlOptions{DatabasePath: path, LayoutID: "account-settings", BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return control.store
+	}
+	store := open()
 	ref, _ := secretstore.ParseReference("secret://provider-account/settings")
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
 	now := time.Unix(1786200000, 0).UTC()
@@ -26,29 +34,38 @@ func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 		t.Fatalf("create: %+v %v", result, err)
 	}
 	loaded, exists, err := store.ProviderAccountRepository().Load(ctx, account.ID)
-	if err != nil || !exists || loaded.AutomaticRefresh || loaded.SettingsRevision != 1 {
+	if err != nil || !exists || loaded.AutomaticRefresh || loaded.CyberAccessProgram != cyberaccess.Standard || loaded.SettingsRevision != 1 {
 		t.Fatalf("explicit consent changed: %+v %v", loaded, err)
 	}
 	account.AutomaticRefresh = true
-	account.SettingsRevision = 2
 	account.EgressProfile = egressprofile.Direct()
 	account.EgressProfile.ID = "profile.us"
 	account.EgressProfile.DisplayName = "US"
 	account.EgressProfile.Policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080"}
-	if result, err := store.ProviderAccountRepository().WriteSettings(ctx, 1, account); err != nil || result.Outcome != provideraccount.CommitCommitted {
-		t.Fatalf("settings: %+v %v", result, err)
+	for index, preference := range []cyberaccess.Preference{cyberaccess.Standard, cyberaccess.Blue, cyberaccess.Red, cyberaccess.Standard} {
+		expected := uint64(index + 1)
+		account.CyberAccessProgram = preference
+		account.SettingsRevision = expected + 1
+		if result, err := store.ProviderAccountRepository().WriteSettings(ctx, expected, account); err != nil || result.Outcome != provideraccount.CommitCommitted {
+			t.Fatalf("settings %s: %+v %v", preference.WireValue(), result, err)
+		}
+		if result, err := store.ProviderAccountRepository().WriteSettings(ctx, expected, account); err != nil || result.Outcome != provideraccount.CommitConflict {
+			t.Fatalf("stale CAS: %+v %v", result, err)
+		}
+		if err := store.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+		store = open()
+		loaded, exists, err = store.ProviderAccountRepository().Load(ctx, account.ID)
+		if err != nil || !exists || loaded != account {
+			t.Fatalf("restart changed %s settings: %+v %v", preference.WireValue(), loaded, err)
+		}
 	}
-	if result, err := store.ProviderAccountRepository().WriteSettings(ctx, 1, account); err != nil || result.Outcome != provideraccount.CommitConflict {
-		t.Fatalf("stale CAS: %+v %v", result, err)
-	}
-	if err := store.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-	store = openTestStore(t, path)
 	defer store.Shutdown(ctx)
-	loaded, exists, err = store.ProviderAccountRepository().Load(ctx, account.ID)
-	if err != nil || !exists || loaded != account {
-		t.Fatalf("restart changed settings: %+v %v", loaded, err)
+	for _, invalid := range []any{nil, "", "unknown", "follow_client", true, false} {
+		if _, err := store.database.ExecContext(ctx, `UPDATE provider_accounts SET cyber_access_program=? WHERE account_id=?`, invalid, account.ID.String()); err == nil {
+			t.Fatalf("database accepted invalid preference %#v", invalid)
+		}
 	}
 	if result, err := store.ProviderAccountRepository().Delete(ctx, account.ID, 1); err != nil || result.Outcome != provideraccount.CommitCommitted {
 		t.Fatalf("delete: %+v %v", result, err)

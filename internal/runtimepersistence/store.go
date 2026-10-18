@@ -84,8 +84,9 @@ type Store struct {
 	closeErr        error
 }
 
-// Open creates the data directory, opens SQLite through an explicit typed
-// connector, initializes the current schema, and reads its durable state.
+// Open retains the private combined repository adapter used by legacy tests.
+// Production startup uses OpenControl and OpenObservations; published monolithic
+// sources are admitted only by the strict inspection/extraction paths.
 func Open(ctx context.Context, options Options) (*Store, error) {
 	return openStore(ctx, options, nil)
 }

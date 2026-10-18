@@ -358,6 +358,7 @@ abstract interface class ControlApi {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   });
 
   Future<ProviderAccount> replaceProviderAccountCredential({
@@ -2528,8 +2529,11 @@ final class HttpControlApi
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) async {
+    final selectedProgram = cyberAccessProgram ?? account.cyberAccessProgram;
     if (!_validResourceId(account.id) ||
+        !providerAccountCyberAccessPrograms.contains(selectedProgram) ||
         automaticRefresh && !account.supportsAutomaticRefresh) {
       throw const ControlContractException(
         'Provider Account settings are invalid',
@@ -2541,6 +2545,7 @@ final class HttpControlApi
       expectedRevision: account.settingsRevision,
       body: {
         'automaticRefresh': automaticRefresh,
+        'cyberAccessProgram': selectedProgram,
         'egressProfile': egressProfile == null
             ? null
             : {'id': egressProfile.id, 'revision': egressProfile.revision},
@@ -2549,7 +2554,8 @@ final class HttpControlApi
     final updated = ProviderAccount.fromJson(payload, 'providerAccount');
     final changed =
         account.egressProfile != egressProfile ||
-        account.automaticRefresh != automaticRefresh;
+        account.automaticRefresh != automaticRefresh ||
+        account.cyberAccessProgram != selectedProgram;
     if (updated.id != account.id ||
         updated.revision != account.revision ||
         updated.kind != account.kind ||
@@ -2558,6 +2564,7 @@ final class HttpControlApi
         updated.settingsRevision !=
             account.settingsRevision + (changed ? 1 : 0) ||
         updated.automaticRefresh != automaticRefresh ||
+        updated.cyberAccessProgram != selectedProgram ||
         updated.egressProfile != egressProfile) {
       throw const ControlContractException(
         'Provider Account settings response is inconsistent',

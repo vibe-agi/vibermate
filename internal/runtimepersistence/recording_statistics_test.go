@@ -19,3 +19,12 @@ func TestRecordingStorageStatisticsCountEveryPhysicalSourceCopy(t *testing.T) {
 		t.Fatalf("limited direct-expiry preview called complete: %+v %v", stats, err)
 	}
 }
+
+func TestRecordingStorageStatisticsPublishedRuntime3IncludesNativeApproval(t *testing.T) {
+	f := newEgressInspectionFixture(t, 3)
+	nativeExec(t, f.legacy, `INSERT INTO native_tool_approvals VALUES('cccccccccccccccccccccccccccccccc','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',zeroblob(32),1,'allowed',1,10,2,'native-decision-0001',3)`)
+	_, preview, err := f.reader.catalog.InspectRecordingStorage(t.Context(), f.control, time.Now().UTC(), true)
+	if err != nil || preview.Approvals != 1 {
+		t.Fatalf("runtime3 native approval preview %+v %v", preview, err)
+	}
+}

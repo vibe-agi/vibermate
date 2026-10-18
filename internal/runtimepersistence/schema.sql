@@ -1,4 +1,4 @@
--- Current revision-2 bootstrap. The migration runner owns revision publication.
+-- Current revision-3 bootstrap. The migration runner owns revision publication.
 -- Column order matches the frozen revision-1 plus revision-2 migration.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
@@ -388,6 +388,7 @@ CREATE TABLE "provider_accounts"(
   settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
   egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(CAST(egress_profile_json AS BLOB))<=69632),
   automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
+  cyber_access_program TEXT NOT NULL DEFAULT 'standard' CHECK(cyber_access_program IN ('standard','daybreak_blue','daybreak_red')),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
   driver_ref TEXT NOT NULL
@@ -1422,7 +1423,7 @@ CREATE TABLE runtime_user_policies(
   CHECK(all_environments = 0 OR json_array_length(allowed_environment_ids_json) = 0)
 ) STRICT;
 
--- Prepared native revision-2 DDL; not used by the active revision-1 Store.
+-- Native tool tables introduced in revision 2 and retained by runtime revision 3.
 CREATE TABLE native_tool_scopes(
   capture_kind TEXT NOT NULL  CHECK(capture_kind IN('managed_run','manual_capture')),
   capture_id TEXT NOT NULL  CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),

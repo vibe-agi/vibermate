@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -154,7 +155,15 @@ func TestBackupValidationRejectsTamperingIncompatibilityAndUnknownTargets(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				encoded = []byte(strings.Replace(string(encoded), `"revision":2`, `"revision":99`, 1))
+				var manifest backupManifest
+				if err := json.Unmarshal(encoded, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				manifest.Database.Revision = 99
+				encoded, err = json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(name, encoded, 0o600); err != nil {
 					t.Fatal(err)
 				}

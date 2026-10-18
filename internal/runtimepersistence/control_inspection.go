@@ -91,7 +91,7 @@ func CreateStagedControl(ctx context.Context, path, layout string, now time.Time
 // reads the typed target projection. The directory owner compares this result
 // to a newly derived source certificate, never just a serialized receipt hash.
 func CertifyStagedControlProjection(ctx context.Context, path, layout string, sourceRevision int64) (digest [32]byte, count int64, result error) {
-	if sourceRevision < 0 || sourceRevision > 2 {
+	if sourceRevision != 0 && sourceRevision != 1 && sourceRevision != 2 && sourceRevision != 3 {
 		return digest, 0, ErrUnsupportedSchema
 	}
 	if _, err := InspectControl(ctx, path, layout); err != nil {

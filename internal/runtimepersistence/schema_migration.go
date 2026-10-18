@@ -152,13 +152,16 @@ type legacyTable struct {
 
 func quoteMigrationIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 func legacyTables(ctx context.Context) ([]legacyTable, error) {
+	return frozenMigrationTables(ctx, schemaV1SQL)
+}
+func frozenMigrationTables(ctx context.Context, frozen string) ([]legacyTable, error) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, schemaV1SQL); err != nil {
+	if _, err := db.ExecContext(ctx, frozen); err != nil {
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name`)
@@ -211,7 +214,10 @@ func fingerprintPart(h hash.Hash, tag byte, b []byte) {
 // Memory is bounded by one row (the frozen schema bounds each body). The SQL
 // sorter is file-backed and capped; no whole-table or whole-DB materialization.
 func legacyFingerprint(ctx context.Context, q schemaQueryer) ([32]byte, error) {
-	tables, err := legacyTables(ctx)
+	return frozenFingerprint(ctx, q, schemaV1SQL)
+}
+func frozenFingerprint(ctx context.Context, q schemaQueryer, frozen string) ([32]byte, error) {
+	tables, err := frozenMigrationTables(ctx, frozen)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -298,53 +304,24 @@ func (runner schemaMigrationRunner) upgrade(ctx context.Context, input Migration
 	if err != nil || fresh.legacyDigest != v.legacyDigest {
 		return runner.reconcileVerified(ctx, v, timeout)
 	}
-	// No journal_mode pragma: opening the writer cannot precede certification.
-	db := sql.OpenDB(newSQLiteUpgradeConnector(v.sourcePath, DefaultBusyTimeout))
-	db.SetMaxOpenConns(1)
-	conn, err := db.Conn(ctx)
+	writer, err := openMigrationWriter(ctx, v.sourcePath, runner)
 	if err != nil {
-		if err := runner.closeDatabasePool(db); err != nil {
+		if err := writer.close(); err != nil {
 			return MigrationResult{FromRevision: 1}, ErrMigrationOutcomeUnknown
 		}
 		return runner.reconcileVerified(ctx, v, timeout)
 	}
-	closed := false
-	var closeErr error
-	closeDatabase := func() error {
-		if !closed {
-			closeConnection := runner.closeConn
-			if closeConnection == nil {
-				closeConnection = (*sql.Conn).Close
-			}
-			closeErr = errors.Join(closeConnection(conn), runner.closeDatabasePool(db))
-			closed = true
-		}
-		return closeErr
-	}
-	defer func() { _ = closeDatabase() }()
-	begun := false
-	reconcile := func(root error) (MigrationResult, error) {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		defer cancel()
-		if begun {
-			_, _ = conn.ExecContext(cleanup, "ROLLBACK")
-		}
-		// Both closes must positively succeed before source visibility can be
-		// considered. A failed close retains uncertainty even if v2 is readable.
-		if err := closeDatabase(); err != nil {
-			return MigrationResult{FromRevision: 1}, errors.Join(ErrMigrationOutcomeUnknown, ctx.Err())
-		}
-		result, err := runner.reconcile(cleanup, v, timeout)
-		if err != nil {
-			return result, errors.Join(err, ctx.Err())
-		}
-		_ = root
-		return result, nil
+	defer func() { _ = writer.close() }()
+	conn := writer.conn
+	reconcile := func() (MigrationResult, error) {
+		return writer.reconcile(ctx, timeout, 1, func(proof context.Context) (MigrationResult, error) {
+			return runner.reconcile(proof, v, timeout)
+		})
 	}
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
-	begun = true
+	writer.begun = true
 	state, err := inspectSupportedSchema(ctx, conn)
 	if err == nil && state.Revision == 1 {
 		err = migrationIntegrity(ctx, conn)
@@ -356,47 +333,42 @@ func (runner schemaMigrationRunner) upgrade(ctx context.Context, input Migration
 		digest, err = legacyFingerprint(ctx, conn)
 	}
 	if err != nil || digest != v.legacyDigest || !migrationOwners(v) {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	// Recheck the independently owned snapshot immediately inside the transaction.
 	_, snapshotDigest, err := migrationFingerprintPath(ctx, v.snapshotPath, DefaultBusyTimeout)
 	if err != nil || snapshotDigest != v.legacyDigest {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	if _, err := conn.ExecContext(ctx, migration001To002SQL); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if runner.afterDDL != nil {
 		if err := runner.afterDDL(ctx, conn); err != nil {
-			return reconcile(err)
+			return reconcile()
 		}
 	}
 	if err := inspectSchemaLayout(ctx, conn, 2); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if err := migrationIntegrity(ctx, conn); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	digest, err = legacyFingerprint(ctx, conn)
 	if err != nil || digest != v.legacyDigest || !migrationOwners(v) {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	if err := migrationAdditionsEmpty(ctx, conn); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if _, err := conn.ExecContext(ctx, `UPDATE runtime_metadata SET schema_revision=2 WHERE singleton=1 AND schema_revision=1`); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
-	commit := runner.commit
-	if commit == nil {
-		commit = commitSchemaMigration
+	if err := writer.commit(ctx); err != nil {
+		return reconcile()
 	}
-	if err := commit(ctx, conn); err != nil {
-		return reconcile(err)
-	}
-	begun = false
 	// Even ordinary successful COMMIT gets an independent durable proof.
-	return reconcile(nil)
+	return reconcile()
 }
 
 func (runner schemaMigrationRunner) closeDatabasePool(database *sql.DB) error {
@@ -408,13 +380,9 @@ func (runner schemaMigrationRunner) closeDatabasePool(database *sql.DB) error {
 }
 
 func (runner schemaMigrationRunner) reconcileVerified(ctx context.Context, v VerifiedMigrationDatabase, timeout time.Duration) (MigrationResult, error) {
-	proof, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-	defer cancel()
-	result, err := runner.reconcile(proof, v, timeout)
-	if err != nil {
-		return result, errors.Join(err, ctx.Err())
-	}
-	return result, nil
+	return reconcileMigrationVerified(ctx, timeout, func(proof context.Context) (MigrationResult, error) {
+		return runner.reconcile(proof, v, timeout)
+	})
 }
 
 func migrationAdditionsEmpty(ctx context.Context, q schemaQueryer) error {

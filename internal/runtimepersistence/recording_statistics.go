@@ -57,7 +57,7 @@ func (c *InspectionCatalog) InspectRecordingStorage(ctx context.Context, visibil
 			approvals, assignments, captures := "0", "0", `(SELECT count(*) FROM `+alias+`.capture_observations)`
 			if !source.Current {
 				approvals = `(SELECT count(*) FROM ` + alias + `.tool_approvals)`
-				if source.Database.Revision == 2 {
+				if publishedNativeRevision(source.Database.Revision) {
 					approvals += `+(SELECT count(*) FROM ` + alias + `.native_tool_approvals)`
 				}
 				assignments = `(SELECT count(*) FROM ` + alias + `.capture_environment_assignments)`

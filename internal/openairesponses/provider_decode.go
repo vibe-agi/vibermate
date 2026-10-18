@@ -1013,24 +1013,80 @@ func (stream *ProviderStream) clientEvent(event ssewire.Event) (ssewire.Event, e
 	if err := json.Unmarshal(event.Data, &root); err != nil {
 		return ssewire.Event{}, err
 	}
+	modified := rewriteNativeModelHeaderJSON(root, stream.request.RequestedModel, stream.request.EffectiveModel)
 	if raw := root["response"]; rawPresent(raw) {
 		var response map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &response); err != nil {
 			return ssewire.Event{}, err
 		}
+		responseModified := rewriteNativeModelHeaderJSON(response, stream.request.RequestedModel, stream.request.EffectiveModel)
 		if model, present := response["model"]; present {
 			var reported string
 			if err := json.Unmarshal(model, &reported); err != nil || reported == "" {
 				return ssewire.Event{}, protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$.response.model", errors.New("Responses SSE response model is invalid"))
 			}
-			if reported != stream.request.RequestedModel {
+			if reported == stream.request.EffectiveModel {
 				response["model"], _ = json.Marshal(stream.request.RequestedModel)
-				root["response"], _ = json.Marshal(response)
-				event.Data, _ = json.Marshal(root)
+				responseModified = true
 			}
 		}
+		if responseModified {
+			root["response"], _ = json.Marshal(response)
+			modified = true
+		}
+	}
+	if modified {
+		event.Data, _ = json.Marshal(root)
 	}
 	return event, nil
+}
+
+// Codex rust-v0.163.0 reads model identity from response.headers, then
+// top-level headers, accepting openai-model and x-openai-model. Preserve every
+// unknown field and header representation; only exact mapped values are aliases.
+func rewriteNativeModelHeaderJSON(object map[string]json.RawMessage, requested, effective string) bool {
+	var headers map[string]json.RawMessage
+	if json.Unmarshal(object["headers"], &headers) != nil || headers == nil {
+		return false
+	}
+	modified := false
+	for name, raw := range headers {
+		if !strings.EqualFold(name, "openai-model") && !strings.EqualFold(name, "x-openai-model") {
+			continue
+		}
+		if replacement, changed := rewriteNativeModelHeaderValue(raw, requested, effective); changed {
+			headers[name] = replacement
+			modified = true
+		}
+	}
+	if modified {
+		object["headers"], _ = json.Marshal(headers)
+	}
+	return modified
+}
+
+func rewriteNativeModelHeaderValue(raw json.RawMessage, requested, effective string) (json.RawMessage, bool) {
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		if value == effective {
+			replacement, _ := json.Marshal(requested)
+			return replacement, true
+		}
+		return raw, false
+	}
+	// Codex resolves array-valued headers through their first element, including
+	// nested arrays. Other elements are opaque and retain their original meaning.
+	var values []json.RawMessage
+	if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+		return raw, false
+	}
+	first, changed := rewriteNativeModelHeaderValue(values[0], requested, effective)
+	if !changed {
+		return raw, false
+	}
+	values[0] = first
+	replacement, _ := json.Marshal(values)
+	return replacement, true
 }
 
 type providerPendingTerminal struct {

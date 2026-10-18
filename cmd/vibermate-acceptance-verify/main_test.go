@@ -247,6 +247,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		"flutter-macos-framework",
 		"launcher",
 		"url-launcher-framework",
+		"vibermate-xray",
 	}
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
@@ -279,7 +280,8 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		"flutter-macos-framework": filepath.Join(
 			bundle, "Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
 		),
-		"launcher": filepath.Join(macOSDirectory, "vibermate"),
+		"launcher":       filepath.Join(macOSDirectory, "vibermate"),
+		"vibermate-xray": filepath.Join(macOSDirectory, "vibermate-xray"),
 	}
 	for role, path := range artifactPaths {
 		if role == "desktop-app-bundle" || role == "desktop-build-manifest" {
@@ -294,19 +296,19 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		}
 		artifactPaths[role] = canonical
 	}
-	configurationPaths := []string{
-		"go.mod",
-		"go.sum",
-		"ui/flutter_app/.metadata",
-		"ui/flutter_app/pubspec.yaml",
-		"ui/flutter_app/pubspec.lock",
-		"ui/flutter_app/tool/flutter-sdk.env",
-		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
-		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
-		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
-		"ui/flutter_app/macos/Runner/Info.plist",
-		"ui/flutter_app/macos/Runner/Release.entitlements",
+	payload, err := os.ReadFile("../../internal/acceptancereport/testdata/desktop-build-inventory.json")
+	if err != nil {
+		t.Fatal(err)
 	}
+	var inventory struct {
+		Configuration []string          `json:"configuration"`
+		Nested        map[string]string `json:"nested"`
+	}
+	if err := json.Unmarshal(payload, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	configurationPaths := inventory.Configuration
+
 	configurationDigests := make(map[string]string, len(configurationPaths))
 	for _, name := range configurationPaths {
 		path := filepath.Join(sourceRoot, filepath.FromSlash(name))
@@ -336,41 +338,13 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		Go: tools.Go, Flutter: tools.Flutter,
 		Dart: tools.Dart, Xcode: tools.Xcode,
 	}
-	daemon, err := acceptancereport.DigestArtifact(
-		"daemon",
-		artifactPaths["daemon"],
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	launcher, err := acceptancereport.DigestArtifact(
-		"launcher",
-		artifactPaths["launcher"],
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	appFramework, err := acceptancereport.DigestArtifact(
-		"app-framework",
-		artifactPaths["app-framework"],
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	flutterFramework, err := acceptancereport.DigestArtifact(
-		"flutter-macos-framework",
-		artifactPaths["flutter-macos-framework"],
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fileSelector, err := acceptancereport.DigestArtifact("file-selector-framework", artifactPaths["file-selector-framework"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	urlLauncher, err := acceptancereport.DigestArtifact("url-launcher-framework", artifactPaths["url-launcher-framework"])
-	if err != nil {
-		t.Fatal(err)
+	nestedDigests := make(map[string]string)
+	for name, relative := range inventory.Nested {
+		evidence, err := acceptancereport.DigestArtifact(name, filepath.Join(bundle, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nestedDigests[name] = evidence.SHA256
 	}
 	manifestPayload, err := json.MarshalIndent(cliBuildManifest{
 		Schema: acceptancereport.DesktopBuildManifestSchemaV3,
@@ -381,14 +355,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		},
 		Toolchains:          buildTools,
 		ConfigurationSHA256: configurationDigests,
-		NestedCodeSHA256: map[string]string{
-			"app-framework":           appFramework.SHA256,
-			"file-selector-framework": fileSelector.SHA256,
-			"flutter-macos-framework": flutterFramework.SHA256,
-			"url-launcher-framework":  urlLauncher.SHA256,
-			"vibermated":              daemon.SHA256,
-			"vibermate":               launcher.SHA256,
-		},
+		NestedCodeSHA256:    nestedDigests,
 	}, "", "  ")
 	if err != nil {
 		t.Fatal(err)

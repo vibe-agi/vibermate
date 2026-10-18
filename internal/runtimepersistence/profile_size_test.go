@@ -36,6 +36,14 @@ func TestMigratedPublishedLargeProfileBindsAndStarts(t *testing.T) {
 		t.Fatalf("upgrade: %+v %v", result, err)
 	}
 	f.assertLegacyPreserved(t)
+	state, err := InspectSchema(t.Context(), filepath.Join(f.source, "runtime.db"), time.Second)
+	if err != nil || state.Revision != 2 {
+		t.Fatalf("legacy stage: %+v %v", state, err)
+	}
+	if result, err := UpgradeRevision2(t.Context(), revision2InputAfterLegacyUpgrade(t, f.source, f.owner)); err != nil || !result.Committed || result.ToRevision != 3 {
+		t.Fatalf("current stage: %+v %v", result, err)
+	}
+	f.assertLegacyPreserved(t)
 	store := openTestStore(t, filepath.Join(f.source, "runtime.db"))
 	p, exists, err := store.EgressProfileRepository().LoadRevision(t.Context(), "profile.example", 1)
 	if err != nil || !exists {

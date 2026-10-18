@@ -215,7 +215,7 @@ func TestRecordingLegacyApprovalPurgeCountsCopiesAndPreservesUnknown(t *testing.
 }
 
 func TestRecordingLegacyCaptureMetadataCleanupKeepsSharedAndNativeSafety(t *testing.T) {
-	for _, revision := range []int{1, 2} {
+	for _, revision := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(revision), func(t *testing.T) {
 			f := newEgressInspectionFixture(t, revision)
 			for _, id := range []string{"audit-a", "audit-b"} {
@@ -223,7 +223,7 @@ func TestRecordingLegacyCaptureMetadataCleanupKeepsSharedAndNativeSafety(t *test
 				nativeExec(t, f.legacy, `INSERT INTO acp_observations(run_id,policy,revision,snapshot,final,expires_at_unix_ms) VALUES(?,'{"mode":"full","retentionDays":7}',1,X'01',1,?)`, id, time.Now().Add(time.Hour).UnixMilli())
 				nativeExec(t, f.legacy, `INSERT INTO capture_environment_assignments(capture_kind,capture_id,environment_id,environment_revision,environment_digest,assignment_revision,source,launch_environment_id,launch_environment_revision,launch_environment_digest,protected_authorities_json,managed_authorities_json,launch_authority_digest,updated_at_unix_ms) VALUES('managed_run',?,'env',1,randomblob(32),1,'launch','env',1,randomblob(32),'[]','[]',randomblob(32),1)`, id)
 			}
-			if revision == 2 {
+			if revision == 2 || revision == 3 {
 				nativeExec(t, f.legacy, `INSERT INTO native_tool_scopes VALUES('managed_run','audit-a',1,1,'closed',1,20); INSERT INTO native_tool_once VALUES('managed_run','audit-a',randomblob(32),'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',randomblob(32),'once-proof',10,1)`)
 			}
 			nativeExec(t, f.control.store.database, `UPDATE recording_capture_fences SET deleted=1 WHERE capture_id='audit-a'`)
@@ -245,7 +245,7 @@ func TestRecordingLegacyCaptureMetadataCleanupKeepsSharedAndNativeSafety(t *test
 					t.Fatalf("%s remaining=%d err=%v", table, count, err)
 				}
 			}
-			if revision == 2 {
+			if revision == 2 || revision == 3 {
 				for _, table := range []string{"native_tool_scopes", "native_tool_once"} {
 					var count int
 					if err := f.legacy.QueryRow(`SELECT count(*) FROM ` + table + ` WHERE capture_id='audit-a'`).Scan(&count); err != nil || count != 1 {

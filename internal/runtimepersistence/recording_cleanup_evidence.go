@@ -73,7 +73,7 @@ func recordingCleanupRoots(source InspectionSource, mirror string, cutoff time.T
 			recordingCleanupRoot{"tool_approvals", "approval_id", `EXISTS(SELECT 1 FROM ` + mirror + `.inspection_mirror_active a JOIN ` + mirror + `.inspection_mirror_generations g USING(generation) WHERE a.singleton=1 AND g.complete=1 AND g.archive_epoch>1)`, nil},
 		)
 		roots = append(roots, recordingCleanupRoot{"runtime_exchange_agent_identities", "exchange_id", `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='exchange' AND d.identity=r.exchange_id)`, nil})
-		if source.Database.Revision == 2 {
+		if publishedNativeRevision(source.Database.Revision) {
 			nativeWhere := `(` + hidden("r.capture_kind", "r.capture_id") + ` OR (` + expired("metadata_expires_at_unix_ms") + ` AND r.completed_at_unix_ms IS NOT NULL AND NOT EXISTS(SELECT 1 FROM main.native_tool_contents nc WHERE nc.operation_id=r.operation_id AND nc.expires_at_unix_ms>` + fmt.Sprint(cutoff.UnixMilli()) + `)))`
 			selected := `SELECT n.operation_id FROM main.native_tool_operations n WHERE ` + strings.ReplaceAll(nativeWhere, "r.", "n.")
 			hiddenOwner := `SELECT n.operation_id FROM main.native_tool_operations n WHERE ` + strings.ReplaceAll(hidden("r.capture_kind", "r.capture_id"), "r.", "n.")
@@ -151,7 +151,7 @@ func (s *ObservationStore) certifyRecordingAuditClosure(ctx context.Context, con
 	}
 	// Select every destructible proof root before any source transaction deletes.
 	for _, source := range sources {
-		if !source.Current && source.Database.Revision == 2 {
+		if !source.Current && publishedNativeRevision(source.Database.Revision) {
 			_, err := s.certifyCleanupQuery(ctx, control, m, source, "attempt", func(mirror string) string {
 				hidden := cleanupHiddenScope(mirror, "r.capture_kind", "r.capture_id", "1", "1")
 				return `SELECT CASE WHEN r.claimed_at_unix_ms>0 AND r.authority_revision>0 THEN r.attempt_id END FROM main.native_tool_once r WHERE ` + hidden + ` AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='attempt' AND d.identity=r.attempt_id) LIMIT 256`
@@ -254,7 +254,7 @@ func (s *ObservationStore) purgeRecordingEvidence(ctx context.Context, control *
 					var n int64
 					switch root.table {
 					case "runtime_raw_evidence_envelopes":
-						n, err = deleteRawEvidenceCompatible(ctx, tx, source.Current || source.Database.Revision == 2, query)
+						n, err = deleteRawEvidenceCompatible(ctx, tx, source.Current || publishedNativeRevision(source.Database.Revision), query)
 					case "runtime_exchange_contents":
 						n, err = deleteExchangeContent(ctx, tx, query)
 					case "native_tool_contents":

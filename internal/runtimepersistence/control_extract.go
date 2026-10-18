@@ -50,14 +50,14 @@ func ExtractControl(ctx context.Context, in ControlExtraction) (proof ControlExt
 	}
 	defer tx.Rollback()
 	proof.Source, err = inspectSupportedSchema(ctx, tx)
-	if err != nil || (proof.Source.Revision != 1 && proof.Source.Revision != 2) {
+	if err != nil || (proof.Source.Revision != 1 && proof.Source.Revision != 2 && proof.Source.Revision != 3) {
 		return proof, errors.Join(ErrUnsupportedSchema, err)
 	}
 	if err = extractionStructure(ctx, tx); err != nil {
 		return proof, err
 	}
 	sourceProjections := append([]controlProjection(nil), controlProjections...)
-	if proof.Source.Revision == 2 {
+	if publishedNativeRevision(proof.Source.Revision) {
 		sourceProjections = append(sourceProjections, nativeControlProjections...)
 	}
 	for _, p := range sourceProjections {
@@ -76,7 +76,7 @@ func ExtractControl(ctx context.Context, in ControlExtraction) (proof ControlExt
 	if err = extractionIntegrity(ctx, tx, `PRAGMA main.integrity_check('runtime_usage_retention_caps')`); err != nil {
 		return proof, err
 	}
-	if proof.Source.Revision == 2 {
+	if publishedNativeRevision(proof.Source.Revision) {
 		if err = validateExtractionDeliveryConstants(ctx, tx); err != nil {
 			return proof, err
 		}
@@ -234,6 +234,9 @@ func extractionQuery(p controlProjection, revision int64, in ControlExtraction) 
 	}
 	columns := strings.Split(p.columns, ",")
 	for i, column := range columns {
+		if p.table == "provider_accounts" && column == "cyber_access_program" && (revision == 1 || revision == 2) {
+			columns[i] = "'standard'"
+		}
 		if (p.table == "capture_runs" || p.table == "manual_captures") && column == "observation" {
 			columns[i] = "'waiting_for_traffic'"
 		}

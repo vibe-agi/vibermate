@@ -27,6 +27,7 @@ func extractionFixture(t *testing.T, revision int) (string, *sql.DB) {
 	if revision == 2 {
 		ddl = schemaV2SQL
 	}
+ if revision == 3 {ddl=schemaRuntimeV3SQL}
 	nativeExec(t, db, ddl)
 	if _, err := db.Exec(`INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',?,'2026-10-03T00:00:00Z')`, revision); err != nil {
 		t.Fatal(err)

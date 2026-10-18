@@ -142,6 +142,13 @@ func (route CompiledRoutePlan) AllowsAccountHistory() bool { return route.allowA
 func (route CompiledRoutePlan) ResolveModelMapping(requested string) (string, bool) {
 	return route.modelPolicy.ResolveMapping(requested)
 }
+
+// ModelAliases returns a detached view of the exact route mappings used when
+// presenting provider model capabilities under client-facing identifiers.
+func (route CompiledRoutePlan) ModelAliases() []ModelMapping {
+	return slices.Clone(route.modelPolicy.Mappings)
+}
+
 func (route CompiledRoutePlan) WireProfile() wireprofile.CompiledUpstreamWireProfile {
 	return route.wireProfile
 }

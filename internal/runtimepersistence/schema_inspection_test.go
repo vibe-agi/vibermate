@@ -76,7 +76,7 @@ func TestSchemaSwitchFrozenV2LayoutsAndTamper(t *testing.T) {
 
 func TestInspectSchemaObservesCommittedWALUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	shutdownTestStore(t, openTestStore(t, path))
+	createPublishedRuntime3InspectionFixture(t, path)
 	db := openSQLiteForTest(t, path)
 	if _, err := db.Exec("PRAGMA wal_autocheckpoint=0; UPDATE runtime_metadata SET schema_revision=99"); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestInspectSchemaObservesCommittedWALUnchanged(t *testing.T) {
 func TestInspectSchemaCommittedWALWithoutSHM(t *testing.T) {
 	root := t.TempDir()
 	original := filepath.Join(root, "original.db")
-	shutdownTestStore(t, openTestStore(t, original))
+	createPublishedRuntime3InspectionFixture(t, original)
 	db := openSQLiteForTest(t, original)
 	if _, err := db.Exec("PRAGMA wal_autocheckpoint=0; UPDATE runtime_metadata SET schema_revision=99"); err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestInspectSchemaSourceChangesAndTemporaryCleanup(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "runtime.db")
-			shutdownTestStore(t, openTestStore(t, path))
+			createPublishedRuntime3InspectionFixture(t, path)
 			if strings.HasPrefix(scenario, "wal_") && scenario != "wal_appears_after_read" {
 				db := openSQLiteForTest(t, path)
 				if _, err := db.Exec("PRAGMA wal_autocheckpoint=0; UPDATE runtime_metadata SET initialized_at='2026-10-03T01:00:00Z'"); err != nil {
@@ -249,7 +249,7 @@ func TestSchemaInspectionEmbeddedSQLiteVersion(t *testing.T) {
 }
 
 func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
-	for _, scenario := range []string{"absent", "zero", "empty", "v1", "v2", "foreign", "foreign_reserved_prefix", "forged_revision2", "revision99", "missing_table", "missing_index", "forged_metadata", "extra_table", "hidden_extra_table"} {
+	for _, scenario := range []string{"absent", "zero", "empty", "v1", "v2", "v3", "foreign", "foreign_reserved_prefix", "forged_revision2", "revision99", "missing_table", "missing_index", "forged_metadata", "extra_table", "hidden_extra_table"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "runtime.db")
@@ -260,7 +260,7 @@ func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
 			}
 			if scenario != "absent" && scenario != "zero" {
 				if scenario != "empty" && scenario != "foreign" && scenario != "foreign_reserved_prefix" && scenario != "forged_metadata" && scenario != "v1" && scenario != "v2" && scenario != "forged_revision2" {
-					shutdownTestStore(t, openTestStore(t, path))
+					createPublishedRuntime3InspectionFixture(t, path)
 				}
 				db := openSQLiteForTest(t, path)
 				statement := "PRAGMA user_version"
@@ -323,6 +323,10 @@ func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
 				if err != nil || state.Revision != 2 {
 					t.Fatalf("actual v2 = %+v %v", state, err)
 				}
+			case "v3":
+				if err != nil || state.Revision != 3 {
+					t.Fatalf("actual v3 = %+v %v", state, err)
+				}
 			default:
 				if !errors.Is(err, ErrUnsupportedSchema) {
 					t.Fatalf("malformed schema accepted: %v", err)
@@ -338,5 +342,15 @@ func TestInspectSchemaReadOnlyAndFailClosed(t *testing.T) {
 				t.Fatal("schema inspection modified source")
 			}
 		})
+	}
+}
+
+func createPublishedRuntime3InspectionFixture(t *testing.T, path string) {
+	t.Helper()
+	db := openSQLiteForTest(t, path)
+	nativeExec(t, db, schemaRuntimeV3SQL)
+	nativeExec(t, db, `INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',3,'2026-10-03T00:00:00Z')`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

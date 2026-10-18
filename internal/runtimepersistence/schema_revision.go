@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// schema.sql is the current bootstrap, identified by an integer revision.
+// schema.sql is the unreleased combined repository test adapter bootstrap.
+// Production role bootstraps and published monolithic formats are separate.
 // Older supported schemas are frozen separately for read-only inspection and
 // private rollback validation and verified transactional upgrades.
 // Any bootstrap change requires its corresponding revision and upgrade review.
@@ -25,6 +26,12 @@ var schemaV2SQL string
 
 //go:embed migrations/001_to_002.sql
 var migration001To002SQL string
+
+//go:embed schema/runtime_v3.sql
+var schemaRuntimeV3SQL string
+
+//go:embed migrations/002_to_003.sql
+var migration002To003SQL string
 
 const (
 	// schemaIdentity marks a SQLite file as a ViberMate Runtime database.
@@ -114,3 +121,7 @@ func readSchemaRevision(ctx context.Context, database schemaQuerier) (int64, err
 	}
 	return revision, nil
 }
+
+// Native history/authority has exactly the same published generation in runtime2 and runtime3.
+// Callers must first establish the monolithic runtime role.
+func publishedNativeRevision(revision int64) bool { return revision == 2 || revision == 3 }

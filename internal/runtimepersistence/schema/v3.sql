@@ -404,6 +404,7 @@ CREATE TABLE "provider_accounts"(
   note_revision INTEGER NOT NULL DEFAULT 0 CHECK(note_revision BETWEEN 0 AND 9223372036854775807),
   settings_revision INTEGER NOT NULL CHECK(settings_revision BETWEEN 1 AND 9223372036854775807),
   egress_profile_json TEXT NOT NULL CHECK(json_valid(egress_profile_json) AND length(CAST(egress_profile_json AS BLOB))<=69632),
+  cyber_access_program TEXT NOT NULL DEFAULT 'standard' CHECK(cyber_access_program IN ('standard','daybreak_blue','daybreak_red')),
   automatic_refresh INTEGER NOT NULL CHECK(automatic_refresh IN (0,1)),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),

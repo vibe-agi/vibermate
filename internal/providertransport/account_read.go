@@ -14,7 +14,8 @@ import (
 )
 
 // AccountReadRequest freezes one declared operation and an already authorized
-// short-lived credential. It cannot carry client headers, bodies or URLs.
+// short-lived credential. Only the operation's closed query is carried from
+// the client, never its headers, body or destination URL.
 type AccountReadRequest struct {
 	read       upstreamservice.Read
 	credential providerauth.Lease
@@ -29,12 +30,16 @@ type capturedAccountRead struct {
 	operationID      string
 }
 
-func NewCapturedAccountRead(plan environment.RequestPlan, credential providerauth.Lease, connectionID, operationID string, stamps ...recording.Stamp) (AccountReadRequest, error) {
+func NewCapturedAccountRead(plan environment.RequestPlan, credential providerauth.Lease, connectionID, operationID, rawQuery string, stamps ...recording.Stamp) (AccountReadRequest, error) {
 	route, selected, err := plan.AccountReadTarget()
 	if err != nil {
 		return AccountReadRequest{}, err
 	}
 	read, err := upstreamservice.ResolveRead(route.ProviderTarget().Origin, plan.Operation().ID().String())
+	if err != nil {
+		return AccountReadRequest{}, err
+	}
+	read, err = read.WithRawQuery(rawQuery)
 	if err != nil {
 		return AccountReadRequest{}, err
 	}
@@ -85,7 +90,7 @@ func (client *Client) ReadAccount(ctx context.Context, request AccountReadReques
 	spec := runtimeFetchSpec{
 		purpose: egressaudit.PurposeUpstreamAccountRead, targetRef: request.targetRef,
 		target: target, relativePath: request.read.Path(), credential: request.credential,
-		captured: request.captured,
+		captured: request.captured, rawQuery: request.read.RawQuery(), modelCatalog: request.read.IsModelDirectory(),
 	}
 	if request.captured != nil {
 		spec.purpose = egressaudit.PurposeRouteOperation
