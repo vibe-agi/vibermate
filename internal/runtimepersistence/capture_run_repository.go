@@ -250,6 +250,7 @@ func (repository *captureRunRepository) AuthorizeProxy(
 	}
 	// Authentication depends only on current control facts. Traffic display is
 	// optional evidence published by the admitted connection/exchange producer.
+	record.RecordingScope = recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, Fence: original}
 	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, 0, now, original)
 	return record, nil
 }

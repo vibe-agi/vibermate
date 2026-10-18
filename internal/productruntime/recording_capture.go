@@ -7,6 +7,9 @@ import (
 func (r *observationRecorder) ObserveCapture(stamp recording.Stamp, v recording.CaptureObservation) (result recording.OfferResult) {
 	const charge = 8192 // item, inline stamp, detached scope and bounded scalar SQL workspace
 	defer func() { r.budget.RecordOffer(recording.Capture, result, 0) }()
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
+	}
 	if !stamp.Current() {
 		return recording.DroppedStale
 	}

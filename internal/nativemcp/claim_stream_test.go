@@ -236,7 +236,7 @@ func TestNativeSentCallbackFailureDrainsAndReachesRetirement(t *testing.T) {
 func testNativeSentCallbackRetirementOrder(t *testing.T, parentFirst bool) {
 	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 	e := f.executor.(*executor)
-	observer := &callbackRetirementCallObserver{Repository: e.dependencies.Store}
+	observer := &callbackRetirementCallObserver{Repository: e.dependencies.Store.(nativetool.Repository)}
 	e.dependencies.Store = observer
 	f.handshake(t)
 	f.transport.handler = func(r *http.Request, _ []byte) (*http.Response, error) {
@@ -358,7 +358,7 @@ func TestNativeCallbackRetirementProofMatchesHeldReplyOnly(t *testing.T) {
 	verifyEntered, verifyRelease := make(chan struct{}), make(chan struct{})
 	startRelease := make(chan struct{})
 	close(startRelease)
-	held := &heldFreshGETStart{Repository: e.dependencies.Store, target: child.id, started: make(chan nativetool.StartReceipt, 1), release: startRelease, verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
+	held := &heldFreshGETStart{Repository: e.dependencies.Store.(nativetool.Repository), target: child.id, started: make(chan nativetool.StartReceipt, 1), release: startRelease, verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
 	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[child.id] != nil }
 	held.beforeVerify = func() { close(verifyEntered); <-verifyRelease }
 	e.dependencies.Store = held

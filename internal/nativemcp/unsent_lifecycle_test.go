@@ -19,7 +19,7 @@ import (
 func holdUnsentLifecycle(t *testing.T, f *nativeFixture, request CapturedRequest, beforeStart ...func()) (*heldFreshGETStart, func() Terminal) {
 	t.Helper()
 	e := f.executor.(*executor)
-	held := &heldFreshGETStart{Repository: e.dependencies.Store, target: request.id, started: make(chan nativetool.StartReceipt, 1), release: make(chan struct{}), verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
+	held := &heldFreshGETStart{Repository: e.dependencies.Store.(nativetool.Repository), target: request.id, started: make(chan nativetool.StartReceipt, 1), release: make(chan struct{}), verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
 	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[request.id] != nil }
 	e.dependencies.Store = held
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -16,6 +16,72 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   test(
+    'manual rotation rejects a late optional authorization summary',
+    () async {
+      final api = _OverviewApi();
+      final controller = await _overviewController(api);
+      addTearDown(controller.dispose);
+      final base = controller.data!;
+      DashboardData withRevision(int revision) => DashboardData(
+        status: base.status,
+        captures: [
+          CaptureRecord(
+            key: 'manual_capture:rotation',
+            id: 'rotation',
+            kind: 'manual_capture',
+            displayName: 'Rotation',
+            state: 'active',
+            observation: 'waiting_for_traffic',
+            createdAt: DateTime.utc(2026, 1, 1),
+            updatedAt: DateTime.utc(2026, 1, 1),
+            manualCapture: ManualCaptureSummary(
+              clientClass: 'cli',
+              lifetime: 'until_revoked',
+              credentialRevision: revision,
+            ),
+          ),
+        ],
+        captureNextCursor: null,
+        environments: base.environments,
+        endpoints: base.endpoints,
+        accounts: base.accounts,
+      );
+      controller.data = withRevision(1);
+      controller.selectedCaptureKey = 'manual_capture:rotation';
+      api.gate = Completer<ExchangeSummary>();
+      const scope = ActivitySummaryScope(manualCaptureId: 'rotation');
+      final pending = controller.loadActivitySummary(scope);
+      controller.data = withRevision(2);
+      final rejected = expectLater(
+        pending,
+        throwsA(isA<ControlContractException>()),
+      );
+      api.gate!.complete(_authorizationSummary(scope, revision: 1));
+      await rejected;
+    },
+  );
+  testWidgets(
+    'Capture authorization facts render with zero retained requests',
+    (tester) async {
+      final api = _OverviewApi(retainBodies: false)..authorizationOnly = true;
+      final controller = await _overviewController(api);
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(overview(controller, AppLanguage.english));
+      await tester.pumpAndSettle();
+      expect(find.text('0 requests'), findsOneWidget);
+      expect(
+        find.byKey(const Key('capture-authorization-observation')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('does not establish request or model success'),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  test(
     'summary absent bodies skips conversations directory enrichment',
     () async {
       final api = _OverviewApi(retainBodies: false);
@@ -586,8 +652,10 @@ final class _OverviewApi implements ControlApi {
   int conversationLoads = 0;
   Completer<ExchangeSummary>? gate;
   bool usageFails = false, summaryFails = false;
+  bool authorizationOnly = false;
 
   ExchangeSummary summary(ActivitySummaryScope scope) {
+    if (authorizationOnly) return _authorizationSummary(scope);
     final factor = scope.sessionId.isEmpty ? 1 : 2;
     final launch =
         scope.captureRunId.isNotEmpty || scope.manualCaptureId.isNotEmpty;
@@ -695,3 +763,34 @@ final class _OverviewApi implements ControlApi {
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
 }
+
+ExchangeSummary _authorizationSummary(
+  ActivitySummaryScope scope, {
+  int revision = 0,
+}) => ExchangeSummary(
+  scope: scope,
+  generatedAt: DateTime.utc(2026, 10, 18),
+  requests: 0,
+  succeeded: 0,
+  failed: 0,
+  canceled: 0,
+  pending: 0,
+  firstObservedAt: null,
+  lastObservedAt: null,
+  failures: const {},
+  otherFailures: 0,
+  contentBodiesAvailable: false,
+  captureObservation: CaptureObservationSummary(
+    captureKind: scope.manualCaptureId.isEmpty
+        ? 'managed_run'
+        : 'manual_capture',
+    captureId: scope.manualCaptureId.isEmpty
+        ? scope.captureRunId
+        : scope.manualCaptureId,
+    archiveEpoch: 1,
+    captureGeneration: 1,
+    credentialRevision: revision,
+    firstObservedAt: DateTime.utc(2026, 10, 17),
+    lastObservedAt: null,
+  ),
+);

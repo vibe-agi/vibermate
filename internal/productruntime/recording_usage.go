@@ -15,12 +15,12 @@ import (
 // This wrapper publishes only successful required-setting commits. It does not
 // add a query to any observation producer.
 type recordingUsageRepository struct {
-	runtimeusage.Repository
+	runtimeusage.PolicyRepository
 	recorder *observationRecorder
 }
 
 func (r recordingUsageRepository) SetUsagePolicy(ctx context.Context, p runtimeusage.CollectionPolicy, now time.Time) (runtimeusage.CollectionPolicy, error) {
-	updated, err := r.Repository.SetUsagePolicy(ctx, p, now)
+	updated, err := r.PolicyRepository.SetUsagePolicy(ctx, p, now)
 	if err == nil {
 		r.recorder.publishUsagePolicy(updated)
 	}

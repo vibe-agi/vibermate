@@ -42,6 +42,63 @@ Map<String, Object?> nativeApprovalFixture() => {
   },
 };
 void main() {
+  test(
+    'native preview and decision remain usable while optional summary HTTP waits',
+    () async {
+      final entered = Completer<void>();
+      final history = Completer<http.Response>();
+      var decisions = 0;
+      final api = await nativeApi((request) async {
+        if (request.url.path.endsWith('/activities/summary')) {
+          entered.complete();
+          return history.future;
+        }
+        if (request.method == 'POST') {
+          decisions++;
+          return nativeResponse(nativeResolved('allowed'));
+        }
+        if (request.url.path.endsWith('/approvals')) {
+          return nativeResponse({
+            'items': [nativeApprovalFixture()],
+            'nextCursor': '',
+          });
+        }
+        return nativeResponse(nativeApprovalFixture());
+      });
+      addTearDown(api.close);
+      final controller = nativeController(api);
+      addTearDown(controller.dispose);
+      final pendingHistory = controller.loadActivitySummary(
+        const ActivitySummaryScope(manualCaptureId: 'synthetic'),
+      );
+      final rejectedHistory = expectLater(
+        pendingHistory,
+        throwsA(isA<ControlProblem>()),
+      );
+      await entered.future;
+      controller.setNativeApprovalsVisible(true);
+      while (controller.nativeApprovalsLoading) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final approval = controller.nativeApprovals.single;
+      expect(approval.canAllow, isTrue);
+      await controller.decideNativeApproval(approval, NativeDecision.allowOnce);
+      expect(decisions, 1);
+      expect(controller.nativeApprovalError, isNull);
+      history.complete(
+        http.Response(
+          jsonEncode({
+            'reasonCode': 'inspection_unavailable',
+            'messageKey': 'error.inspection_unavailable',
+          }),
+          503,
+          headers: {'content-type': 'application/json'},
+        ),
+      );
+      await rejectedHistory;
+    },
+  );
+
   test('pending traversal restarts to discover later earlier tuples', () async {
     var pages = 0;
     final cursors = <String?>[];

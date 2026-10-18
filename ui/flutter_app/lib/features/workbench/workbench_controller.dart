@@ -1351,8 +1351,27 @@ final class WorkbenchController extends ChangeNotifier
         : ActivitySummaryScope(captureRunId: capture.captureRunId!);
   }
 
-  Future<ExchangeSummary> loadActivitySummary(ActivitySummaryScope scope) =>
-      _inspectionRead(() => _api.activitySummary(scope));
+  Future<ExchangeSummary> loadActivitySummary(
+    ActivitySummaryScope scope,
+  ) async {
+    final capture = selectedCapture;
+    final revision = capture?.manualCapture?.credentialRevision;
+    final bound =
+        capture != null &&
+        capture.isManual &&
+        scope.manualCaptureId == capture.id;
+    final summary = await _inspectionRead(() => _api.activitySummary(scope));
+    if (bound &&
+        (selectedCaptureKey != capture.key ||
+            selectedCapture?.manualCapture?.credentialRevision != revision ||
+            summary.captureObservation != null &&
+                summary.captureObservation!.credentialRevision != revision)) {
+      throw const ControlContractException(
+        'Capture authorization summary is no longer current',
+      );
+    }
+    return summary;
+  }
 
   Future<RuntimeUsageReport> loadCaptureUsage(
     ActivitySummaryScope scope,
@@ -1678,11 +1697,12 @@ final class WorkbenchController extends ChangeNotifier
       loading = false;
       _startProviderAccountQuotaPolling();
       notifyListeners();
-      if (selectedCapture != null) await _loadCaptureDetail(selectedCapture!);
+      if (selectedCapture != null) {
+        unawaited(_loadCaptureDetail(selectedCapture!));
+      }
+      await refreshPendingApprovals();
       if (section == WorkbenchSection.network) {
-        await _refreshNetwork();
-      } else {
-        await refreshPendingApprovals();
+        unawaited(_refreshNetwork());
       }
       if (section == WorkbenchSection.settings ||
           section == WorkbenchSection.usage) {
@@ -3094,7 +3114,7 @@ final class WorkbenchController extends ChangeNotifier
     ApprovalChoice choice,
   ) async {
     final current = networkData;
-    if (current == null || networkMutating) return false;
+    if (networkMutating) return false;
     networkMutating = true;
     _clearNetworkError();
     networkNotice = null;
@@ -3105,14 +3125,16 @@ final class WorkbenchController extends ChangeNotifier
         choice: choice,
       );
       if (_disposed) return false;
-      networkData = NetworkData(
-        approvals: current.approvals
-            .where((candidate) => candidate.id != resolved.id)
-            .toList(growable: false),
-        connections: current.connections,
-        egressAttempts: current.egressAttempts,
-        rules: current.rules,
-      );
+      if (current != null) {
+        networkData = NetworkData(
+          approvals: current.approvals
+              .where((candidate) => candidate.id != resolved.id)
+              .toList(growable: false),
+          connections: current.connections,
+          egressAttempts: current.egressAttempts,
+          rules: current.rules,
+        );
+      }
       pendingApprovals = pendingApprovals
           ?.where((candidate) => candidate.id != resolved.id)
           .toList(growable: false);
@@ -4294,7 +4316,9 @@ final class WorkbenchController extends ChangeNotifier
         // must not turn a confirmed assignment into an unassigned run.
         if (!_disposed &&
             generation == _selectionGeneration &&
-            selectedCaptureKey == capture.key) {
+            selectedCaptureKey == capture.key &&
+            selectedCapture?.manualCapture?.credentialRevision ==
+                capture.manualCapture?.credentialRevision) {
           selectedAssignment = assignment;
           selectedCaptureLaunchIncomplete = assignment == null;
         }
@@ -4315,7 +4339,9 @@ final class WorkbenchController extends ChangeNotifier
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       final assignment = values[0] as CaptureAssignment?;
@@ -4350,7 +4376,9 @@ final class WorkbenchController extends ChangeNotifier
       );
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       selectedCaptureConversations = conversationPage;
@@ -4399,7 +4427,9 @@ final class WorkbenchController extends ChangeNotifier
             );
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       final retained =
@@ -4457,14 +4487,13 @@ final class WorkbenchController extends ChangeNotifier
     try {
       return await _api.captureAssignment(capture.key);
     } on ControlProblem catch (error) {
-      // A failed pre-launch assignment in older runtimes left a finished run
-      // with no child or traffic. Other missing assignments remain errors.
+      // Older pre-launch failures can leave a finished run without a child
+      // record or assignment. Recording placeholders are not traffic proof.
       if (error.status == 404 &&
           error.reasonCode == 'capture_assignment_not_found' &&
           !capture.isManual &&
           !capture.running &&
-          capture.managedRun?.processId == null &&
-          capture.observation == 'waiting_for_traffic') {
+          capture.managedRun?.processId == null) {
         return null;
       }
       rethrow;
@@ -4928,6 +4957,7 @@ final class WorkbenchController extends ChangeNotifier
         left.storage == right.storage &&
         left.storageFailure == right.storageFailure &&
         left.recordingFailure == right.recordingFailure &&
+        left.recording == right.recording &&
         left.environmentProjection == right.environmentProjection &&
         listEquals(
           left.unavailableEnvironments,

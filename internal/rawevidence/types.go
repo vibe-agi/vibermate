@@ -167,6 +167,7 @@ func (frame Frame) validate(bodyBytes int) error {
 // Context carries only frozen authority references. Raw message content belongs
 // to Payload, and credential header values are removed before a Payload exists.
 type Context struct {
+	ObservationStamp         recording.Stamp `json:"-"`
 	ScopeKind                ScopeKind
 	ScopeID                  string
 	ExchangeID               string

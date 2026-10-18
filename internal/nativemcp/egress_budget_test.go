@@ -133,11 +133,11 @@ func heldEffectiveBudget(t *testing.T, name string, cancelHeld bool, sseClose ..
 	defer cancel()
 	var receiptObserver *effectiveReceiptObserver
 	if len(sseClose) > 0 {
-		receiptObserver = &effectiveReceiptObserver{Repository: e.dependencies.Store, target: request.id, receipt: make(chan nativetool.StartReceipt, 1)}
+		receiptObserver = &effectiveReceiptObserver{Repository: e.dependencies.Store.(nativetool.Repository), target: request.id, receipt: make(chan nativetool.StartReceipt, 1)}
 		e.dependencies.Store = receiptObserver
 	}
 	if len(sseClose) > 0 && sseClose[0] == "cancel-entered" {
-		e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store, target: request.id, after: func() {
+		e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store.(nativetool.Repository), target: request.id, after: func() {
 			cancel()
 			select {
 			case <-body.entered:
@@ -290,7 +290,7 @@ func retainedParentEffectiveBudget(t *testing.T, name string) int64 {
 		t.Fatal("real observed stream/parent missing")
 	}
 	real := e.dependencies.Store
-	e.dependencies.Store = &effectiveParentReadFault{Repository: real, parent: get.id}
+	e.dependencies.Store = &effectiveParentReadFault{Repository: real.(nativetool.Repository), parent: get.id}
 	// Actual Store retirement succeeds; only its subsequent projection read
 	// fails. The existing module parent still retains the immutable binding.
 	e.retireStream(selectedSession, stream)

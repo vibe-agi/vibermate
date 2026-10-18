@@ -5,6 +5,8 @@ package desktophost_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	_ "modernc.org/sqlite"
 )
@@ -63,9 +66,17 @@ BEGIN SELECT RAISE(ABORT,'synthetic usage failure'); END`, 0},
 			if _, err := usage.SetUsagePolicy(context.Background(), policy, time.Now().UTC()); err != nil {
 				t.Fatal(err)
 			}
-			// Inject a storage-boundary failure only for the selected recording. All
-			// assertions below use public Runtime reads, never private SQLite contents.
-			databaseURL := url.URL{Scheme: "file", Path: filepath.Join(dataDirectory, "runtime.db"), RawQuery: "mode=rw"}
+			// Fault only the actual initialized optional owner. Public inspection
+			// remains unavailable without Task5's complete mirror; direct
+			// synthetic-role SQL below proves eventual independent persistence.
+			readyDeadline := time.Now().Add(5 * time.Second)
+			for host.Runtime().RawEvidenceStatistics().WriterID == "" && time.Now().Before(readyDeadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if host.Runtime().RawEvidenceStatistics().WriterID == "" {
+				t.Fatal("optional owner not initialized")
+			}
+			databaseURL := url.URL{Scheme: "file", Path: filepath.Join(dataDirectory, "observations.db"), RawQuery: "mode=rw"}
 			faults, err := sql.Open("sqlite", databaseURL.String())
 			if err != nil {
 				t.Fatal(err)
@@ -84,36 +95,87 @@ BEGIN SELECT RAISE(ABORT,'synthetic usage failure'); END`, 0},
 				status.RecordingFailure == nil || status.RecordingFailure.Operation != test.stage {
 				t.Fatalf("recording failure lost its warning or stopped forwarding: %+v", status)
 			}
+
 			assertCalls := func(want int) {
 				t.Helper()
-				now := time.Now().UTC()
-				period, err := runtimeusage.NewQuery(now.AddDate(0, 0, -1).Format("2006-01-02"), now.AddDate(0, 0, 1).Format("2006-01-02"), "UTC")
-				if err != nil {
-					t.Fatal(err)
-				}
-				calls := 0
-				_, err = host.Runtime().UsageRepository().ScanUsage(context.Background(), runtimeusage.AggregationQuery{Period: period, Dimension: "account", Limit: 50}, "", now, func(bucket runtimeusage.UsageBucket) error {
-					if bucket.Status != activity.StatusSucceeded || bucket.GroupID != string(account) ||
-						bucket.Model != "claude-test" || !bucket.Usage.InputUncached.Known || bucket.Usage.InputUncached.Tokens != 4 ||
-						!bucket.Usage.Output.Known || bucket.Usage.Output.Tokens != 2 {
-						t.Errorf("terminal usage lost frozen attribution or declared tokens: %+v", bucket)
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					rows, err := faults.Query(`SELECT observation_json FROM runtime_usage_observations ORDER BY exchange_id LIMIT 20`)
+					if err != nil {
+						t.Fatal(err)
 					}
-					calls += bucket.Calls
-					return nil
-				})
-				if err != nil || calls != want {
-					t.Fatalf("recorded usage calls = %d, want %d: %v", calls, want, err)
+					calls := 0
+					for rows.Next() {
+						var encoded string
+						if err = rows.Scan(&encoded); err != nil {
+							rows.Close()
+							t.Fatal(err)
+						}
+						var observation runtimeusage.Observation
+						if err = json.Unmarshal([]byte(encoded), &observation); err != nil {
+							rows.Close()
+							t.Fatal(err)
+						}
+						if observation.Status != activity.StatusSucceeded || observation.AccountID != string(account) || observation.UpstreamModel != "claude-test" || !observation.Usage.InputUncached.Known || observation.Usage.InputUncached.Tokens != 4 || !observation.Usage.Output.Known || observation.Usage.Output.Tokens != 2 {
+							rows.Close()
+							t.Fatalf("terminal usage lost attribution/tokens: %+v", observation)
+						}
+						calls++
+					}
+					if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+						t.Fatal(err)
+					}
+					if calls == want {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("eventual optional usage=%d want=%d", calls, want)
+					}
+					time.Sleep(time.Millisecond)
 				}
 			}
+			assertEvidence := func() {
+				t.Helper()
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					var subject, status, actualAccount, route string
+					var revision, epoch int64
+					err := faults.QueryRow(`SELECT subject_id,status,account_id,account_revision,credential_epoch,route_id FROM runtime_activities WHERE kind='exchange.completed' AND environment_id=? ORDER BY sequence DESC LIMIT 1`, environment.String()).Scan(&subject, &status, &actualAccount, &revision, &epoch, &route)
+					if errors.Is(err, sql.ErrNoRows) && time.Now().Before(deadline) {
+						time.Sleep(time.Millisecond)
+						continue
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if status != "succeeded" || actualAccount != account.String() || revision != 1 || epoch != 1 || route != "route.anthropic" {
+						t.Fatal("independent Activity lost frozen execution identity")
+					}
+					var outcome, origin string
+					var bytesOut, bytesIn int64
+					err = faults.QueryRow(`SELECT outcome,target_origin,bytes_out,bytes_in FROM runtime_egress_attempts WHERE parent_exchange_id=? AND purpose='provider_attempt'`, subject).Scan(&outcome, &origin, &bytesOut, &bytesIn)
+					if err == nil && outcome == "completed" && origin != "https://api.anthropic.com" && bytesOut > 0 && bytesIn > 0 {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("independent Egress terminal missing", err, outcome, origin, bytesOut, bytesIn)
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+
 			assertCalls(test.usageCalls)
+			if _, err := host.Runtime().Activities().ListExchanges(context.Background(), activity.PageRequest{Limit: 1}); !errors.Is(err, recording.ErrInspectionUnavailable) {
+				t.Fatalf("missing mirror was not explicit: %v", err)
+			}
 			if test.stage != "activity_terminal" {
-				assertManagedEvidence(t, host, environment, account)
+				assertEvidence()
 			}
 			if _, err := faults.Exec(`DROP TRIGGER reject_recording`); err != nil {
 				t.Fatal(err)
 			}
 			runManagedChild(t, paths, environment, false)
-			assertManagedEvidence(t, host, environment, account)
+			assertEvidence()
 			assertCalls(test.usageCalls + 1)
 			shutdownHost(t, host)
 			host, _ = startManagedHost(t, paths, dataDirectory, factory, catalog)

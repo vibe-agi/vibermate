@@ -127,7 +127,7 @@ func (manager *Manager) observe(record Record) {
 	if manager.recording.Recorder == nil || manager.recording.Scopes == nil {
 		return
 	}
-	stamp := manager.recording.Scopes.ScopeStamp(record.Scope.Capture)
+	stamp := recording.StampOriginal(manager.recording.Scopes, record.Scope)
 	if stamp.Fence() != record.Scope.Fence || !stamp.MatchesCapture(record.Scope.Capture) {
 		return
 	}

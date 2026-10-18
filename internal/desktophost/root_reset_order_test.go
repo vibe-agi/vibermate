@@ -8,10 +8,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/hostsecret"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 func TestRootResetIntentIsReadOnlyAfterGenerationOwnership(t *testing.T) {
@@ -28,16 +32,33 @@ func TestRootResetIntentIsReadOnlyAfterGenerationOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	markerPath := filepath.Join(dataDirectory, "root-reset-request.json")
-	marker := []byte(`{"schema":"invalid"}`)
-	if err := os.WriteFile(markerPath, marker, 0o600); err != nil {
+
+	factory, err := hostsecret.NewServerFileFactory(dataDirectory)
+	if err != nil {
 		t.Fatal(err)
 	}
-	options := DefaultOptions(hostPaths, productruntime.Options{
-		Paths:          runtimePaths,
-		Host:           hostcontract.Desktop(),
-		SecurityRandom: rand.Reader,
-	})
+	secrets, err := factory.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeOptions := productruntime.Options{Paths: runtimePaths, Host: hostcontract.Desktop(), SecurityRandom: rand.Reader, Secrets: secrets, OfflineHold: gate, Approvals: toolapproval.DefaultConfig(), ExchangeHold: exchange.DefaultHoldPolicy(), Clock: productruntime.SystemClock{}, InstanceIDs: productruntime.NewCryptographicInstanceIDSource(), Lifecycle: productruntime.DefaultLifecycleOptions()}
+	initial, err := productruntime.Start(context.Background(), runtimeOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = initial.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dataDirectory, "root-reset-request.json")
+	marker := []byte(`{"schema":"invalid"}`)
+	if err = os.WriteFile(markerPath, marker, 0600); err != nil {
+		t.Fatal(err)
+	}
+	options := DefaultOptions(hostPaths, runtimeOptions)
 
 	owner, err := instanceguard.Acquire(hostPaths.LockPath())
 	if err != nil {

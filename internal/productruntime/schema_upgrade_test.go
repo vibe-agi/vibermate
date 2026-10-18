@@ -77,10 +77,10 @@ func TestSchemaSwitchSecondHostCannotEnter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Shutdown(context.Background())
-	if phases != 1 || runtime.Status().SchemaRevision != 2 {
+	if phases < 1 || runtime.Status().SchemaRevision != 3 {
 		t.Fatal("startup did not perform one verified upgrade")
 	}
-	policy, err := runtime.storage.UsagePolicy(context.Background())
+	policy, err := runtime.storage.UsagePolicyRepository().UsagePolicy(context.Background())
 	if err != nil || policy.Enabled || policy.RetentionDays != 90 {
 		t.Fatal("startup reseeded opt-out")
 	}

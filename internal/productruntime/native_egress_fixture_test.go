@@ -880,14 +880,25 @@ func (f *runtimeNativeEgressFixture) join(t *testing.T, call runtimeNativeCall) 
 func (f *runtimeNativeEgressFixture) audit(id nativetool.ID) (egressaudit.Record, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	page, e := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 2, ParentKind: egressaudit.ParentClientOperation, ParentID: id.String(), Purpose: egressaudit.PurposeClientToolService})
-	if e != nil {
-		return egressaudit.Record{}, e
+	// This send-entry proof reads the required physical delivery row. Optional
+	// audit pagination/settlement is never authority for transport or once use.
+	var attemptID, connectionID, target, policyID, ruleID, proxyID, payload, selection, outcome, errorClass string
+	var policyRevision, proxyRevision, defaultRevision uint64
+	var started, bytesOut, bytesIn int64
+	var completed sql.NullInt64
+	var known bool
+	err := f.db.QueryRowContext(ctx, `SELECT attempt_id,connection_id,payload_class,target_origin,policy_id,policy_revision,rule_id,proxy_id,proxy_revision,selection_source,default_revision,started_at_unix_ms,completed_at_unix_ms,outcome,error_class,bytes_out,bytes_in,byte_counts_known FROM native_tool_deliveries WHERE operation_id=?`, id.String()).Scan(&attemptID, &connectionID, &payload, &target, &policyID, &policyRevision, &ruleID, &proxyID, &proxyRevision, &selection, &defaultRevision, &started, &completed, &outcome, &errorClass, &bytesOut, &bytesIn, &known)
+	if err != nil {
+		return egressaudit.Record{}, err
 	}
-	if len(page.Items) != 1 {
-		return egressaudit.Record{}, fmt.Errorf("native audit %s count=%d", id, len(page.Items))
+	attempt, err := egressaudit.New(egressaudit.NewInput{ID: attemptID, ConnectionID: connectionID, Purpose: egressaudit.PurposeClientToolService, PayloadClass: egressaudit.PayloadClass(payload), Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: id.String()}, Caller: egressaudit.CallerCore, TargetOrigin: target, Decision: egressaudit.DecisionRef{PolicyID: policyID, PolicyRevision: policyRevision, Authority: egressaudit.AuthorityEnvironment, RuleID: ruleID, ProxyID: proxyID, ProxyRevision: proxyRevision, SelectionSource: egressprofile.SelectionSource(selection), DefaultRevision: defaultRevision}, StartedAt: time.UnixMilli(started).UTC()})
+	if err != nil {
+		return egressaudit.Record{}, err
 	}
-	return page.Items[0], nil
+	if completed.Valid {
+		attempt, err = attempt.Finish(egressaudit.TerminalInput{Outcome: egressaudit.Outcome(outcome), ErrorClass: errorClass, BytesOut: bytesOut, BytesIn: bytesIn, UnobservedByteCounts: !known, CompletedAt: time.UnixMilli(completed.Int64).UTC()})
+	}
+	return egressaudit.Record{Attempt: attempt}, err
 }
 func (f *runtimeNativeEgressFixture) checkAudit(record egressaudit.Record, id nativetool.ID, want runtimeNativeExpected, outcome, errorClass string) error {
 	a := record.Attempt
@@ -976,7 +987,7 @@ func (f *runtimeNativeEgressFixture) assertNoStart(t *testing.T, id nativetool.I
 	for _, q := range []struct {
 		query string
 		value *int
-	}{{`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, &once}, {`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?`, &audits}, {`SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND consumed_at_unix_ms IS NOT NULL`, &consumed}} {
+	}{{`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, &once}, {`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, &audits}, {`SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND consumed_at_unix_ms IS NOT NULL`, &consumed}} {
 		if e := f.db.QueryRow(q.query, id.String()).Scan(q.value); e != nil {
 			t.Fatal(e)
 		}
@@ -1065,7 +1076,7 @@ func (f *runtimeNativeEgressFixture) failureState(t *testing.T, id nativetool.ID
 	if err = f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_approvals WHERE operation_id=? AND consumed_at_unix_ms IS NOT NULL`, id.String()).Scan(&state.Consumed); err != nil {
 		t.Fatal(err)
 	}
-	if err = f.db.QueryRow(`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=? AND purpose='client_tool_service'`, id.String()).Scan(&state.Audits); err != nil {
+	if err = f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, id.String()).Scan(&state.Audits); err != nil {
 		t.Fatal(err)
 	}
 	wantConsumed := 1

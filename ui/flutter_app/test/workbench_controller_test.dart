@@ -18,6 +18,40 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   test(
+    'initial dashboard and pending approvals complete while optional detail waits',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _HeldInitialDetailApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      final initialized = controller.initialize();
+      await api.entered.future;
+      var completed = false;
+      initialized.then((_) {
+        completed = true;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(controller.data, isNotNull);
+      expect(controller.loading, isFalse);
+      expect(api.approvalReads, greaterThan(0));
+      expect(completed, isTrue);
+      final pending = controller.pendingApprovals!.first;
+      expect(
+        await controller.decideApproval(pending, pending.choices.first),
+        isTrue,
+      );
+      expect(api.decisions, 1);
+      api.release.complete();
+      await initialized;
+    },
+  );
+
+  test(
     'Activity inspection invalidation rejects a late detail response',
     () async {
       final delegate = PreviewControlApi();
@@ -2692,4 +2726,43 @@ final class _ActivityInspectionApi extends _UsageTrackingApi {
     String callId, {
     String? cursor,
   }) async => fail();
+}
+
+final class _HeldInitialDetailApi extends _UsageTrackingApi {
+  _HeldInitialDetailApi(super.delegate);
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  int approvalReads = 0;
+  int decisions = 0;
+  @override
+  Future<ApprovalRecord> decideApproval({
+    required ApprovalRecord approval,
+    required ApprovalChoice choice,
+  }) {
+    decisions += 1;
+    return delegate.decideApproval(approval: approval, choice: choice);
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+  }
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() {
+    approvalReads += 1;
+    return super.pendingApprovals();
+  }
 }

@@ -1,0 +1,465 @@
+package productruntime
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
+	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
+)
+
+// One fixed lifecycle owner retains every optional handle until real I/O has
+// returned. Worker queues and synchronous disclosure/repair share this owner.
+type recordingStorage struct {
+	provisioning        string
+	dataGuard           *instanceguard.Guard
+	publish             func(context.Context, string, string, *instanceguard.Guard) error
+	closeErr            error
+	unsafeMaintenance   atomic.Bool
+	paused              atomic.Bool
+	maintenanceRequests chan recordingMaintenanceRequest
+	visibility          recording.InspectionVisibility
+	mu                  sync.Mutex
+	current             atomic.Pointer[recordingSinks]
+	active              int
+	closing             bool
+	changed             chan struct{}
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	done                chan struct{}
+	recorder            *observationRecorder
+	catalog             *runtimepersistence.InspectionCatalog
+	tracker             *statusTracker
+	options             runtimepersistence.ObservationOptions
+	root                string
+	random              io.Reader
+	clock               Clock
+	open                func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error)
+	recover             func(context.Context, egressaudit.Repository, time.Time) error
+}
+type recordingSinks struct {
+	store    *runtimepersistence.ObservationStore
+	activity activityRuntime
+	content  exchangeContentRuntime
+	raw      rawEvidenceRuntime
+}
+type recordingProvision struct {
+	Schema      string `json:"schema"`
+	LayoutID    string `json:"layoutId"`
+	SourceID    string `json:"sourceId"`
+	Provisioned bool   `json:"provisioned"`
+}
+
+// The current source identity is a bounded deterministic function of the
+// already durable layout identity; the provision receipt records that choice.
+func recordingSourceID(layout runtimedata.StorageLayout) string {
+	digest := sha256.Sum256([]byte(layout.ID))
+	return "current-" + hex.EncodeToString(digest[:16])
+}
+func newRecordingStorage(owner context.Context, root string, layout runtimedata.StorageLayout, dataGuard *instanceguard.Guard, control recording.InspectionVisibility, q *observationRecorder, tracker *statusTracker, limits *exchangecontent.SourceLimits, random io.Reader, clock Clock, overrides runtimeBuildOverrides) (*recordingStorage, error) {
+	sources := make([]runtimepersistence.InspectionSource, 0, len(layout.Archives)+1)
+	for _, a := range layout.Archives {
+		sources = append(sources, runtimepersistence.InspectionSource{ID: a.ID, RelativePath: a.RelativeDirectory + "/runtime.db", Database: a.Database})
+	}
+	sources = append(sources, runtimepersistence.InspectionSource{ID: recordingSourceID(layout), RelativePath: layout.Observation.RelativePath, Database: runtimepersistence.SchemaState{Identity: layout.Observation.Identity, Revision: layout.Observation.Revision}, Current: true})
+	catalog, err := runtimepersistence.NewInspectionCatalog(runtimepersistence.InspectionCatalogOptions{Root: root, LayoutID: layout.ID, Sources: sources, Generation: 1})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(owner)
+	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), visibility: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
+		options: runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: recordingSourceID(layout), ContentLimits: limits, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout}}
+	if overrides.publishObservations != nil {
+		s.publish = overrides.publishObservations
+	}
+	if overrides.openObservations != nil {
+		s.open = overrides.openObservations
+	}
+	if overrides.recoverEgress != nil {
+		s.recover = overrides.recoverEgress
+	}
+	// These immutable facades never hold a control transaction or connection.
+	if q.connections == nil {
+		q.connections = s
+	}
+	if q.egress == nil {
+		q.egress = s
+	}
+	if q.acp == nil {
+		q.acp = s
+	}
+	if q.capture == nil {
+		q.capture = s
+	}
+	if q.nativeHistory == nil {
+		q.nativeHistory = s
+	}
+	if q.nativeContent == nil {
+		q.nativeContent = s
+	}
+	q.available = s.available
+	go s.run()
+	return s, nil
+}
+func (s *recordingStorage) available() bool { return s.current.Load() != nil && !s.paused.Load() }
+func (s *recordingStorage) acquire() (*recordingSinks, func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.current.Load()
+	if s.paused.Load() {
+		return nil, nil, recording.ErrObservationDiscarded
+	}
+	if s.closing || v == nil {
+		return nil, nil, recording.ErrInspectionUnavailable
+	}
+	s.active++
+	return v, func() { s.mu.Lock(); s.active--; close(s.changed); s.changed = make(chan struct{}); s.mu.Unlock() }, nil
+}
+func (s *recordingStorage) run() {
+	defer close(s.done)
+	// Recovery/open are optional and retry on this same fixed goroutine.
+	for s.ctx.Err() == nil {
+		sinks, err := s.initialize()
+		if err != nil {
+			s.tracker.recordingState(RecordingDegraded)
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-s.ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+			continue
+		}
+		s.mu.Lock()
+		if !s.closing {
+			s.current.Store(sinks)
+			s.tracker.recordingState(RecordingAvailable)
+		}
+		s.mu.Unlock()
+	work:
+		for {
+			select {
+			case <-s.ctx.Done():
+				break work
+			case request := <-s.maintenanceRequests:
+				s.maintain(sinks, request)
+			}
+		}
+		s.current.Store(nil)
+		// Stop both finite workers; an uncooperative sink stays owned here.
+		_ = s.recorder.Shutdown(context.Background())
+		s.closeErr = errors.Join(s.closeErr, sinks.raw.Shutdown(context.Background()))
+		s.mu.Lock()
+		for s.active != 0 {
+			changed := s.changed
+			s.mu.Unlock()
+			<-changed
+			s.mu.Lock()
+		}
+		s.mu.Unlock()
+		s.closeErr = errors.Join(s.closeErr, sinks.activity.Shutdown(context.Background()))
+		s.closeErr = errors.Join(s.closeErr, sinks.content.Shutdown(context.Background()))
+		s.closeErr = errors.Join(s.closeErr, sinks.store.Shutdown(context.Background()))
+		break
+	}
+	_ = s.recorder.Shutdown(context.Background())
+	// Catalog.Close cancels reads immediately, and retains leases until actual
+	// external credential/audit I/O returns, including cancellation-ignoring I/O.
+	s.closeErr = errors.Join(s.closeErr, s.catalog.Close(context.Background()))
+	if s.closeErr == nil {
+		s.tracker.recordingState(RecordingDisabled)
+	} else {
+		s.tracker.recordingState(RecordingDegraded)
+		s.tracker.recordingCleanupPending()
+	}
+}
+func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
+	if s.provisioning != "unprovisioned" && s.provisioning != "provisioned" {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	statePath := filepath.Join(s.root, "recording-state.json")
+	state := recordingProvision{Schema: "vibermate-recording-provision/v1", LayoutID: s.options.LayoutID, SourceID: s.options.ArchiveID}
+	data, err := readRecordingProvision(statePath)
+	if s.provisioning == "provisioned" && err != nil {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	if err == nil {
+		var persisted recordingProvision
+		var fields map[string]json.RawMessage
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if json.Unmarshal(data, &fields) != nil || len(fields) != 4 || decoder.Decode(&persisted) != nil || persisted.Schema != state.Schema || persisted.LayoutID != state.LayoutID || persisted.SourceID != state.SourceID {
+			return nil, recording.ErrInspectionUnavailable
+		}
+		if flag, ok := fields["provisioned"]; !ok || (string(flag) != "true" && string(flag) != "false") {
+			return nil, recording.ErrInspectionUnavailable
+		}
+		if s.provisioning == "provisioned" && !persisted.Provisioned {
+			return nil, recording.ErrInspectionUnavailable
+		}
+		state = persisted
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if info, e := os.Lstat(s.options.DatabasePath); e == nil && !info.Mode().IsRegular() {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	if state.Provisioned {
+		if info, e := os.Lstat(s.options.DatabasePath); e != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return nil, recording.ErrInspectionUnavailable
+		}
+	}
+	store, err := s.open(s.ctx, s.options)
+	if err != nil {
+		return nil, err
+	}
+	var raw rawEvidenceRuntime
+	defer func() {
+		if result != nil {
+			if raw != nil {
+				_ = raw.Shutdown(context.Background())
+			}
+			_ = store.Shutdown(context.Background())
+		}
+	}()
+	if err = s.recover(s.ctx, store.EgressAttemptRepository(), s.clock.Now().UTC()); err != nil {
+		return nil, err
+	}
+	raw, err = buildRawEvidence(rawEvidenceBuildRequest{ctx: s.ctx, budget: s.recorder.budget, repository: store.RawEvidenceRepository(), random: s.random, clock: s.clock, config: rawevidence.DefaultConfig()})
+	if err != nil {
+		return nil, err
+	}
+	activities, err := buildActivity(activityBuildRequest{repository: store.ActivityRepository(), clock: s.clock, random: s.random})
+	if err != nil {
+		return nil, err
+	}
+	content, err := buildExchangeContent(exchangeContentBuildRequest{ctx: s.ctx, repository: store.ExchangeContentRepository(), clock: s.clock, contentLimits: s.options.ContentLimits})
+	if err != nil {
+		_ = activities.Shutdown(context.Background())
+		return nil, err
+	}
+	state.Provisioned = true
+	if err = writeRecordingProvision(statePath, state); err != nil {
+		_ = activities.Shutdown(context.Background())
+		_ = content.Shutdown(context.Background())
+		return nil, err
+	}
+	if err = s.publish(s.ctx, s.root, s.options.LayoutID, s.dataGuard); err != nil {
+		_ = activities.Shutdown(context.Background())
+		_ = content.Shutdown(context.Background())
+		return nil, err
+	}
+	s.provisioning = "provisioned"
+	return &recordingSinks{store: store, raw: raw, activity: activities, content: content}, nil
+}
+func writeRecordingProvision(path string, state recordingProvision) error {
+	if info, err := os.Lstat(path); err == nil && (!info.Mode().IsRegular() || info.Mode().Perm() != 0600) || err != nil && !errors.Is(err, os.ErrNotExist) {
+		return recording.ErrInspectionUnavailable
+	}
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".recording-state-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err = errors.Join(f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err = os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+func (s *recordingStorage) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	s.closing = true
+	s.current.Store(nil)
+	s.mu.Unlock()
+	s.cancel()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = s.catalog.Close(canceled)
+	select {
+	case <-s.done:
+		return s.closeErr
+	case <-ctx.Done():
+		s.tracker.recordingCleanupPending()
+		return ctx.Err()
+	}
+}
+func (s *recordingStorage) PutConnection(ctx context.Context, scope recording.Scope, e connectionevent.Event) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.ConnectionEventRepository().(connectionevent.ScopedStore).PutConnection(ctx, scope, e)
+}
+func (s *recordingStorage) PutScopedAttempt(ctx context.Context, scope recording.Scope, a egressaudit.Attempt) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.EgressAttemptStore().(egressaudit.ScopedAttemptStore).PutScopedAttempt(ctx, scope, a)
+}
+func (s *recordingStorage) PutACP(ctx context.Context, a acpobservation.Record) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.PutACP(ctx, a)
+}
+func (s *recordingStorage) PutCaptureObservation(ctx context.Context, scope recording.Scope, a recording.CaptureObservation) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.PutCaptureObservation(ctx, scope, a)
+}
+func (s *recordingStorage) PutNativeHistory(ctx context.Context, a nativetool.RecordedHistory) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.PutNativeHistory(ctx, a)
+}
+func (s *recordingStorage) PutNativeContent(ctx context.Context, a nativetool.ContentObservation) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.PutNativeContent(ctx, a)
+}
+func (s *recordingStorage) PutCollectedUsage(ctx context.Context, a runtimeusage.CollectedObservation) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.PutCollectedUsage(ctx, a)
+}
+func (s *recordingStorage) AppendLocatedRevealAudit(ctx context.Context, a rawevidence.LocatedRevealAudit) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.AppendLocatedRevealAudit(ctx, a)
+}
+func (s *recordingStorage) PutScopedConversationIdentity(ctx context.Context, scope recording.Scope, id string, a agentconversation.ClientIdentity) error {
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer done()
+	return v.store.ConversationIdentityRepository().(activity.ScopedConversationIdentityWriter).PutScopedConversationIdentity(ctx, scope, id, a)
+}
+func (s *recordingStorage) GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error) {
+	return agentconversation.ClientIdentity{}, recording.ErrInspectionUnavailable
+}
+func (s *recordingStorage) PutConversationIdentity(context.Context, string, agentconversation.ClientIdentity) error {
+	return recording.ErrObservationDiscarded
+}
+
+// Physical cleanup/tombstone publication is Task5. Refusal is atomic and must
+// never claim empty, complete, or erased evidence during this checkpoint.
+func (s *recordingStorage) DeleteCapture(context.Context, string, string) (resourcedeletion.Released, error) {
+	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
+}
+func (s *recordingStorage) ClearEvidence(context.Context) (resourcedeletion.Released, error) {
+	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
+}
+
+func (s *recordingStorage) RepairConversation(ctx context.Context, repair activity.ConversationRepair) error {
+	if !repair.Root.Current || repair.Root.SourceID != s.options.ArchiveID {
+		return recording.ErrObservationDiscarded
+	}
+	if err := s.catalog.Check(repair.Root.Token.Sources); err != nil {
+		return err
+	}
+	if err := s.visibility.RecheckInspectionStamp(ctx, repair.Root.Token.Control); err != nil {
+		return err
+	}
+	v, done, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	err = v.store.RepairConversation(ctx, repair)
+	done()
+	if err != nil {
+		return err
+	}
+	if err = s.catalog.Check(repair.Root.Token.Sources); err != nil {
+		return err
+	}
+	return s.visibility.RecheckInspectionStamp(ctx, repair.Root.Token.Control)
+}
+
+func readRecordingProvision(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 4096 {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	b, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil || len(b) > 4096 {
+		return nil, recording.ErrInspectionUnavailable
+	}
+	return b, nil
+}
+
+type unavailableArchiveBarrier struct{}
+
+func (unavailableArchiveBarrier) BeginClear(context.Context) (evidencearchive.Release, error) {
+	return nil, recording.ErrInspectionUnavailable
+}

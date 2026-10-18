@@ -1031,7 +1031,7 @@ func (request ClientRequest) RawEvidenceContext() (rawevidence.Context, error) {
 		scopeKind = rawevidence.ScopeManualCapture
 		scopeID = manualCaptureID
 	}
-	context := rawevidence.Context{
+	context := rawevidence.Context{ObservationStamp: request.observationStamp,
 		ScopeKind:                scopeKind,
 		ScopeID:                  scopeID,
 		ExchangeID:               request.ExchangeID(),

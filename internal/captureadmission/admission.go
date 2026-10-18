@@ -6,6 +6,7 @@ package captureadmission
 import (
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -88,6 +89,7 @@ func (ProxyCredential) GoString() string {
 // connection. Optional identities stay private and are exposed through typed
 // accessors so a caller cannot confuse an absent identity with an empty one.
 type Admission struct {
+	recordingScope     recording.Scope
 	receipt            *retainedReceipt
 	kind               Kind
 	admissionRef       string
@@ -321,3 +323,6 @@ func validLabel(value string) bool {
 func (admission Admission) RuntimeUserID() (runtimeuser.UserID, bool) {
 	return admission.runtimeUserID, admission.runtimeUserID != ""
 }
+
+// RecordingScope is optional provenance selected by the authenticating control read.
+func (a Admission) RecordingScope() recording.Scope { return a.recordingScope }

@@ -172,7 +172,7 @@ func (r storageCutoverRunner) prepare(ctx context.Context, owned OwnedStorage, n
 		if err != nil {
 			return layout, err
 		}
-		receipt = roleCutoverReceipt{Schema: roleCutoverSchema, Phase: "preparing", CreatedAt: now.Format(time.RFC3339Nano), Source: state, Files: files, Layout: StorageLayout{ID: id, Control: DatabaseRole{"runtime.db", "vibermate-control", 3, true}, Observation: DatabaseRole{"observations.db", "vibermate-observations", 1, false}, Archives: []LegacyArchive{}}}
+		receipt = roleCutoverReceipt{Schema: roleCutoverSchema, Phase: "preparing", CreatedAt: now.Format(time.RFC3339Nano), Source: state, Files: files, Layout: StorageLayout{ObservationProvisioning: "unprovisioned", ID: id, Control: DatabaseRole{"runtime.db", "vibermate-control", 3, true}, Observation: DatabaseRole{"observations.db", "vibermate-observations", 1, false}, Archives: []LegacyArchive{}}}
 		if state.Revision != 0 {
 			archiveID := "legacy-" + id
 			receipt.Layout.Archives = []LegacyArchive{{ID: archiveID, RelativeDirectory: "archives/" + archiveID, Database: state}}

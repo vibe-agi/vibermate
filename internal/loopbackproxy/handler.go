@@ -510,7 +510,7 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
 		return
 	}
-	_ = audit.BindObservationScope(audit.ObservationScope(capture))
+	_ = audit.BindObservationScope(audit.OriginalObservationScope(admission.RecordingScope()))
 	// A cleartext forward-proxy request carries its target in an absolute
 	// request-target. It enters the model pipeline only when the exact target
 	// was frozen from this verified Agent's client configuration; every other

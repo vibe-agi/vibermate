@@ -181,6 +181,7 @@ func b4Join(t *testing.T, done <-chan struct{}, name string) {
 }
 
 type b4Fixture struct {
+	observations                 *cleartextOfferLog
 	t                            *testing.T
 	ctx                          context.Context
 	cancel                       context.CancelFunc
@@ -218,7 +219,7 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 	// Allocate Store paths before cleanup, so TempDir cannot remove live SQL files.
 	options := testOptions(t, hostcontract.Desktop(), gate)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
-	f := &b4Fixture{t: t, ctx: ctx, cancel: cancel, gate: gate, port: port, target: fmt.Sprintf("blind.fixture:%d", port), resolvedTarget: fmt.Sprintf("127.0.0.1:%d", port)}
+	f := &b4Fixture{observations: &cleartextOfferLog{attempts: make(map[string]egressaudit.Attempt)}, t: t, ctx: ctx, cancel: cancel, gate: gate, port: port, target: fmt.Sprintf("blind.fixture:%d", port), resolvedTarget: fmt.Sprintf("127.0.0.1:%d", port)}
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
@@ -250,13 +251,12 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 				if err := gate.Drain(cleanupContext); err != nil {
 					t.Errorf("B4 cleanup gate drain: %v", err)
 				}
-				if err := f.r.recorder.Flush(cleanupContext); err != nil {
-					t.Error(err)
-				}
-				page, err := f.r.EgressAttempts().List(cleanupContext, egressaudit.PageRequest{Limit: 10})
+				// Final producer callbacks follow actual request/copy joins.
+				// Optional SQL durability is not a cleanup prerequisite.
+				page, err := f.observations.List(cleanupContext, egressaudit.PageRequest{Limit: 10})
 				stop()
 				if err != nil {
-					t.Errorf("B4 cleanup audit: %v", err)
+					t.Errorf("B4 cleanup producer observations: %v", err)
 				} else {
 					if f.expectedAttempts > 0 && len(page.Items) != f.expectedAttempts {
 						t.Errorf("B4 cleanup attempts=%d want=%d", len(page.Items), f.expectedAttempts)
@@ -266,7 +266,7 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 						if !a.Terminal() {
 							t.Errorf("B4 cleanup nonterminal outbound=%s", a.ID())
 						}
-						t.Logf("B4 cleanup outbound=%s parent=%s terminal=%t outcome=%s", a.ID(), a.ConnectionID(), a.Terminal(), a.Outcome())
+						t.Logf("B4 cleanup offered outbound=%s parent=%s terminal=%t outcome=%s", a.ID(), a.ConnectionID(), a.Terminal(), a.Outcome())
 					}
 				}
 			}
@@ -409,7 +409,10 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 	}
 	options.BlindTunnels = &blindTunnelDialer{coordinator: gate, dialer: dialer}
 	options.OriginalTransport = &noNetworkOriginalTransport{}
-	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{recorder: recorder, blindProber: func() (*blindtunnel.ReachabilityProber, error) {
+	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{recorder: recorder, egressObserver: func(delegate *runtimeEgressRepository) egressaudit.Observer {
+		f.observations.egress = delegate
+		return f.observations
+	}, blindProber: func() (*blindtunnel.ReachabilityProber, error) {
 		return blindtunnel.NewReachabilityProberWithBuilder(builder)
 	}})
 	if err != nil {

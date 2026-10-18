@@ -112,7 +112,7 @@ func TestNativeClaimWaitsForRealResponseCleanup(t *testing.T) {
 				}
 				f.transport.handler = func(*http.Request, []byte) (*http.Response, error) { return response, nil }
 				if cleanup != "not_started" {
-					e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store, target: request.id, after: func() {
+					e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store.(nativetool.Repository), target: request.id, after: func() {
 						cancel()
 						<-body.entered
 						if cleanup == "returned" {
@@ -307,7 +307,7 @@ func TestNativeClaimObservedClassificationPrecedesClosureRace(t *testing.T) {
 	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 	f.handshake(t)
 	e := f.executor.(*executor)
-	held := &claimHeldObservationStore{Repository: e.dependencies.Store, entered: make(chan struct{}), release: make(chan struct{})}
+	held := &claimHeldObservationStore{Repository: e.dependencies.Store.(nativetool.Repository), entered: make(chan struct{}), release: make(chan struct{})}
 	e.dependencies.Store = held
 	f.transport.handler = func(*http.Request, []byte) (*http.Response, error) {
 		return wireResponse("data: {\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"ping\"}\n\n", true), nil

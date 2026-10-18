@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"strings"
 	"time"
@@ -86,6 +87,7 @@ func (digest CapabilityDigest) valid() bool {
 // DurableRecord is the complete SQLite representation. It contains hashes,
 // never bearer values or child argv.
 type DurableRecord struct {
+	RecordingScope              recording.Scope `json:"-"`
 	ID                          string
 	ProxyCapabilityHash         CapabilityDigest
 	ControlCapabilityHash       CapabilityDigest
@@ -469,6 +471,7 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 // Evidence is frozen after proxy capability authorization. It intentionally
 // excludes the capability hash and raw value.
 type Evidence struct {
+	RecordingScope  recording.Scope `json:"-"`
 	RunID           string
 	Observed        bool
 	FirstObservedAt time.Time
@@ -504,7 +507,7 @@ func evidenceOf(record DurableRecord) Evidence {
 		record.MachineRegistrationRevision,
 		record.WorkspaceDerivationRevision,
 	)
-	return Evidence{
+	return Evidence{RecordingScope: record.RecordingScope,
 		RunID:           record.ID,
 		Observed:        record.Observed(),
 		FirstObservedAt: record.FirstObservedAt,

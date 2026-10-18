@@ -29,7 +29,7 @@ func TestUsagePolicyPublicationAcceptsOnlyMonotonicSuccessfulCommits(t *testing.
 	initial := runtimeusage.CollectionPolicy{Revision: 1, RetentionDays: 30, Enabled: false}
 	q.publishUsagePolicy(initial)
 	store := &usagePolicyStore{next: runtimeusage.CollectionPolicy{Revision: 2, RetentionDays: 30, Enabled: true}, err: errors.New("CAS conflict")}
-	repo := recordingUsageRepository{Repository: store, recorder: q}
+	repo := recordingUsageRepository{PolicyRepository: store, recorder: q}
 	_, _ = repo.SetUsagePolicy(context.Background(), initial, time.Now())
 	if p := q.usagePolicy.Load(); p == nil || p.Revision != 1 || p.Enabled {
 		t.Fatal("failed commit activated collection or initial publication missing")

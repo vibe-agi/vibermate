@@ -322,7 +322,7 @@ func (manager *Manager) AuthorizeProxy(
 	if err := record.Validate(); err != nil || record.State != StateActive {
 		return Evidence{}, errors.Join(ErrCredentialRejected, err)
 	}
-	evidence := Evidence{
+	evidence := Evidence{RecordingScope: record.RecordingScope,
 		ManualCaptureID:    record.ID,
 		CredentialRevision: record.CredentialRevision,
 		DisplayName:        record.DisplayName,

@@ -166,11 +166,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			rollback.run(rollbackContext),
 		)
 	}
-	if dataDirectory := options.Runtime.Paths.DataDirectory(); dataDirectory != "" {
-		if err := localca.ApplyPendingRootReset(ctx, dataDirectory); err != nil {
-			return fail("local Root reset", err)
-		}
-	}
+	options.Runtime.ConsumePendingRootReset = true
 	discovery, err := localdiscovery.NewPublisher(
 		options.Paths.DiscoveryPath(),
 		options.Runtime.Clock,
@@ -408,12 +404,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		}
 	}
 	conversationIndexer, err := conversationprojection.New(conversationprojection.Options{
-		Activities:  runtime.Activities(),
-		Contents:    runtime.ExchangeContents(),
-		CaptureRuns: runtime.CaptureRunReader(),
-		Identities:  runtime.ConversationIdentities(),
-		Writer:      runtime.ConversationProjectionWriter(),
-		Resolvers:   identityResolvers,
+		Activities:         runtime.Activities(),
+		Contents:           runtime.ExchangeContents(),
+		CaptureRuns:        runtime.CaptureRunReader(),
+		IdentityInspection: runtime.IdentityInspection(),
+		RepairWriter:       runtime.ConversationRepairWriter(),
+		Resolvers:          identityResolvers,
 	})
 	if err != nil {
 		return fail("Agent Conversation projection", err)
@@ -435,44 +431,50 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("upstream model catalog", err)
 	}
 	controlOptions := desktopcontrol.Options{
-		NetworkAccess:       &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
-		Storage:             runtime,
-		ACP:                 runtime.ACPObservations(),
-		Readiness:           ready,
-		Status:              runtime,
-		Environments:        runtime.Environments(),
-		ClientToolAccess:    runtime,
-		Assignments:         runtime.CaptureAssignments(),
-		Activities:          runtime.Activities(),
-		ConversationIndexer: conversationIndexer,
-		Contents:            runtime.ExchangeContents(),
-		Connections:         runtime.ConnectionEvents(),
-		Egress:              runtime.EgressAttempts(),
-		Approvals:           runtime.ToolApprovals(),
-		NativeTools:         runtime.NativeToolRepository(),
-		NativePreviews:      runtime.NativeToolPreviews(),
-		NativeContentKey:    runtime.NativeToolContentKey(),
-		Endpoints:           runtime.UpstreamEndpoints(),
-		Models:              models,
-		ClientModels:        modelMetadata,
-		Accounts:            runtime.ProviderAccounts(),
-		AccountReads:        runtime.AccountReads(),
-		CodexOAuth:          runtime.CodexOAuthAccounts(),
-		CodexLogins:         runtime.CodexOAuthLogins(),
-		CodeLibrary:         runtime.CodeLibrary(),
-		EgressProfiles:      runtime.EgressProfiles(),
-		VLESSProfiles:       runtime.VLESSProfiles(),
-		EgressDefaults:      runtime.EgressDefaults(),
-		ProductUpdates:      runtime.ProductUpdates(),
-		RawEvidence:         runtime.RawEvidence(),
-		Offline:             runtime,
-		ConnectionRules:     runtime.ConnectionRules(),
-		CaptureRuns:         runtime.CaptureRunReader(),
-		ManualCaptures:      runtime.ManualCaptures(),
-		Archive:             runtime.EvidenceArchive(),
-		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
-		RootTrust:           rootTrust,
-		Clock:               options.Runtime.Clock,
+		NetworkAccess:                  &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
+		Storage:                        runtime,
+		ACP:                            runtime.ACPObservations(),
+		ACPInspection:                  runtime.ACPInspection(),
+		ACPMarkers:                     runtime.ACPMarkers(),
+		Readiness:                      ready,
+		Status:                         runtime,
+		Environments:                   runtime.Environments(),
+		ClientToolAccess:               runtime,
+		Assignments:                    runtime.CaptureAssignments(),
+		ActivityInspection:             runtime.Activities(),
+		ActivityRecorder:               runtime.ActivityRecorder(),
+		CaptureObservations:            runtime.CaptureObservations(),
+		ConversationIdentityInspection: conversationIndexer,
+		ConversationIndexer:            conversationIndexer,
+		Contents:                       runtime.ExchangeContents(),
+		Connections:                    runtime.ConnectionEvents(),
+		Egress:                         runtime.EgressAttempts(),
+		Approvals:                      runtime.ToolApprovals(),
+		NativeAuthority:                runtime.NativeToolRepository(),
+		NativeInspection:               runtime.NativeInspection(),
+		NativePreviews:                 runtime.NativeToolPreviews(),
+		NativeContentKey:               runtime.NativeToolContentKey(),
+		Endpoints:                      runtime.UpstreamEndpoints(),
+		Models:                         models,
+		ClientModels:                   modelMetadata,
+		Accounts:                       runtime.ProviderAccounts(),
+		AccountReads:                   runtime.AccountReads(),
+		CodexOAuth:                     runtime.CodexOAuthAccounts(),
+		CodexLogins:                    runtime.CodexOAuthLogins(),
+		CodeLibrary:                    runtime.CodeLibrary(),
+		EgressProfiles:                 runtime.EgressProfiles(),
+		VLESSProfiles:                  runtime.VLESSProfiles(),
+		EgressDefaults:                 runtime.EgressDefaults(),
+		ProductUpdates:                 runtime.ProductUpdates(),
+		RawEvidence:                    runtime.RawEvidence(),
+		Offline:                        runtime,
+		ConnectionRules:                runtime.ConnectionRules(),
+		CaptureRuns:                    runtime.CaptureRunReader(),
+		ManualCaptures:                 runtime.ManualCaptures(),
+		Archive:                        runtime.EvidenceArchive(),
+		ArchiveBarrier:                 runtime.EvidenceArchiveBarrier(),
+		RootTrust:                      rootTrust,
+		Clock:                          options.Runtime.Clock,
 	}
 	if limits, ok := runtime.ExchangeContentLimits(); ok {
 		controlOptions.ContentLimits = &limits
@@ -703,7 +705,16 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	host.beginShutdown(nil)
 	select {
 	case <-host.shutdownDone:
-		return host.shutdownErr
+		result := host.shutdownErr
+		if host.runtime.ShutdownCompleted() {
+			if host.remoteServer != nil {
+				result = errors.Join(result, host.remoteServer.Shutdown(ctx))
+			}
+			if host.remoteServer == nil || host.remoteServer.ShutdownCompleted() {
+				result = errors.Join(result, host.guard.Release())
+			}
+		}
+		return result
 	case <-ctx.Done():
 		return fmt.Errorf("wait for Desktop Host shutdown: %w", ctx.Err())
 	}

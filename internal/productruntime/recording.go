@@ -44,6 +44,8 @@ type recordingItem struct {
 	bytes             int64
 }
 type observationRecorder struct {
+	originalScopesOnly bool
+	available          func() bool
 	nativeContent      nativetool.ContentWriter
 	acp                acpobservation.Writer
 	capture            recording.CaptureWriter
@@ -80,6 +82,9 @@ func newObservationRecorder(owner context.Context, b *recording.Budget, c connec
 // no execution authority and creates no registry. Durable generations follow
 // in the storage-role split; the current terminal barrier owns Capture drains.
 func (r *observationRecorder) ScopeStamp(c captureidentity.Reference) recording.Stamp {
+	if r.originalScopesOnly && c != (captureidentity.Reference{}) {
+		return recording.Stamp{}
+	}
 	generation := uint64(0)
 	if c != (captureidentity.Reference{}) {
 		generation = 1
@@ -104,6 +109,9 @@ func (r *observationRecorder) offer(s recording.Stamp, k recording.Kind, e conne
 			r.budget.RecordOffer(k, result, uint64(bytes))
 		}
 	}()
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
+	}
 	if !s.Current() {
 		return recording.DroppedStale
 	}
@@ -260,7 +268,7 @@ func (r *observationRecorder) run() {
 				outcome = recording.Persisted
 				if err != nil {
 					outcome = recording.Unconfirmed
-					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || item.kind != recording.Activity && errors.Is(err, recording.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict) || errors.Is(err, nativetool.ErrNotFound)) {
+					if errors.Is(err, acpobservation.ErrInvalid) || errors.Is(err, acpobservation.ErrConflict) || errors.Is(err, acpobservation.ErrNotFound) || errors.Is(err, runtimeusage.ErrObservationDiscarded) || errors.Is(err, recording.ErrObservationDiscarded) || item.kind == recording.Native && (errors.Is(err, nativetool.ErrInvalid) || errors.Is(err, nativetool.ErrConflict) || errors.Is(err, nativetool.ErrNotFound)) {
 						outcome = recording.Discarded
 					}
 				}
@@ -500,6 +508,9 @@ func (r *observationRecorder) prepareScope(ctx context.Context, raw rawEvidenceR
 func (r *observationRecorder) offerContent(ctx context.Context, s recording.Stamp, in exchangecontent.OwnInput, limits exchangecontent.SourceLimits, sink exchangecontent.SourceRecorder) (result recording.OfferResult) {
 	var bytes uint64
 	defer func() { r.budget.RecordOffer(recording.Content, result, bytes) }()
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
+	}
 	if !s.Current() {
 		return recording.DroppedStale
 	}
@@ -550,4 +561,12 @@ func (r *observationRecorder) enqueue(item *recordingItem) recording.OfferResult
 		item.reservation.Release()
 		return recording.DroppedCapacity
 	}
+}
+
+func (r *observationRecorder) StampScope(scope recording.Scope) recording.Stamp {
+	stamp, err := recording.NewStamp(r.epoch, scope.Capture, scope.Fence)
+	if err != nil {
+		return recording.Stamp{}
+	}
+	return stamp
 }

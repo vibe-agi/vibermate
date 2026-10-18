@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
 
@@ -46,41 +47,7 @@ func (r *Runtime) StorageLocation(ctx context.Context) (StorageLocation, error) 
 	if r == nil || r.storage == nil || ctx == nil {
 		return StorageLocation{}, errors.New("Runtime storage is unavailable")
 	}
-	now := r.clock.Now().UTC()
-	statistics, err := r.storage.StorageStatistics(ctx, now)
-	if err != nil {
-		return StorageLocation{}, err
-	}
-	databasePath := r.paths.DatabasePath()
-	databaseBytes, err := storageFileBytes(databasePath, true)
-	if err != nil {
-		return StorageLocation{}, err
-	}
-	walBytes, err := storageFileBytes(databasePath+"-wal", false)
-	if err != nil {
-		return StorageLocation{}, err
-	}
-	sharedMemoryBytes, err := storageFileBytes(databasePath+"-shm", false)
-	if err != nil {
-		return StorageLocation{}, err
-	}
-	available, capacityErr := filesystemAvailableBytes(r.paths.DataDirectory())
-	var availablePointer *uint64
-	if capacityErr == nil {
-		availablePointer = &available
-	}
-	return StorageLocation{
-		Backend: "sqlite", DataDirectory: r.paths.DataDirectory(),
-		DatabasePath: databasePath, CollectedAt: now,
-		DatabaseBytes: databaseBytes, WALBytes: walBytes,
-		SharedMemoryBytes:        sharedMemoryBytes,
-		EvidenceBytes:            statistics.EvidenceBytes,
-		ReusableBytes:            statistics.ReusableBytes,
-		FilesystemAvailableBytes: availablePointer,
-		LowSpaceThresholdBytes:   storageLowSpaceThresholdBytes,
-		CapacityState:            storageCapacityState(availablePointer),
-		CleanupPreview:           storageRecordCounts(statistics.Expired),
-	}, nil
+	return StorageLocation{}, recording.ErrInspectionUnavailable
 }
 
 func (r *Runtime) EvidenceArchivePreview(
@@ -89,7 +56,7 @@ func (r *Runtime) EvidenceArchivePreview(
 	if r == nil || r.storage == nil || ctx == nil {
 		return resourcedeletion.Released{}, errors.New("Runtime storage is unavailable")
 	}
-	return r.storage.EvidenceArchivePreview(ctx)
+	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
 }
 
 func storageCapacityState(available *uint64) string {
@@ -108,7 +75,7 @@ func (r *Runtime) CleanupExpiredStorage(
 	if r == nil || r.storage == nil || ctx == nil {
 		return resourcedeletion.Released{}, errors.New("Runtime storage is unavailable")
 	}
-	return r.storage.CleanupExpired(ctx, r.clock.Now().UTC())
+	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
 }
 
 func storageRecordCounts(value resourcedeletion.Released) StorageRecordCounts {

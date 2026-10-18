@@ -41,8 +41,8 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 	}
 	indexer, err := conversationprojection.New(conversationprojection.Options{
 		Activities: options.Runtime.Activities(), Contents: options.Runtime.ExchangeContents(),
-		CaptureRuns: options.Runtime.CaptureRunReader(), Identities: options.Runtime.ConversationIdentities(),
-		Writer: options.Runtime.ConversationProjectionWriter(), Resolvers: identityResolvers,
+		CaptureRuns: options.Runtime.CaptureRunReader(), IdentityInspection: options.Runtime.IdentityInspection(), RepairWriter: options.Runtime.ConversationRepairWriter(),
+		Resolvers: identityResolvers,
 	})
 	if err != nil {
 		return nil, err
@@ -65,15 +65,15 @@ func New(options Options) (*desktopcontrol.Handler, error) {
 		ProductUpdates:  options.Runtime.ProductUpdates(),
 		LaunchSnapshots: options.Runtime.LaunchSnapshots(),
 		Storage:         options.Runtime,
-		ACP:             options.Runtime.ACPObservations(),
-		Readiness:       options.Readiness, Status: options.Runtime,
+		ACP:             options.Runtime.ACPObservations(), ACPInspection: options.Runtime.ACPInspection(), ACPMarkers: options.Runtime.ACPMarkers(),
+		Readiness: options.Readiness, Status: options.Runtime,
 		Environments: options.Runtime.Environments(), Assignments: options.Runtime.CaptureAssignments(),
-		ClientToolAccess: options.Runtime,
-		DryRun:           options.Runtime.DryRun,
-		Activities:       options.Runtime.Activities(), ConversationIndexer: indexer,
+		ClientToolAccess:   options.Runtime,
+		DryRun:             options.Runtime.DryRun,
+		ActivityInspection: options.Runtime.Activities(), ActivityRecorder: options.Runtime.ActivityRecorder(), CaptureObservations: options.Runtime.CaptureObservations(), ConversationIdentityInspection: indexer, ConversationIndexer: indexer,
 		Contents: options.Runtime.ExchangeContents(), Connections: options.Runtime.ConnectionEvents(),
 		Egress: options.Runtime.EgressAttempts(), Approvals: options.Runtime.ToolApprovals(),
-		NativeTools: options.Runtime.NativeToolRepository(), NativePreviews: options.Runtime.NativeToolPreviews(),
+		NativeAuthority: options.Runtime.NativeToolRepository(), NativeInspection: options.Runtime.NativeInspection(), NativePreviews: options.Runtime.NativeToolPreviews(),
 		NativeContentKey: options.Runtime.NativeToolContentKey(),
 		Endpoints:        options.Runtime.UpstreamEndpoints(), Models: models, ClientModels: metadata,
 		Accounts: options.Runtime.ProviderAccounts(), CodexOAuth: options.Runtime.CodexOAuthAccounts(),

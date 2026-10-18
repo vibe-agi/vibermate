@@ -13,7 +13,7 @@ import (
 // runtimeEgressRepository keeps inspection and optional recording separate.
 // Native reliable transactions use their repository directly.
 type runtimeEgressRepository struct {
-	delegate                egressaudit.Repository
+	delegate                egressaudit.Reader
 	recorder                *observationRecorder
 	status                  *statusTracker
 	owner                   context.Context
@@ -24,7 +24,7 @@ type runtimeEgressRepository struct {
 	rawEvidenceFailureCount uint64
 }
 
-func newRuntimeEgressRepository(delegate egressaudit.Repository, status *statusTracker, owner context.Context, lifecycle LifecycleOptions, _ context.CancelCauseFunc) *runtimeEgressRepository {
+func newRuntimeEgressRepository(delegate egressaudit.Reader, status *statusTracker, owner context.Context, lifecycle LifecycleOptions, _ context.CancelCauseFunc) *runtimeEgressRepository {
 	timeout := lifecycle.RollbackTimeout
 	if lifecycle.ShutdownTimeout < timeout {
 		timeout = lifecycle.ShutdownTimeout

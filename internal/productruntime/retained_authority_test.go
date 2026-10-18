@@ -489,7 +489,7 @@ func TestRetainedRevocationJoinsConnectionTerminal(t *testing.T) {
 	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
 	defer block.unblock()
 	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
-		block.Repository = request.repository
+		block.Reader = request.repository
 		request.repository = block
 		return buildConnectionEvent(ctx, request)
 	}})
@@ -545,7 +545,7 @@ func TestRetainedFinishJoinsPreviouslyExpiredConnectionTerminal(t *testing.T) {
 	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
 	defer block.unblock()
 	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
-		block.Repository = request.repository
+		block.Reader = request.repository
 		request.repository = block
 		return buildConnectionEvent(ctx, request)
 	}})

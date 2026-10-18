@@ -28,6 +28,10 @@ type recordedMetadata struct {
 }
 
 func (o activityAttemptObserver) metadataReservation(stamp recording.Stamp, observation any) (*recording.Reservation, bool) {
+	if o.queue.available != nil && !o.queue.available() {
+		o.queue.budget.RecordOffer(recording.Activity, recording.DroppedUnavailable, 0)
+		return nil, false
+	}
 	if !stamp.Current() {
 		o.queue.budget.RecordOffer(recording.Activity, recording.DroppedStale, 0)
 		return nil, false
@@ -221,6 +225,13 @@ func (m *recordedMetadata) persist(ctx context.Context, scope recording.Scope, r
 	if errors.Is(usageErr, runtimeusage.ErrObservationDiscarded) {
 		usageErr = nil
 	}
+	discarded := errors.Is(activityErr, recording.ErrObservationDiscarded) || errors.Is(identityErr, recording.ErrObservationDiscarded)
+	if errors.Is(activityErr, recording.ErrObservationDiscarded) {
+		activityErr = nil
+	}
+	if errors.Is(identityErr, recording.ErrObservationDiscarded) {
+		identityErr = nil
+	}
 	if report != nil {
 		if activityErr != nil {
 			stage := "activity_terminal"
@@ -236,7 +247,11 @@ func (m *recordedMetadata) persist(ctx context.Context, scope recording.Scope, r
 			report("usage", usageErr)
 		}
 	}
-	return errors.Join(activityErr, identityErr, usageErr)
+	err := errors.Join(activityErr, identityErr, usageErr)
+	if err == nil && discarded {
+		return recording.ErrObservationDiscarded
+	}
+	return err
 }
 
 // Nonallocating traversal of closed metadata values. Admission's receipt is an

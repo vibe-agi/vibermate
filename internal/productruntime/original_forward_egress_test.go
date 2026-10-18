@@ -655,7 +655,7 @@ func (f *capturedOriginalFixture) assertForwardAudits(t *testing.T, want int) {
 			if boundRequests != 1 {
 				t.Fatal("original parent has no unique actual Exchange-created Request", boundRequests)
 			}
-			exchange, err := f.r.storage.ActivityRepository().GetExchange(ctx, parent.ExchangeID)
+			exchange, err := f.r.Activities().GetExchange(ctx, parent.ExchangeID)
 			if err != nil || exchange.Kind != activity.KindExchangeCompleted || exchange.SubjectID != parent.ExchangeID || exchange.ConnectionID != a.ConnectionID() || exchange.EnvironmentID != "captured.original.egress" || exchange.EnvironmentRevision != 1 || exchange.EnvironmentDigest != f.assignment.EnvironmentDigest.String() || exchange.RouteID != "" || exchange.RouteRevision != 0 || exchange.AccountID != "" || exchange.AccountRevision != 0 || exchange.CredentialEpoch != 0 || exchange.ManualCaptureID != f.capture.ID {
 				t.Fatalf("original actual persisted Exchange linkage: parent=%+v exchange=%+v err=%v", parent, exchange, err)
 			}

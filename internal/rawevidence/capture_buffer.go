@@ -60,7 +60,7 @@ type CaptureBuffer struct {
 // Keep this conservative reservation until settlement rather than pretending
 // len(encoded) bounds the temporary encoding workspace.
 func observationCharge(o Observation) int64 {
-	n := int64(32<<10) + 2*int64(unsafe.Sizeof(recording.Fence{})) + int64(len(o.Body)) + int64(len(o.Frames))*1024
+	n := int64(32<<10) + 2*int64(unsafe.Sizeof(recording.Fence{})) + 2*int64(unsafe.Sizeof(recording.Stamp{})) + int64(len(o.Body)) + int64(len(o.Frames))*1024
 	for _, value := range []string{o.ScopeID, o.ExchangeID, o.ConnectionID, o.AttemptID, o.EnvironmentID, o.EnvironmentDigest, o.ClientEndpointID, o.UpstreamEndpointID, o.ProtocolPlanID, o.RouteID, o.AccountID, o.Method, o.Scheme, o.Authority, o.Path, o.RawQuery, o.ContentType, o.ContentEncoding, o.Representation} {
 		n += int64(len(value)) * 2
 	}
@@ -79,6 +79,11 @@ func observationCharge(o Observation) int64 {
 }
 
 func (m *Manager) TryCapture(stamp recording.Stamp, meta CaptureMetadata) *CaptureBuffer {
+	return m.CaptureStamped(stamp, meta, DefaultMaximumBodyBytes)
+}
+
+// CaptureStamped preserves the original admission and the caller body bound.
+func (m *Manager) CaptureStamped(stamp recording.Stamp, meta CaptureMetadata, maximum int) *CaptureBuffer {
 	if m == nil {
 		return nil
 	}
@@ -90,7 +95,7 @@ func (m *Manager) TryCapture(stamp recording.Stamp, meta CaptureMetadata) *Captu
 		m.budget.RecordOffer(recording.Raw, recording.DroppedInvalid, 0)
 		return nil
 	}
-	b := m.Capture(meta, DefaultMaximumBodyBytes)
+	b := m.Capture(meta, maximum)
 	if b != nil {
 		b.stamp = stamp
 		b.stamped = true

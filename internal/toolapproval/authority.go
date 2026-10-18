@@ -86,7 +86,7 @@ func DefaultConfig() Config {
 }
 
 type Options struct {
-	NativeRepository nativetool.LifecycleRepository
+	NativeRepository nativetool.LifecycleAuthority
 	Repository       Repository
 	Clock            Clock
 	Random           io.Reader
@@ -116,7 +116,7 @@ type waiter struct {
 }
 
 type Authority struct {
-	nativeRepository nativetool.LifecycleRepository
+	nativeRepository nativetool.LifecycleAuthority
 	repository       Repository
 	clock            Clock
 	random           io.Reader

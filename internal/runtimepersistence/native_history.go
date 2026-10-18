@@ -64,7 +64,7 @@ func stageNativeHistory(ctx context.Context, op nativetool.Operation, event stri
 		report(nativetool.HistoryScopeUnavailable)
 		return
 	}
-	stamp := b.scopes.ScopeStamp(op.RecordingScope.Capture)
+	stamp := recording.StampOriginal(b.scopes, op.RecordingScope)
 	if !stamp.Current() || !stamp.MatchesCapture(op.RecordingScope.Capture) || stamp.Fence() != op.RecordingScope.Fence {
 		report(nativetool.HistoryScopeStale)
 		return

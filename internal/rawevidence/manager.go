@@ -332,6 +332,15 @@ func (manager *Manager) PrepareTerminalScope(
 	kind ScopeKind,
 	id string,
 ) (TerminalScope, error) {
+	return manager.prepareTerminalScope(ctx, kind, id, true)
+}
+
+// SealTerminalScope joins actual request leases and closes new admission. It
+// preserves already accepted envelopes without waiting for their durability.
+func (manager *Manager) SealTerminalScope(ctx context.Context, kind ScopeKind, id string) (TerminalScope, error) {
+	return manager.prepareTerminalScope(ctx, kind, id, false)
+}
+func (manager *Manager) prepareTerminalScope(ctx context.Context, kind ScopeKind, id string, flush bool) (TerminalScope, error) {
 	if manager == nil {
 		return nil, errors.New("raw evidence terminal scope is invalid")
 	}
@@ -386,9 +395,11 @@ func (manager *Manager) PrepareTerminalScope(
 	}
 	manager.scopeMu.Unlock()
 
-	if err := manager.FlushScope(ctx, kind, id); err != nil {
-		manager.reopenPreparingScope(key)
-		return nil, err
+	if flush {
+		if err := manager.FlushScope(ctx, kind, id); err != nil {
+			manager.reopenPreparingScope(key)
+			return nil, err
+		}
 	}
 	return &terminalScopeLease{manager: manager, key: key}, nil
 }
@@ -1063,4 +1074,25 @@ func resetTimer(timer *time.Timer, duration time.Duration) {
 		}
 	}
 	timer.Reset(duration)
+}
+
+// PauseOffers seals only optional publication. The existing request leases and
+// worker remain owned; the lifecycle owner separately Flushes before mutation.
+// Resuming never revives a manager whose worker has begun shutdown.
+func (manager *Manager) PauseOffers() func() {
+	manager.admissionMu.Lock()
+	manager.accepting = false
+	manager.admissionMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			manager.admissionMu.Lock()
+			manager.scopeMu.Lock()
+			if manager.workerContext.Err() == nil && manager.scopeAccepting {
+				manager.accepting = true
+			}
+			manager.scopeMu.Unlock()
+			manager.admissionMu.Unlock()
+		})
+	}
 }

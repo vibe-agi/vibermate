@@ -69,6 +69,7 @@ func persistenceFailure(operation string, err error, at time.Time) *PersistenceF
 // InstanceID intentionally uses the existing instanceId wire field. It is a
 // process incarnation, not an installation identity or durable revision.
 type RuntimeStatus struct {
+	Recording             RecordingStatus              `json:"recording"`
 	State                 RuntimeState                 `json:"state"`
 	InstanceID            string                       `json:"instanceId"`
 	Host                  hostcontract.Kind            `json:"host"`
@@ -94,6 +95,7 @@ func newStatusTracker(instanceID string, host hostcontract.Kind, startedAt time.
 	return &statusTracker{
 		clock: SystemClock{},
 		status: RuntimeStatus{
+			Recording:  RecordingStatus{State: RecordingStarting},
 			State:      RuntimeStateStarting,
 			InstanceID: instanceID,
 			Host:       host,
@@ -188,6 +190,7 @@ func (t *statusTracker) failRecording(operation string, err error) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.status.Recording.State = RecordingDegraded
 	if t.status.RecordingFailure == nil {
 		t.status.RecordingFailure = persistenceFailure(operation, err, t.clock.Now())
 	}
@@ -218,4 +221,36 @@ func (t *statusTracker) finishStopping(stoppedAt time.Time, shutdownErr error) {
 	}
 	t.status.State = RuntimeStateStopped
 	t.status.StoppedAt = &stoppedAt
+}
+
+type RecordingState string
+
+const (
+	RecordingStarting  RecordingState = "starting"
+	RecordingAvailable RecordingState = "available"
+	RecordingDegraded  RecordingState = "degraded"
+	RecordingDisabled  RecordingState = "disabled"
+)
+
+type RecordingStatus struct {
+	State           RecordingState `json:"state"`
+	ReservedRecords int64          `json:"reservedRecords"`
+	ReservedBytes   int64          `json:"reservedBytes"`
+	Dropped         uint64         `json:"dropped"`
+	Unconfirmed     uint64         `json:"unconfirmed"`
+	CleanupPending  bool           `json:"cleanupPending"`
+}
+
+func (t *statusTracker) recordingState(state RecordingState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Recording.State = state
+	if state == RecordingDisabled {
+		t.status.Recording.CleanupPending = false
+	}
+}
+func (t *statusTracker) recordingCleanupPending() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.status.Recording.CleanupPending = true
 }

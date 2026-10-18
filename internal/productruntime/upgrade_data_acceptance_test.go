@@ -230,7 +230,7 @@ func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
 	task7Must(t, e)
 	decisions, e := toolpolicy.New(r.approvals)
 	task7Must(t, e)
-	request := exchangeBuildRequest{recorder: r.recorder, ownerContext: ctx, actions: r.offlineHold, accounts: r.accounts, provider: f.provider, toolDecisions: decisions, activities: r.activities, identities: r.conversationIDs, contents: r.contents, usage: r.storage, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: f.annotations}
+	request := exchangeBuildRequest{recorder: r.recorder, ownerContext: ctx, actions: r.offlineHold, accounts: r.accounts, provider: f.provider, toolDecisions: decisions, activities: r.activities, identities: r.conversationIDs, contents: r.contents, usage: r.recordingStorage, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: f.annotations}
 	admission, e := captureadmission.NewAuthorizer(r.captureRuns, r.manualCaptures)
 	task7Must(t, e)
 	policy, e := (connectionpolicy.Snapshot{Revision: 1, Mode: connectionpolicy.ModeDenyUnknown, Rules: []connectionpolicy.Rule{{ID: "task7.chatgpt", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("chatgpt.com", 443)}}}).Compile()

@@ -316,7 +316,7 @@ func (f *capturedOriginalFixture) assertSemanticAudits(t *testing.T, want int) {
 		if bound != 1 {
 			t.Fatal("semantic audit has no unique actual provider request", bound)
 		}
-		exchange, err := f.r.storage.ActivityRepository().GetExchange(ctx, parent.ExchangeID)
+		exchange, err := f.r.Activities().GetExchange(ctx, parent.ExchangeID)
 		if err != nil || exchange.Kind != activity.KindExchangeCompleted || exchange.SubjectID != parent.ExchangeID || exchange.ConnectionID != a.ConnectionID() || exchange.EnvironmentID != "captured.original.egress" || exchange.EnvironmentRevision != 1 || exchange.EnvironmentDigest != f.assignment.EnvironmentDigest.String() || exchange.RouteID != "route.test" || exchange.RouteRevision != 1 || exchange.AccountID != "" || exchange.AccountRevision != 0 || exchange.CredentialEpoch != 0 || exchange.ManualCaptureID != f.capture.ID {
 			t.Fatalf("semantic audit lacks real Exchange linkage: parent=%+v exchange=%+v err=%v", parent, exchange, err)
 		}

@@ -686,7 +686,7 @@ func assertManagedAnthropicResponseWithToolPolicy(t *testing.T, mode environment
 		t.Fatal(err)
 	}
 	calls := 0
-	_, err = usage.ScanUsage(context.Background(), runtimeusage.AggregationQuery{Period: period}, "", now, func(bucket runtimeusage.UsageBucket) error {
+	_, err = host.Runtime().UsageInspection().ScanUsage(context.Background(), runtimeusage.AggregationQuery{Period: period}, "", now, func(bucket runtimeusage.UsageBucket) error {
 		if bucket.Status != activity.StatusSucceeded || !bucket.Usage.InputUncached.Known || bucket.Usage.InputUncached.Tokens != 4 ||
 			!bucket.Usage.Output.Known || bucket.Usage.Output.Tokens != 2 {
 			t.Errorf("native terminal lost its status or usage: %+v", bucket)

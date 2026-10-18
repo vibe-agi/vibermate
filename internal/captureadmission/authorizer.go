@@ -75,6 +75,7 @@ func (authorizer *compositeAuthorizer) authorizeManaged(
 	if err != nil {
 		return Admission{}, err
 	}
+	admission.recordingScope = evidence.RecordingScope
 	if reader, ok := authorizer.runs.(interface {
 		ProxyValidity(context.Context, capturerun.ProxyCapability) (captureauthority.Validity, error)
 	}); ok {
@@ -105,6 +106,7 @@ func (authorizer *compositeAuthorizer) authorizeManual(
 	if err != nil {
 		return Admission{}, err
 	}
+	admission.recordingScope = evidence.RecordingScope
 	if reader, ok := authorizer.manuals.(interface {
 		ProxyValidity(context.Context, manualcapture.ProxyCredential) (captureauthority.Validity, error)
 	}); ok {

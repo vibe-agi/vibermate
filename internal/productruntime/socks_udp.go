@@ -143,7 +143,7 @@ func (u *runtimeUDP) OpenUDP(ctx context.Context, admission captureadmission.Adm
 	if err != nil {
 		return opened, err
 	}
-	_ = connection.BindObservationScope(connection.ObservationScope(capture))
+	_ = connection.BindObservationScope(connection.OriginalObservationScope(admission.RecordingScope()))
 	outcome := u.policy.Current().Evaluate(connectionpolicy.Request{Host: host, Port: target.Port})
 	if outcome.Decision == connectionpolicy.DecisionAsk {
 		if err = connection.Decide(ctx, connectionevent.DecisionEvidence{Source: source, Decision: connectionevent.DecisionAsk, RuleID: outcome.RuleID, Decryption: connectionevent.DecryptionNone}); err != nil {

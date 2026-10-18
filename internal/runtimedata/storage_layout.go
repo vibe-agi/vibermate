@@ -2,6 +2,7 @@ package runtimedata
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -33,10 +34,12 @@ type LegacyArchive struct {
 	Database          runtimepersistence.SchemaState `json:"database"`
 }
 type StorageLayout struct {
-	ID          string          `json:"id"`
-	Control     DatabaseRole    `json:"control"`
-	Observation DatabaseRole    `json:"observation"`
-	Archives    []LegacyArchive `json:"archives"`
+	// Empty is an older undeclared optional role, never permission to recreate history.
+	ObservationProvisioning string          `json:"observationProvisioning,omitempty"`
+	ID                      string          `json:"id"`
+	Control                 DatabaseRole    `json:"control"`
+	Observation             DatabaseRole    `json:"observation"`
+	Archives                []LegacyArchive `json:"archives"`
 }
 
 const storageLayoutName = "storage-layout.json"
@@ -67,6 +70,10 @@ func validStorageID(value string) bool {
 	return len(value) > 0 && len(value) <= 128 && utf8.ValidString(value) && !strings.ContainsAny(value, "/\\\x00") && value != "." && value != ".."
 }
 func validStorageLayout(l StorageLayout) bool {
+	// Unknown optional provisioning states withhold recording, not control.
+	if len(l.ObservationProvisioning) > 32 || !utf8.ValidString(l.ObservationProvisioning) {
+		return false
+	}
 	if !validStorageID(l.ID) || l.Control != (DatabaseRole{"runtime.db", "vibermate-control", 3, true}) || l.Observation != (DatabaseRole{"observations.db", "vibermate-observations", 1, false}) || len(l.Archives) > 128 {
 		return false
 	}
@@ -114,4 +121,62 @@ func readStorageDocument(path string) ([]byte, bool, error) {
 		return nil, true, ErrBackupInvalid
 	}
 	return encoded, true, nil
+}
+
+// MarkObservationProvisioned makes first publication durable in owned layout
+// metadata. No optional I/O runs while a control SQL transaction is held.
+func MarkObservationProvisioned(ctx context.Context, root, layoutID string, guard *instanceguard.Guard) error {
+	check := func() error {
+		if ctx == nil || ctx.Err() != nil {
+			return ErrSchemaUpgradeIncomplete
+		}
+		if guard == nil || guard.Path() != filepath.Join(root, lockName) || !guard.OwnsDirectory(root) {
+			return ErrSchemaUpgradeIncomplete
+		}
+		return nil
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	layout, err := ReadStorageLayout(root)
+	if err != nil {
+		return err
+	}
+	if layout.ID != layoutID || (layout.ObservationProvisioning != "unprovisioned" && layout.ObservationProvisioning != "provisioned") {
+		return ErrBackupInvalid
+	}
+	if layout.ObservationProvisioning == "unprovisioned" {
+		layout.ObservationProvisioning = "provisioned"
+		encoded, err := json.Marshal(storageLayoutDocument{Schema: storageLayoutSchema, StorageLayout: layout})
+		if err != nil || len(encoded) > 64<<10 {
+			return ErrBackupInvalid
+		}
+		file, err := os.CreateTemp(root, ".storage-document-")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(file.Name())
+		if _, err = file.Write(encoded); err != nil {
+			file.Close()
+			return err
+		}
+		if err = errors.Join(file.Sync(), file.Close()); err != nil {
+			return err
+		}
+		if err = check(); err != nil {
+			return err
+		}
+		if err = os.Rename(file.Name(), filepath.Join(root, storageLayoutName)); err != nil {
+			return err
+		}
+	}
+	// Also reconcile an earlier rename whose directory Sync outcome was unknown.
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	if err = errors.Join(directory.Sync(), directory.Close()); err != nil {
+		return err
+	}
+	return check()
 }

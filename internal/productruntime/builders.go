@@ -59,12 +59,13 @@ type storageBuildRequest struct {
 	now                  time.Time
 	upgradeTimeout       time.Duration
 	progress             func(runtimedata.SchemaUpgradePhase) error
-	contentLimits        *exchangecontent.SourceLimits
+	recorder             *observationRecorder
 }
 
 type storageBuildResult struct {
-	store *runtimepersistence.Store
-	state runtimepersistence.SchemaState
+	store  *runtimepersistence.ControlStore
+	state  runtimepersistence.SchemaState
+	layout runtimedata.StorageLayout
 }
 
 func buildStorage(
@@ -74,26 +75,23 @@ func buildStorage(
 	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
 		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
 	}
-	// Candidate v3 is intentionally not a shipped intermediate upgrade. The
-	// storage-role cutover will supply direct owned v1/v2 migration.
-	candidateSchema, inspectErr := runtimepersistence.InspectSchema(ctx, request.databasePath, runtimepersistence.DefaultBusyTimeout)
-	if inspectErr != nil {
-		return storageBuildResult{}, inspectErr
+	timeout := request.upgradeTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
 	}
-	if candidateSchema.Revision != 0 && candidateSchema.Revision != 3 {
-		return storageBuildResult{}, runtimepersistence.ErrUnsupportedSchema
-	}
-	if _, err := runtimedata.UpgradeSchemaOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
+	upgrade, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	layout, err := runtimedata.PrepareStorageOwned(upgrade, runtimedata.OwnedStorage{Directory: request.directory, Runtime: request.dataGuard, Host: request.hostGuard}, request.now, request.progress)
+	if err != nil {
 		return storageBuildResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return storageBuildResult{}, err
 	}
-	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
-		ContentLimits:          request.contentLimits,
-		DatabasePath:           request.databasePath,
-		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
-		CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
+	store, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{
+		DatabasePath: request.databasePath, LayoutID: layout.ID,
+		BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
+		NativeHistory: request.recorder, CaptureObserver: request.recorder, RecordingScopes: request.recorder,
 	})
 	if err != nil {
 		return storageBuildResult{}, err
@@ -106,7 +104,7 @@ func buildStorage(
 			wrapOptionalError("close storage after build failure", closeErr),
 		)
 	}
-	return storageBuildResult{store: store, state: state}, nil
+	return storageBuildResult{store: store, state: state, layout: layout}, nil
 }
 
 type environmentBuildRequest struct {
@@ -370,7 +368,7 @@ func buildExchangeContent(
 type connectionEventBuildRequest struct {
 	observer   connectionevent.Observer
 	scopes     recording.ScopeIssuer
-	repository connectionevent.Repository
+	repository connectionevent.Reader
 	clock      connectionevent.Clock
 	random     io.Reader
 }
@@ -397,7 +395,7 @@ type approvalBuildRequest struct {
 	random           io.Reader
 	config           toolapproval.Config
 	remembered       toolapproval.RememberedListener
-	nativeRepository nativetool.LifecycleRepository
+	nativeRepository nativetool.LifecycleAuthority
 }
 
 type approvalRuntime interface {
@@ -535,6 +533,11 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 	id string,
 ) (capturerun.TerminalEvidence, error) {
 	if barrier.recorder != nil {
+		if sealer, ok := barrier.raw.(interface {
+			SealTerminalScope(context.Context, rawevidence.ScopeKind, string) (rawevidence.TerminalScope, error)
+		}); ok {
+			return sealer.SealTerminalScope(ctx, rawevidence.ScopeManagedRun, id)
+		}
 		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManagedRun, id, barrier.reporter)
 	}
 	terminal, err := barrier.raw.PrepareTerminalScope(
@@ -556,6 +559,11 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 	id string,
 ) (manualcapture.TerminalEvidence, error) {
 	if barrier.recorder != nil {
+		if sealer, ok := barrier.raw.(interface {
+			SealTerminalScope(context.Context, rawevidence.ScopeKind, string) (rawevidence.TerminalScope, error)
+		}); ok {
+			return sealer.SealTerminalScope(ctx, rawevidence.ScopeManualCapture, id)
+		}
 		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManualCapture, id, barrier.reporter)
 	}
 	terminal, err := barrier.raw.PrepareTerminalScope(

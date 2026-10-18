@@ -37,11 +37,18 @@ type IDSource interface {
 	NewNativeOperationID(context.Context) (nativetool.ID, error)
 	NewOwnerEpoch(context.Context) (uint64, error)
 }
+
+// AuthorityStore contains only required lifecycle and physical delivery authority.
+type AuthorityStore interface {
+	nativetool.LifecycleAuthority
+	nativetool.ExecutionAuthority
+}
+
 type Dependencies struct {
 	EgressDefaults  egressprofile.Resolver
 	OwnerContext    context.Context
 	Transport       originaltransport.Transport
-	Store           nativetool.Repository
+	Store           AuthorityStore
 	ToolDecisions   exchange.ToolDecisionGate
 	Offline         offlinehold.Coordinator
 	Clock           func() time.Time
@@ -458,7 +465,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		return reject(w, received.OperationID, ReasonExecutionUncertain)
 	}
 	if r.kind == nativetool.RequestToolsCall && len(intents) > 0 && e.dependencies.RecordingScopes != nil && !received.CreatedAt.IsZero() {
-		stamp := e.dependencies.RecordingScopes.ScopeStamp(received.RecordingScope.Capture)
+		stamp := recording.StampOriginal(e.dependencies.RecordingScopes, received.RecordingScope)
 		if stamp.Current() && stamp.Fence() == received.RecordingScope.Fence && stamp.MatchesCapture(received.RecordingScope.Capture) {
 			r.retention.stamp = stamp
 			r.retention.identity = nativetool.ContentIdentity{OperationID: received.OperationID, Scope: received.RecordingScope, EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), Kind: r.kind, ToolName: intents[0].Call.Name, TargetOrigin: plan.Route().TargetOrigin.String(), CredentialOwner: string(plan.Route().CredentialOwner), Recording: plan.ContentRecording(), CreatedAt: received.CreatedAt, ExpiresAt: received.CreatedAt.Add(time.Duration(plan.ContentRecording().RetentionDays) * 24 * time.Hour)}

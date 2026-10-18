@@ -40,6 +40,9 @@ func (r *observationRecorder) PrepareNativeHistory(s recording.Stamp, o nativeto
 			r.budget.RecordOffer(recording.Native, result, 0)
 		}
 	}()
+	if r.available != nil && !r.available() {
+		return nil, recording.DroppedUnavailable
+	}
 	if !s.Current() {
 		return nil, recording.DroppedStale
 	}

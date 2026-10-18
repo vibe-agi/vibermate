@@ -27,6 +27,50 @@ Map<String, Object?> observation(String kind) => {
   'lastObservedAt': kind == 'manual_capture' ? '2026-10-17T23:30:00Z' : null,
 };
 void main() {
+  test(
+    'recording status keeps availability and process-local loss explicit',
+    () {
+      Map<String, Object?> value(String state) => {
+        'state': state,
+        'reservedRecords': 0,
+        'reservedBytes': 0,
+        'dropped': 0,
+        'unconfirmed': 0,
+        'cleanupPending': false,
+      };
+      for (final state in ['starting', 'available', 'degraded', 'disabled']) {
+        expect(
+          RuntimeRecordingStatus.fromJson(value(state)).incomplete,
+          state != 'available',
+        );
+      }
+      expect(
+        RuntimeRecordingStatus.fromJson({
+          ...value('available'),
+          'dropped': 1,
+        }).incomplete,
+        isTrue,
+      );
+      expect(
+        RuntimeRecordingStatus.fromJson({
+          ...value('available'),
+          'cleanupPending': true,
+        }).incomplete,
+        isTrue,
+      );
+      for (final malformed in [
+        value('healthy'),
+        {...value('available'), 'reservedRecords': -1},
+        {...value('available'), 'crashLoss': 123},
+      ]) {
+        expect(
+          () => RuntimeRecordingStatus.fromJson(malformed),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+    },
+  );
+
   for (final kind in ['managed_run', 'manual_capture']) {
     test(
       'Capture observation preserves sparse $kind facts with zero requests',

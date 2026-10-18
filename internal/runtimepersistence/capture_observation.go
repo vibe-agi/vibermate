@@ -52,7 +52,7 @@ func (s *ObservationStore) CaptureObservation(ctx context.Context, scope recordi
 // to the authority result.
 func observeCapture(observer recording.CaptureObserver, scopes recording.ScopeIssuer, capture captureidentity.Reference, revision uint64, at time.Time, original recording.Fence) {
 	if observer != nil && scopes != nil {
-		stamp := scopes.ScopeStamp(capture)
+		stamp := recording.StampOriginal(scopes, recording.Scope{Capture: capture, Fence: original})
 		if !stamp.Current() || stamp.Fence() != original || !stamp.MatchesCapture(capture) {
 			return
 		}

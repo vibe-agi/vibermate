@@ -145,12 +145,15 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err == nil {
 		return host, nil
 	}
-	shutdownContext, cancel := context.WithTimeout(
-		context.Background(),
-		options.ShutdownTimeout,
-	)
+	return nil, rollbackFailedRuntimeStart(runtime, guard, options.ShutdownTimeout, err)
+}
+
+func rollbackFailedRuntimeStart(runtime *productruntime.Runtime, guard *instanceguard.Guard, timeout time.Duration, root error) error {
+	shutdownContext, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return nil, errors.Join(err, runtime.Shutdown(shutdownContext), guard.Release())
+	handoffErr := runtime.HandoffFailedStartHostGuard(guard)
+	return errors.Join(root, handoffErr, runtime.Shutdown(shutdownContext))
+
 }
 
 // Attach exposes the network Server boundary around an existing ProductRuntime.
@@ -309,7 +312,7 @@ func startAttached(
 		return nil, err
 	}
 	usage, err := runtimeusage.New(runtimeusage.Options{
-		Ledger: runtime.UsageRepository(), Clock: options.Clock,
+		Policies: runtime.UsageRepository(), Reader: runtime.UsageInspection(), Clock: options.Clock,
 		Prices: &modelcatalog.ReferencePrices{Fetch: runtime.FetchModelsDevPrices, Clock: options.Clock},
 	})
 	if err != nil {
@@ -584,8 +587,7 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	runtimeStopped := !host.ownsRuntime
 	if host.ownsRuntime {
 		runtimeErr = host.runtime.Shutdown(shutdownContext)
-		runtimeStopped = runtimeErr == nil &&
-			host.runtime.Status().State == productruntime.RuntimeStateStopped
+		runtimeStopped = host.runtime.ShutdownCompleted()
 	}
 	if host.socksDone != nil {
 		select {
@@ -606,4 +608,15 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	host.closeErr = errors.Join(attemptErr, host.guard.Release())
 	host.closed = true
 	return host.closeErr
+}
+
+// ShutdownCompleted distinguishes actual listener/Runtime cleanup from a
+// historical timeout that remains reportable after a successful retry.
+func (host *Host) ShutdownCompleted() bool {
+	if host == nil {
+		return true
+	}
+	host.shutdownMu.Lock()
+	defer host.shutdownMu.Unlock()
+	return host.closed
 }

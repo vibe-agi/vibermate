@@ -23,7 +23,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
-	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
@@ -63,64 +62,75 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
-	recorder           *observationRecorder
-	socks              *socksproxy.Server
-	udp                *runtimeUDP
-	vlessProfiles      *vlessprofile.Manager
-	network            *egressnetwork.Builder
-	productUpdates     *productupdate.Reader
-	bodyAdmission      *exchange.BodyAdmission
-	launchSnapshots    launchsnapshot.Store
-	paths              RuntimePaths
-	storage            *runtimepersistence.Store
-	acpObservations    *acpobservation.Manager
-	status             *statusTracker
-	schemaReader       runtimepersistence.SchemaStateReader
-	environments       environmentRuntime
-	assignments        captureAssignmentRuntime
-	workspaceIdentity  *workspaceidentity.Manager
-	activities         activityRuntime
-	conversationIDs    activity.ConversationIdentityRepository
-	conversationWriter activity.ConversationProjectionWriter
-	contents           exchangeContentRuntime
-	connections        connectionEventRuntime
-	egress             egressaudit.Reader
-	egressCompletion   *runtimeEgressRepository
-	endpoints          *upstreamendpoint.Manager
-	accounts           *provideraccount.Manager
-	accountReads       *accountoperation.Reader
-	codexOAuth         *codexoauth.Manager
-	codexLogins        *codexoauth.LoginManager
-	codeLibrary        *codelibrary.Manager
-	egressProfiles     *egressprofile.Manager
-	egressDefaults     *egressprofile.DefaultManager
-	runtimeUsers       *runtimeuser.Manager
-	approvals          approvalRuntime
-	nativeTools        nativemcp.Executor
-	nativeContentKey   [32]byte
-	connectionRules    *connectionpolicy.Manager
-	monitor            ownedComponent
-	rawEvidence        rawEvidenceRuntime
-	recordingBudget    *recording.Budget
-	evidenceArchive    resourcedeletion.Archive
-	archiveBarrier     *evidencearchive.Barrier
-	provider           providerRuntime
-	original           originalRuntime
-	exchanges          exchangeRuntime
-	captureRuns        captureRuntime
-	manualCaptures     manualCaptureRuntime
-	localCA            localCARuntime
-	proxy              proxyRuntime
-	offlineHold        offlinehold.RuntimeCoordinator
-	resumeProber       offlinehold.Prober
-	cleanups           cleanupStack
-	clock              Clock
-	timeout            LifecycleOptions
+	recordingStorage     *recordingStorage
+	activityInspection   *recordingActivity
+	contentInspection    *recordingContent
+	connectionInspection *runtimepersistence.ConnectionInspectionReader
+	nativeInspection     *runtimepersistence.NativeInspectionReader
+	acpInspection        *runtimepersistence.ACPInspectionReader
+	captureInspection    *runtimepersistence.CaptureInspectionReader
+	usageInspection      *runtimepersistence.UsageInspectionReader
+	recorder             *observationRecorder
+	socks                *socksproxy.Server
+	udp                  *runtimeUDP
+	vlessProfiles        *vlessprofile.Manager
+	network              *egressnetwork.Builder
+	productUpdates       *productupdate.Reader
+	bodyAdmission        *exchange.BodyAdmission
+	launchSnapshots      launchsnapshot.Store
+	paths                RuntimePaths
+	storage              *runtimepersistence.ControlStore
+	acpObservations      *acpobservation.Manager
+	status               *statusTracker
+	schemaReader         runtimepersistence.SchemaStateReader
+	environments         environmentRuntime
+	assignments          captureAssignmentRuntime
+	workspaceIdentity    *workspaceidentity.Manager
+	activities           activityRuntime
+	conversationIDs      activity.ConversationIdentityRepository
+	conversationWriter   activity.ConversationProjectionWriter
+	contents             exchangeContentRuntime
+	connections          connectionEventRuntime
+	egress               egressaudit.Reader
+	egressCompletion     *runtimeEgressRepository
+	endpoints            *upstreamendpoint.Manager
+	accounts             *provideraccount.Manager
+	accountReads         *accountoperation.Reader
+	codexOAuth           *codexoauth.Manager
+	codexLogins          *codexoauth.LoginManager
+	codeLibrary          *codelibrary.Manager
+	egressProfiles       *egressprofile.Manager
+	egressDefaults       *egressprofile.DefaultManager
+	runtimeUsers         *runtimeuser.Manager
+	approvals            approvalRuntime
+	nativeTools          nativemcp.Executor
+	nativeContentKey     [32]byte
+	connectionRules      *connectionpolicy.Manager
+	monitor              ownedComponent
+	rawEvidence          rawEvidenceRuntime
+	recordingBudget      *recording.Budget
+	evidenceArchive      resourcedeletion.Archive
+	archiveBarrier       *evidencearchive.Barrier
+	provider             providerRuntime
+	original             originalRuntime
+	exchanges            exchangeRuntime
+	captureRuns          captureRuntime
+	manualCaptures       manualCaptureRuntime
+	localCA              localCARuntime
+	proxy                proxyRuntime
+	offlineHold          offlinehold.RuntimeCoordinator
+	resumeProber         offlinehold.Prober
+	cleanups             cleanupStack
+	clock                Clock
+	timeout              LifecycleOptions
 
-	shutdownOnce       sync.Once
-	shutdownDone       chan struct{}
-	shutdownBudgetDone chan struct{}
-	shutdownErr        error
+	shutdownOwnershipMu  sync.Mutex
+	failedStartHostGuard *instanceguard.Guard
+	failedStartGuardErr  error
+	shutdownOnce         sync.Once
+	shutdownDone         chan struct{}
+	shutdownBudgetDone   chan struct{}
+	shutdownErr          error
 }
 
 // Start validates all dependencies and executes the typed production builder.
@@ -129,15 +139,17 @@ func Start(ctx context.Context, options Options) (*Runtime, error) {
 }
 
 type runtimeBuildOverrides struct {
-	egressObserver  func(*runtimeEgressRepository) egressaudit.Observer
-	recorder        observationRecorderBuilder
-	connectionEvent func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
-	originalProber  func() (*originaltransport.TLSProber, error)
-	providerProber  func() (*providertransport.ProviderProber, error)
-	blindProber     func() (*blindtunnel.ReachabilityProber, error)
-	environment     func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
-	provider        func(providerBuildRequest) (providerRuntime, error)
-	recoverEgress   func(context.Context, egressaudit.Repository, time.Time) error
+	publishObservations func(context.Context, string, string, *instanceguard.Guard) error
+	egressObserver      func(*runtimeEgressRepository) egressaudit.Observer
+	recorder            observationRecorderBuilder
+	connectionEvent     func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
+	originalProber      func() (*originaltransport.TLSProber, error)
+	providerProber      func() (*providertransport.ProviderProber, error)
+	blindProber         func() (*blindtunnel.ReachabilityProber, error)
+	environment         func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	provider            func(providerBuildRequest) (providerRuntime, error)
+	recoverEgress       func(context.Context, egressaudit.Repository, time.Time) error
+	openObservations    func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error)
 }
 
 func recoverEgressAttempts(
@@ -185,10 +197,6 @@ func startWithBuilders(
 	environmentBuilder := buildEnvironment
 	if overrides.environment != nil {
 		environmentBuilder = overrides.environment
-	}
-	recoverEgress := recoverEgressAttempts
-	if overrides.recoverEgress != nil {
-		recoverEgress = overrides.recoverEgress
 	}
 
 	instanceID, err := options.InstanceIDs.NewInstanceID(ctx)
@@ -239,10 +247,24 @@ func startWithBuilders(
 	} else if hostGuard.Path() != filepath.Join(options.Paths.DataDirectory(), "server.lock") || !hostGuard.OwnsDirectory(options.Paths.DataDirectory()) {
 		return fail("host ownership", ErrInvalidOptions)
 	}
+	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
+	cleanups.register("runtime owner context", func(context.Context) error { cancelOwner(errors.New("runtime stopped")); return nil })
+	recordingBudget, err := recording.NewBudget(recording.Limits{Records: 2048, Bytes: 64 << 20})
+	if err != nil {
+		return fail("recording budget", err)
+	}
+	recorderBuilder := overrides.recorder
+	if recorderBuilder == nil {
+		recorderBuilder = newObservationRecorder
+	}
+	recorder := recorderBuilder(ownerContext, recordingBudget, nil, nil)
+	recorder.originalScopesOnly = true
+	recorder.reportFailure = tracker.failRecording
+	cleanups.register("observation recorder", recorder.Shutdown)
 	storageResult, err := buildStorage(ctx, storageBuildRequest{
 		databasePath: options.Paths.DatabasePath(),
 		directory:    options.Paths.DataDirectory(), dataGuard: dataGuard, hostGuard: hostGuard, now: options.Clock.Now().UTC(), upgradeTimeout: options.SchemaUpgradeTimeout, progress: options.SchemaUpgradeProgress,
-		contentLimits: contentLimits,
+		recorder: recorder,
 	})
 	if err != nil {
 		return fail("sqlite", err)
@@ -263,28 +285,27 @@ func startWithBuilders(
 		}
 		return fail("sqlite", incompleteErr)
 	}
-	cleanups.register("sqlite", storageResult.store.Shutdown)
+	cleanups.register("sqlite", func(ctx context.Context) error {
+		err := storageResult.store.Shutdown(ctx)
+		if err != nil {
+			return errors.Join(err, storageResult.store.Shutdown(context.WithoutCancel(ctx)))
+		}
+		return nil
+	})
+	visibility, err := storageResult.store.ReadInspectionSnapshot(ctx, nil)
+	if err != nil {
+		return fail("recording epoch", err)
+	}
+	recorder.epoch.Advance(visibility.Stamp.ArchiveEpoch)
 	if err := storageResult.store.NativeToolRepository().Recover(ctx, options.Clock.Now().UTC()); err != nil {
 		return fail("native tool recovery", err)
 	}
-	egressRepository := storageResult.store.EgressAttemptRepository()
-	if egressRepository == nil {
-		return fail(
-			"EgressAttempt recovery",
-			fmt.Errorf(
-				"%w: EgressAttempt repository is nil",
-				ErrInvalidBuildResult,
-			),
-		)
-	}
-	if err := recoverEgress(
-		ctx,
-		egressRepository,
-		options.Clock.Now().UTC(),
-	); err != nil {
-		return fail("EgressAttempt recovery", err)
-	}
 
+	if options.ConsumePendingRootReset {
+		if err := localca.ApplyPendingRootReset(ctx, options.Paths.DataDirectory()); err != nil {
+			return fail("local Root reset", err)
+		}
+	}
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
 	var nativeContentKey [32]byte
 	if _, err := io.ReadFull(securityRandom, nativeContentKey[:]); err != nil {
@@ -327,48 +348,32 @@ func startWithBuilders(
 	if err != nil {
 		return fail("Runtime User authority", err)
 	}
-	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
-	cleanups.register("runtime owner context", func(context.Context) error {
-		cancelOwner(errors.New("runtime owner context stopped"))
-		return nil
-	})
-	recordingBudget, err := recording.NewBudget(recording.Limits{Records: 2048, Bytes: 64 << 20})
+	optional, err := newRecordingStorage(ownerContext, options.Paths.DataDirectory(), storageResult.layout, dataGuard, storageResult.store, recorder, tracker, contentLimits, securityRandom, options.Clock, overrides)
 	if err != nil {
-		return fail("recording budget", err)
+		return fail("recording descriptors", err)
 	}
-	rawEvidence, err := buildRawEvidence(rawEvidenceBuildRequest{
-		ctx:        ownerContext,
-		budget:     recordingBudget,
-		repository: storageResult.store.RawEvidenceRepository(),
-		random:     securityRandom,
-		clock:      options.Clock,
-		config:     rawevidence.DefaultConfig(),
-	})
-	if err != nil || rawEvidence == nil {
-		buildErr := err
-		if buildErr == nil {
-			buildErr = fmt.Errorf(
-				"%w: Raw evidence writer is nil",
-				ErrInvalidBuildResult,
-			)
-		}
-		return fail("Raw evidence writer", buildErr)
-	}
-	cleanups.register("Raw evidence writer", rawEvidence.Shutdown)
-	recorderBuilder := overrides.recorder
-	if recorderBuilder == nil {
-		recorderBuilder = newObservationRecorder
-	}
-	recorder := recorderBuilder(ownerContext, recordingBudget, storageResult.store.ConnectionEventRepository().(connectionevent.ScopedStore), egressRepository.(egressaudit.ScopedAttemptStore))
-	recorder.reportFailure = tracker.failRecording
-	cleanups.register("observation recorder", func(ctx context.Context) error {
-		err := recorder.Shutdown(ctx)
+	cleanups.register("optional recording ownership", func(ctx context.Context) error {
+		err := optional.Shutdown(ctx)
 		if err != nil {
-			<-recorder.done
+			<-optional.done
 		}
 		return err
 	})
-	usagePolicy, err := storageResult.store.UsageRepository().UsagePolicy(ctx)
+	activityReader, err := runtimepersistence.NewActivityInspectionReader(optional.catalog, storageResult.store, *contentLimits)
+	if err != nil {
+		return fail("Activity inspection configuration", err)
+	}
+	contentReader, err := runtimepersistence.NewContentInspectionReader(optional.catalog, storageResult.store, *contentLimits)
+	if err != nil {
+		return fail("content inspection configuration", err)
+	}
+	activities := &recordingActivity{InspectionReader: activityReader, owner: optional}
+	contents := &recordingContent{InspectionReader: contentReader, owner: optional}
+	connectionReader := runtimepersistence.NewConnectionInspectionReader(optional.catalog, storageResult.store)
+	egressReader := runtimepersistence.NewEgressInspectionReader(optional.catalog, storageResult.store)
+	acpReader := runtimepersistence.NewACPInspectionReader(optional.catalog, storageResult.store)
+	rawEvidence := &recordingRaw{runtimeRawReader: runtimepersistence.NewRawInspectionReader(optional.catalog, storageResult.store, optional, optional), owner: optional}
+	usagePolicy, err := storageResult.store.UsagePolicyRepository().UsagePolicy(ctx)
 	if err != nil {
 		return fail("usage collection policy", err)
 	}
@@ -378,7 +383,7 @@ func startWithBuilders(
 	recorder.publishUsagePolicy(usagePolicy)
 
 	runtimeEgress := newRuntimeEgressRepository(
-		egressRepository,
+		egressReader,
 		tracker,
 		ownerContext,
 		options.Lifecycle,
@@ -510,40 +515,6 @@ func startWithBuilders(
 		return fail("ProviderAccount deletion authority", err)
 	}
 	pending.register("Capture assignment runtime", assignments.Shutdown)
-	activities, err := buildActivity(activityBuildRequest{
-		repository: storageResult.store.ActivityRepository(),
-		clock:      options.Clock,
-		random:     securityRandom,
-	})
-	if err != nil || activities == nil {
-		buildErr := err
-		if buildErr == nil {
-			buildErr = fmt.Errorf(
-				"%w: Activity component is nil",
-				ErrInvalidBuildResult,
-			)
-		}
-		return fail("Activity recovery", buildErr)
-	}
-	cleanups.register("Activity component", activities.Shutdown)
-
-	contents, err := buildExchangeContent(exchangeContentBuildRequest{
-		contentLimits: contentLimits,
-		ctx:           ctx,
-		repository:    storageResult.store.ExchangeContentRepository(),
-		clock:         options.Clock,
-	})
-	if err != nil || contents == nil {
-		buildErr := err
-		if buildErr == nil {
-			buildErr = fmt.Errorf(
-				"%w: Exchange content component is nil",
-				ErrInvalidBuildResult,
-			)
-		}
-		return fail("Exchange content recovery", buildErr)
-	}
-	cleanups.register("Exchange content component", contents.Shutdown)
 
 	connectionBuilder := buildConnectionEvent
 	if overrides.connectionEvent != nil {
@@ -551,7 +522,7 @@ func startWithBuilders(
 	}
 	connections, err := connectionBuilder(ctx, connectionEventBuildRequest{
 		observer: recorder, scopes: recorder,
-		repository: storageResult.store.ConnectionEventRepository(),
+		repository: connectionReader,
 		clock:      options.Clock,
 		random:     securityRandom,
 	})
@@ -614,7 +585,8 @@ func startWithBuilders(
 			tracker.observeStorage(state.Revision, observationErr)
 		},
 		cleanup: func(ctx context.Context) error {
-			return storageResult.store.MaintainExpired(ctx, options.Clock.Now().UTC())
+			_, err := storageResult.store.RetireNativeMetadata(ctx, options.Clock.Now().UTC(), 100)
+			return err
 		},
 	})
 	if err != nil {
@@ -775,9 +747,9 @@ func startWithBuilders(
 		provider:                 provider,
 		toolDecisions:            toolDecisions,
 		activities:               activities,
-		identities:               storageResult.store.ConversationIdentityRepository(),
+		identities:               optional,
 		contents:                 contents,
-		usage:                    storageResult.store,
+		usage:                    optional,
 		recorder:                 recorder,
 		clock:                    options.Clock,
 		hold:                     options.ExchangeHold,
@@ -1008,8 +980,7 @@ func startWithBuilders(
 		return nil
 	})
 	cleanups.register("retained capture authority admission", func(context.Context) error { retained.BeginShutdown(); return nil })
-	recorder.acp = storageResult.store
-	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPRegistrations(), captureRuns, assignments, environments, options.Clock, acpobservation.RecordingOptions{Recorder: recorder, Scopes: recorder, Reader: storageResult.store.ACPSnapshots()})
+	acpObservations, err := acpobservation.NewManager(storageResult.store.ACPRegistrations(), captureRuns, assignments, environments, options.Clock, acpobservation.RecordingOptions{Recorder: recorder, Scopes: recorder, Reader: acpReader})
 	if err != nil {
 		return fail("ACP observations", err)
 	}
@@ -1031,6 +1002,7 @@ func startWithBuilders(
 		shutdownBudgetDone = make(chan struct{})
 	}
 	return &Runtime{
+		recordingStorage: optional, activityInspection: activities, contentInspection: contents, connectionInspection: connectionReader, nativeInspection: runtimepersistence.NewNativeInspectionReader(optional.catalog, storageResult.store), acpInspection: acpReader, captureInspection: runtimepersistence.NewCaptureInspectionReader(optional.catalog, storageResult.store), usageInspection: runtimepersistence.NewUsageInspectionReader(optional.catalog, storageResult.store),
 		socks:              socks,
 		udp:                udp,
 		bodyAdmission:      bodyAdmission,
@@ -1043,11 +1015,11 @@ func startWithBuilders(
 		assignments:        assignments,
 		workspaceIdentity:  workspaceIdentity,
 		activities:         activities,
-		conversationIDs:    storageResult.store.ConversationIdentityRepository(),
-		conversationWriter: storageResult.store.ConversationProjectionWriter(),
+		conversationIDs:    optional,
+		conversationWriter: nil,
 		contents:           contents,
 		connections:        connections,
-		egress:             runtimeEgress,
+		egress:             egressReader,
 		egressCompletion:   runtimeEgress,
 		recorder:           recorder,
 		endpoints:          endpoints,
@@ -1069,7 +1041,7 @@ func startWithBuilders(
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
 		recordingBudget:    recordingBudget,
-		evidenceArchive:    recordingArchive{delegate: storageResult.store, recorder: recorder, revoker: nativeRevoker, raw: rawEvidence},
+		evidenceArchive:    optional,
 		archiveBarrier:     archiveBarrier,
 		provider:           provider,
 		original:           original,
@@ -1091,6 +1063,32 @@ func startWithBuilders(
 // Status returns an immutable copy of the current runtime state.
 func (r *Runtime) Status() RuntimeStatus {
 	status := r.status.snapshot()
+	if r.recordingBudget != nil {
+		snapshot := r.recordingBudget.Snapshot()
+		status.Recording.ReservedRecords = snapshot.ReservedRecords
+		status.Recording.ReservedBytes = snapshot.ReservedBytes
+		for _, kind := range snapshot.ByKind {
+			for result, count := range kind.Offers {
+				if recording.OfferResult(result) != recording.Accepted {
+					status.Recording.Dropped += count.Records
+				}
+			}
+			status.Recording.Unconfirmed += kind.Settlements[recording.Unconfirmed].Records
+		}
+		if status.Recording.State == RecordingAvailable && (status.Recording.Dropped > 0 || status.Recording.Unconfirmed > 0) {
+			status.Recording.State = RecordingDegraded
+		}
+	}
+	if r.recordingStorage != nil {
+		select {
+		case <-r.recordingStorage.done:
+			status.Recording.CleanupPending = r.recordingStorage.closeErr != nil
+		default:
+		}
+	}
+	if status.Recording.State == RecordingAvailable && (status.RecordingFailure != nil || r.recordingStorage != nil && !r.recordingStorage.available()) {
+		status.Recording.State = RecordingDegraded
+	}
 	status.EnvironmentProjection = r.environments.Health()
 	status.OfflineHold = r.offlineHold.Snapshot()
 	if status.EnvironmentProjection.State == environment.ProjectionStateUnavailable &&
@@ -1171,8 +1169,8 @@ func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
 }
 
 // Activities returns the runtime-owned durable redacted timeline.
-func (r *Runtime) Activities() activity.Runtime {
-	return r.activities
+func (r *Runtime) Activities() *recordingActivity {
+	return r.activityInspection
 }
 
 // ConversationIdentities retains exact, client-owned session and actor IDs
@@ -1188,12 +1186,13 @@ func (r *Runtime) ConversationProjectionWriter() activity.ConversationProjection
 
 // ExchangeContents returns the separate, retention-bound semantic evidence
 // reader. Body-free Activity and egress journals never expose this content.
-func (r *Runtime) UsageRepository() runtimeusage.Repository {
-	return recordingUsageRepository{Repository: r.storage.UsageRepository(), recorder: r.recorder}
+func (r *Runtime) UsageRepository() runtimeusage.PolicyRepository {
+	return recordingUsageRepository{PolicyRepository: r.storage.UsagePolicyRepository(), recorder: r.recorder}
 }
+func (r *Runtime) UsageInspection() runtimeusage.InspectionReader { return r.usageInspection }
 
-func (r *Runtime) ExchangeContents() exchangecontent.Reader {
-	return r.contents
+func (r *Runtime) ExchangeContents() exchangecontent.InspectionReader {
+	return r.contentInspection
 }
 
 func (r *Runtime) ExchangeContentLimits() (exchangecontent.SourceLimits, bool) {
@@ -1230,12 +1229,12 @@ func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
 // the whole-archive clear. A Host must expose the destructive action with this
 // exact runtime-owned instance so holder discovery cannot race a new Capture.
 func (r *Runtime) EvidenceArchiveBarrier() evidencearchive.ClearBarrier {
-	return recordingArchiveBarrier{capture: r.archiveBarrier, recorder: r.recorder}
+	return unavailableArchiveBarrier{}
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.
-func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
-	return r.connections
+func (r *Runtime) ConnectionEvents() *runtimepersistence.ConnectionInspectionReader {
+	return r.connectionInspection
 }
 
 // EgressAttempts returns the durable per-egress audit boundary. It answers
@@ -1317,7 +1316,7 @@ func (r *Runtime) FetchModelsDevPrices(ctx context.Context) (*http.Response, err
 
 // NativeToolRepository and NativeToolPreviews expose the same Store and live
 // executor used by captured native traffic to authenticated host composition.
-func (r *Runtime) NativeToolRepository() nativetool.Repository {
+func (r *Runtime) NativeToolRepository() nativetool.AuthorityRepository {
 	return r.storage.NativeToolRepository()
 }
 func (r *Runtime) NativeToolPreviews() nativemcp.Executor { return r.nativeTools }
@@ -1443,6 +1442,13 @@ func (r *Runtime) executeShutdown() {
 		budgetCallbackDone = make(chan struct{})
 		stopBudget = context.AfterFunc(shutdownContext, func() {
 			defer close(budgetCallbackDone)
+			if r.recordingStorage != nil {
+				select {
+				case <-r.recordingStorage.done:
+				default:
+					r.status.recordingCleanupPending()
+				}
+			}
 			r.status.finishStopping(r.clock.Now(), context.DeadlineExceeded)
 			close(r.shutdownBudgetDone)
 		})
@@ -1463,9 +1469,14 @@ func (r *Runtime) executeShutdown() {
 		r.egressCompletion.finishShutdown()
 		durabilityErr = r.egressCompletion.failure()
 	}
-	r.shutdownErr = errors.Join(cleanupErr, durabilityErr)
+	r.shutdownOwnershipMu.Lock()
+	if r.failedStartHostGuard != nil {
+		r.failedStartGuardErr = r.failedStartHostGuard.Release()
+	}
+	r.shutdownErr = errors.Join(cleanupErr, durabilityErr, r.failedStartGuardErr)
 	r.status.finishStopping(r.clock.Now(), r.shutdownErr)
 	close(r.shutdownDone)
+	r.shutdownOwnershipMu.Unlock()
 }
 
 // blindTunnelDialer pairs the gated dialer with the action admission the
@@ -1497,4 +1508,58 @@ func (tunnels *blindTunnelDialer) Dial(
 	request blindtunnel.DialRequest,
 ) (net.Conn, offlinehold.Lease, error) {
 	return tunnels.dialer.Dial(ctx, request)
+}
+
+func (r *Runtime) ActivityRecorder() activity.Recorder { return r.activities }
+func (r *Runtime) IdentityInspection() activity.IdentityInspectionReader {
+	return r.activityInspection.InspectionReader.(*runtimepersistence.ActivityInspectionReader)
+}
+func (r *Runtime) NativeInspection() nativetool.InspectionReader  { return r.nativeInspection }
+func (r *Runtime) ACPInspection() acpobservation.InspectionReader { return r.acpInspection }
+func (r *Runtime) ACPMarkers() acpobservation.MarkerReader        { return r.storage.ACPRegistrations() }
+func (r *Runtime) CaptureObservations() recording.CaptureObservationReader {
+	return r.captureInspection
+}
+
+func (r *Runtime) ConversationRepairWriter() activity.ConversationRepairWriter {
+	return r.recordingStorage
+}
+
+// ShutdownDone closes only after actual owned cleanup, independently of the
+// caller/internal budget and historical shutdown error. It conveys no readiness.
+func (r *Runtime) ShutdownDone() <-chan struct{} { return r.shutdownDone }
+func (r *Runtime) ShutdownCompleted() bool {
+	select {
+	case <-r.shutdownDone:
+		return true
+	default:
+		return false
+	}
+}
+
+// HandoffFailedStartHostGuard transfers the one failed Server startup guard to
+// this existing shutdown owner. Register before bounded Shutdown. Successful
+// hosts continue owning their own guards. Duplicate handoff is idempotent.
+func (r *Runtime) HandoffFailedStartHostGuard(guard *instanceguard.Guard) error {
+	if r == nil || guard == nil {
+		return ErrInvalidOptions
+	}
+	r.shutdownOwnershipMu.Lock()
+	defer r.shutdownOwnershipMu.Unlock()
+	if r.failedStartHostGuard != nil {
+		if r.failedStartHostGuard != guard {
+			return ErrInvalidOptions
+		}
+		return r.failedStartGuardErr
+	}
+	if guard.Path() != filepath.Join(r.paths.DataDirectory(), "server.lock") || !guard.OwnsDirectory(r.paths.DataDirectory()) {
+		return ErrInvalidOptions
+	}
+	r.failedStartHostGuard = guard
+	select {
+	case <-r.shutdownDone:
+		r.failedStartGuardErr = guard.Release()
+	default:
+	}
+	return r.failedStartGuardErr
 }

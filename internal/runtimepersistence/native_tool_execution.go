@@ -679,7 +679,14 @@ func (r *nativeToolRepository) Recover(ctx context.Context, now time.Time) error
 		return errors.Join(nativetool.ErrUnavailable, err)
 	}
 	err = r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		return revokeNativeScopesWhere(ctx, tx, "state<>'closed'", now)
+		if err := revokeNativeScopesWhere(ctx, tx, "state<>'closed'", now); err != nil {
+			return err
+		}
+		// Exclusive Runtime ownership excludes the former process. A known
+		// logical terminal does not prove that its socket finished; reconcile
+		// every retained physically open delivery without issuing a receipt.
+		_, err := tx.ExecContext(ctx, `UPDATE native_tool_deliveries SET completed_at_unix_ms=MAX(started_at_unix_ms,?),outcome='failed',error_class='daemon_restarted',bytes_out=0,bytes_in=0,byte_counts_known=0 WHERE completed_at_unix_ms IS NULL`, now.UnixMilli())
+		return err
 	})
 	// Rotate even on unknown commit: old receipts cannot outlive this boundary.
 	r.issuer = issuer

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
@@ -12,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +97,7 @@ func TestRealCapturedForwardingWhileHistoryWriterBlocked(t *testing.T) {
 			f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: family, choice: "builtin", recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
 				return newObservationRecorder(ctx, b, sink, sink)
 			}})
+			waitRecording(t, f.r)
 			run := newOriginalForwardRun(t, f)
 			first := run.start(t)
 			select {
@@ -119,6 +122,7 @@ func TestRealBlindAndCleartextWhileHistoryWriterBlocked(t *testing.T) {
 			f := newB4Fixture(t, port, func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
 				return newObservationRecorder(ctx, b, sink, sink)
 			})
+			waitRecording(t, f.r)
 			for range 2 {
 				flight := f.job(func(context.Context) b4Result { return f.wire(port == 443) })
 				select {
@@ -368,8 +372,8 @@ func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
 				kind = rawevidence.ScopeManagedRun
 				captureKind = captureidentity.KindManagedRun
 			}
-			const id = "held-admin-fence"
-			barrier := captureEvidenceBarrier{raw: r.rawEvidence, recorder: r.recorder}
+			waitRecording(t, r)
+			id, stamp := recordingAuthorityScope(t, r, captureKind)
 			store := &scopeFenceArchive{}
 			archive := recordingArchive{raw: r.rawEvidence, recorder: r.recorder, delegate: store}
 			perform := func(ctx context.Context, target string) error {
@@ -377,20 +381,16 @@ func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
 					_, err := archive.DeleteCapture(ctx, string(captureKind), target)
 					return err
 				}
-				var terminal interface{ Abort() }
-				var err error
-				if path == "managed_prepare" {
-					terminal, err = barrier.PrepareManagedRun(ctx, target)
-				} else {
-					terminal, err = barrier.PrepareManualCapture(ctx, target)
-				}
+				// This is the administrative settlement primitive. Normal
+				// Capture Finish has its separate non-durability test.
+				terminal, err := r.recorder.prepareScope(ctx, r.rawEvidence, kind, target, nil)
 				if err == nil {
 					terminal.Abort()
 				}
 				return err
 			}
 			event := connectionevent.Event{ConnectionID: "held-admin-connection", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
-			if r.recorder.ObserveConnection(r.recorder.ScopeStamp(captureidentity.Reference{Kind: captureKind, ID: id}), event) != recording.Accepted {
+			if r.recorder.ObserveConnection(stamp, event) != recording.Accepted {
 				t.Fatal("observation refused")
 			}
 			<-sink.entered
@@ -467,8 +467,8 @@ func TestCaptureFenceSurvivesPartialSettlementAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { release(0); release(1); shutdownRuntime(t, r) })
-	const id = "two-write-fence"
-	stamp := r.recorder.ScopeStamp(captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: id})
+	waitRecording(t, r)
+	id, stamp := recordingAuthorityScope(t, r, captureidentity.KindManualCapture)
 	event := connectionevent.Event{ConnectionID: "two-write-connection", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
 	for range 2 {
 		if r.recorder.ObserveConnection(stamp, event) != recording.Accepted {
@@ -476,9 +476,8 @@ func TestCaptureFenceSurvivesPartialSettlementAndShutdown(t *testing.T) {
 		}
 	}
 	<-sink.entered
-	barrier := captureEvidenceBarrier{raw: r.rawEvidence, recorder: r.recorder}
 	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	_, err = barrier.PrepareManualCapture(short, id)
+	_, err = r.recorder.prepareScope(short, r.rawEvidence, rawevidence.ScopeManualCapture, id, nil)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
@@ -511,4 +510,29 @@ func TestCaptureFenceSurvivesPartialSettlementAndShutdown(t *testing.T) {
 		t.Fatal("completed worker retained fence", err)
 	}
 	lease.Release()
+}
+
+func recordingAuthorityScope(t *testing.T, r *Runtime, kind captureidentity.Kind) (string, recording.Stamp) {
+	t.Helper()
+	if kind == captureidentity.KindManualCapture {
+		grant, err := r.manualCaptures.Create(t.Context(), manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Administrative scope", ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeUntilRevoked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		admitted, err := r.manualCaptures.AuthorizeProxy(t.Context(), grant.Credential)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return grant.Capture.ID, r.recorder.StampScope(admitted.RecordingScope)
+	}
+	dir := t.TempDir()
+	grant, err := r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", CatalogRevision: 1, Lifetime: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := r.captureRuns.AuthorizeProxy(t.Context(), grant.ProxyCapability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return grant.Run.ID, r.recorder.StampScope(admitted.RecordingScope)
 }

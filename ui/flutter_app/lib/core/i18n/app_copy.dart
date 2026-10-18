@@ -313,6 +313,15 @@ final class AppCopy {
     'status.ready': 'Ready',
     'status.proxy_stopped': 'Proxy stopped',
     'status.recording_degraded': 'Recording incomplete',
+    'status.recording.starting': 'starting',
+    'status.recording.available': 'available',
+    'status.recording.degraded': 'incomplete or unavailable',
+    'status.recording.disabled': 'disabled',
+    'status.recording.evidence':
+        'Recording {state}. {dropped} dropped, {unconfirmed} writes unconfirmed in this Runtime session. Agent execution remains independent. Missing records do not mean no traffic.',
+    'capture.summary.authorization_observed':
+        'Recorded Capture authorization: first {first}, latest {last}. This does not establish request or model success.',
+    'capture.summary.unknown_time': 'unknown',
     'status.failure.storage':
         'Proxy stopped: {operation} · {reason} · first seen {at}. Check storage access and disk space, then restart the Runtime. Refreshing this page cannot recover the proxy.',
     'status.failure.recording':
@@ -1189,7 +1198,7 @@ final class AppCopy {
     'exchange.raw.loading': 'Loading retained wire evidence…',
     'exchange.raw.empty': 'No raw HTTP evidence was retained.',
     'exchange.raw.writer_degraded':
-        'Raw capture is degraded; {count} records are waiting for durable storage. Restart the local runtime.',
+        'Raw recording is incomplete; {count} records are still owned by the writer. Missing records may have been dropped and cannot be recovered by restarting.',
     'exchange.raw.reveal': 'Reveal',
     'exchange.raw.hide': 'Hide revealed bytes',
     'exchange.raw.redacted_credentials': 'Credential values removed: {fields}',
@@ -1240,7 +1249,7 @@ final class AppCopy {
     'exchange.raw.body.decode.decoder_unavailable':
         'This Runtime did not provide a decoded view. Update the Runtime to read compressed bodies here, or inspect the original bytes in HTTP details.',
     'exchange.raw.recovery':
-        'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
+        'A previous writer ended without confirmation. Its configured flush window was {ms} ms; the amount of missing evidence is unknown.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
     'exchange.raw.diagnostic.preview': 'Review redacted diagnostic',
     'exchange.raw.diagnostic.copy': 'Copy diagnostic',
@@ -3300,6 +3309,15 @@ final class AppCopy {
     'status.ready': '就绪',
     'status.proxy_stopped': '代理已停止',
     'status.recording_degraded': '记录不完整',
+    'status.recording.starting': '正在启动',
+    'status.recording.available': '可用',
+    'status.recording.degraded': '不完整或不可用',
+    'status.recording.disabled': '已停用',
+    'status.recording.evidence':
+        '记录{state}。本次运行已丢弃 {dropped} 条，{unconfirmed} 次写入未确认。Agent 执行独立进行；缺少记录不代表没有流量。',
+    'capture.summary.authorization_observed':
+        '已记录 Capture 授权：首次 {first}，最近 {last}。这不能证明请求或模型成功。',
+    'capture.summary.unknown_time': '未知',
     'status.failure.storage':
         '代理已停止：{operation} · {reason} · 首次发生于 {at}。请检查存储权限和磁盘空间，处理后重启 Runtime；刷新页面不能恢复代理。',
     'status.failure.recording':
@@ -4043,7 +4061,8 @@ final class AppCopy {
     'exchange.raw.summary': '{count} 条边界消息',
     'exchange.raw.loading': '正在读取保留的原始证据…',
     'exchange.raw.empty': '没有保留原始 HTTP 证据。',
-    'exchange.raw.writer_degraded': '原始流量写入器已降级；{count} 条记录正在等待持久化。请重启本地运行时。',
+    'exchange.raw.writer_degraded':
+        '原始记录不完整；写入器仍持有 {count} 条记录。缺失记录可能已丢弃，重启无法补回。',
     'exchange.raw.reveal': '显示原文',
     'exchange.raw.hide': '隐藏原文',
     'exchange.raw.redacted_credentials': '已移除凭证值：{fields}',
@@ -4088,7 +4107,7 @@ final class AppCopy {
         '解压结果超过 4 MiB 阅读上限。仍可在 HTTP 技术详情中查看原始压缩字节。',
     'exchange.raw.body.decode.decoder_unavailable':
         '当前 Runtime 未提供解压视图，请更新 Runtime 后在此阅读正文；也可展开 HTTP 技术详情查看原始字节。',
-    'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
+    'exchange.raw.recovery': '上次写入器未确认正常结束；配置的刷写窗口为 {ms} 毫秒，实际缺失范围未知。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
     'exchange.raw.diagnostic.preview': '预览脱敏诊断',
     'exchange.raw.diagnostic.copy': '复制诊断',

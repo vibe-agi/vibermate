@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"log/slog"
 	"strings"
 	"time"
@@ -175,6 +176,7 @@ func (digest CredentialDigest) Valid() bool {
 // domain-separated credential digest. AdmissionRef is deliberately absent
 // because it is derived as manual-capture/<ID>.
 type DurableRecord struct {
+	RecordingScope      recording.Scope `json:"-"`
 	ID                  ID
 	Owner               OwnerScope
 	DisplayName         string
@@ -339,6 +341,7 @@ type RevokeCommand struct {
 }
 
 type Evidence struct {
+	RecordingScope     recording.Scope `json:"-"`
 	ManualCaptureID    ID
 	CredentialRevision CredentialRevision
 	DisplayName        string

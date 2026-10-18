@@ -109,6 +109,7 @@ type requestDoer interface {
 }
 
 type RuntimeInspection struct {
+	Recording        productruntime.RecordingStatus
 	Origin           string
 	ProcessID        int
 	Ready            bool
@@ -197,6 +198,7 @@ func InspectLocal(
 		Storage:          string(response.Runtime.Storage),
 		StorageFailure:   response.Runtime.StorageFailure,
 		RecordingFailure: response.Runtime.RecordingFailure,
+		Recording:        response.Runtime.Recording,
 	}, nil
 }
 

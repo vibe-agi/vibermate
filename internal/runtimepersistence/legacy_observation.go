@@ -112,7 +112,7 @@ func NewInspectionCatalog(options InspectionCatalogOptions) (*InspectionCatalog,
 	return c, nil
 }
 func inspectionInventory(layout string, sources []InspectionSource) ([]InspectionSource, string, error) {
-	if len(sources) < 1 || len(sources) > 128 {
+	if len(sources) < 1 || len(sources) > 129 {
 		return nil, "", ErrInspectionSourceLimit
 	}
 	seen := map[string]bool{}

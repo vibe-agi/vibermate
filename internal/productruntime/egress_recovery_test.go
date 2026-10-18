@@ -3,57 +3,37 @@ package productruntime
 import (
 	"context"
 	"errors"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
-	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
 func TestProductRuntimeRecoversInterruptedEgressAtStartup(t *testing.T) {
 	t.Parallel()
 
-	paths, err := NewRuntimePaths(filepath.Join(t.TempDir(), "runtime-data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := runtimepersistence.Open(
-		context.Background(),
-		runtimepersistence.Options{
-			DatabasePath:           paths.DatabasePath(),
-			BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
-			CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
+	first := startTestRuntime(t, options)
+	waitRecording(t, first)
 	attempt := runtimeProviderAttempt(t, "egress-before-restart")
-	record, err := store.EgressAttemptRepository().Append(
-		context.Background(),
-		attempt,
-	)
-	if err != nil {
+	repository := first.recordingStorage.current.Load().store.EgressAttemptRepository()
+	if err := repository.(egressaudit.ScopedAttemptStore).PutScopedAttempt(context.Background(), first.recorder.ScopeStamp(captureidentity.Reference{}).Scope(), attempt); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
+	initial, err := repository.List(context.Background(), egressaudit.PageRequest{Limit: 10})
+	if err != nil || len(initial.Items) != 1 {
+		t.Fatal("seed optional history", err)
 	}
-
-	runtime := startTestRuntime(t, testOptionsWithPaths(
-		t,
-		paths,
-		hostcontract.Desktop(),
-		&coordinatorDouble{},
-	))
+	record := initial.Items[0]
+	shutdownRuntime(t, first)
+	options.OfflineHold = &coordinatorDouble{}
+	runtime := startTestRuntime(t, options)
 	defer shutdownRuntime(t, runtime)
-	page, err := runtime.EgressAttempts().List(
-		context.Background(),
-		egressaudit.PageRequest{Limit: 10},
-	)
+	// Eventual optional recovery is explicit; required startup did not join it.
+	waitRecording(t, runtime)
+	page, err := runtime.recordingStorage.current.Load().store.EgressAttemptRepository().List(context.Background(), egressaudit.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,23 +53,20 @@ func TestProductRuntimeRecoversInterruptedEgressAtStartup(t *testing.T) {
 	}
 }
 
-func TestProductRuntimeRefusesToStartWhenEgressRecoveryFails(t *testing.T) {
-	t.Parallel()
-
-	recoveryErr := errors.New("injected EgressAttempt recovery failure")
-	overrides := runtimeBuildOverrides{
-		recoverEgress: func(context.Context, egressaudit.Repository, time.Time) error {
-			return recoveryErr
-		},
+func TestProductRuntimeOrdinaryRecoveryFailureIsOptional(t *testing.T) {
+	runtime, err := startWithBuilders(context.Background(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recoverEgress: func(context.Context, egressaudit.Repository, time.Time) error {
+		return errors.New("synthetic ordinary recovery failure")
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := startWithBuilders(
-		context.Background(),
-		testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}),
-		overrides,
-	)
-	if !errors.Is(err, recoveryErr) ||
-		!strings.Contains(err.Error(), `stage "EgressAttempt recovery"`) {
-		t.Fatalf("startup recovery error = %v", err)
+	defer shutdownRuntime(t, runtime)
+	deadline := time.Now().Add(time.Second)
+	for runtime.Status().Recording.State == RecordingStarting && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if status := runtime.Status(); status.State != RuntimeStateInitialized || status.Recording.State != RecordingDegraded {
+		t.Fatalf("optional recovery changed control readiness: %+v", status)
 	}
 }
 

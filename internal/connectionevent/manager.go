@@ -460,3 +460,19 @@ func (c *Connection) ObservationStamp() recording.Stamp {
 	defer c.mu.Unlock()
 	return c.stamp
 }
+
+// OriginalObservationScope uses only the immutable provenance accompanying
+// authenticated admission; unknown coordinates do not affect forwarding.
+func (c *Connection) OriginalObservationScope(scope recording.Scope) recording.Stamp {
+	if c == nil || c.manager == nil {
+		return recording.Stamp{}
+	}
+	stamp := recording.StampOriginal(c.manager.scopes, scope)
+	if !stamp.Current() {
+		c.mu.Lock()
+		c.global = recording.Stamp{}
+		c.attempted = Event{}
+		c.mu.Unlock()
+	}
+	return stamp
+}

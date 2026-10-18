@@ -26,7 +26,8 @@ type udpTerminalWrite struct {
 	event connectionevent.Event
 }
 type blockedUDPTerminals struct {
-	connectionevent.Repository
+	connectionevent.Reader
+	legacy  connectionevent.Repository
 	scoped  connectionevent.ScopedStore
 	entered chan udpTerminalWrite
 	release chan struct{}
@@ -43,7 +44,7 @@ func (b *blockedUDPTerminals) Append(ctx context.Context, event connectionevent.
 		case <-b.release:
 		}
 	}
-	return b.Repository.Append(ctx, event)
+	return b.legacy.Append(ctx, event)
 }
 
 type observedDirectUDP struct {
@@ -111,12 +112,15 @@ func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder
 		revocation = request.nativeRevocation.(*nativeRevocation)
 		return buildEnvironment(ctx, request)
 	}, connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
-		block.Repository = request.repository
+		block.Reader = request.repository
 		request.repository = block
 		return buildConnectionEvent(ctx, request)
 	}})
 	if e != nil {
 		t.Fatal(e)
+	}
+	if recorder != nil {
+		waitRecording(t, r)
 	}
 	t.Cleanup(func() {
 		block.unblock()

@@ -39,3 +39,23 @@ func (s Stamp) Scope() Scope { return Scope{Capture: s.Capture(), Fence: s.Fence
 type ScopeIssuer interface {
 	ScopeStamp(captureidentity.Reference) Stamp
 }
+
+// OriginalScopeIssuer consumes coordinates selected by an existing required
+// admission read. It is pure: it must not look up or invent Capture authority.
+type OriginalScopeIssuer interface{ StampScope(Scope) Stamp }
+
+// StampOriginal preserves compatibility with explicit standalone legacy
+// issuers. Production implements OriginalScopeIssuer and never guesses fences.
+func StampOriginal(issuer ScopeIssuer, scope Scope) Stamp {
+	if issuer == nil {
+		return Stamp{}
+	}
+	if original, ok := issuer.(OriginalScopeIssuer); ok {
+		return original.StampScope(scope)
+	}
+	stamp := issuer.ScopeStamp(scope.Capture)
+	if stamp.Scope() != scope {
+		return Stamp{}
+	}
+	return stamp
+}

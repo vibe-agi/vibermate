@@ -117,6 +117,8 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
+	// ConsumePendingRootReset is selected by the owned Desktop generation. Required storage admission precedes reset consumption and CA opening.
+	ConsumePendingRootReset bool
 	// VLESSExecutable is selected by the trusted host, never by an import URI.
 	VLESSExecutable string
 	// NetworkOptions injects trusted dial/resolver dependencies. Runtime owns

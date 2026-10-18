@@ -361,6 +361,7 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	if err := transaction.Commit(); err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture authorization: %w", err)
 	}
+	record.RecordingScope = recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, Fence: original}
 	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now, original)
 	return record, nil
 }

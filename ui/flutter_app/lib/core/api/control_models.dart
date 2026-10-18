@@ -1842,6 +1842,7 @@ final class RuntimeStatus {
     required this.stopReasonCode,
     this.storageFailure,
     this.recordingFailure,
+    this.recording,
     this.networkAccess,
   });
 
@@ -1889,6 +1890,7 @@ final class RuntimeStatus {
         'stopReasonCode',
         'storageFailure',
         'recordingFailure',
+        'recording',
       },
     );
     final instanceId = requireString(runtime, 'instanceId', 'status.runtime');
@@ -2003,6 +2005,9 @@ final class RuntimeStatus {
       storage: storage,
       storageFailure: storageFailure,
       recordingFailure: recordingFailure,
+      recording: runtime.containsKey('recording')
+          ? RuntimeRecordingStatus.fromJson(runtime['recording'])
+          : null,
       networkAccess: value.containsKey('networkAccess')
           ? HostNetworkAccess.fromJson(
               value['networkAccess'],
@@ -2032,6 +2037,7 @@ final class RuntimeStatus {
   final int schemaRevision;
   final String storage;
   final RuntimePersistenceFailure? storageFailure, recordingFailure;
+  final RuntimeRecordingStatus? recording;
   final String environmentProjection;
   final List<String>? unavailableEnvironments;
   final OfflineHoldSnapshot offlineHold;
@@ -11999,4 +12005,74 @@ final class DeletionOutcome {
   final DeletionReleased? released;
 
   bool get truncated => holderCount > holders.length;
+}
+
+final class RuntimeRecordingStatus {
+  const RuntimeRecordingStatus({
+    required this.state,
+    required this.reservedRecords,
+    required this.reservedBytes,
+    required this.dropped,
+    required this.unconfirmed,
+    required this.cleanupPending,
+  });
+  factory RuntimeRecordingStatus.fromJson(Object? json) {
+    const path = 'status.runtime.recording';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'state',
+        'reservedRecords',
+        'reservedBytes',
+        'dropped',
+        'unconfirmed',
+        'cleanupPending',
+      },
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {
+      'starting',
+      'available',
+      'degraded',
+      'disabled',
+    }.contains(state)) {
+      throw const ControlContractException('unsupported recording state');
+    }
+    return RuntimeRecordingStatus(
+      state: state,
+      reservedRecords: requireInteger(value, 'reservedRecords', path),
+      reservedBytes: requireInteger(value, 'reservedBytes', path),
+      dropped: requireInteger(value, 'dropped', path),
+      unconfirmed: requireInteger(value, 'unconfirmed', path),
+      cleanupPending: requireBoolean(value, 'cleanupPending', path),
+    );
+  }
+  final String state;
+  final int reservedRecords, reservedBytes, dropped, unconfirmed;
+  final bool cleanupPending;
+  bool get incomplete =>
+      state != 'available' ||
+      dropped != 0 ||
+      unconfirmed != 0 ||
+      cleanupPending;
+  @override
+  bool operator ==(Object other) =>
+      other is RuntimeRecordingStatus &&
+      state == other.state &&
+      reservedRecords == other.reservedRecords &&
+      reservedBytes == other.reservedBytes &&
+      dropped == other.dropped &&
+      unconfirmed == other.unconfirmed &&
+      cleanupPending == other.cleanupPending;
+  @override
+  int get hashCode => Object.hash(
+    state,
+    reservedRecords,
+    reservedBytes,
+    dropped,
+    unconfirmed,
+    cleanupPending,
+  );
 }

@@ -188,6 +188,9 @@ func rawEvidenceWriterViewOf(reader rawevidence.Reader) rawEvidenceWriterView {
 	if !ok {
 		return rawEvidenceWriterView{State: "unavailable"}
 	}
+	if availability, ok := reader.(interface{ RecordingAvailable() bool }); ok && !availability.RecordingAvailable() {
+		return rawEvidenceWriterView{State: "unavailable"}
+	}
 	statistics := statisticsReader.Statistics()
 	state := "active"
 	if statistics.LastFailure != "" {
