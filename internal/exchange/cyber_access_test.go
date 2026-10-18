@@ -183,6 +183,8 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 		{name: "duplicate subagent headers fail", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian", "guardian"}}, current: "daybreak_blue", programs: []string{"daybreak_blue", "daybreak_red"}, wantFailure: ReasonProviderRequestInvalid},
 		{name: "duplicate role headers cannot hide behind legacy metadata", mode: cyberaccess.Red, headers: http.Header{"X-Codex-Guardian": {"reviewer", "classifier"}}, metadata: json.RawMessage(`{"x-openai-subagent":"guardian"}`), current: "daybreak_blue", programs: []string{"daybreak_blue", "daybreak_red"}, wantFailure: ReasonProviderRequestInvalid},
 		{name: "unknown role cannot hide behind legacy metadata", mode: cyberaccess.Red, headers: http.Header{"X-Codex-Guardian": {"other"}}, metadata: json.RawMessage(`{"x-openai-subagent":"guardian"}`), current: "daybreak_blue", programs: []string{"daybreak_blue", "daybreak_red"}, wantFailure: ReasonProviderRequestInvalid},
+		{name: "standalone null subagent metadata fails", mode: cyberaccess.Red, metadata: json.RawMessage(`{"x-openai-subagent":null}`), current: "daybreak_blue", programs: []string{"daybreak_blue", "daybreak_red"}, wantFailure: ReasonProviderRequestInvalid},
+		{name: "ordinary metadata string stays Red", mode: cyberaccess.Red, metadata: json.RawMessage(`{"x-openai-subagent":"worker"}`), current: "daybreak_blue", programs: []string{"daybreak_red"}, want: "daybreak_red"},
 		{name: "nonstring Guardian metadata fails", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, metadata: json.RawMessage(`{"x-openai-subagent":null}`), current: "daybreak_blue", programs: []string{"daybreak_blue", "daybreak_red"}, wantFailure: ReasonProviderRequestInvalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -234,6 +236,9 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 			if test.wantFailure != "" {
 				if ReasonOf(err) != test.wantFailure || len(requests) != 0 {
 					t.Fatalf("failure=%s, want %s; model requests=%d; err=%v", ReasonOf(err), test.wantFailure, len(requests), err)
+				}
+				if test.wantFailure == ReasonProviderRequestInvalid && len(provider.queries) != 0 {
+					t.Fatalf("malformed metadata read capabilities: %d", len(provider.queries))
 				}
 				return
 			}

@@ -1,4 +1,4 @@
--- Current revision-2 bootstrap. The migration runner owns revision publication.
+-- Current revision-3 bootstrap. The migration runner owns revision publication.
 -- Column order matches the frozen revision-1 plus revision-2 migration.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
@@ -1397,7 +1397,7 @@ CREATE TABLE runtime_user_policies(
   CHECK(all_environments = 0 OR json_array_length(allowed_environment_ids_json) = 0)
 ) STRICT;
 
--- Prepared native revision-2 DDL; not used by the active revision-1 Store.
+-- Native tool tables introduced in revision 2 and retained by runtime revision 3.
 CREATE TABLE native_tool_scopes(
   capture_kind TEXT NOT NULL  CHECK(capture_kind IN('managed_run','manual_capture')),
   capture_id TEXT NOT NULL  CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),

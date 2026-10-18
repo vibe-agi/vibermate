@@ -199,11 +199,11 @@ func TestRevision2DurabilityFailureKeepsReadableV3Pending(t *testing.T) {
 			}
 			result, err := runner.upgrade(context.Background(), input)
 			if !errors.Is(err, ErrMigrationOutcomeUnknown) || result.Committed || calls != 1 {
-				t.Fatalf("readable v2 promoted despite %s: result=%+v err=%v calls=%d", fault, result, err, calls)
+				t.Fatalf("readable v3 promoted despite %s: result=%+v err=%v calls=%d", fault, result, err, calls)
 			}
 			state, err := InspectSchema(context.Background(), filepath.Join(f.source, "runtime.db"), time.Second)
 			if err != nil || state.Revision != 3 {
-				t.Fatal("fault fixture did not leave actual readable v2")
+				t.Fatal("fault fixture did not leave actual readable v3")
 			}
 			f.assertLegacyPreserved(t)
 			if _, err := os.Stat(filepath.Join(f.source, SchemaUpgradeReceiptName)); err != nil {
@@ -338,7 +338,7 @@ func TestRevision2DurabilityJournalGuardAndDeadlineRemainUnknown(t *testing.T) {
 			}
 			result, err := runner.reconcile(context.Background(), input.Database, timeout)
 			if result.Committed || !errors.Is(err, ErrMigrationOutcomeUnknown) {
-				t.Fatalf("%s promoted readable v2: %+v %v", fault, result, err)
+				t.Fatalf("%s promoted readable v3: %+v %v", fault, result, err)
 			}
 		})
 	}

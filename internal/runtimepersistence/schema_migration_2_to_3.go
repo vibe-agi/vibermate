@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 )
 
 // VerifiedRevision2Database certifies every frozen-v2 field and sequence.
@@ -138,53 +139,24 @@ func (runner revision2MigrationRunner) upgrade(ctx context.Context, input Revisi
 	if err != nil || fresh.sourceDigest != v.sourceDigest {
 		return runner.reconcileVerified(ctx, v, timeout)
 	}
-	// No journal_mode pragma: opening the writer cannot precede certification.
-	db := sql.OpenDB(newSQLiteUpgradeConnector(v.sourcePath, DefaultBusyTimeout))
-	db.SetMaxOpenConns(1)
-	conn, err := db.Conn(ctx)
+	writer, err := openMigrationWriter(ctx, v.sourcePath, schemaMigrationRunner(runner))
 	if err != nil {
-		if err := runner.closeDatabasePool(db); err != nil {
+		if err := writer.close(); err != nil {
 			return MigrationResult{FromRevision: 2}, ErrMigrationOutcomeUnknown
 		}
 		return runner.reconcileVerified(ctx, v, timeout)
 	}
-	closed := false
-	var closeErr error
-	closeDatabase := func() error {
-		if !closed {
-			closeConnection := runner.closeConn
-			if closeConnection == nil {
-				closeConnection = (*sql.Conn).Close
-			}
-			closeErr = errors.Join(closeConnection(conn), runner.closeDatabasePool(db))
-			closed = true
-		}
-		return closeErr
-	}
-	defer func() { _ = closeDatabase() }()
-	begun := false
-	reconcile := func(root error) (MigrationResult, error) {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		defer cancel()
-		if begun {
-			_, _ = conn.ExecContext(cleanup, "ROLLBACK")
-		}
-		// Both closes must positively succeed before source visibility can be
-		// considered. A failed close retains uncertainty even if v2 is readable.
-		if err := closeDatabase(); err != nil {
-			return MigrationResult{FromRevision: 2}, errors.Join(ErrMigrationOutcomeUnknown, ctx.Err())
-		}
-		result, err := runner.reconcile(cleanup, v, timeout)
-		if err != nil {
-			return result, errors.Join(err, ctx.Err())
-		}
-		_ = root
-		return result, nil
+	defer func() { _ = writer.close() }()
+	conn := writer.conn
+	reconcile := func() (MigrationResult, error) {
+		return writer.reconcile(ctx, timeout, 2, func(proof context.Context) (MigrationResult, error) {
+			return runner.reconcile(proof, v, timeout)
+		})
 	}
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
-	begun = true
+	writer.begun = true
 	state, err := inspectSupportedSchema(ctx, conn)
 	if err == nil && state.Revision == 2 {
 		err = migrationIntegrity(ctx, conn)
@@ -196,57 +168,48 @@ func (runner revision2MigrationRunner) upgrade(ctx context.Context, input Revisi
 		digest, err = revision2Fingerprint(ctx, conn)
 	}
 	if err != nil || digest != v.sourceDigest || !revision2MigrationOwners(v) {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	// Recheck the independently owned snapshot immediately inside the transaction.
 	snapshotState, snapshotDigest, err := revision2FingerprintPath(ctx, v.snapshotPath, DefaultBusyTimeout)
 	if err != nil || snapshotState.Revision != 2 || snapshotDigest != v.sourceDigest {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	if _, err := conn.ExecContext(ctx, migration002To003SQL); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if runner.afterDDL != nil {
 		if err := runner.afterDDL(ctx, conn); err != nil {
-			return reconcile(err)
+			return reconcile()
 		}
 	}
 	if err := inspectSchemaLayout(ctx, conn, 3); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if err := migrationIntegrity(ctx, conn); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	digest, err = revision2Fingerprint(ctx, conn)
 	if err != nil || digest != v.sourceDigest || !revision2MigrationOwners(v) {
-		return reconcile(ErrMigrationNotCommitted)
+		return reconcile()
 	}
 	if err := revision2AdditionsStandard(ctx, conn); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
 	if _, err := conn.ExecContext(ctx, `UPDATE runtime_metadata SET schema_revision=3 WHERE singleton=1 AND schema_revision=2`); err != nil {
-		return reconcile(err)
+		return reconcile()
 	}
-	commit := runner.commit
-	if commit == nil {
-		commit = commitSchemaMigration
+	if err := writer.commit(ctx); err != nil {
+		return reconcile()
 	}
-	if err := commit(ctx, conn); err != nil {
-		return reconcile(err)
-	}
-	begun = false
 	// Even ordinary successful COMMIT gets an independent durable proof.
-	return reconcile(nil)
+	return reconcile()
 }
 
 func (runner revision2MigrationRunner) reconcileVerified(ctx context.Context, v VerifiedRevision2Database, timeout time.Duration) (MigrationResult, error) {
-	proof, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-	defer cancel()
-	result, err := runner.reconcile(proof, v, timeout)
-	if err != nil {
-		return result, errors.Join(err, ctx.Err())
-	}
-	return result, nil
+	return reconcileMigrationVerified(ctx, timeout, func(proof context.Context) (MigrationResult, error) {
+		return runner.reconcile(proof, v, timeout)
+	})
 }
 
 func ReconcileRevision2MigrationDatabase(ctx context.Context, source, snapshot string, owner, snapshotOwner *instanceguard.Guard, expected [32]byte, timeout time.Duration) (MigrationResult, error) {
@@ -295,9 +258,6 @@ func (runner revision2MigrationRunner) reconcile(ctx context.Context, v Verified
 	return result, nil
 }
 
-func (runner revision2MigrationRunner) closeDatabasePool(db *sql.DB) error {
-	return schemaMigrationRunner(runner).closeDatabasePool(db)
-}
 func (runner revision2MigrationRunner) syncOwnedSource(ctx context.Context, v VerifiedMigrationDatabase) error {
 	return schemaMigrationRunner(runner).syncOwnedSource(ctx, v)
 }

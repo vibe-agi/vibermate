@@ -123,6 +123,11 @@ func newNativeFixtureWithChoice(t *testing.T, mode environment.ToolPolicyMode, r
 
 func newNativeFixtureWithApprovalConfig(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, approvalConfig toolapproval.Config, custom ...Limits) *nativeFixture {
 	t.Helper()
+	return newNativeFixtureWithApprovalObservation(t, mode, recording, lifetime, choice, approvalConfig, nil, custom...)
+}
+
+func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, approvalConfig toolapproval.Config, observe func(nativetool.Approval), custom ...Limits) *nativeFixture {
+	t.Helper()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout, NativeStreamLifetime: lifetime})
@@ -212,6 +217,9 @@ func newNativeFixtureWithApprovalConfig(t *testing.T, mode environment.ToolPolic
 	t.Cleanup(connection.Close)
 	options := toolapproval.DefaultOptions(store.ToolApprovalRepository())
 	options.NativeRepository = store.NativeToolRepository()
+	if observe != nil {
+		options.NativeRepository = approvalPublicationObserver{LifecycleRepository: options.NativeRepository, observe: observe}
+	}
 	options.Config = approvalConfig
 	authority, err := toolapproval.New(ctx, options)
 	if err != nil {

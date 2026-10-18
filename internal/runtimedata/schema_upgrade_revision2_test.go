@@ -144,14 +144,13 @@ func TestRevision2OwnedPendingReceiptSurvivesCrash(t *testing.T) {
 			t.Fatalf("private file changed %s", name)
 		}
 	}
-	// The old API remains a frozen-v2 boundary. Inspect it offline; current
-	// Store admission requires the separately owned second stage.
+	// The second transition reaches current runtime3; repeated startup is a no-op.
 	state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(source, "runtime.db"), time.Second)
 	if err != nil || state.Revision != 3 {
-		t.Fatalf("legacy receipt result %+v %v", state, err)
+		t.Fatalf("revision2 receipt result %+v %v", state, err)
 	}
 
-	if _, err := upgradeRevision2Owned(context.Background(), source, filepath.Join(filepath.Dir(source), "still-unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("normal2 emitted upgrade"); return nil }); err != nil {
+	if _, err := upgradeRevision2Owned(context.Background(), source, filepath.Join(filepath.Dir(source), "still-unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("normal3 emitted upgrade"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -168,7 +167,7 @@ func TestRevision2OwnedRestoreRetainsAccountSecretReferences(t *testing.T) {
 	}
 	state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(restored, "runtime.db"), time.Second)
 	if err != nil || state.Revision != 2 {
-		t.Fatal("snapshot restore lost frozen1")
+		t.Fatal("snapshot restore lost frozen2")
 	}
 	originalRows, restoredRows := snapshotTestRows(t, snapshot), snapshotTestRows(t, restored)
 	if fmt.Sprint(originalRows) != fmt.Sprint(restoredRows) {

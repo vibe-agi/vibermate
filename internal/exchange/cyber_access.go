@@ -102,12 +102,12 @@ func nativeGuardianRequest(request ClientRequest, headers http.Header, body []by
 		return false, errors.New("Responses Guardian metadata is invalid")
 	}
 	if raw, present := root.Metadata["x-openai-subagent"]; present {
-		var subagent string
-		if err := json.Unmarshal(raw, &subagent); err != nil {
+		var subagent *string
+		if err := json.Unmarshal(raw, &subagent); err != nil || subagent == nil {
 			return false, errors.New("Responses Guardian subagent metadata is invalid")
 		}
-		guardian = guardian || subagent == "guardian"
-		other = other || subagent != "guardian"
+		guardian = guardian || *subagent == "guardian"
+		other = other || *subagent != "guardian"
 	}
 	if (originalGuardian || guardian) && (originalOther || other) {
 		return false, errors.New("Responses Guardian role signals disagree")
