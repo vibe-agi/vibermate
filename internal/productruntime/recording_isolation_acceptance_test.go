@@ -2,6 +2,7 @@ package productruntime
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -405,5 +406,69 @@ func TestOptionalFinalizationCannotMaskMixedOwnershipFailure(t *testing.T) {
 	owner.closeRaw(unsplitRawShutdownFixture{err: runtimepersistence.ErrInspectionUnavailable})
 	if !errors.Is(owner.closeErr, runtimepersistence.ErrInspectionUnavailable) {
 		t.Fatal("unknown shutdown error was filtered")
+	}
+}
+
+func TestRawBuilderDoesNotInventOwnerAfterActualRepositoryCancellation(t *testing.T) {
+	r, err := Start(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownRuntime(t, r)
+	waitRecording(t, r)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	raw, err := buildRawEvidence(rawEvidenceBuildRequest{ctx: ctx, budget: r.recorder.budget, repository: r.recordingStorage.current.Load().store.RawEvidenceRepository(), random: rand.Reader, clock: r.clock, config: rawevidence.DefaultConfig()})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("actual repository cancellation cause lost: %v", err)
+	}
+	if raw != nil {
+		t.Fatalf("failed Raw construction invented owner: %T", raw)
+	}
+}
+func TestRuntimeActualRawInitializationRefusalHasNoPhantomOwnership(t *testing.T) {
+	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
+	r, err := startWithBuilders(t.Context(), options, runtimeBuildOverrides{openObservations: func(ctx context.Context, options runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error) {
+		store, err := runtimepersistence.OpenObservations(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("sqlite", options.DatabasePath)
+		if err != nil {
+			store.Shutdown(context.Background())
+			return nil, err
+		}
+		_, err = db.Exec(`CREATE TRIGGER reject_actual_raw_start BEFORE INSERT ON runtime_raw_evidence_writer_sessions BEGIN SELECT RAISE(ABORT,'actual Raw initialization refusal'); END`)
+		closeErr := db.Close()
+		if err != nil || closeErr != nil {
+			store.Shutdown(context.Background())
+			return nil, errors.Join(err, closeErr)
+		}
+		return store, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { r.Shutdown(context.Background()) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.Status().Recording.State != RecordingDegraded {
+		if time.Now().After(deadline) {
+			t.Fatal("actual Raw initialization refusal not observed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err = r.Shutdown(t.Context()); err != nil {
+		t.Errorf("failed constructor invented ownership: %v", err)
+	}
+	status := r.Status()
+	if status.State != RuntimeStateStopped || status.Recording.State != RecordingDegraded || status.RecordingFailure == nil || !status.RecordingFailure.Valid() || status.Recording.CleanupPending {
+		t.Fatalf("Raw initialization health/ownership: %+v", status)
+	}
+	for _, name := range []string{"runtime-data.lock", "server.lock"} {
+		guard, err := instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), name))
+		if err != nil {
+			t.Fatalf("real guard not joined: %s %v", name, err)
+		}
+		guard.Release()
 	}
 }

@@ -583,13 +583,17 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 func buildRawEvidence(
 	request rawEvidenceBuildRequest,
 ) (rawEvidenceRuntime, error) {
-	return rawevidence.Open(request.ctx, rawevidence.Options{
+	manager, err := rawevidence.Open(request.ctx, rawevidence.Options{
 		Repository: request.repository,
 		Budget:     request.budget,
 		Random:     request.random,
 		Clock:      request.clock,
 		Config:     request.config,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
 }
 
 type exchangeBuildRequest struct {

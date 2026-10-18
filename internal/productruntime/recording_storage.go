@@ -372,6 +372,8 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 	}
 	raw, err = buildRawEvidence(rawEvidenceBuildRequest{ctx: s.ctx, budget: s.recorder.budget, repository: store.RawEvidenceRepository(), random: s.random, clock: s.clock, config: rawevidence.DefaultConfig()})
 	if err != nil {
+		s.recordingErr = errors.Join(s.recordingErr, err)
+		s.tracker.failRecording("raw_evidence", err)
 		return nil, err
 	}
 	activities, err := buildActivity(activityBuildRequest{repository: store.ActivityRepository(), clock: s.clock, random: s.random})
