@@ -103,3 +103,26 @@ target. An incomplete newly created target may remain for inspection or manual
 removal, but ViberMate never selects it.
 
 For container data volumes and rollback, see [Docker deployment](docker.md).
+
+## Format compatibility and rollback
+
+Version 0.1.30 reads exact published `vibermate-runtime` revisions 1, 2 and 3.
+Backup, verification, move and restore preserve the source revision and values;
+restoring does not modify or upgrade the backup source. Starting the new Runtime
+on the restored destination performs any required owned upgrade: 1→2→3 or 2→3,
+with a separate private snapshot for each transition and no normal writers
+between them. Current revision 3 preserves actual Standard/Blue/Red account preferences.
+
+A revision 3 backup requires ViberMate 0.1.30 or a later compatible reader.
+Older releases refuse revision 3 unchanged; a post-upgrade backup is not an old-reader
+rollback artifact. To return to the old format, stop all owners and use the
+independently verified private snapshot from before that transition, restoring
+into a new directory. A revision1 snapshot remains revision 1; a revision2 snapshot remains revision 2.
+Retain the original source and snapshot until the chosen restored Runtime is
+verified. There is no in-place downgrade.
+
+An unresolved schema-upgrade receipt blocks normal startup and public backup or
+move. Keep it with the source and private snapshot for guarded reconciliation;
+do not delete it to force startup. Public backups retain the exclusions above;
+private rollback snapshots preserve actual local credential files, but never
+export external Keychain entries. See [private rollback snapshots](deployment.md#private-rollback-snapshots).

@@ -286,14 +286,12 @@ func executeContext(
 		_ = renderCLIMessage(environment, stderr, "cli.error.codexProbeFailureDetail", map[string]string{"details": probeFailure.SafeSummary()})
 	}
 	var controlFailure *runlauncher.ControlFailure
-	if errors.As(err, &controlFailure) {
-		catalogs, catalogErr := locales.New()
-		if catalogErr == nil {
-			message, renderErr := catalogs.Render(locales.Detect(environment), "cli.error.controlFailureDetail", map[string]string{"details": controlFailure.SafeSummary()})
-			if renderErr == nil {
-				_, _ = fmt.Fprintln(stderr, message)
-			}
-		}
+	var callFailure *runlauncher.ControlCallFailure
+	switch {
+	case errors.As(err, &controlFailure):
+		_ = renderCLIMessage(environment, stderr, "cli.error.controlFailureDetail", map[string]string{"details": controlFailure.SafeSummary()})
+	case errors.As(err, &callFailure):
+		_ = renderCLIMessage(environment, stderr, "cli.error.controlFailureDetail", map[string]string{"details": callFailure.SafeSummary()})
 	}
 	if acp != nil {
 		if errors.Is(err, runlauncher.ErrACPUnavailable) {

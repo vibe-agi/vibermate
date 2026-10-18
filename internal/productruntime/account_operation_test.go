@@ -50,6 +50,9 @@ func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertranspor
 	wire.mu.Lock()
 	wire.requests = append(wire.requests, request.Clone(request.Context()))
 	wire.mu.Unlock()
+	if request.URL.Path == "/backend-api/codex/models" {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "Etag": {`"catalog-global"`}, "Set-Cookie": {"upstream-cookie"}}, Body: io.NopCloser(strings.NewReader(managedCodexCatalogFixture))}, transportprofile.Evidence{}, nil
+	}
 	if request.URL.Path == "/backend-api/wham/rate-limit-reset-credits/consume" {
 		body, err := io.ReadAll(request.Body)
 		_ = request.Body.Close()
@@ -191,6 +194,10 @@ func newAccountReadFixture(t *testing.T) accountReadFixture {
 
 func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef, resources ...exchange.ResourcePolicy) accountReadFixture {
 	t.Helper()
+	return newAccountReadFixtureWithBuilders(t, driver, runtimeBuildOverrides{}, resources...)
+}
+func newAccountReadFixtureWithBuilders(t *testing.T, driver providerauth.DriverRef, overrides runtimeBuildOverrides, resources ...exchange.ResourcePolicy) accountReadFixture {
+	t.Helper()
 	ctx := context.Background()
 	gate, err := offlinehold.New(offlinehold.Config{MaxHeldRequests: 8, MaxHeldBytes: 1 << 20, MaxHoldDuration: time.Second, ReleaseConcurrency: 2})
 	if err != nil {
@@ -200,7 +207,12 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 	if len(resources) != 0 {
 		options.Resources = &resources[0]
 	}
-	runtime := startTestRuntime(t, options)
+	startup, cancelStartup := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelStartup()
+	runtime, err := startWithBuilders(startup, options, overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-B"}}`, time.Now().Add(time.Hour).Unix()))) + ".synthetic"
 	credentialBytes := token

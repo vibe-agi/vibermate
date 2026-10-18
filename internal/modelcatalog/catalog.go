@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
+
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -196,13 +198,15 @@ type endpointCatalog struct {
 }
 
 type endpointModel struct {
-	ID              string          `json:"id"`
-	Slug            json.RawMessage `json:"slug"`
-	DisplayName     string          `json:"display_name"`
-	OwnedBy         string          `json:"owned_by"`
-	MaxModelLength  int64           `json:"max_model_len"`
-	ContextWindow   int64           `json:"context_window"`
-	MaxOutputTokens int64           `json:"max_output_tokens"`
+	AvailableAccessPrograms json.RawMessage `json:"available_access_programs"`
+	ID                      string          `json:"id"`
+	Slug                    json.RawMessage `json:"slug"`
+	DisplayName             string          `json:"display_name"`
+	OwnedBy                 string          `json:"owned_by"`
+	MaxModelLength          int64           `json:"max_model_len"`
+	ContextWindow           int64           `json:"context_window"`
+	MaxContextWindow        int64           `json:"max_context_window"`
+	MaxOutputTokens         int64           `json:"max_output_tokens"`
 }
 
 func (service *Service) discoverEndpoint(
@@ -248,7 +252,7 @@ func (service *Service) discoverEndpoint(
 		}
 		if !validModelID(item.ID) || !validModelName(item.DisplayName) ||
 			!validModelName(item.OwnedBy) || item.MaxModelLength < 0 || item.ContextWindow < 0 ||
-			item.MaxOutputTokens < 0 {
+			item.MaxContextWindow < 0 || item.MaxOutputTokens < 0 {
 			return nil, ErrInvalidCatalog
 		}
 		if _, duplicate := seen[item.ID]; duplicate {
@@ -259,9 +263,21 @@ func (service *Service) discoverEndpoint(
 		if contextLimit == 0 {
 			contextLimit = item.ContextWindow
 		}
+		if contextLimit == 0 {
+			contextLimit = item.MaxContextWindow
+		}
+		var cyberPrograms []string
+		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) {
+			var err error
+			cyberPrograms, err = cyberaccess.ParsePrograms(item.AvailableAccessPrograms)
+			if err != nil {
+				return nil, ErrInvalidCatalog
+			}
+		}
 		models = append(models, Model{
 			ID: item.ID, DisplayName: item.DisplayName, OwnedBy: item.OwnedBy,
 			ContextLimit: contextLimit, OutputLimit: item.MaxOutputTokens,
+			AvailableCyberPrograms: cyberPrograms,
 		})
 	}
 	sort.Slice(models, func(left, right int) bool { return models[left].ID < models[right].ID })

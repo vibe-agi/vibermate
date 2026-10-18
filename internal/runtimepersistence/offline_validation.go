@@ -28,7 +28,7 @@ func validateExistingSchema(ctx context.Context, path string, timeout time.Durat
 	if err != nil {
 		return err
 	}
-	if state.Revision == 1 {
+	if state.Revision == 1 || state.Revision == 2 {
 		return ErrMigrationRequired
 	}
 	if state.Revision != 0 && state.Revision != schemaRevision {

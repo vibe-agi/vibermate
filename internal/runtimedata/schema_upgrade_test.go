@@ -137,7 +137,13 @@ func upgradeGuards(t *testing.T, source string) (*instanceguard.Guard, *instance
 func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	source := frozenUpgradeFixture(t)
 	owner, host := upgradeGuards(t, source)
-	before := snapshotTestRows(t, source)
+	// Compare every frozen-v1 account field; the new preference is checked
+	// independently below rather than comparing arrays of different columns.
+	legacyColumns := map[string][]string{"provider_accounts": {
+		"account_id", "display_name", "credential_origin", "endpoint_associations", "association_revision", "note", "note_revision",
+		"settings_revision", "egress_profile_json", "automatic_refresh", "realm_id", "driver_ref", "secret_reference", "state", "revision", "created_at_unix_ms", "updated_at_unix_ms",
+	}}
+	before := snapshotTestRowsWithColumns(t, source, legacyColumns)
 	private := snapshotTestFiles(t, source)
 	target := filepath.Join(filepath.Dir(source), "private-snapshot")
 	runner := newSchemaUpgradeRunner()
@@ -167,7 +173,7 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	if _, exists, err := readSchemaUpgradeReceipt(source); err != nil || exists {
 		t.Fatal("committed receipt not consumed")
 	}
-	after := snapshotTestRows(t, source)
+	after := snapshotTestRowsWithColumns(t, source, legacyColumns)
 	filter := func(rows []string) []string {
 		var result []string
 		for _, row := range rows {
@@ -201,13 +207,13 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 			t.Fatalf("private file changed %s", name)
 		}
 	}
-	// Marker consumption precedes ordinary changes, which must not be compared
-	// to the historical snapshot on later normal2 startups.
-	store := openBackupStore(t, filepath.Join(source, "runtime.db"))
-	if _, err := store.ConnectionRuleRepository().Load(context.Background()); err != nil {
-		t.Fatal(err)
+	// The old API remains a frozen-v2 boundary. Inspect it offline; current
+	// Store admission requires the separately owned second stage.
+	state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(source, "runtime.db"), time.Second)
+	if err != nil || state.Revision != 2 {
+		t.Fatalf("legacy receipt result %+v %v", state, err)
 	}
-	shutdownBackupStore(t, store)
+
 	if _, err := UpgradeSchemaOwned(context.Background(), source, filepath.Join(filepath.Dir(source), "still-unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("normal2 emitted upgrade"); return nil }); err != nil {
 		t.Fatal(err)
 	}

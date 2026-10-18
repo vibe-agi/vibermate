@@ -477,6 +477,7 @@ final class _QuotaApi extends Fake implements ControlApi {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) {
     mutations++;
     throw StateError('unexpected settings mutation');

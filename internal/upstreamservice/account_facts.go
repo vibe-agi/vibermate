@@ -91,6 +91,9 @@ func (read Read) Project(body []byte) (Facts, error) {
 	if read.Validate() != nil {
 		return Facts{}, ErrUnsupported
 	}
+	if read.IsModelDirectory() {
+		return projectCodexModels(body)
+	}
 	if read.ID() == CodexUsageHistory {
 		return projectCodexHistory(body)
 	}

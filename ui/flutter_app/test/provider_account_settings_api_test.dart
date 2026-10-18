@@ -9,6 +9,7 @@ import 'package:vibermate_app/core/api/control_models.dart';
 Map<String, Object?> _account({
   int settingsRevision = 4,
   bool automaticRefresh = false,
+  String cyberAccessProgram = 'daybreak_blue',
   EgressProfileRevision? egressProfile,
 }) => {
   'id': 'account.settings',
@@ -28,6 +29,7 @@ Map<String, Object?> _account({
   'deleteHeaderNames': <String>[],
   'settingsRevision': settingsRevision,
   'automaticRefresh': automaticRefresh,
+  'cyberAccessProgram': cyberAccessProgram,
   'supportsAutomaticRefresh': true,
   'egressProfile': egressProfile?.toJson(),
   'codexOAuth': {
@@ -44,6 +46,7 @@ void main() {
     () async {
       var current = _account();
       var inconsistent = false;
+      final programWrites = <String>[];
       final client = MockClient((request) async {
         expect(request.method, 'PUT');
         expect(
@@ -56,8 +59,13 @@ void main() {
         final body = jsonDecode(request.body) as Map;
         expect(
           body.keys,
-          unorderedEquals(['automaticRefresh', 'egressProfile']),
+          unorderedEquals([
+            'automaticRefresh',
+            'cyberAccessProgram',
+            'egressProfile',
+          ]),
         );
+        programWrites.add(body['cyberAccessProgram'] as String);
         if (body['egressProfile'] != null) {
           expect(body['egressProfile'], {
             'id': 'profile.direct',
@@ -69,11 +77,13 @@ void main() {
             : EgressProfileRevision.direct;
         final changed =
             current['automaticRefresh'] != body['automaticRefresh'] ||
+            current['cyberAccessProgram'] != body['cyberAccessProgram'] ||
             current['egressProfile'] != profile?.toJson();
         current = _account(
           settingsRevision:
               (current['settingsRevision'] as int) + (changed ? 1 : 0),
           automaticRefresh: body['automaticRefresh'] as bool,
+          cyberAccessProgram: body['cyberAccessProgram'] as String,
           egressProfile: profile,
         );
         return http.Response(
@@ -106,6 +116,12 @@ void main() {
       expect(direct.settingsRevision, 5);
       expect(direct.revision, 2);
       expect(direct.credentialEpoch, 9);
+      expect(direct.cyberAccessProgram, 'daybreak_blue');
+      expect(direct.withNote('note', 1).cyberAccessProgram, 'daybreak_blue');
+      expect(
+        direct.withAssociations([], 4).cyberAccessProgram,
+        'daybreak_blue',
+      );
       final inherited = await api.setProviderAccountSettings(
         direct,
         egressProfile: null,
@@ -114,25 +130,54 @@ void main() {
       expect(inherited.settingsRevision, 6);
       expect(inherited.egressProfile, isNull);
       expect(inherited.withNote('note', 1).automaticRefresh, isFalse);
-      final noChange = await api.setProviderAccountSettings(
+      final standard = await api.setProviderAccountSettings(
         inherited,
         egressProfile: null,
         automaticRefresh: false,
+        cyberAccessProgram: 'standard',
       );
-      expect(noChange.settingsRevision, 6);
+      expect(standard.cyberAccessProgram, 'standard');
+      expect(standard.settingsRevision, 7);
+      final noChange = await api.setProviderAccountSettings(
+        standard,
+        egressProfile: null,
+        automaticRefresh: false,
+      );
+      expect(noChange.settingsRevision, 7);
+      final red = await api.setProviderAccountSettings(
+        noChange,
+        egressProfile: null,
+        automaticRefresh: false,
+        cyberAccessProgram: 'daybreak_red',
+      );
+      expect(red.cyberAccessProgram, 'daybreak_red');
+      expect(red.settingsRevision, 8);
       inconsistent = true;
       await expectLater(
         api.setProviderAccountSettings(
-          noChange,
+          red,
           egressProfile: null,
           automaticRefresh: true,
         ),
         throwsA(isA<ControlContractException>()),
       );
+      expect(programWrites, [
+        'daybreak_blue',
+        'daybreak_blue',
+        'standard',
+        'standard',
+        'daybreak_red',
+        'daybreak_red',
+      ]);
     },
   );
 
   test('projection requires complete current account settings', () {
+    final legacy = _account()..remove('cyberAccessProgram');
+    expect(
+      ProviderAccount.fromJson(legacy, 'account').cyberAccessProgram,
+      'standard',
+    );
     for (final field in [
       'automaticRefresh',
       'supportsAutomaticRefresh',
@@ -149,6 +194,8 @@ void main() {
       );
     }
     for (final invalid in [
+      {..._account(), 'cyberAccessProgram': null},
+      {..._account(), 'cyberAccessProgram': 'true'},
       {..._account(), 'settingsRevision': 0},
       {..._account(), 'settingsRevision': -1},
       {

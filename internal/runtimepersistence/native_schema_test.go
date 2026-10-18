@@ -205,9 +205,7 @@ func TestNativeAuditRebuildPreservesRowsAndSequence(t *testing.T) {
 	writeAnthropicEndpoint(t, store)
 	ref, _ := secretstore.ParseReference("secret://provider-account/native-legacy")
 	account := provideraccount.Account{ID: "native-legacy", DisplayName: "Legacy", Origin: providerTestOrigin(t), AssociationRevision: 1, RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: ref, State: provideraccount.StateActive, Revision: 1, SettingsRevision: 1, CreatedAt: now, UpdatedAt: now}
-	if _, err := store.ProviderAccountRepository().Write(ctx, 0, account); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1ProviderAccount(t, store, account)
 	candidate := environmentFixture(t, "native-legacy", 1)
 	seedFrozenV1Environment(t, store, candidate, now)
 	if err := store.ExchangeContentRepository().Put(ctx, contentRecordFixture(t, "native-legacy-history", now)); err != nil {

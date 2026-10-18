@@ -358,6 +358,7 @@ abstract interface class ControlApi {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   });
 
   Future<ProviderAccount> replaceProviderAccountCredential({
@@ -768,7 +769,7 @@ final class HttpControlApi
   // prefix plus Base64 and JSON overhead. Ordinary control reads stay at the
   // tighter 2 MiB boundary.
   static const _maximumRawRevealResponseBytes = 32 * 1024 * 1024;
-  static const _requestTimeout = Duration(seconds: 10);
+  static const _requestTimeout = Duration(seconds: 30);
   static const _modelDiscoveryTimeout = Duration(seconds: 30);
 
   static Future<HttpControlApi> connect(
@@ -809,6 +810,7 @@ final class HttpControlApi
   String? _renewalKey;
   Timer? _sessionRenewalTimer;
   bool _closed = false;
+  final _requests = <_ControlRequest>{};
   bool _sessionInvalidated = false;
 
   void replaceSession(DesktopSession session) {
@@ -2524,8 +2526,11 @@ final class HttpControlApi
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) async {
+    final selectedProgram = cyberAccessProgram ?? account.cyberAccessProgram;
     if (!_validResourceId(account.id) ||
+        !providerAccountCyberAccessPrograms.contains(selectedProgram) ||
         automaticRefresh && !account.supportsAutomaticRefresh) {
       throw const ControlContractException(
         'Provider Account settings are invalid',
@@ -2537,6 +2542,7 @@ final class HttpControlApi
       expectedRevision: account.settingsRevision,
       body: {
         'automaticRefresh': automaticRefresh,
+        'cyberAccessProgram': selectedProgram,
         'egressProfile': egressProfile == null
             ? null
             : {'id': egressProfile.id, 'revision': egressProfile.revision},
@@ -2545,7 +2551,8 @@ final class HttpControlApi
     final updated = ProviderAccount.fromJson(payload, 'providerAccount');
     final changed =
         account.egressProfile != egressProfile ||
-        account.automaticRefresh != automaticRefresh;
+        account.automaticRefresh != automaticRefresh ||
+        account.cyberAccessProgram != selectedProgram;
     if (updated.id != account.id ||
         updated.revision != account.revision ||
         updated.kind != account.kind ||
@@ -2554,6 +2561,7 @@ final class HttpControlApi
         updated.settingsRevision !=
             account.settingsRevision + (changed ? 1 : 0) ||
         updated.automaticRefresh != automaticRefresh ||
+        updated.cyberAccessProgram != selectedProgram ||
         updated.egressProfile != egressProfile) {
       throw const ControlContractException(
         'Provider Account settings response is inconsistent',
@@ -3157,10 +3165,16 @@ final class HttpControlApi
     final sentSession = _session;
     final isReadCapability = token == sentSession.readToken;
     final destination = _resolve(path);
-    final request = http.Request(method, destination)
-      ..followRedirects = false
-      ..headers['accept'] = 'application/json, application/problem+json'
-      ..headers['authorization'] = 'Bearer $token';
+    final owner = _ControlRequest();
+    final request =
+        http.AbortableRequest(
+            method,
+            destination,
+            abortTrigger: owner.abort.future,
+          )
+          ..followRedirects = false
+          ..headers['accept'] = 'application/json, application/problem+json'
+          ..headers['authorization'] = 'Bearer $token';
     if (!_browserManagedHeaders) {
       request.headers
         ..['origin'] = _origin
@@ -3177,12 +3191,19 @@ final class HttpControlApi
       request.headers['content-type'] = 'application/json';
       request.bodyBytes = encoded;
     }
-    final response = await _client.send(request).timeout(responseTimeout);
-    final bytes = await _readBounded(
-      response,
-      responseTimeout,
-      maximumResponseBytes,
-    );
+    _requests.add(owner);
+    final http.StreamedResponse response;
+    final Uint8List bytes;
+    try {
+      (response, bytes) = await owner.receive(
+        _client,
+        request,
+        responseTimeout,
+        maximumResponseBytes,
+      );
+    } finally {
+      _requests.remove(owner);
+    }
     if (response.statusCode == 401) {
       final retired = !identical(sentSession, _session);
       if (retired &&
@@ -3231,31 +3252,6 @@ final class HttpControlApi
       );
     }
     return destination;
-  }
-
-  Future<Uint8List> _readBounded(
-    http.StreamedResponse response,
-    Duration responseTimeout,
-    int maximumResponseBytes,
-  ) async {
-    final declared = response.contentLength;
-    if (declared != null && declared > maximumResponseBytes) {
-      throw ControlContractException(
-        'control response exceeded ${maximumResponseBytes ~/ (1024 * 1024)} MiB',
-      );
-    }
-    final builder = BytesBuilder(copy: false);
-    var length = 0;
-    await for (final chunk in response.stream.timeout(responseTimeout)) {
-      length += chunk.length;
-      if (length > maximumResponseBytes) {
-        throw ControlContractException(
-          'control response exceeded ${maximumResponseBytes ~/ (1024 * 1024)} MiB',
-        );
-      }
-      builder.add(chunk);
-    }
-    return builder.takeBytes();
   }
 
   Object? _decodeJson(Uint8List bytes) {
@@ -3419,6 +3415,9 @@ final class HttpControlApi
     _closed = true;
     _sessionRenewalTimer?.cancel();
     _renewalKey = null;
+    for (final request in _requests.toList()) {
+      request.cancel(StateError('Control API is closed'));
+    }
     _session = DesktopSession(
       baseUrl: _session.baseUrl,
       readToken: '___________________________________________',
@@ -3427,6 +3426,103 @@ final class HttpControlApi
       expiresAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
     _client.close();
+  }
+}
+
+/// A safe local failure: never contains a destination, capability or body.
+final class ControlRequestTimeout extends TimeoutException {
+  ControlRequestTimeout(Duration duration)
+    : super('Control request timed out', duration);
+}
+
+/// Owns one attempt, from sending headers through bounded body consumption.
+/// Cancellation completes the caller even if a custom client ignores abortion;
+/// any response that arrives later is discarded and its stream canceled.
+final class _ControlRequest {
+  final abort = Completer<void>();
+  final _result = Completer<(http.StreamedResponse, Uint8List)>();
+  Timer? _deadline;
+  StreamSubscription<List<int>>? _body;
+
+  Future<(http.StreamedResponse, Uint8List)> receive(
+    http.Client client,
+    http.BaseRequest request,
+    Duration timeout,
+    int maximumBytes,
+  ) {
+    _deadline = Timer(timeout, () => cancel(ControlRequestTimeout(timeout)));
+    unawaited(_receive(client, request, maximumBytes));
+    return _result.future;
+  }
+
+  Future<void> _receive(
+    http.Client client,
+    http.BaseRequest request,
+    int maximumBytes,
+  ) async {
+    try {
+      final response = await client.send(request);
+      if (_result.isCompleted) {
+        _discard(response);
+        return;
+      }
+      ControlContractException oversized() => ControlContractException(
+        'control response exceeded ${maximumBytes ~/ (1024 * 1024)} MiB',
+      );
+      final declared = response.contentLength;
+      if (declared != null && declared > maximumBytes) {
+        _discard(response);
+        cancel(oversized());
+        return;
+      }
+      final builder = BytesBuilder(copy: false);
+      var length = 0;
+      _body = response.stream.listen(
+        (chunk) {
+          if (_result.isCompleted) return;
+          length += chunk.length;
+          if (length > maximumBytes) {
+            cancel(oversized());
+          } else {
+            builder.add(chunk);
+          }
+        },
+        onError: (Object error, StackTrace stack) => cancel(error, stack),
+        onDone: () {
+          if (_result.isCompleted) return;
+          _deadline?.cancel();
+          _body = null;
+          _result.complete((response, builder.takeBytes()));
+        },
+      );
+      // Also handle synchronous streams that fail while listen is being set up.
+      if (_result.isCompleted) _cancelBody();
+    } catch (error, stack) {
+      cancel(error, stack);
+    }
+  }
+
+  void cancel(Object error, [StackTrace? stack]) {
+    if (_result.isCompleted) return;
+    _deadline?.cancel();
+    _result.completeError(error, stack);
+    if (!abort.isCompleted) abort.complete();
+    _cancelBody();
+  }
+
+  void _cancelBody() {
+    final body = _body;
+    _body = null;
+    if (body != null) _cancelSubscription(body);
+  }
+
+  static void _discard(http.StreamedResponse response) {
+    _cancelSubscription(response.stream.listen((_) {}, onError: (Object _) {}));
+  }
+
+  static void _cancelSubscription(StreamSubscription<List<int>> subscription) {
+    // Cleanup failure must not replace the original safe deadline/close error.
+    unawaited(subscription.cancel().catchError((Object _) {}));
   }
 }
 

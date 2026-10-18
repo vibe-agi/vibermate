@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	defaultHeartbeatInterval           = 30 * time.Second
-	defaultControlTimeout              = 5 * time.Second
-	defaultRemoteAuthenticationTimeout = 30 * time.Second
+	defaultHeartbeatInterval     = 30 * time.Second
+	defaultControlTimeout        = 5 * time.Second
+	defaultInitialControlTimeout = 30 * time.Second
 	// defaultCreateTimeout is the one control call that can contain work
 	// measured in people rather than in milliseconds.
 	//
@@ -79,8 +79,9 @@ type Config struct {
 	Stdout            io.Writer
 	Stderr            io.Writer
 	HeartbeatInterval time.Duration
-	// ControlTimeout bounds lifecycle control calls (default 5s). When explicitly
-	// supplied it also bounds remote session authentication (default 30s).
+	// ControlTimeout bounds heartbeat and finalization calls (default 5s).
+	// Remote session authentication and initial process attachment default to
+	// 30s; an explicitly supplied ControlTimeout bounds those calls too.
 	// Capture creation has its own CreateTimeout (default 90s).
 	ControlTimeout     time.Duration
 	CreateTimeout      time.Duration
@@ -90,8 +91,8 @@ type Config struct {
 }
 
 type Launcher struct {
-	config                      Config
-	remoteAuthenticationTimeout time.Duration
+	config                Config
+	initialControlTimeout time.Duration
 }
 
 // LaunchRequest carries an optional explicit initial Environment selection
@@ -116,10 +117,10 @@ func New(config Config) (*Launcher, error) {
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaultHeartbeatInterval
 	}
-	authenticationTimeout := config.ControlTimeout
+	initialControlTimeout := config.ControlTimeout
 	if config.ControlTimeout == 0 {
 		config.ControlTimeout = defaultControlTimeout
-		authenticationTimeout = defaultRemoteAuthenticationTimeout
+		initialControlTimeout = defaultInitialControlTimeout
 	}
 	if config.CreateTimeout == 0 {
 		config.CreateTimeout = defaultCreateTimeout
@@ -158,7 +159,7 @@ func New(config Config) (*Launcher, error) {
 		// Other writers receive both child output and supervisor diagnostics.
 		config.Stderr = &lockedWriter{writer: config.Stderr}
 	}
-	return &Launcher{config: config, remoteAuthenticationTimeout: authenticationTimeout}, nil
+	return &Launcher{config: config, initialControlTimeout: initialControlTimeout}, nil
 }
 
 type lockedWriter struct {
@@ -199,8 +200,8 @@ func (launcher *Launcher) Run(
 		remote, companion, err = connectRemote(
 			ctx,
 			*launcher.config.Remote,
-			max(controlTransportTimeout(launcher.config), launcher.remoteAuthenticationTimeout),
-			launcher.remoteAuthenticationTimeout,
+			max(controlTransportTimeout(launcher.config), launcher.initialControlTimeout),
+			launcher.initialControlTimeout,
 			cwd,
 			command,
 			executable,
@@ -223,7 +224,7 @@ func (launcher *Launcher) Run(
 		}
 		control, err = newControlClient(
 			session,
-			controlTransportTimeout(launcher.config),
+			max(controlTransportTimeout(launcher.config), launcher.initialControlTimeout),
 		)
 		if err != nil {
 			return 1, fmt.Errorf("construct local control client: %w", err)
@@ -339,8 +340,9 @@ func (launcher *Launcher) Run(
 	defer restoreTerminal()
 	stopSignals := relaySignals(child.Process)
 	defer stopSignals()
-	if err := launcher.callWithTimeout(
+	if err := launcher.callWithin(
 		ctx,
+		launcher.initialControlTimeout,
 		func(call context.Context) error {
 			return control.attach(call, grant, child.Process.Pid)
 		},

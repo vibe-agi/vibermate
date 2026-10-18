@@ -1,6 +1,7 @@
 package nativemcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,13 +9,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 func TestNativeGETCallbackKeepsObservedAuthorityAfterEOF(t *testing.T) {
@@ -379,8 +383,74 @@ func TestNativeGETCallbacksReuseCapacity(t *testing.T) {
 	}
 }
 
+// This observer forwards every real repository method. Publication is signaled
+// only after the actual approval transaction has committed successfully.
+type approvalPublicationObserver struct {
+	nativetool.LifecycleRepository
+	observe func(nativetool.Approval)
+}
+
+func (observer approvalPublicationObserver) RequestApproval(ctx context.Context, operation, id nativetool.ID, now, expires time.Time) (nativetool.Approval, error) {
+	approval, err := observer.LifecycleRepository.RequestApproval(ctx, operation, id, now, expires)
+	if err == nil {
+		observer.observe(approval)
+	}
+	return approval, err
+}
+
 func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
-	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
+	// This is a capacity/reclamation test, not a pre-publication latency SLA.
+	// Keep the real three-second decision expiry and bound the entire fixture.
+	deadline, bounded := t.Deadline()
+	if !bounded {
+		deadline = time.Now().Add(15 * time.Minute)
+	}
+	// Leave teardown time within the runner's normal or race execution budget.
+	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
+	defer cancel()
+	published := make(chan nativetool.Approval, 1)
+	f := newNativeFixtureWithApprovalObservation(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, authoredEgress(t, egressprofile.Direct()), toolapproval.Config{DecisionTimeout: 3 * time.Second}, func(approval nativetool.Approval) {
+		select {
+		case published <- approval:
+		case <-ctx.Done():
+		}
+	})
+	dumpFailure := func() {
+		var dump bytes.Buffer
+		_ = pprof.Lookup("goroutine").WriteTo(&dump, 2)
+		t.Log(dump.String())
+	}
+	awaitApproval := func(id nativetool.ID, done <-chan Terminal) nativetool.Approval {
+		t.Helper()
+		select {
+		case approval := <-published:
+			if approval.OperationID != id || approval.State != "pending" || approval.ExpiresAt.Sub(approval.CreatedAt) != 3*time.Second {
+				t.Fatalf("wrong durable approval for %s: %+v", id, approval)
+			}
+			stored, err := f.store.NativeToolRepository().GetApproval(ctx, approval.ID)
+			if err != nil || stored.OperationID != id || stored.Revision != approval.Revision || stored.State != "pending" {
+				t.Fatalf("publication preceded durable approval: %+v %v", stored, err)
+			}
+			return approval
+		case terminal := <-done:
+			t.Fatalf("operation %s ended before approval publication: %+v", id, terminal)
+		case <-ctx.Done():
+			dumpFailure()
+			t.Fatalf("capacity fixture stopped awaiting approval for %s: %v", id, ctx.Err())
+		}
+		return nativetool.Approval{}
+	}
+	awaitTerminal := func(done <-chan Terminal) Terminal {
+		t.Helper()
+		select {
+		case terminal := <-done:
+			return terminal
+		case <-ctx.Done():
+			dumpFailure()
+			t.Fatalf("capacity fixture stopped awaiting terminal: %v", ctx.Err())
+		}
+		return Terminal{}
+	}
 	f.handshake(t)
 	next := make(chan struct{}, 1)
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
@@ -408,8 +478,11 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 	}
 	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
 	parentDone := make(chan Terminal, 1)
-	go func() { parentDone <- f.executor.Serve(context.Background(), parent, httptest.NewRecorder()) }()
-	f.approve(t, parent.id)
+	go func() { parentDone <- f.executor.Serve(ctx, parent, httptest.NewRecorder()) }()
+	parentApproval := awaitApproval(parent.id, parentDone)
+	if _, err := f.store.NativeToolRepository().DecideApproval(ctx, nativetool.DecisionInput{ApprovalID: parentApproval.ID, ExpectedRevision: parentApproval.Revision, Decision: nativetool.DecisionAllowOnce, IdempotencyKey: "capacity-parent-allow", ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	e := f.executor.(*executor)
 	e.mu.Lock()
 	owner := e.scopes[f.capture.Key()]
@@ -420,7 +493,6 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 	e.mu.Unlock()
 	for i := 0; i < 1025; i++ {
 		identity := fmt.Sprint(30000 + i)
-		deadline := time.Now().Add(3 * time.Second)
 		for {
 			s.mu.Lock()
 			present := s.parents[identity] != nil
@@ -433,38 +505,33 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 				t.Fatalf("parent ended at denied callback %d: %+v", i+1, got)
 			default:
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("denied callback %d unavailable", i+1)
+			select {
+			case <-ctx.Done():
+				dumpFailure()
+				t.Fatalf("denied callback %d unavailable: %v", i+1, ctx.Err())
+			case <-time.After(time.Millisecond):
 			}
-			time.Sleep(time.Millisecond)
 		}
 		child := f.captured(t, "POST", fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{}}`, identity), "synthetic-session")
 		done := make(chan Terminal, 1)
-		go func() { done <- f.executor.Serve(context.Background(), child, httptest.NewRecorder()) }()
-		var approval nativetool.Approval
-		for {
-			op, err := f.store.NativeToolRepository().Get(context.Background(), child.id)
-			if err == nil && op.ApprovalID != nil {
-				approval, err = f.store.NativeToolRepository().GetApproval(context.Background(), *op.ApprovalID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("denial question %d missing", i+1)
-			}
-			time.Sleep(time.Millisecond)
-		}
-		if _, err := f.store.NativeToolRepository().DecideApproval(context.Background(), nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionDeny, IdempotencyKey: "capacity-deny-" + identity, ObservedAt: time.Now().UTC()}); err != nil {
+		go func() { done <- f.executor.Serve(ctx, child, httptest.NewRecorder()) }()
+		approval := awaitApproval(child.id, done)
+		decisionStarted := time.Now().UTC()
+		if _, err := f.store.NativeToolRepository().DecideApproval(ctx, nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionDeny, IdempotencyKey: "capacity-deny-" + identity, ObservedAt: decisionStarted}); err != nil {
+			t.Logf("callback=%d published=%+v decisionStarted=%s decisionElapsed=%s", i+1, approval, decisionStarted.Format(time.RFC3339Nano), time.Since(decisionStarted))
+			dumpFailure()
+			proof, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			latest, readErr := f.store.NativeToolRepository().GetApproval(proof, approval.ID)
+			stop()
+			t.Logf("latest approval=%+v read=%v", latest, readErr)
 			t.Fatal(err)
 		}
-		if got := <-done; got.Outcome == OutcomeCompleted {
+		if got := awaitTerminal(done); got.Outcome == OutcomeCompleted {
 			t.Fatal("denied callback completed send")
 		}
 		next <- struct{}{}
 	}
-	if got := <-parentDone; got.Outcome != OutcomeCompleted {
+	if got := awaitTerminal(parentDone); got.Outcome != OutcomeCompleted {
 		t.Fatal(got)
 	}
 	if f.transport.sends() != 4 {

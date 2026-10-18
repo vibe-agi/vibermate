@@ -21,7 +21,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
-	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
 
 const maxControlResponseBytes = 128 << 10
@@ -71,12 +70,7 @@ func (failure *ControlFailure) SafeSummary() string {
 	if status < 100 || status > 599 {
 		status = 0
 	}
-	stage := "control"
-	switch failure.Stage {
-	case "capture_create", "session_check":
-		stage = failure.Stage
-	}
-	return fmt.Sprintf("stage=%s status=%d reason=%s", stage, status, safeControlReason(failure.ReasonCode))
+	return fmt.Sprintf("stage=%s status=%d reason=%s", safeControlStage(failure.Stage), status, safeControlReason(failure.ReasonCode))
 }
 
 func (failure *ControlFailure) Error() string {
@@ -158,7 +152,7 @@ func InspectLocal(
 		http.StatusOK,
 		&response,
 	); err != nil {
-		return RuntimeInspection{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+		return RuntimeInspection{}, fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
 	}
 	if response.Generation != session.InstanceID ||
 		response.Runtime.InstanceID != session.InstanceID ||
@@ -334,6 +328,7 @@ func (client *controlClient) jsonRequest(
 	if client == nil || ctx == nil {
 		return errors.New("control client and context are required")
 	}
+	stage := controlRequestStage(method, path)
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
@@ -349,7 +344,7 @@ func (client *controlClient) jsonRequest(
 		body,
 	)
 	if err != nil {
-		return err
+		return newControlCallFailure(stage, "network", err)
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
 	if input != nil {
@@ -363,7 +358,7 @@ func (client *controlClient) jsonRequest(
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("call %s control API: %w", client.description, err)
+		return newControlCallFailure(stage, "network", err)
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(
@@ -371,41 +366,39 @@ func (client *controlClient) jsonRequest(
 		maxControlResponseBytes+1,
 	))
 	if err != nil && ctx.Err() != nil {
-		return fmt.Errorf("read %s control response: %w", client.description, ctx.Err())
+		return newControlCallFailure(stage, "response_read", errors.Join(err, ctx.Err()))
 	}
 	if response.StatusCode != wantStatus {
 		if err != nil || len(payload) > maxControlResponseBytes {
 			payload = nil
 		}
 		failure := decodeControlFailure(response.StatusCode, payload).(*ControlFailure)
-		switch {
-		case method == http.MethodPost && path == "/api/v1/capture-runs":
-			failure.Stage = "capture_create"
-		case method == http.MethodGet && path == servercontrol.RuntimeUserCurrentSessionPath:
-			failure.Stage = "session_check"
-		}
+		failure.Stage = stage
 		return failure
 	}
 	if err != nil {
-		return fmt.Errorf("read %s control response: %w", client.description, err)
+		return newControlCallFailure(stage, "response_read", err)
 	}
 	if len(payload) > maxControlResponseBytes {
-		return fmt.Errorf("%s control response exceeds the size limit", client.description)
+		return newControlCallFailure(stage, "invalid_response", errors.New("control response exceeds the size limit"))
 	}
 	if output == nil {
 		if len(bytes.TrimSpace(payload)) != 0 {
-			return fmt.Errorf("%s control response body is unexpected", client.description)
+			return newControlCallFailure(stage, "invalid_response", errors.New("control response body is unexpected"))
 		}
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode %s control response: %w", client.description, err)
+		return newControlCallFailure(stage, "invalid_response", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%s control response contains trailing JSON", client.description)
+		if err == nil {
+			err = errors.New("control response contains trailing JSON")
+		}
+		return newControlCallFailure(stage, "invalid_response", err)
 	}
 	return nil
 }

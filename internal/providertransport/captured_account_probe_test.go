@@ -60,7 +60,7 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 	newSpec := func(t *testing.T, origin, path, accountID string, history bool) runtimeFetchSpec {
 		plan, lease := acquire(t, origin, path, accountID, history, profile)
 		t.Cleanup(lease.Release)
-		request, err := NewCapturedAccountRead(plan, lease, "connection.captured-probe", "operation.captured-probe")
+		request, err := NewCapturedAccountRead(plan, lease, "connection.captured-probe", "operation.captured-probe", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,10 +72,10 @@ func ExerciseCapturedAccountProbe(t *testing.T, acquire func(t *testing.T, origi
 		if !ok {
 			t.Fatal("real Manager lease has no account")
 		}
-		return runtimeFetchSpec{purpose: egressaudit.PurposeRouteOperation, targetRef: request.targetRef, target: target, relativePath: request.read.Path(), credential: lease, method: http.MethodGet, captured: request.captured, account: account, resolved: account.ResolvedEgress}
+		return runtimeFetchSpec{purpose: egressaudit.PurposeRouteOperation, targetRef: request.targetRef, target: target, relativePath: request.read.Path(), credential: lease, method: http.MethodGet, captured: request.captured, account: account, resolved: account.ResolvedEgress, modelCatalog: request.read.IsModelDirectory()}
 	}
 	for _, origin := range []string{"https://chatgpt.com", "https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex"} {
-		for _, path := range []string{"/backend-api/wham/usage", "/backend-api/wham/profiles/me"} {
+		for _, path := range []string{"/backend-api/wham/usage", "/backend-api/wham/profiles/me", "/backend-api/codex/models"} {
 			t.Run(origin+path, func(t *testing.T) {
 				spec := newSpec(t, origin, path, "captured-b", true)
 				plan := spec.captured.plan

@@ -33,6 +33,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 const (
@@ -44,6 +45,7 @@ const (
 type operation struct {
 	cancel     context.CancelCauseFunc
 	stopClient func() bool
+	turnState  *codexTurnRequestWitness
 }
 
 type contentCapture struct {
@@ -82,11 +84,13 @@ type Pipeline struct {
 	ownerContext context.Context
 	cancelOwner  context.CancelCauseFunc
 
-	mu         sync.Mutex
-	closing    bool
-	operations map[*operation]struct{}
-	changed    chan struct{}
-	turnStates map[[32]byte]codexTurnStateBinding
+	mu                sync.Mutex
+	closing           bool
+	operations        map[*operation]struct{}
+	changed           chan struct{}
+	turnStates        map[[32]byte]*codexTurnState
+	turnStateRequests map[string]*codexTurnRequestWitness
+	turnStateSequence uint64
 }
 
 type Executor interface {
@@ -132,7 +136,7 @@ func New(options Options) (*Pipeline, error) {
 		attemptIDs = NewCryptographicAttemptIDSource()
 	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
-	return &Pipeline{
+	pipeline := &Pipeline{
 		bodyAdmission:            options.BodyAdmission,
 		actions:                  options.Actions,
 		accounts:                 options.Accounts,
@@ -155,8 +159,15 @@ func New(options Options) (*Pipeline, error) {
 		cancelOwner:              cancelOwner,
 		operations:               make(map[*operation]struct{}),
 		changed:                  make(chan struct{}),
-		turnStates:               make(map[[32]byte]codexTurnStateBinding),
-	}, nil
+		turnStates:               make(map[[32]byte]*codexTurnState),
+		turnStateRequests:        make(map[string]*codexTurnRequestWitness),
+	}
+	context.AfterFunc(ownerContext, func() {
+		pipeline.mu.Lock()
+		defer pipeline.mu.Unlock()
+		pipeline.clearCodexTurnStatesLocked()
+	})
+	return pipeline, nil
 }
 
 func (pipeline *Pipeline) Execute(
@@ -562,6 +573,7 @@ func (pipeline *Pipeline) executeCandidate(
 			}
 		}
 		frozenRequest, err := pipeline.newProviderRequest(
+			ctx,
 			request,
 			selection,
 			credential,
@@ -574,7 +586,7 @@ func (pipeline *Pipeline) executeCandidate(
 			transformInput,
 		)
 		if err != nil {
-			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+			return newProviderRequestFailure(request.exchangeID, err)
 		}
 		pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 		var contentPath *protocolpath.Path
@@ -651,7 +663,7 @@ func (pipeline *Pipeline) executeCandidate(
 	)
 	result.Translation = result.Translation.Merge(backendRequestReport)
 	if err != nil {
-		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+		return newProviderRequestFailure(request.exchangeID, err)
 	}
 	headers := encodedProvider.Headers()
 	if credential.mode == providerauth.CredentialManaged {
@@ -676,6 +688,9 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		headers = original
 	}
+	if originalAccountNativePassthrough(request, selection, credential.mode) {
+		replaceCodexTurnToken(headers, nonHopCodexTurnToken(headers))
+	}
 	providerPath := upstreamendpoint.ProviderRelativePath(
 		selection.target.Origin(), encodedProvider.RelativePath(),
 	)
@@ -690,6 +705,10 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
 	}
+	if originalAccountNativePassthrough(request, selection, credential.mode) {
+		replaceCodexTurnToken(transformedHeaders, nonHopCodexTurnToken(transformedHeaders))
+	}
+
 	if selection.codecPlan.ProviderDialect() == protocolspec.DialectOpenAIResponses &&
 		upstreamendpoint.IsChatGPTCodexOrigin(selection.target.Origin()) {
 		refreshChatGPTRoutingHint(transformedHeaders, encodedProvider.Body(), transformedBody)
@@ -706,6 +725,7 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 	}
 	frozenRequest, err := pipeline.newProviderRequest(
+		ctx,
 		request,
 		selection,
 		credential,
@@ -718,7 +738,7 @@ func (pipeline *Pipeline) executeCandidate(
 		transformInput,
 	)
 	if err != nil {
-		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+		return newProviderRequestFailure(request.exchangeID, err)
 	}
 	pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 	if decoded.Stream {
@@ -802,6 +822,7 @@ func decodeBoundedContent(body []byte, contentEncoding string) ([]byte, error) {
 }
 
 func (pipeline *Pipeline) newProviderRequest(
+	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
 	credential credentialMaterial,
@@ -865,7 +886,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		options.SecretRef = credential.secret
 		options.AuthDriverRef = credential.driver
 	}
-	return providertransport.NewRequest(options)
+	return pipeline.finalizeAccountCyberMode(ctx, request, options)
 }
 
 func newProviderRawEvidenceContext(
@@ -1623,7 +1644,7 @@ func (pipeline *Pipeline) executeComplete(
 	if transformTurn.HasResponse() {
 		// Opaque state is exposed to a native client only after its ownership
 		// binding has been recorded. Scripts cannot revive a stripped token.
-		logicalHeaders.Del("X-Codex-Turn-State")
+		replaceCodexTurnToken(logicalHeaders, "")
 		if state := responseHeaders.Get("X-Codex-Turn-State"); state != "" {
 			logicalHeaders.Set("X-Codex-Turn-State", state)
 		}
@@ -1648,6 +1669,11 @@ func (pipeline *Pipeline) executeComplete(
 			transformInput.Headers,
 			transformed.Headers,
 		)
+		if transformErr == nil {
+			responseEnvelope, transformErr = normalizeNativeTransformedEnvelope(
+				responseEnvelope, request, selection, frozenRequest, decoded, transformInput.Headers, responseHeaders,
+			)
+		}
 		if transformErr != nil {
 			return newFailure(
 				ReasonMessageTransformFailed,
@@ -2575,7 +2601,7 @@ func (pipeline *Pipeline) executeStream(
 			)
 		}
 		responseHeaders := response.Header.Clone()
-		responseHeaders.Del("X-Codex-Turn-State")
+		replaceCodexTurnToken(responseHeaders, "")
 		metadata := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
 		if state := metadata.Get("X-Codex-Turn-State"); state != "" {
 			responseHeaders.Set("X-Codex-Turn-State", state)
@@ -2653,6 +2679,7 @@ func (pipeline *Pipeline) executeStream(
 			captured,
 			transformer,
 			frozenRequest,
+			metadata,
 		)
 		if streamErr == nil {
 			return nil
@@ -2727,6 +2754,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	captured *contentCapture,
 	transformer *streamMessageTransformer,
 	frozenRequest providertransport.Request,
+	responseMetadata http.Header,
 ) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
@@ -2783,6 +2811,11 @@ func (pipeline *Pipeline) consumeProviderStream(
 				fragment = transformed
 				if headerReady {
 					envelope, envelopeErr := transformer.Envelope()
+					if envelopeErr == nil {
+						envelope, envelopeErr = normalizeNativeTransformedEnvelope(
+							envelope, request, selection, frozenRequest, decoded, transformer.beforeHeaders, responseMetadata,
+						)
+					}
 					if envelopeErr != nil {
 						return newFailure(
 							ReasonMessageTransformFailed,
@@ -2935,6 +2968,58 @@ func (pipeline *Pipeline) consumeProviderStream(
 	responseForEvidence := terminal.DecodedResponse().Clone()
 	captured.response = &responseForEvidence
 	return nil
+}
+
+// Response scripts inspect the upstream logical headers. Normalize only their
+// final downstream envelope so raw and transform-input evidence retain the
+// provider's identity. The metadata has already been account-scoped once.
+func normalizeNativeTransformedEnvelope(
+	envelope ResponseEnvelope,
+	request ClientRequest,
+	selection frozenSelection,
+	frozen providertransport.Request,
+	decoded protocolcore.Request,
+	before http.Header,
+	metadata http.Header,
+) (ResponseEnvelope, error) {
+	if !isNativeCodexSelection(request, selection) {
+		return envelope, nil
+	}
+	headers := envelope.Headers()
+	rewriteMappedModelHeaders(headers, decoded.RequestedModel, decoded.EffectiveModel)
+	if originalAccountNativePassthrough(request, selection, frozen.CredentialMode()) {
+		// This metadata was already strictly filtered from the original response;
+		// scripts cannot supply a routing token or create managed continuity state.
+		replaceCodexTurnToken(headers, nonHopCodexTurnToken(metadata))
+	}
+	if account, managed := frozen.AccountRef(); managed && account.Validate() == nil {
+		// Turn state is hidden from scripts by the credential redaction boundary.
+		// Restore only the already ownership-validated native metadata, never script
+		// output or an unbound upstream header.
+		for name := range headers {
+			if strings.EqualFold(name, codexTurnStateHeader) {
+				delete(headers, name)
+			}
+		}
+		if token := codexTurnToken(metadata); token != "" {
+			headers.Set(codexTurnStateHeader, token)
+		}
+		original := upstreamservice.ModelValidator(before, "X-Models-Etag")
+		retained := upstreamservice.ModelValidator(headers, "X-Models-Etag")
+		for name := range headers {
+			if strings.EqualFold(name, "X-Models-Etag") {
+				delete(headers, name)
+			}
+		}
+		// A deleted or changed validator no longer proves the upstream catalog's
+		// version. Do not invent an account-scoped validator from script output.
+		if original != "" && retained == original {
+			if scoped := metadata.Get("X-Models-Etag"); scoped != "" {
+				headers.Set("X-Models-Etag", scoped)
+			}
+		}
+	}
+	return NewResponseEnvelope(envelope.Mode(), envelope.StatusCode(), headers)
 }
 
 type providerReadResult struct {
@@ -3476,13 +3561,15 @@ func (pipeline *Pipeline) begin(
 		)
 	}
 	pipeline.operations[active] = struct{}{}
+	active.turnState = pipeline.beginCodexTurnRequestLocked(actionID, operationContext, clientContext)
 	return operationContext, active, action, nil
 }
 
 func (pipeline *Pipeline) finish(active *operation) {
 	active.stopClient()
-	active.cancel(nil)
 	pipeline.mu.Lock()
+	pipeline.finishCodexTurnRequestLocked(active.turnState)
+	active.cancel(nil)
 	delete(pipeline.operations, active)
 	pipeline.signalLocked()
 	pipeline.mu.Unlock()
@@ -3494,6 +3581,7 @@ func (pipeline *Pipeline) finish(active *operation) {
 func (pipeline *Pipeline) BeginShutdown() {
 	pipeline.mu.Lock()
 	pipeline.closing = true
+	pipeline.clearCodexTurnStatesLocked()
 	pipeline.cancelOwner(ErrRuntimeStopping)
 	for active := range pipeline.operations {
 		active.cancel(ErrRuntimeStopping)

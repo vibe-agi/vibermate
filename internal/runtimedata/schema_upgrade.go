@@ -32,7 +32,8 @@ type schemaUpgradeReceipt struct {
 	FromRevision  int64  `json:"fromRevision"`
 	ToRevision    int64  `json:"toRevision"`
 	Snapshot      string `json:"snapshot"`
-	LegacyDigest  string `json:"legacyDigest"`
+	LegacyDigest  string `json:"legacyDigest,omitempty"`
+	SourceDigest  string `json:"sourceDigest,omitempty"`
 	Status        string `json:"status"`
 }
 type schemaUpgradeRunner struct {
@@ -53,46 +54,13 @@ func UpgradeSchemaOwned(ctx context.Context, source, target string, owner, hostO
 }
 func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target string, owner, hostOwner *instanceguard.Guard, now time.Time, timeout time.Duration, progress func(SchemaUpgradePhase) error) (runtimepersistence.MigrationResult, error) {
 	var result runtimepersistence.MigrationResult
-	if err := snapshotDirectory(ctx, source); err != nil {
+	work, err := newSchemaUpgradeWork(ctx, source, owner, hostOwner, now, timeout, progress)
+	if err != nil {
 		return result, err
 	}
-	if !snapshotOwns(owner, source, lockName) || now.IsZero() || now.Location() != time.UTC || timeout < 0 {
-		return result, ErrTarget
-	}
-	if hostOwner == nil {
-		var err error
-		hostOwner, err = instanceguard.Acquire(filepath.Join(source, "server.lock"))
-		if err != nil {
-			return result, errors.Join(ErrBusy, err)
-		}
-		defer hostOwner.Release()
-	}
-	if !snapshotOwns(hostOwner, source, "server.lock") {
-		return result, ErrTarget
-	}
-	if timeout == 0 {
-		timeout = 15 * time.Minute
-	}
-	work := ctx
-	cancel := func() {}
-	defer func() { cancel() }()
-	emitted := false
-	emit := func(phase SchemaUpgradePhase) error {
-		if emitted {
-			return work.Err()
-		}
-		emitted = true
-		work, cancel = context.WithTimeout(ctx, timeout)
-		if progress != nil {
-			if err := progress(phase); err != nil {
-				return err
-			}
-		}
-		if !snapshotOwns(owner, source, lockName) || !snapshotOwns(hostOwner, source, "server.lock") {
-			return ErrTarget
-		}
-		return work.Err()
-	}
+	defer work.close()
+	hostOwner, timeout = work.host, work.timeout
+	emit := work.emit
 	fail := func(err error) (runtimepersistence.MigrationResult, error) {
 		return result, errors.Join(ErrSchemaUpgradeIncomplete, err)
 	}
@@ -104,25 +72,23 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 		if err := emit(SchemaUpgradeRunning); err != nil {
 			return fail(err)
 		}
-		if !validSchemaUpgradeReceipt(receipt, source) {
+		if receipt.Schema != "runtime-schema-upgrade-receipt/v1" || !validSchemaUpgradeReceipt(receipt, source) {
 			return fail(ErrBackupInvalid)
 		}
-		snapshotOwner, snapshotHost, err := lockSchemaSnapshot(receipt.Snapshot)
+		snapshot, err := lockCertifiedSchemaSnapshot(work.ctx, receipt.Snapshot, runner.snapshot)
 		if err != nil {
 			return fail(err)
 		}
-		defer snapshotOwner.Release()
-		defer snapshotHost.Release()
-		manifest, err := runner.snapshot.certifySnapshotLocked(work, receipt.Snapshot)
-		if err != nil || manifest.Database.Revision != 1 || manifest.Database.InitializedAt != receipt.InitializedAt {
+		defer snapshot.close()
+		if snapshot.manifest.Database.Revision != 1 || snapshot.manifest.Database.InitializedAt != receipt.InitializedAt {
 			return fail(ErrBackupInvalid)
 		}
 		var digest [32]byte
 		decoded, _ := hex.DecodeString(receipt.LegacyDigest)
 		copy(digest[:], decoded)
-		result, err = runtimepersistence.ReconcileMigrationDatabase(work, filepath.Join(source, "runtime.db"), filepath.Join(receipt.Snapshot, "runtime.db"), owner, snapshotOwner, digest, timeout)
+		result, err = runtimepersistence.ReconcileMigrationDatabase(work.ctx, filepath.Join(source, "runtime.db"), filepath.Join(receipt.Snapshot, "runtime.db"), owner, snapshot.owner, digest, timeout)
 		if errors.Is(err, runtimepersistence.ErrMigrationNotCommitted) {
-			if err := runner.removeReceipt(work, source); err != nil {
+			if err := runner.removeReceipt(work.ctx, source); err != nil {
 				return fail(err)
 			}
 			// This startup remains failed. The next fresh startup may create a new snapshot.
@@ -131,7 +97,7 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 		if err != nil {
 			return fail(err)
 		}
-		return runner.consumeCommitted(work, source, owner, hostOwner, receipt, result)
+		return runner.consumeCommitted(work.ctx, source, owner, hostOwner, receipt, result)
 	}
 	preparing, err := schemaUpgradeNeedsPreparation(source)
 	if err != nil {
@@ -142,9 +108,9 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 			return fail(err)
 		}
 	}
-	state, err := runner.inspect(work, filepath.Join(source, "runtime.db"), runtimepersistence.DefaultBusyTimeout)
+	state, err := runner.inspect(work.ctx, filepath.Join(source, "runtime.db"), runtimepersistence.DefaultBusyTimeout)
 	if err != nil {
-		if work.Err() != nil || emitted && !errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
+		if work.ctx.Err() != nil || work.emitted && !errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
 			return fail(err)
 		}
 		return result, err
@@ -153,7 +119,7 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 		return fail(ErrTarget)
 	}
 	if state.Revision != 1 {
-		if err := work.Err(); err != nil {
+		if err := work.ctx.Err(); err != nil {
 			return fail(err)
 		}
 		return result, nil
@@ -161,75 +127,30 @@ func (runner schemaUpgradeRunner) upgrade(ctx context.Context, source, target st
 	if err := emit(SchemaUpgradeRunning); err != nil {
 		return fail(err)
 	}
-	if target == "" {
-		container, err := os.MkdirTemp(filepath.Dir(source), ".vibermate-schema-upgrade-")
-		if err != nil {
-			return fail(ErrCopy)
-		}
-		defer os.Remove(container) // Remove only the exact unused empty container.
-		target = filepath.Join(container, "snapshot")
-	}
-	if err := snapshotRoots(work, source, target); err != nil {
-		return fail(err)
-	}
-	if err := runner.create(work, source, target, owner, hostOwner, now); err != nil {
-		return fail(err)
-	}
-	snapshotOwner, snapshotHost, err := lockSchemaSnapshot(target)
+	snapshot, err := createOwnedSchemaSnapshot(work.ctx, source, target, owner, hostOwner, now, state, runner.create, runner.snapshot)
 	if err != nil {
 		return fail(err)
 	}
-	defer snapshotOwner.Release()
-	defer snapshotHost.Release()
-	manifest, err := runner.snapshot.certifySnapshotLocked(work, target)
-	if err != nil || manifest.Database != state {
-		return fail(ErrBackupInvalid)
-	}
-	verified, err := runtimepersistence.VerifyMigrationDatabase(work, filepath.Join(source, "runtime.db"), filepath.Join(target, "runtime.db"), owner, snapshotOwner, runtimepersistence.DefaultBusyTimeout)
+	defer snapshot.close()
+	target = snapshot.path
+	verified, err := runtimepersistence.VerifyMigrationDatabase(work.ctx, filepath.Join(source, "runtime.db"), filepath.Join(target, "runtime.db"), owner, snapshot.owner, runtimepersistence.DefaultBusyTimeout)
 	if err != nil {
 		return fail(err)
 	}
 	digest := verified.LegacyDigest()
 	receipt = schemaUpgradeReceipt{Schema: "runtime-schema-upgrade-receipt/v1", Source: source, InitializedAt: state.InitializedAt, FromRevision: 1, ToRevision: 2, Snapshot: target, LegacyDigest: hex.EncodeToString(digest[:]), Status: "pending"}
-	if err := runner.writeReceipt(work, source, receipt); err != nil {
+	if err := runner.writeReceipt(work.ctx, source, receipt); err != nil {
 		return fail(err)
 	}
-	result, err = runner.upgradeDatabase(work, runtimepersistence.MigrationInput{Database: verified, ReconcileTimeout: 30 * time.Second})
+	result, err = runner.upgradeDatabase(work.ctx, runtimepersistence.MigrationInput{Database: verified, ReconcileTimeout: 30 * time.Second})
 	if err != nil {
-		if errors.Is(err, runtimepersistence.ErrMigrationNotCommitted) && !errors.Is(err, runtimepersistence.ErrMigrationOutcomeUnknown) {
-			cleanup, cancel := context.WithTimeout(context.WithoutCancel(work), 30*time.Second)
-			defer cancel()
-			if removeErr := runner.removeReceipt(cleanup, source); removeErr != nil {
-				return fail(removeErr)
-			}
-		}
-		return fail(err)
+		return fail(removeNotCommittedReceipt(work.ctx, source, err, runner.removeReceipt))
 	}
-	return runner.consumeCommitted(work, source, owner, hostOwner, receipt, result)
+	return runner.consumeCommitted(work.ctx, source, owner, hostOwner, receipt, result)
 }
 
 func (runner schemaUpgradeRunner) consumeCommitted(ctx context.Context, source string, owner, host *instanceguard.Guard, receipt schemaUpgradeReceipt, result runtimepersistence.MigrationResult) (runtimepersistence.MigrationResult, error) {
-	fail := func(err error) (runtimepersistence.MigrationResult, error) {
-		return result, errors.Join(ErrSchemaUpgradeIncomplete, err)
-	}
-	if !result.Committed || result.ToRevision != 2 || !snapshotOwns(owner, source, lockName) || !snapshotOwns(host, source, "server.lock") {
-		return fail(runtimepersistence.ErrMigrationOutcomeUnknown)
-	}
-	// Caller cancellation never starts normal writes, even after known commit.
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
-	receipt.Status = "committed"
-	if err := runner.writeReceipt(ctx, source, receipt); err != nil {
-		return fail(err)
-	}
-	if err := runner.removeReceipt(ctx, source); err != nil {
-		return fail(err)
-	}
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
-	return result, nil
+	return consumeCommittedSchemaReceipt(ctx, source, owner, host, receipt, result, 2, runner.writeReceipt, runner.removeReceipt)
 }
 
 func schemaUpgradeNeedsPreparation(source string) (bool, error) {
@@ -250,10 +171,24 @@ func schemaUpgradeNeedsPreparation(source string) (bool, error) {
 	return db.Size() >= 128*1024*1024 && wal.Size() > 32, nil
 }
 func validSchemaUpgradeReceipt(r schemaUpgradeReceipt, source string) bool {
-	if r.Schema != "runtime-schema-upgrade-receipt/v1" || r.Source != source || r.FromRevision != 1 || r.ToRevision != 2 || (r.Status != "pending" && r.Status != "committed") || len(r.LegacyDigest) != 64 {
+	digestText := r.LegacyDigest
+	switch r.Schema {
+	case "runtime-schema-upgrade-receipt/v1":
+		if r.FromRevision != 1 || r.ToRevision != 2 || r.SourceDigest != "" {
+			return false
+		}
+	case "runtime-schema-upgrade-receipt/v2":
+		if r.FromRevision != 2 || r.ToRevision != 3 || r.LegacyDigest != "" {
+			return false
+		}
+		digestText = r.SourceDigest
+	default:
 		return false
 	}
-	digest, err := hex.DecodeString(r.LegacyDigest)
+	if r.Source != source || (r.Status != "pending" && r.Status != "committed") || len(digestText) != 64 {
+		return false
+	}
+	digest, err := hex.DecodeString(digestText)
 	if err != nil || bytes.Equal(digest, make([]byte, 32)) {
 		return false
 	}
@@ -292,15 +227,56 @@ func readSchemaUpgradeReceipt(source string) (schemaUpgradeReceipt, bool, error)
 	if err != nil || !os.SameFile(info, opened) {
 		return receipt, true, ErrBackupInvalid
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 64*1024))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&receipt); err != nil {
+	encoded, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	if err != nil || len(encoded) > 64*1024 {
+		return receipt, true, ErrBackupInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return receipt, true, ErrBackupInvalid
+	}
+	fields := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return receipt, true, ErrBackupInvalid
+		}
+		key, ok := token.(string)
+		if !ok || fields[key] {
+			return receipt, true, ErrBackupInvalid
+		}
+		fields[key] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return receipt, true, ErrBackupInvalid
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
 		return receipt, true, ErrBackupInvalid
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return receipt, true, ErrBackupInvalid
 	}
+	decoder = json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, true, ErrBackupInvalid
+	}
+	digestKey := "legacyDigest"
+	if receipt.Schema == "runtime-schema-upgrade-receipt/v2" {
+		digestKey = "sourceDigest"
+	}
+	if len(fields) != 8 {
+		return receipt, true, ErrBackupInvalid
+	}
+	for _, key := range []string{"schema", "source", "initializedAt", "fromRevision", "toRevision", "snapshot", digestKey, "status"} {
+		if !fields[key] {
+			return receipt, true, ErrBackupInvalid
+		}
+	}
+
 	return receipt, true, nil
 }
 func writeSchemaUpgradeReceipt(ctx context.Context, source string, receipt schemaUpgradeReceipt) error {

@@ -20,6 +20,7 @@ import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
+import '../../core/i18n/app_copy.dart';
 import '../../core/api/product_update_api.dart';
 import '../../core/update/product_version.dart';
 import 'runtime_connection_guide.dart';
@@ -991,6 +992,8 @@ final class WorkbenchController extends ChangeNotifier
   final Set<String> _loadingRawEvidence = {};
   final Map<String, String> _rawEvidenceErrors = {};
   final Map<String, UpstreamModelCatalog> _upstreamModelCatalogs = {};
+  final Map<String, String> _upstreamModelCatalogScopes = {};
+  final Map<String, int> _upstreamModelCatalogLoads = {};
   final Map<String, ClientModelCatalog> _clientModelCatalogs = {};
   Future<CodeLibraryCatalog>? _codeLibraryCatalog;
   int _rawEvidenceGeneration = 0;
@@ -1058,10 +1061,30 @@ final class WorkbenchController extends ChangeNotifier
   String _upstreamModelCatalogKey(String endpointId, String accountId) =>
       '$endpointId\u0000$accountId';
 
+  String _upstreamModelScope(String endpointId, String accountId) {
+    final endpoint = data?.endpoints
+        .where((value) => value.id == endpointId)
+        .firstOrNull;
+    final account = data?.accounts
+        .where((value) => value.id == accountId)
+        .firstOrNull;
+    return '${endpoint?.revision}:${endpoint?.origin}:${endpoint?.state}:'
+        '${account?.revision}:${account?.credentialEpoch}:'
+        '${account?.settingsRevision}:${account?.associationRevision}:'
+        '${account?.credentialOrigin}:${account?.usable}:'
+        '${account?.isLinkedTo(endpointId)}';
+  }
+
   UpstreamModelCatalog? upstreamModelCatalog(
     String endpointId,
     String accountId,
-  ) => _upstreamModelCatalogs[_upstreamModelCatalogKey(endpointId, accountId)];
+  ) {
+    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    return _upstreamModelCatalogScopes[key] ==
+            _upstreamModelScope(endpointId, accountId)
+        ? _upstreamModelCatalogs[key]
+        : null;
+  }
 
   Future<UpstreamModelCatalog> upstreamModels(
     String endpointId, {
@@ -1069,6 +1092,9 @@ final class WorkbenchController extends ChangeNotifier
     bool refresh = false,
   }) async {
     final key = _upstreamModelCatalogKey(endpointId, accountId);
+    final scope = _upstreamModelScope(endpointId, accountId);
+    final generation = (_upstreamModelCatalogLoads[key] ?? 0) + 1;
+    _upstreamModelCatalogLoads[key] = generation;
     // The server cache is TTL-, endpoint-, account-revision- and credential-
     // epoch-bound. Keep a last-known snapshot for display while loading, but
     // never let an unbounded UI cache bypass those availability checks.
@@ -1077,8 +1103,11 @@ final class WorkbenchController extends ChangeNotifier
       accountId: accountId,
       refresh: refresh,
     );
-    if (!_disposed) {
+    if (!_disposed &&
+        _upstreamModelCatalogLoads[key] == generation &&
+        _upstreamModelScope(endpointId, accountId) == scope) {
       _upstreamModelCatalogs[key] = catalog;
+      _upstreamModelCatalogScopes[key] = scope;
       notifyListeners();
     }
     return catalog;
@@ -3242,6 +3271,7 @@ final class WorkbenchController extends ChangeNotifier
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) async {
     if (!_beginInventoryMutation()) return null;
     try {
@@ -3249,6 +3279,7 @@ final class WorkbenchController extends ChangeNotifier
         account,
         egressProfile: egressProfile,
         automaticRefresh: automaticRefresh,
+        cyberAccessProgram: cyberAccessProgram ?? account.cyberAccessProgram,
       );
       if (_disposed || data == null) return null;
       data = _dashboardWith(
@@ -3274,7 +3305,9 @@ final class WorkbenchController extends ChangeNotifier
         }
         if (!_disposed) inventoryError = 'provider_accounts.settings.conflict';
       } else if (!_disposed) {
-        inventoryError = 'provider_accounts.settings.failed';
+        inventoryError = error is TimeoutException
+            ? _describeError(error)
+            : 'provider_accounts.settings.failed';
       }
       return null;
     } finally {
@@ -4655,6 +4688,9 @@ final class WorkbenchController extends ChangeNotifier
   String _describeError(Object error) {
     return switch (error) {
       DashboardUnavailable failure => _describeError(failure.cause),
+      TimeoutException() => AppCopy.forLanguage(language)(
+        'error.control_timeout',
+      ),
       EnvironmentUpstreamReferenceException() =>
         'error.environment_upstream_changed',
       ControlProblem(reasonCode: 'environment_upstream_stale') =>
@@ -4885,6 +4921,7 @@ final class WorkbenchController extends ChangeNotifier
         left.noteRevision == right.noteRevision &&
         left.settingsRevision == right.settingsRevision &&
         left.automaticRefresh == right.automaticRefresh &&
+        left.cyberAccessProgram == right.cyberAccessProgram &&
         left.supportsAutomaticRefresh == right.supportsAutomaticRefresh &&
         left.egressProfile == right.egressProfile &&
         left.credentialOrigin == right.credentialOrigin &&

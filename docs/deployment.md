@@ -433,11 +433,23 @@ Local file credentials retain their original account references after restore.
 External and keychain credentials stay in their existing locations on the
 original host and are not exported.
 
-Stopped revision-1 data upgrades automatically to revision 2 at startup, under
-exclusive data and server locks. Startup first creates and verifies a fresh
-private snapshot of the complete directory, including local secrets, then
-upgrades SQLite in one fully synchronized transaction. Keep the snapshot
-private and retain it; it is not an ordinary shareable backup.
+Version 0.1.30 uses monolithic `vibermate-runtime` revision 3. Stopped published
+revision-1 data upgrades through 1→2 and then 2→3; installed revision-2 data goes
+directly through 2→3. Both stages retain the same exclusive data and server locks
+and share one bounded work budget. Each transition first creates and verifies
+its own private snapshot of the complete directory, including local secrets,
+then uses a separate synchronized SQLite transaction. No normal writers start
+between stages. Revision-1 installations therefore retain two snapshots; keep
+the original revision-1 snapshot for rollback to that format. An exact current revision 3
+database needs no upgrade snapshot. Existing account settings, consent,
+credentials and history are preserved; pre-feature accounts start at Standard.
+
+The new reader supports exact published1/2/3. Older releases refuse revision 3;
+there is no in-place downgrade. A private snapshot restores faithfully at its
+original revision, without upgrading the snapshot or restored data. A current revision 3
+backup preserves real Blue/Red preferences and requires a reader with runtime3
+support. Keep private snapshots private; ordinary backup exclusions remain in
+force. See [format compatibility and rollback](backup-and-restore.md#format-compatibility-and-rollback).
 
 Desktop readiness normally has a two-minute budget after its initial starting
 frame. One storage preparation or upgrade frame allows at most twenty minutes

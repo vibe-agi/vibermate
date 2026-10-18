@@ -158,6 +158,12 @@ func TestOriginalAliasPreservesCredentialDestination(t *testing.T) {
 				io.Copy(io.Discard, response.Body)
 				response.Body.Close()
 				requests := observed.snapshot()
+				if managed {
+					if len(requests) != 0 || response.StatusCode != http.StatusServiceUnavailable || calls.Load() != 0 || wire.denied.Load() != 0 {
+						t.Fatalf("managed model directory fell back to original credentials: requests=%d status=%d calls=%d", len(requests), response.StatusCode, calls.Load())
+					}
+					return
+				}
 				if len(requests) != 1 {
 					t.Fatalf("original requests=%d status=%d", len(requests), response.StatusCode)
 				}

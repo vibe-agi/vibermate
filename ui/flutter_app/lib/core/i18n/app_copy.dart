@@ -1,4 +1,4 @@
-import '../../features/workbench/workbench_controller.dart';
+import '../preferences/workbench_preferences.dart';
 
 final class AppCopy {
   const AppCopy._(this._values);
@@ -51,6 +51,8 @@ final class AppCopy {
   }
 
   static const _en = <String, String>{
+    'error.control_timeout':
+        'The control request timed out. The operation may already have completed. Refresh to check the latest state before deciding whether to retry. When loading records, this timeout alone does not show that Agent work failed.',
     'native.empty': 'No tool activity recorded',
     'native.readerUnavailable':
         'Tool activity cannot be read. Refresh this Capture.',
@@ -472,6 +474,31 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         'Allow this Runtime to refresh OAuth credentials when needed. Imports start off; OAuth sign-in starts on. Turning this off does not sign out or prevent manual refresh.',
     'provider_accounts.egress.label': 'Account network exit',
+    'provider_accounts.cyber_access.label': 'Cyber access mode',
+    'provider_accounts.cyber_access.option.standard': 'Standard',
+    'provider_accounts.cyber_access.option.daybreak_blue': 'Daybreak Blue',
+    'provider_accounts.cyber_access.option.daybreak_red': 'Daybreak Red',
+    'provider_accounts.cyber_access.detail':
+        'This account setting takes precedence over the client’s cyber mode. Daybreak Blue and Daybreak Red require support from the requested model; unsupported or unknown models are rejected. These are separate modes, not increasing levels.',
+    'provider_accounts.cyber_access.loading': 'Checking model capabilities…',
+    'provider_accounts.cyber_access.supported_one':
+        '{mode}: supported by 1 model',
+    'provider_accounts.cyber_access.supported':
+        '{mode}: supported by {count} models',
+    'provider_accounts.cyber_access.standard_available':
+        'Standard is available. No verified Daybreak capabilities were reported.',
+    'provider_accounts.cyber_access.unsupported':
+        'No models currently advertise support for {mode}.',
+    'provider_accounts.cyber_access.unknown':
+        'Daybreak support unknown: this service did not provide complete model capabilities.',
+    'provider_accounts.cyber_access.unavailable':
+        'Support check unavailable. Your saved mode is unchanged.',
+    'provider_accounts.cyber_access.unlinked':
+        'Link this account to a ChatGPT service to check model support.',
+    'provider_accounts.cyber_access.credential_unavailable':
+        'A usable account credential is required to check model support.',
+    'provider_accounts.cyber_access.refresh': 'Refresh support',
+    'provider_accounts.cyber_access.retry': 'Retry support check',
     'provider_accounts.egress.detail':
         'Overrides the traffic profile for this account, including model calls, OAuth refresh, quota and history. Applies to new requests; a failed exit never falls back to direct. Manage exits in Settings → Network exits.',
     'provider_accounts.egress.inherit': 'Follow traffic profile',
@@ -3092,6 +3119,8 @@ final class AppCopy {
   };
 
   static const _zh = <String, String>{
+    'error.control_timeout':
+        '控制请求超时。操作可能已经完成。请先刷新并检查最新状态，再决定是否重试。读取记录时，仅凭此次超时无法判断 Agent 工作是否失败。',
     'native.empty': '尚未记录工具活动',
     'native.readerUnavailable': '工具活动暂时无法读取，请刷新此 Capture。',
     'native.loginUnknown': '尚未确认登录账号',
@@ -3430,6 +3459,26 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         '允许当前 Runtime 按需刷新 OAuth 凭据。新导入默认关闭，OAuth 登录默认开启。关闭不会退出账号，也不影响手动刷新。',
     'provider_accounts.egress.label': '账号网络出口',
+    'provider_accounts.cyber_access.label': '网络安全模式',
+    'provider_accounts.cyber_access.option.standard': 'Standard',
+    'provider_accounts.cyber_access.option.daybreak_blue': 'Daybreak Blue',
+    'provider_accounts.cyber_access.option.daybreak_red': 'Daybreak Red',
+    'provider_accounts.cyber_access.detail':
+        '账号设置优先于客户端的网络安全模式。Daybreak Blue 和 Daybreak Red 需要请求的模型明确支持；不支持或能力未知时会拒绝请求。这是三种独立模式，不是逐级提升的等级。',
+    'provider_accounts.cyber_access.loading': '正在查询模型能力…',
+    'provider_accounts.cyber_access.supported_one': '{mode}：1 个模型支持',
+    'provider_accounts.cyber_access.supported': '{mode}：{count} 个模型支持',
+    'provider_accounts.cyber_access.standard_available':
+        'Standard 可用，未查询到已验证的 Daybreak 能力。',
+    'provider_accounts.cyber_access.unsupported': '当前没有模型声明支持 {mode}。',
+    'provider_accounts.cyber_access.unknown':
+        'Daybreak 支持情况未知：此服务未提供完整的模型能力信息。',
+    'provider_accounts.cyber_access.unavailable': '暂时无法查询支持情况，已保存的模式保持不变。',
+    'provider_accounts.cyber_access.unlinked': '请将此账号关联到 ChatGPT 服务后查询模型支持情况。',
+    'provider_accounts.cyber_access.credential_unavailable':
+        '需要可用的账号凭据才能查询模型支持情况。',
+    'provider_accounts.cyber_access.refresh': '刷新支持情况',
+    'provider_accounts.cyber_access.retry': '重试查询',
     'provider_accounts.egress.detail':
         '优先于流量策略，统一用于此账号的模型调用、OAuth 刷新、额度和历史查询。从下一次请求生效；出口失败不会回退直连。请在「设置 → 网络出口方案」管理可选方案。',
     'provider_accounts.egress.inherit': '跟随流量策略',

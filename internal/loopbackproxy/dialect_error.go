@@ -265,7 +265,8 @@ func exchangeErrorType(reason exchange.ReasonCode) string {
 	case exchange.ReasonProviderCredentialUnavailable:
 		return "authentication_error"
 	case exchange.ReasonInvalidExchangeRequest,
-		exchange.ReasonUnsupportedClientInput:
+		exchange.ReasonUnsupportedClientInput,
+		exchange.ReasonCyberAccessProgramUnavailable:
 		return "invalid_request_error"
 	default:
 		return "api_error"
@@ -319,6 +320,8 @@ func encodeExchangeStreamFailure(dialect protocolspec.Dialect, notice exchange.F
 
 func exchangeReasonMessage(reason exchange.ReasonCode) string {
 	switch reason {
+	case exchange.ReasonCyberAccessProgramUnavailable:
+		return "ViberMate cannot confirm the selected cyber access mode for this account and model. Refresh the account's model capabilities or choose a compatible mode (" + string(reason) + ")."
 	case exchange.ReasonProviderCredentialUnavailable:
 		return "ViberMate has no provider credential configured for the selected route (" +
 			string(reason) + ")."
@@ -333,7 +336,8 @@ func exchangeReasonMessage(reason exchange.ReasonCode) string {
 func exchangeFailureShouldNotRetry(reason exchange.ReasonCode) bool {
 	switch reason {
 	case exchange.ReasonProviderCredentialUnavailable,
-		exchange.ReasonMessageTransformFailed:
+		exchange.ReasonMessageTransformFailed,
+		exchange.ReasonCyberAccessProgramUnavailable:
 		return true
 	default:
 		return false

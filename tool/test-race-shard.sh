@@ -8,12 +8,14 @@ fail() {
 }
 
 usage() {
-  printf 'usage: bash tool/test-race-shard.sh native|persistence|rest [--list]\n' >&2
+  printf 'usage: bash tool/test-race-shard.sh native|persistence|persistence-migration|persistence-rest|rest [--list]\n' >&2
   exit 2
 }
 
 [[ $# -ge 1 && $# -le 2 ]] || usage
-case "$1" in native|persistence|rest) shard=$1 ;; *) usage ;; esac
+case "$1" in native|persistence|rest|persistence-migration|persistence-rest) shard=$1 ;; *) usage ;; esac
+package_shard=$shard
+case "$shard" in persistence-*) package_shard=persistence ;; esac
 [[ $# -eq 1 || $2 == --list ]] || usage
 
 native=github.com/vibe-agi/vibermate/internal/nativemcp
@@ -36,14 +38,23 @@ while IFS= read -r package; do
   case "$seen" in *$'\n'"$package"$'\n'*) fail "duplicate discovered package: $package" ;; esac
   seen+="$package"$'\n'
   case "$package" in
-    "$native") have_native=true; [[ $shard != native ]] || selected+=("$package") ;;
-    "$persistence") have_persistence=true; [[ $shard != persistence ]] || selected+=("$package") ;;
-    *) [[ $shard != rest ]] || selected+=("$package") ;;
+    "$native") have_native=true; [[ $package_shard != native ]] || selected+=("$package") ;;
+    "$persistence") have_persistence=true; [[ $package_shard != persistence ]] || selected+=("$package") ;;
+    *) [[ $package_shard != rest ]] || selected+=("$package") ;;
   esac
 done <<< "$discovery"
 
 $have_native && $have_persistence || fail 'package discovery is missing an isolated package'
 [[ ${#selected[@]} -gt 0 ]] || fail "no packages selected for $shard"
+
+case "$shard" in
+  persistence-migration|persistence-rest)
+    arguments=("${shard#persistence-}")
+    [[ $# -eq 1 ]] || arguments+=(--list)
+    printf '%s\n' "$discovery" | node tool/persistence-race-partition.mjs "${arguments[@]}"
+    exit $?
+    ;;
+esac
 
 if [[ $# -eq 2 ]]; then
   printf '%s\n' "${selected[@]}"

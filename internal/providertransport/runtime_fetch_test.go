@@ -324,7 +324,7 @@ func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := transport.lastRequest()
-			if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.153.4" || request.Method != http.MethodGet {
+			if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0" || request.Method != http.MethodGet {
 				t.Fatalf("model catalog request = %s %s", request.Method, request.URL)
 			}
 			if request.Header.Get("Authorization") != "Bearer "+token || request.Header.Get(chatGPTAccountHeader) != "selected-account" {
