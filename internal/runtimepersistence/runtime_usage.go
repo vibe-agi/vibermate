@@ -93,6 +93,11 @@ func (store *Store) setUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 			return runtimeusage.CollectionPolicy{}, err
 		}
 	}
+	if controlOnly {
+		if err := requestRecordingCleanup(operation, tx); err != nil {
+			return runtimeusage.CollectionPolicy{}, err
+		}
+	}
 	updated, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
 	if err != nil {
 		return runtimeusage.CollectionPolicy{}, err

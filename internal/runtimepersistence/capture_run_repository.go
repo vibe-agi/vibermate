@@ -217,6 +217,9 @@ func (repository *captureRunRepository) Create(
 	if _, err := tx.ExecContext(operation, `INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES('managed_run',?,1,0)`, record.ID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(operation, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1 WHERE singleton=1`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

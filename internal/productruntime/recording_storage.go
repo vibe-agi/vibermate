@@ -42,6 +42,8 @@ type recordingStorage struct {
 	paused              atomic.Bool
 	maintenanceRequests chan recordingMaintenanceRequest
 	visibility          recording.InspectionVisibility
+	control             *runtimepersistence.ControlStore
+	publishedMirror     recording.InspectionStamp
 	mu                  sync.Mutex
 	current             atomic.Pointer[recordingSinks]
 	active              int
@@ -79,7 +81,7 @@ func recordingSourceID(layout runtimedata.StorageLayout) string {
 	digest := sha256.Sum256([]byte(layout.ID))
 	return "current-" + hex.EncodeToString(digest[:16])
 }
-func newRecordingStorage(owner context.Context, root string, layout runtimedata.StorageLayout, dataGuard *instanceguard.Guard, control recording.InspectionVisibility, q *observationRecorder, tracker *statusTracker, limits *exchangecontent.SourceLimits, random io.Reader, clock Clock, overrides runtimeBuildOverrides) (*recordingStorage, error) {
+func newRecordingStorage(owner context.Context, root string, layout runtimedata.StorageLayout, dataGuard *instanceguard.Guard, control *runtimepersistence.ControlStore, q *observationRecorder, tracker *statusTracker, limits *exchangecontent.SourceLimits, random io.Reader, clock Clock, overrides runtimeBuildOverrides) (*recordingStorage, error) {
 	sources := make([]runtimepersistence.InspectionSource, 0, len(layout.Archives)+1)
 	for _, a := range layout.Archives {
 		sources = append(sources, runtimepersistence.InspectionSource{ID: a.ID, RelativePath: a.RelativeDirectory + "/runtime.db", Database: a.Database})
@@ -90,7 +92,7 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(owner)
-	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), visibility: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
+	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
 		options: runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: recordingSourceID(layout), ContentLimits: limits, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout}}
 	if overrides.publishObservations != nil {
 		s.publish = overrides.publishObservations
@@ -159,15 +161,23 @@ func (s *recordingStorage) run() {
 			s.tracker.recordingState(RecordingAvailable)
 		}
 		s.mu.Unlock()
+		ticker := time.NewTicker(time.Second)
 	work:
 		for {
 			select {
 			case <-s.ctx.Done():
 				break work
+			case <-ticker.C:
+				if !s.unsafeMaintenance.Load() {
+					if err := s.refreshMirror(sinks.store); err != nil {
+						s.tracker.recordingState(RecordingDegraded)
+					}
+				}
 			case request := <-s.maintenanceRequests:
 				s.maintain(sinks, request)
 			}
 		}
+		ticker.Stop()
 		s.current.Store(nil)
 		// Stop both finite workers; an uncooperative sink stays owned here.
 		_ = s.recorder.Shutdown(context.Background())
@@ -232,6 +242,7 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 			return nil, recording.ErrInspectionUnavailable
 		}
 	}
+	s.publishedMirror = recording.InspectionStamp{}
 	store, err := s.open(s.ctx, s.options)
 	if err != nil {
 		return nil, err
@@ -245,6 +256,9 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 			_ = store.Shutdown(context.Background())
 		}
 	}()
+	if err = s.refreshMirror(store); err != nil {
+		return nil, err
+	}
 	if err = s.recover(s.ctx, store.EgressAttemptRepository(), s.clock.Now().UTC()); err != nil {
 		return nil, err
 	}
@@ -462,4 +476,21 @@ type unavailableArchiveBarrier struct{}
 
 func (unavailableArchiveBarrier) BeginClear(context.Context) (evidencearchive.Release, error) {
 	return nil, recording.ErrInspectionUnavailable
+}
+
+// This runs only on the existing fixed lifecycle owner. Polling durable control
+// versions also recovers a missed wake; required mutations never wait for it.
+func (s *recordingStorage) refreshMirror(store *runtimepersistence.ObservationStore) error {
+	snapshot, err := s.control.ReadInspectionSnapshot(s.ctx, nil)
+	if err != nil {
+		return err
+	}
+	if snapshot.Stamp == s.publishedMirror {
+		return nil
+	}
+	if err = store.PublishInspectionMirror(s.ctx, s.control); err != nil {
+		return err
+	}
+	s.publishedMirror = snapshot.Stamp
+	return nil
 }

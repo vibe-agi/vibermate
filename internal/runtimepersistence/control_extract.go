@@ -105,7 +105,7 @@ func ExtractControl(ctx context.Context, in ControlExtraction) (proof ControlExt
 	if _, err = out.ExecContext(ctx, controlSchemaSQL); err != nil {
 		return proof, err
 	}
-	if _, err = out.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON; DELETE FROM runtime_usage_policy; DELETE FROM runtime_egress_default`); err != nil {
+	if _, err = out.ExecContext(ctx, `PRAGMA defer_foreign_keys=ON; DELETE FROM runtime_usage_policy; DELETE FROM runtime_egress_default; DELETE FROM recording_cleanup_state`); err != nil {
 		return proof, err
 	}
 	projections := controlExtractionProjections()
@@ -185,6 +185,8 @@ func extractionQuery(p controlProjection, revision int64, in ControlExtraction) 
 		return `SELECT run_id,json_extract(policy,'$.mode'),json_extract(policy,'$.retentionDays'),expires_at_unix_ms,1,1 FROM acp_observations ORDER BY run_id`, nil
 	case "runtime_metadata":
 		return `SELECT singleton,'vibermate-control',3,initialized_at FROM runtime_metadata ORDER BY singleton`, nil
+	case "recording_cleanup_state":
+		return `SELECT 1,0,0,1`, nil
 	case "runtime_storage_state":
 		return `SELECT 1,?,1,1`, []any{in.LayoutID}
 	case "runtime_usage_legacy_retention_caps":

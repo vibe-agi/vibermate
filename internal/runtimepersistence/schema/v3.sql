@@ -967,3 +967,13 @@ CREATE TABLE runtime_usage_legacy_retention_caps(
   through_sequence INTEGER NOT NULL CHECK(through_sequence>0 AND after_sequence<through_sequence),
   PRIMARY KEY(archive_id,retention_days)
 ) STRICT;
+
+-- One durable obligation covers every declared source. No observation IDs or
+-- ordinary delivery state belong to this required control relation.
+CREATE TABLE recording_cleanup_state(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ requested_revision INTEGER NOT NULL CHECK(requested_revision>=0),
+ completed_revision INTEGER NOT NULL CHECK(completed_revision>=0 AND completed_revision<=requested_revision),
+ source_generation INTEGER NOT NULL CHECK(source_generation>0)
+) STRICT;
+INSERT INTO recording_cleanup_state VALUES(1,0,0,1);

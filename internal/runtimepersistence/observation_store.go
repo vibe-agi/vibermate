@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"sync"
 	"time"
 )
 
@@ -12,7 +13,10 @@ type ObservationOptions struct {
 	ContentLimits                       *exchangecontent.SourceLimits
 }
 
-type ObservationStore struct{ store *Store }
+type ObservationStore struct {
+	store    *Store
+	mirrorMu sync.Mutex
+}
 
 func OpenObservations(ctx context.Context, o ObservationOptions) (*ObservationStore, error) {
 	if !roleID(o.LayoutID) || !roleID(o.ArchiveID) {
