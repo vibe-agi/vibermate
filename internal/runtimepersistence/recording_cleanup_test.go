@@ -605,3 +605,125 @@ func TestRecordingCleanupCertifiesUnacknowledgedDenialTailBeforeProofRemoval(t *
 		t.Fatal("negative proof loss gated required control", err)
 	}
 }
+
+func TestRecordingCleanupVerificationRejectsRemainingEligibleRoot(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	seedFrozenV1Activity(t, &Store{database: f.legacy}, inspectionActivity("remaining-proof", "remaining-exchange", activity.KindExchangeCompleted, time.Now().UTC().Truncate(time.Millisecond)))
+	nativeExec(t, f.control.store.database, `UPDATE recording_capture_fences SET deleted=1 WHERE capture_id='audit-a'`)
+	if err := f.current.PublishInspectionMirror(t.Context(), f.control); err != nil {
+		t.Fatal(err)
+	}
+	m, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	verifier, ok := any(f.current).(interface {
+		VerifyRecordingCleanup(context.Context, *InspectionMaintenance, time.Time) error
+	})
+	if !ok {
+		t.Fatal("final all-source eligible-root verification unavailable")
+	}
+	now := time.Now().UTC()
+	if err = verifier.VerifyRecordingCleanup(t.Context(), m, now); err == nil {
+		t.Fatal("remaining eligible proof certified clean")
+	}
+	if _, err = f.current.PurgeRecordingEvidence(t.Context(), f.control, m, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifier.VerifyRecordingCleanup(t.Context(), m, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordingPhysicalNewIntentDuringCertificationCannotEraseUncertifiedProof(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for i, id := range []string{"initial", "later"} {
+		root := rawEvidenceRecordForTest("proof-"+id, uint64(i+1), rawevidence.LayerProviderEgress, []byte(id), []byte(`{"version":1,"headers":[]}`))
+		root.ExchangeID = "exchange-" + id
+		root.ConnectionID = "connection-" + id
+		root.AttemptID = "attempt-" + id
+		root.ScopeID = "audit-a"
+		root.ObservedAt = now.Add(-2 * time.Hour)
+		root.ExpiresAt = now.Add(-time.Hour)
+		if id == "later" {
+			root.ScopeID = "audit-b"
+			root.ExpiresAt = now.Add(time.Hour)
+		}
+		if err := newRawEvidenceRepository(f.legacy, newOperationGate()).AppendBatch(t.Context(), []rawevidence.StoredEnvelope{root}, root.ObservedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nativeExec(t, f.control.store.database, `INSERT INTO capture_runs(run_id,proxy_capability_hash,control_capability_hash,cwd,canonical_executable_path,executable_label,client_catalog_revision,state,created_at_unix_ms,expires_at_unix_ms,updated_at_unix_ms) VALUES('audit-b',randomblob(32),randomblob(32),'/tmp','/bin/tool','tool',1,'finished',10,20,20)`)
+	m, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	// Reserve only the required writer connection. History membership must still
+	// commit before its separate required certificate can obtain this connection.
+	heldWriter, err := f.control.store.database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer heldWriter.Close()
+	f.control.store.reads.SetMaxOpenConns(1)
+	cleanupCtx, cancelCleanup := context.WithCancel(t.Context())
+	cleanupDone := make(chan struct{})
+	defer func() { cancelCleanup(); <-cleanupDone }()
+	done := make(chan error, 1)
+	go func() {
+		defer close(cleanupDone)
+		_, err := f.current.PurgeRecordingEvidence(cleanupCtx, f.control, m, now)
+		done <- err
+	}()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		var count int
+		if err = f.current.store.reads.QueryRow(`SELECT count(*) FROM recording_denials`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("history selection did not finish independently of held required writer")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Hold subsequent required snapshots, release certification, and perform the
+	// real DeleteCapture while no history SQL is held by that control operation.
+	heldReads, err := f.control.store.reads.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer heldReads.Close()
+	if err = heldWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.control.DeleteCapture(t.Context(), "managed_run", "audit-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err = heldReads.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(120 * time.Second):
+		t.Fatal("cleanup did not settle")
+	}
+	var remaining, denied int
+	if err = f.legacy.QueryRow(`SELECT count(*) FROM runtime_raw_evidence_envelopes WHERE exchange_id='exchange-later'`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.current.store.database.QueryRow(`SELECT count(*) FROM recording_denials WHERE kind='exchange' AND identity='exchange-later'`).Scan(&denied); err != nil {
+		t.Fatal(err)
+	}
+	if remaining == 0 && denied != 1 {
+		t.Fatal("newly hidden proof erased before its Exchange denial was certified")
+	}
+}

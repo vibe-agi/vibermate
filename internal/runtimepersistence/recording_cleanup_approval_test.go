@@ -361,3 +361,67 @@ func TestRecordingLegacyWholeClearDoesNotClaimUnknownOwnershipRemains(t *testing
 		t.Fatalf("whole clear archive approval: %+v %v", removed, err)
 	}
 }
+
+func TestRecordingNewIntentReclassifiesApprovalBeforeDestroyingItsProof(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	r := legacyCleanupApproval(t, f)
+	if err := newToolApprovalRepository(f.control.store.database, newOperationGate()).Create(t.Context(), r); err != nil {
+		t.Fatal(err)
+	}
+	a := inspectionActivity("approval-positive", r.ExchangeID, activity.KindExchangeCompleted, time.Now().UTC().Truncate(time.Millisecond))
+	a.CaptureRunID = "audit-b"
+	seedFrozenV1Activity(t, &Store{database: f.legacy}, a)
+	nativeExec(t, f.control.store.database, `INSERT INTO capture_runs(run_id,proxy_capability_hash,control_capability_hash,cwd,canonical_executable_path,executable_label,client_catalog_revision,state,created_at_unix_ms,expires_at_unix_ms,updated_at_unix_ms) VALUES('audit-b',randomblob(32),randomblob(32),'/tmp','/bin/tool','tool',1,'finished',10,20,20)`)
+	m, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if _, err = f.current.PurgeRecordingLegacyApprovals(t.Context(), f.control, m, f.control.ToolApprovalRepository().(toolapproval.LegacyApprovalRemover)); err != nil {
+		t.Fatal(err)
+	}
+	heldWriter, err := f.control.store.database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer heldWriter.Close()
+	f.control.store.reads.SetMaxOpenConns(1)
+	before := f.control.store.database.Stats().WaitCount
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.current.PurgeRecordingArchive(t.Context(), f.control, m, time.Now().UTC(), f.control.ToolApprovalRepository().(toolapproval.LegacyApprovalRemover))
+		done <- err
+	}()
+	deadline := time.Now().Add(60 * time.Second)
+	for f.control.store.database.Stats().WaitCount == before {
+		if time.Now().After(deadline) {
+			t.Fatal("initial proof classification did not reach separate required certification")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	heldReads, err := f.control.store.reads.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer heldReads.Close()
+	if err = heldWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.control.DeleteCapture(t.Context(), "managed_run", "audit-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err = heldReads.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("cleanup did not return")
+	}
+	if _, err = f.control.ToolApprovalRepository().Get(t.Context(), r.ID); !errors.Is(err, toolapproval.ErrNotFound) {
+		t.Fatal("newly deleted owner's required approval retained after its positive proof was destroyed", err)
+	}
+}

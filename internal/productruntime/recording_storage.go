@@ -33,6 +33,15 @@ import (
 // One fixed lifecycle owner retains every optional handle until real I/O has
 // returned. Worker queues and synchronous disclosure/repair share this owner.
 type recordingStorage struct {
+	nextExpiry      time.Time
+	layout          runtimedata.StorageLayout
+	sources         []runtimepersistence.InspectionSource
+	approvalReady   chan struct{}
+	legacyAuthority toolapproval.LegacyApprovalRemover
+	startupClaim    *recordingCleanupClaim
+	startupToken    *runtimepersistence.InspectionMaintenance
+	startupErr      error
+
 	clearAuthority      toolapproval.ArchiveClearAuthority
 	cleanupPending      atomic.Bool
 	cleanupWake         chan struct{}
@@ -89,12 +98,42 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 		sources = append(sources, runtimepersistence.InspectionSource{ID: a.ID, RelativePath: a.RelativeDirectory + "/runtime.db", Database: a.Database})
 	}
 	sources = append(sources, runtimepersistence.InspectionSource{ID: recordingSourceID(layout), RelativePath: layout.Observation.RelativePath, Database: runtimepersistence.SchemaState{Identity: layout.Observation.Identity, Revision: layout.Observation.Revision}, Current: true})
-	catalog, err := runtimepersistence.NewInspectionCatalog(runtimepersistence.InspectionCatalogOptions{Root: root, LayoutID: layout.ID, Sources: sources, Generation: 1})
+	state, stateErr := control.RecordingCleanupState(owner)
+	startupReceipt, receiptExists, receiptErr := runtimedata.ReadRecordingCleanupReceipt(root)
+	var claim *recordingCleanupClaim
+	startupErr := errors.Join(stateErr, receiptErr)
+	if stateErr == nil && (state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0) {
+		target, generation, cutoff, claimErr := control.ClaimRecordingCleanup(owner)
+		startupErr = errors.Join(startupErr, claimErr)
+		if claimErr == nil {
+			claim = &recordingCleanupClaim{target: target, generation: generation, cutoff: cutoff, resumed: state.ActiveRevision != 0}
+			state.SourceGeneration = generation
+		}
+	} else if receiptExists {
+		startupErr = errors.Join(startupErr, runtimedata.ErrBackupInvalid)
+	}
+	generation := state.SourceGeneration
+	if generation == 0 {
+		generation = 1
+		startupErr = errors.Join(startupErr, recording.ErrInspectionUnavailable)
+	}
+	catalogOptions := runtimepersistence.InspectionCatalogOptions{Root: root, LayoutID: layout.ID, Sources: sources, Generation: generation}
+	var catalog *runtimepersistence.InspectionCatalog
+	var token *runtimepersistence.InspectionMaintenance
+	var err error
+	if claim != nil || startupErr != nil {
+		catalog, token, err = runtimepersistence.NewRecoveringInspectionCatalog(catalogOptions)
+	} else {
+		catalog, err = runtimepersistence.NewInspectionCatalog(catalogOptions)
+	}
 	if err != nil {
 		return nil, err
 	}
+	if claim != nil && receiptExists && receiptErr == nil && (startupReceipt.LayoutID != layout.ID || startupReceipt.SourceSet != catalog.Version().SourceSet || startupReceipt.TargetRevision != claim.target || startupReceipt.SourceGeneration != claim.generation || startupReceipt.CutoffMillis != claim.cutoff) {
+		startupErr = errors.Join(startupErr, runtimedata.ErrBackupInvalid)
+	}
 	ctx, cancel := context.WithCancel(owner)
-	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), cleanupWake: make(chan struct{}, 1), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
+	s := &recordingStorage{nextExpiry: clock.Now().UTC().Add(time.Minute), layout: layout, sources: sources, approvalReady: make(chan struct{}), startupClaim: claim, startupToken: token, startupErr: startupErr, provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), cleanupWake: make(chan struct{}, 1), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
 		options: runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: recordingSourceID(layout), ContentLimits: limits, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout}}
 	if overrides.publishObservations != nil {
 		s.publish = overrides.publishObservations
@@ -105,8 +144,7 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 	if overrides.recoverEgress != nil {
 		s.recover = overrides.recoverEgress
 	}
-	state, stateErr := control.RecordingCleanupState(owner)
-	if stateErr != nil || state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0 {
+	if startupErr != nil || receiptExists || state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0 {
 		s.markCleanupPending()
 	}
 	// These immutable facades never hold a control transaction or connection.
@@ -180,6 +218,11 @@ func (s *recordingStorage) run() {
 				break work
 			case <-ticker.C:
 				if !s.unsafeMaintenance.Load() {
+					_ = s.requestRoutineRecordingCleanup(s.ctx, s.clock.Now().UTC())
+					s.performPendingCleanup(sinks)
+					if s.unsafeMaintenance.Load() {
+						continue
+					}
 					if err := s.refreshMirror(sinks.store); err != nil {
 						s.tracker.recordingState(RecordingDegraded)
 						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
@@ -191,6 +234,10 @@ func (s *recordingStorage) run() {
 				}
 			case <-s.cleanupWake:
 				if !s.unsafeMaintenance.Load() {
+					s.performPendingCleanup(sinks)
+					if s.unsafeMaintenance.Load() {
+						continue
+					}
 					if err := s.refreshMirror(sinks.store); err != nil {
 						s.tracker.recordingState(RecordingDegraded)
 						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
@@ -221,6 +268,15 @@ func (s *recordingStorage) run() {
 		break
 	}
 	_ = s.recorder.Shutdown(context.Background())
+	if s.startupToken != nil {
+		// initialize has returned all actual I/O. Close admission before the
+		// never-admitted recovery token is released, then join normally below.
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = s.catalog.Close(canceled)
+		_ = s.startupToken.Close()
+		s.startupToken = nil
+	}
 	// Catalog.Close cancels reads immediately, and retains leases until actual
 	// external credential/audit I/O returns, including cancellation-ignoring I/O.
 	s.closeErr = errors.Join(s.closeErr, s.catalog.Close(context.Background()))
@@ -232,6 +288,9 @@ func (s *recordingStorage) run() {
 	}
 }
 func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
+	if s.startupErr != nil {
+		return nil, s.startupErr
+	}
 	if s.provisioning != "unprovisioned" && s.provisioning != "provisioned" {
 		return nil, recording.ErrInspectionUnavailable
 	}
@@ -283,6 +342,26 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 	}()
 	if err = s.refreshMirror(store); err != nil {
 		return nil, err
+	}
+	if s.startupClaim != nil {
+		if err = s.waitApprovalAuthority(); err != nil {
+			return nil, err
+		}
+		if err = s.executeRecordingCleanup(store, s.startupToken, *s.startupClaim); err != nil {
+			s.startupErr = err
+			s.invalidateRecordingSource()
+			return nil, err
+		}
+		if err = s.refreshMirror(store); err != nil {
+			s.startupErr = err
+			s.invalidateRecordingSource()
+			return nil, err
+		}
+		if err = s.startupToken.Close(); err != nil {
+			return nil, err
+		}
+		s.startupToken = nil
+		s.startupClaim = nil
 	}
 	if err = s.recover(s.ctx, store.EgressAttemptRepository(), s.clock.Now().UTC()); err != nil {
 		return nil, err

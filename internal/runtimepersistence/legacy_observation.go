@@ -473,3 +473,18 @@ func (c *InspectionCatalog) rememberSource(version InspectionVersion, source Ins
 	c.identities[source.ID] = files
 	return nil
 }
+
+// NewRecoveringInspectionCatalog reserves a fresh, never-admitted catalog at
+// the already durable active cleanup generation. Ordinary live maintenance
+// continues to require a strictly newer generation.
+func NewRecoveringInspectionCatalog(options InspectionCatalogOptions) (*InspectionCatalog, *InspectionMaintenance, error) {
+	catalog, err := NewInspectionCatalog(options)
+	if err != nil {
+		return nil, nil, err
+	}
+	token := &InspectionMaintenance{catalog: catalog, generation: options.Generation}
+	// No reference to this fresh catalog has escaped. Installing exclusion here
+	// is stronger than observing zero active readers in a live catalog.
+	catalog.maintenance = token
+	return catalog, token, nil
+}

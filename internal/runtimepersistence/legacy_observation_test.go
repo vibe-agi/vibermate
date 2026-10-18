@@ -317,3 +317,42 @@ func TestInspectionConcurrencyAndShutdownRemainOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInspectionRecoveryCatalogBlocksAdmissionAtPersistedGeneration(t *testing.T) {
+	options, _ := inspectionSourcesFixture(t)
+	options.Generation = 17
+	catalog, token, err := NewRecoveringInspectionCatalog(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close(context.Background())
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	lease, err := catalog.acquire(ctx)
+	if err == nil {
+		lease.close()
+		t.Fatal("recovering fresh catalog admitted a reader before cleanup")
+	}
+	if token == nil {
+		t.Fatal("startup recovery lacks exclusive token")
+	}
+	defer token.Close()
+	if catalog.Version().Generation != 17 {
+		t.Fatalf("recovery changed durable generation: %+v", catalog.Version())
+	}
+	if _, err := token.cleanupInventory(); err != nil {
+		t.Fatal(err)
+	}
+	if err := token.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := catalog.BeginMaintenance(t.Context(), 17); err == nil {
+		retry.Close()
+		t.Fatal("live equal-generation retry admitted")
+	}
+	lease, err = catalog.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.close()
+}

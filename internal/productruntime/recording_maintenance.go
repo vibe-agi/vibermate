@@ -19,6 +19,7 @@ type recordingMaintenanceLease interface {
 }
 
 type recordingMaintenanceRequest struct {
+	cleanup    *recordingCleanupClaim
 	ctx        context.Context
 	generation uint64
 	ready      chan recordingMaintenanceResult
@@ -68,6 +69,9 @@ func (s *recordingStorage) BeginMaintenance(ctx context.Context, generation uint
 }
 func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMaintenanceRequest) {
 	if s.unsafeMaintenance.Load() {
+		if request.cleanup != nil {
+			return
+		}
 		request.ready <- recordingMaintenanceResult{err: recording.ErrInspectionUnavailable}
 		return
 	}
@@ -93,7 +97,9 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 		token, err = s.catalog.BeginMaintenance(s.ctx, request.generation)
 	}
 	usable := true
-	if err == nil {
+	if err == nil && request.cleanup != nil {
+		usable = s.executeRecordingCleanup(sinks.store, token, *request.cleanup) == nil
+	} else if err == nil {
 		lease := &recordingMaintenance{store: sinks.store, catalog: token, completed: make(chan bool, 1)}
 		request.ready <- recordingMaintenanceResult{lease: lease}
 		select {
@@ -108,15 +114,24 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 				usable = <-lease.completed
 			}
 		}
-	} else {
+	} else if request.cleanup == nil {
 		request.ready <- recordingMaintenanceResult{err: err}
 	}
 	if usable && token != nil {
-		// The caller has returned all real I/O, but a boolean is not a privacy
-		// certificate. Revalidate and arm this exact writer before releasing leases.
-		if err := sinks.store.PublishInspectionMirror(s.ctx, s.control); err != nil {
+		// After the certified physical boundary, catch up newer predicates
+		// before writer re-admission. Current metadata may now create a new WAL;
+		// it cannot contain the targeted bytes removed by the prior compaction.
+		if request.cleanup != nil {
+			err = s.refreshMirror(sinks.store)
+		} else {
+			err = sinks.store.PublishInspectionMirror(s.ctx, s.control)
+		}
+		if err != nil {
 			usable = false
 		}
+	}
+	if request.cleanup != nil && err != nil {
+		usable = false
 	}
 	if !usable {
 		s.unsafeMaintenance.Store(true)

@@ -7,9 +7,12 @@ import (
 	"errors"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 const RecordingCleanupReceiptName = "recording-cleanup.json"
@@ -120,4 +123,63 @@ func RemoveRecordingCleanupReceipt(ctx context.Context, root string, guard *inst
 		return err
 	}
 	return checkRecordingCleanupOwnership(ctx, root, guard)
+}
+
+// RetireRecordingCleanupArtifacts owns only the private metadata temp namespace
+// emitted by our atomic document writers. It never removes SQLite or backup
+// files. Even a partial temp is safe to retire after matching durable intent.
+func RetireRecordingCleanupArtifacts(ctx context.Context, root string, guard *instanceguard.Guard, expected RecordingCleanupReceipt) error {
+	if err := checkRecordingCleanupOwnership(ctx, root, guard); err != nil {
+		return err
+	}
+	actual, exists, err := ReadRecordingCleanupReceipt(root)
+	if err != nil || !exists || actual.LayoutID != expected.LayoutID || actual.SourceSet != expected.SourceSet || actual.TargetRevision != expected.TargetRevision || actual.SourceGeneration != expected.SourceGeneration || actual.CutoffMillis != expected.CutoffMillis {
+		return errors.Join(ErrBackupInvalid, err)
+	}
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	for {
+		entries, readErr := directory.ReadDir(64)
+		for _, entry := range entries {
+			name := entry.Name()
+			suffix := ""
+			for _, prefix := range []string{".recording-cleanup-", ".recording-certificate-"} {
+				if strings.HasPrefix(name, prefix) {
+					suffix = strings.TrimPrefix(name, prefix)
+					break
+				}
+			}
+			if suffix == "" {
+				if strings.HasPrefix(name, ".recording-cleanup-") || strings.HasPrefix(name, ".recording-certificate-") {
+					return ErrBackupInvalid
+				}
+				continue
+			}
+			number, err := strconv.ParseUint(suffix, 10, 64)
+			if err != nil || strconv.FormatUint(number, 10) != suffix {
+				return ErrBackupInvalid
+			}
+			path := filepath.Join(root, name)
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > recordingCertificateLimit || strings.HasPrefix(name, ".recording-cleanup-") && info.Size() > 64<<10 {
+				return errors.Join(ErrBackupInvalid, err)
+			}
+			if err = checkRecordingCleanupOwnership(ctx, root, guard); err != nil {
+				return err
+			}
+			if err = os.Remove(path); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	return directory.Sync()
 }

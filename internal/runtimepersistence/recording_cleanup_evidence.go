@@ -3,11 +3,13 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 type recordingCleanupRoot struct {
@@ -200,21 +202,26 @@ func (s *ObservationStore) certifyRecordingAuditClosure(ctx context.Context, con
 
 // PurgeRecordingEvidence is the graph portion of an owned cleanup pass; the
 // caller still owes Usage, source compaction/verification and durable receipt.
-func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *ControlStore, m *InspectionMaintenance, cutoff time.Time) (released resourcedeletion.Released, result error) {
+func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *ControlStore, m *InspectionMaintenance, cutoff time.Time) (resourcedeletion.Released, error) {
+	return s.purgeRecordingEvidence(ctx, control, m, cutoff, nil)
+}
+
+// PurgeRecordingArchive is the production physical owner's single ordered
+// preparation boundary. It includes R53 required action and Usage before any
+// Activity/semantic/Raw proof can disappear, even when newer intent arrives.
+func (s *ObservationStore) PurgeRecordingArchive(ctx context.Context, control *ControlStore, m *InspectionMaintenance, cutoff time.Time, authority toolapproval.LegacyApprovalRemover) (resourcedeletion.Released, error) {
+	if authority == nil {
+		return resourcedeletion.Released{}, ErrInspectionUnavailable
+	}
+	return s.purgeRecordingEvidence(ctx, control, m, cutoff, authority)
+}
+func (s *ObservationStore) purgeRecordingEvidence(ctx context.Context, control *ControlStore, m *InspectionMaintenance, cutoff time.Time, authority toolapproval.LegacyApprovalRemover) (released resourcedeletion.Released, result error) {
 	if ctx == nil || control == nil || cutoff.IsZero() {
 		return released, ErrInspectionUnavailable
 	}
-	if err := s.PublishInspectionMirror(ctx, control); err != nil {
-		return released, err
-	}
-	if err := s.certifyRecordingAuditClosure(ctx, control, m, cutoff); err != nil {
-		return released, err
-	}
-	if err := s.CertifyRecordingDenialTail(ctx, control); err != nil {
-		return released, err
-	}
-	if err := s.PublishInspectionMirror(ctx, control); err != nil {
-		return released, err
+	released, result = s.prepareRecordingCleanup(ctx, control, m, cutoff, authority)
+	if result != nil {
+		return released, result
 	}
 	sources, err := m.cleanupInventory()
 	if err != nil {
@@ -294,4 +301,134 @@ func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *
 		}
 	}
 	return released, nil
+}
+
+// VerifyRecordingCleanup is the final read-only predicate pass, under the same
+// catalog exclusion as deletion/compaction. It never turns a remaining denied
+// copy or eligible proof root into a physical completion certificate.
+func (s *ObservationStore) VerifyRecordingCleanup(ctx context.Context, m *InspectionMaintenance, cutoff time.Time) error {
+	if ctx == nil || cutoff.IsZero() {
+		return ErrInspectionUnavailable
+	}
+	sources, err := m.cleanupInventory()
+	if err != nil {
+		return err
+	}
+	for _, source := range sources {
+		err = s.withCleanupSource(ctx, m, source, func(conn *sql.Conn, mirror string) error {
+			roots := recordingCleanupRoots(source, mirror, cutoff)
+			for _, entry := range []struct{ table, key, kind string }{{"runtime_usage_observations", "exchange_id", "usage"}, {"runtime_egress_attempts", "attempt_id", "attempt"}, {"runtime_connection_events", "connection_id", "connection"}} {
+				roots = append(roots, recordingCleanupRoot{table: entry.table, where: `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='` + entry.kind + `' AND d.identity=r.` + entry.key + `)`})
+			}
+			for _, root := range roots {
+				var remaining bool
+				if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM main.`+root.table+` r WHERE `+root.where+`)`).Scan(&remaining); err != nil {
+					return err
+				}
+				if remaining {
+					return fmt.Errorf("%w: remaining cleanup root %s", ErrInspectionUnavailable, root.table)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requestedRevision covers every predicate-broadening live mutation: delete,
+// clear and every Usage policy change commit it in their required transaction.
+// Capture creation only INSERTs never-reused positive fences, narrowing hiding.
+// Legacy caps are imported before owner admission. Denial growth is this
+// exclusive maintenance owner's own fixed-point closure, not an ordinary sink.
+type recordingCleanupPredicateVersion struct{ requested, epoch, policy uint64 }
+
+func (s *ControlStore) cleanupPredicateVersion(ctx context.Context) (v recordingCleanupPredicateVersion, err error) {
+	operation, finish, err := s.store.operations.begin(ctx)
+	if err != nil {
+		return v, err
+	}
+	defer finish()
+	err = s.store.reads.QueryRowContext(operation, `SELECT c.requested_revision,s.archive_epoch,p.revision FROM recording_cleanup_state c JOIN runtime_storage_state s USING(singleton) JOIN runtime_usage_policy p USING(singleton) WHERE c.singleton=1`).Scan(&v.requested, &v.epoch, &v.policy)
+	return v, err
+}
+func (s *ObservationStore) prepareRecordingCleanup(ctx context.Context, control *ControlStore, m *InspectionMaintenance, cutoff time.Time, authority toolapproval.LegacyApprovalRemover) (released resourcedeletion.Released, result error) {
+	for round := 0; ; round++ {
+		if round > 0 && round%4 == 0 {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return released, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		before, err := control.cleanupPredicateVersion(ctx)
+		if err != nil {
+			return released, err
+		}
+		if err = s.PublishInspectionMirror(ctx, control); err != nil {
+			if errors.Is(err, ErrInspectionChanged) {
+				continue
+			}
+			return released, err
+		}
+		if authority != nil {
+			value, err := s.PurgeRecordingLegacyApprovals(ctx, control, m, authority)
+			released = released.Add(value)
+			released.ApprovalOwnershipUnknown = value.ApprovalOwnershipUnknown
+			if err != nil {
+				if errors.Is(err, ErrInspectionChanged) || errors.Is(err, toolapproval.ErrRevisionConflict) {
+					released.CountsIncomplete = true
+					continue
+				}
+				return released, err
+			}
+			_, err = s.PurgeExpiredRecordingUsage(ctx, control, m, cutoff)
+			if err != nil {
+				if errors.Is(err, ErrInspectionChanged) {
+					released.CountsIncomplete = true
+					continue
+				}
+				return released, err
+			}
+			after, err := control.cleanupPredicateVersion(ctx)
+			if err != nil {
+				return released, err
+			}
+			if before != after {
+				continue
+			}
+		}
+		if err = s.certifyRecordingAuditClosure(ctx, control, m, cutoff); err != nil {
+			if errors.Is(err, ErrInspectionChanged) {
+				continue
+			}
+			return released, err
+		}
+		if err = s.CertifyRecordingDenialTail(ctx, control); err != nil {
+			if errors.Is(err, ErrInspectionChanged) {
+				continue
+			}
+			return released, err
+		}
+		if err = s.PublishInspectionMirror(ctx, control); err != nil {
+			if errors.Is(err, ErrInspectionChanged) {
+				continue
+			}
+			return released, err
+		}
+		after, err := control.cleanupPredicateVersion(ctx)
+		if err != nil {
+			return released, err
+		}
+		if before != after {
+			continue
+		}
+		// No further publication occurs before destructive batches, verification and
+		// compaction. Later required intent cannot change this owner-local mirror.
+		return released, nil
+	}
 }

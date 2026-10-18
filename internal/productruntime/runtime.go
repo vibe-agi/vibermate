@@ -574,6 +574,8 @@ func startWithBuilders(
 	if owner, ok := approvals.(toolapproval.ArchiveClearAuthority); ok {
 		optional.clearAuthority = owner
 	}
+	optional.legacyAuthority, _ = approvals.(toolapproval.LegacyApprovalRemover)
+	close(optional.approvalReady)
 	if owner, ok := approvals.(toolapproval.CaptureCanceler); ok {
 		nativeRevoker.installApprovals(owner)
 	}

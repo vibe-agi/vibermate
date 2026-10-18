@@ -237,3 +237,23 @@ func (s *ObservationStore) publishInspectionMirror(ctx context.Context, control 
 	}
 	return nil
 }
+
+// PublishedRecordingStamp is used by the exclusive maintenance owner to retain
+// exactly the activated mirror coordinates, never a newer control snapshot.
+func (s *ObservationStore) PublishedRecordingStamp(ctx context.Context) (stamp recording.InspectionStamp, result error) {
+	operation, finish, err := s.store.operations.begin(ctx)
+	if err != nil {
+		return stamp, err
+	}
+	defer finish()
+	var hash []byte
+	err = s.store.reads.QueryRowContext(operation, `SELECT g.layout_id,g.archive_epoch,g.visibility_revision,g.usage_policy_revision,d.required_denial_count,d.required_denial_hash FROM inspection_mirror_active a JOIN inspection_mirror_generations g USING(generation) CROSS JOIN recording_admission_state d WHERE a.singleton=1 AND d.singleton=1 AND g.complete=1 AND d.enforced=1`).Scan(&stamp.LayoutID, &stamp.ArchiveEpoch, &stamp.VisibilityRevision, &stamp.UsagePolicyRevision, &stamp.DenialCount, &hash)
+	if err != nil || len(hash) != 32 {
+		return recording.InspectionStamp{}, errors.Join(ErrInspectionUnavailable, err)
+	}
+	copy(stamp.DenialHash[:], hash)
+	if !stamp.Valid() {
+		return recording.InspectionStamp{}, ErrInspectionUnavailable
+	}
+	return stamp, nil
+}
