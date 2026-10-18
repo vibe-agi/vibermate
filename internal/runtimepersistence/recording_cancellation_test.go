@@ -22,6 +22,7 @@ type cancelWriterConnector struct {
 	holdExec         atomic.Bool
 	attempts, closes atomic.Int64
 	afterRowsClose   func()
+	rollbackErr      error
 }
 
 func (c *cancelWriterConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -40,7 +41,11 @@ type cancelWriterConn struct {
 
 func (c *cancelWriterConn) Close() error { c.owner.closes.Add(1); return c.Conn.Close() }
 func (c *cancelWriterConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	tx, err := c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	if err == nil && c.owner.rollbackErr != nil {
+		return &observedRollbackTx{Tx: tx, err: c.owner.rollbackErr}, nil
+	}
+	return tx, err
 }
 func (c *cancelWriterConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
 	if c.owner.armed.CompareAndSwap(true, false) {
@@ -179,5 +184,29 @@ func TestRecordingDetectedDenialCorruptionSurvivesConcurrentCancellation(t *test
 	_, err = readRecordingDenialCoverage(ctx, tx, "main", recording.InspectionStamp{})
 	if ctx.Err() == nil || !errors.Is(err, ErrRecordingPrivacyUnavailable) {
 		t.Fatalf("positive corruption erased by concurrent cancellation: ctx=%v result=%v", ctx.Err(), err)
+	}
+}
+
+type observedRollbackTx struct {
+	driver.Tx
+	err error
+}
+
+func (tx *observedRollbackTx) Rollback() error { return errors.Join(tx.Tx.Rollback(), tx.err) }
+
+func TestRecordingCanceledCommitPreservesActualRollbackError(t *testing.T) {
+	current, _, probe := certifiedCancellationWriter(t)
+	sentinel := errors.New("actual rollback diagnostic")
+	probe.rollbackErr = sentinel
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	tx, err := beginObservationTransaction(ctx, current.store.database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	err = tx.Commit()
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, sentinel) {
+		t.Fatalf("rollback error hidden by cancellation: %v", err)
 	}
 }

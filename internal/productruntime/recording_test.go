@@ -94,16 +94,11 @@ func TestRealCapturedForwardingWhileHistoryWriterBlocked(t *testing.T) {
 			sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
 			defer close(sink.release)
 			f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: family, choice: "builtin", recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
-				return newObservationRecorder(ctx, b, sink, sink)
+				return primeBlockedRecordingQueue(t, ctx, b, sink)
 			}})
 			waitRecording(t, f.r)
 			run := newOriginalForwardRun(t, f)
 			first := run.start(t)
-			select {
-			case <-sink.entered:
-			case <-time.After(3 * time.Second):
-				t.Fatal("history writer never entered")
-			}
 			assertOriginalForwardReply(t, f, first.join(t), false)
 			assertOriginalForwardReply(t, f, run.start(t).join(t), false)
 			if f.r.egressCompletion.owner.Err() != nil {
@@ -119,15 +114,11 @@ func TestRealBlindAndCleartextWhileHistoryWriterBlocked(t *testing.T) {
 			sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
 			defer close(sink.release)
 			f := newB4Fixture(t, port, func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
-				return newObservationRecorder(ctx, b, sink, sink)
+				return primeBlockedRecordingQueue(t, ctx, b, sink)
 			})
 			waitRecording(t, f.r)
 			for range 2 {
 				flight := f.job(func(context.Context) b4Result { return f.wire(port == 443) })
-				select {
-				case <-sink.entered:
-				case <-time.After(20 * time.Millisecond):
-				} // only the first worker can enter while blocked
 				f.finish(flight, 200)
 			}
 			if f.r.egressCompletion.owner.Err() != nil {
@@ -140,14 +131,9 @@ func TestRealUDPWhileHistoryWriterBlocked(t *testing.T) {
 	sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
 	defer close(sink.release)
 	f := newUDPShutdownFixture(t, func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
-		return newObservationRecorder(ctx, b, sink, sink)
+		return primeBlockedRecordingQueue(t, ctx, b, sink)
 	})
-	select {
-	case <-sink.entered:
-	case <-time.After(time.Second):
-		t.Fatal("recording sink not blocked")
-	}
-	// Fixture has already completed two real byte-exact datagram exchanges.
+	// The queue was primed before either actual byte-exact datagram exchange.
 	for _, c := range f.controls {
 		c.Close()
 	}
@@ -356,7 +342,7 @@ func TestTimedOutCapturePreparationRemainsOwnedUntilWriterSettles(t *testing.T) 
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(sink.release) }) }
 			r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
-				return newObservationRecorder(ctx, b, sink, sink)
+				return primeBlockedRecordingQueue(t, ctx, b, sink)
 			}})
 			if err != nil {
 				release()

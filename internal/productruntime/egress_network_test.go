@@ -530,7 +530,8 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	}
 	options := testOptions(t, hostcontract.Desktop(), gate)
 	options.OriginalTransport = wire
-	r, err := startWithBuilders(t.Context(), options, runtimeBuildOverrides{
+	offers := &EgressOfferProbe{}
+	r, err := startWithBuilders(t.Context(), options, runtimeBuildOverrides{egressObserver: offers.wrap,
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
 		},
@@ -544,6 +545,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		t.Fatal(err)
 	}
 	defer shutdownRuntime(t, r)
+	WaitRecordingTestRuntime(t, r)
 	policy := egressnetwork.DefaultPolicy()
 	policy.Proxy = egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: proxy.Addr().String()}
 	profile, err := r.EgressProfiles().Publish(t.Context(), egressprofile.PublishCommand{ID: "profile.runtime-original", DisplayName: "Private original", Policy: policy})
@@ -765,7 +767,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		wire.before = func() {
 			wire.before = nil
 			if semantic {
-				page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+				page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 				if err != nil || len(page.Items) != 1 || page.Items[0].Attempt.Terminal() {
 					t.Error("semantic started audit unavailable")
 				} else {
@@ -782,6 +784,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			}
 		}
 	}
+	WaitRecordingTestRuntime(t, r)
 	requestContext, cancelRequest := context.WithCancel(t.Context())
 	defer cancelRequest()
 	request, err := http.NewRequestWithContext(requestContext, method, "https://chatgpt.com"+path, strings.NewReader(body))
@@ -823,7 +826,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 				return errors.New("managed tail hook rejected destination")
 			}
 			logBoundary("enter_" + string(purpose))
-			page, err := r.EgressAttempts().List(req.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := offers.List(req.Context(), egressaudit.PageRequest{Limit: 10})
 			var start egressaudit.Attempt
 			matches := 0
 			if err == nil {
@@ -914,7 +917,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Fatal("model gate was not after one successful persisted rotation and before first model dial", err, inspectErr)
 		}
 		assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 2, newToken, "synthetic-refresh-new")
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 		if err != nil || len(page.Items) != 2 {
 			t.Fatal("pre-loss audit pair missing", err)
 		}
@@ -969,7 +972,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Fatal("proxy loss replayed token/model, rotated again or fell back", err, inspectErr)
 		}
 		assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 2, newToken, "synthetic-refresh-new")
-		page, err = r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err = SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		t.Logf("post-loss epoch=%d secretRevision=%d tokenDispatch=%d modelDispatch=%d tokenHTTP=%d modelHTTP=%d SOCKS=%d proxyDials=%d Direct=%d denied=%d bad=%d", account.Health.CredentialEpoch, metadata.Revision, tokenDispatches.Load(), modelDispatches.Load(), refreshCalls.Load(), upstreamCalls.Load(), calls.Load(), network.proxyDials.Load(), network.direct.Load(), network.denied.Load(), bad.Load())
 		if err != nil || len(page.Items) != 2 {
 			t.Fatal("proxy loss created extra/missing attempts", err)
@@ -983,7 +986,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			if audit.ID() == modelStart.ID() {
 				wantOutcome, wantError = egressaudit.OutcomeFailed, "connection_failed"
 			}
-			if !known || !audit.Terminal() || audit.Outcome() != wantOutcome || audit.ErrorClass() != wantError || audit.Decision() != start.Decision() || audit.Parent() != start.Parent() || audit.Purpose() != start.Purpose() || audit.TargetOrigin() != start.TargetOrigin() || audit.StartedAt() != start.StartedAt() || decision.SelectionSource != egressprofile.SelectionGlobal || decision.DefaultRevision != 2 || decision.ProxyID != "profile.runtime-original" || decision.ProxyRevision != 1 || decision.AccountID != "account.private-runtime" || decision.AccountSettingsRevision != 1 {
+			if !known || !audit.Terminal() || audit.Outcome() != wantOutcome || audit.ErrorClass() != wantError || audit.Decision() != start.Decision() || audit.Parent() != start.Parent() || audit.Purpose() != start.Purpose() || audit.TargetOrigin() != start.TargetOrigin() || !audit.StartedAt().Equal(start.StartedAt().Truncate(time.Millisecond)) || decision.SelectionSource != egressprofile.SelectionGlobal || decision.DefaultRevision != 2 || decision.ProxyID != "profile.runtime-original" || decision.ProxyRevision != 1 || decision.AccountID != "account.private-runtime" || decision.AccountSettingsRevision != 1 {
 				t.Fatal("post-rotation loss changed per-ID audit identity/outcome", audit)
 			}
 			if audit.ID() == tokenStart.ID() && (audit.Parent().Kind != egressaudit.ParentRuntimeAction || audit.TargetOrigin() != "https://auth.openai.com" || decision.Authority != egressaudit.AuthorityRuntime || decision.PolicyID != "account.private-runtime") {
@@ -1000,7 +1003,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		started := map[string]egressaudit.DecisionRef{}
 		var edit sync.Once
 		wire.before = func() {
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 			if err != nil {
 				t.Error(err)
 				return
@@ -1033,7 +1036,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Fatalf("managed failure replay/rotation/exit status%d token%d model%d epoch%d proxy%d direct%d denied%d", response.StatusCode, refreshCalls.Load(), upstreamCalls.Load(), account.Health.CredentialEpoch, calls.Load(), network.direct.Load(), network.denied.Load())
 		}
 		assertRuntimeManagedSecret(t, options.Secrets, managedAccount, secretstore.Revision(wantEpoch), wantAccess, wantRefresh)
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		if err != nil || len(page.Items) != int(wantWires) {
 			t.Fatal("failure operation audit count changed", len(page.Items), err)
 		}
@@ -1058,7 +1061,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		entered, release := make(chan struct{}), make(chan struct{})
 		var first sync.Once
 		wire.before = func() {
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 			if err != nil {
 				t.Error(err)
 				return
@@ -1128,7 +1131,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		}
 		initialIDs := map[string]bool{}
 		checkAudit := func(want int, next bool) {
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != want {
 				t.Fatalf("managed audit count=%d want=%d err=%v", len(page.Items), want, err)
 			}
@@ -1240,7 +1243,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	if managedHold {
 		started := map[string]egressaudit.DecisionRef{}
 		wire.before = func() {
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 			if err != nil {
 				t.Error(err)
 				return
@@ -1320,7 +1323,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 					t.Fatal("cancelled model resumed/retried or independent token changed exit", epoch, refreshCalls.Load(), upstreamCalls.Load(), calls.Load())
 				}
 				assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 2, newToken, "synthetic-refresh-new")
-				page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+				page, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 				if err != nil || len(page.Items) != 1 {
 					t.Fatal("canceled model produced an audit or independent token audit missing", err)
 				}
@@ -1342,7 +1345,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 				t.Fatal("canceled refresh flight did not join", err)
 			}
 			assertRuntimeManagedSecret(t, options.Secrets, managedAccount, 1, oldToken, "synthetic-refresh-old")
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != 0 || refreshCalls.Load() != 0 || upstreamCalls.Load() != 0 || calls.Load() != 0 || network.direct.Load() != 0 || network.denied.Load() != 0 {
 				t.Fatal("canceled held refresh sent or rotated")
 			}
@@ -1394,7 +1397,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			t.Error("managed consumers did not drain", err)
 		}
 		account, accountErr := r.ProviderAccounts().Get(t.Context(), "account.private-runtime")
-		page, auditErr := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, auditErr := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		t.Logf("after actual resume consumers drained snapshot=%+v token=%d model=%d proxy=%d direct=%d credentialEpoch=%d auditCount=%d", gate.Snapshot(), refreshCalls.Load(), upstreamCalls.Load(), calls.Load(), network.denied.Load(), account.Health.CredentialEpoch, len(page.Items))
 		if resumeErr != nil && (accountErr != nil || auditErr != nil || account.Health.CredentialEpoch != 1 || refreshCalls.Load() != 0 || upstreamCalls.Load() != 0 || calls.Load() != 0 || network.denied.Load() != 0 || len(page.Items) != 0) {
 			t.Error("rejected managed resume produced physical send, rotation or audit")
@@ -1436,7 +1439,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 			if response.StatusCode != 200 || network.direct.Load() != 1 || calls.Load() != 4 || refreshCalls.Load() != 1 || upstreamCalls.Load() != 2 || bad.Load() != 0 || network.denied.Load() != 0 {
 				t.Fatal("next operation did not use edited builtin exit without token replay")
 			}
-			page, err = r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err = SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != 3 {
 				t.Fatal("next held operation audit missing", err)
 			}
@@ -1476,7 +1479,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	if response.StatusCode != 200 || !strings.Contains(string(reply), "synthetic-response") || calls.Load() != wantProxy || network.direct.Load() != wantDirect || upstreamCalls.Load() != 1 || bad.Load() != 0 || network.denied.Load() != 0 {
 		t.Fatalf("actual original wire status%d reply%s proxy%d upstream%d refresh%d bad%d direct%d", response.StatusCode, reply, calls.Load(), upstreamCalls.Load(), refreshCalls.Load(), bad.Load(), network.denied.Load())
 	}
-	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 	if err != nil || len(page.Items) != int(wantWires) {
 		t.Fatalf("actual Runtime audit %+v %v", page, err)
 	}
@@ -1546,7 +1549,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 	if failed.StatusCode == 200 || calls.Load() != wantWires || upstreamCalls.Load() != 1 || network.denied.Load() != 0 {
 		t.Fatalf("unavailable frozen proxy bypass/retry: status%d proxy%d upstream%d unexpected/direct%d", failed.StatusCode, calls.Load(), upstreamCalls.Load(), network.denied.Load())
 	}
-	page, err = r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err = SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 	if err != nil || len(page.Items) != int(wantWires)+1 {
 		t.Fatalf("failure lost independent audit %+v %v", page, err)
 	}

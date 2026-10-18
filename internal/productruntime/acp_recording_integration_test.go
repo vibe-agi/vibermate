@@ -33,12 +33,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
-type acpChildActivity struct{ runs capturerun.Repository }
-
-func (a acpChildActivity) Active(ctx context.Context, c captureidentity.Reference) (bool, error) {
-	return a.runs.Active(ctx, c.ID, time.Now())
-}
-
 type isolatedACPDiscovery struct{ session localdiscovery.Session }
 
 func (d isolatedACPDiscovery) Load() (localdiscovery.Session, error) { return d.session, nil }
@@ -67,6 +61,18 @@ func TestIsolatedACPChildFixture(t *testing.T) {
 	if os.Getenv("VIBERMATE_TASK2_ACP_CHILD") != "1" {
 		return
 	}
+	if release := os.Getenv("VIBERMATE_TASK7_CHILD_RELEASE"); release != "" {
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			if _, err := os.Stat(release); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				os.Exit(4)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
 		os.Exit(3)
 	}
@@ -81,39 +87,24 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			control, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{DatabasePath: filepath.Join(directory, "control.db"), LayoutID: "acp-child", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer control.Shutdown(ctx)
-			observations, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(directory, "observations.db"), LayoutID: "acp-child", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer observations.Shutdown(ctx)
-			sink := &heldRealACPStore{owner: observations, entered: make(chan struct{}), release: make(chan struct{}), fail: fail}
-			queue := productruntime.NewACPRecordingTestRecorder(ctx, sink)
-			defer queue.Shutdown(ctx)
+			sink := &heldRealACPStore{entered: make(chan struct{}), release: make(chan struct{}), fail: fail}
+			runtime, queue, observations := productruntime.StartACPRecordingTestRuntime(t, sink)
+			sink.owner = observations
 			var once sync.Once
 			release := func() { once.Do(func() { close(sink.release) }) }
 			defer release()
-			runs, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(control.CaptureRunRepository()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer runs.Shutdown(ctx)
+			defer func() {
+				release()
+				if err := runtime.Shutdown(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}()
+			runs := runtime.CaptureRuns()
 			grant, err := runs.Create(ctx, capturerun.CreateCommand{CWD: directory, CanonicalExecutablePath: executable, ExecutableLabel: "test-agent", CatalogRevision: 1, Lifetime: 10 * time.Minute})
 			if err != nil {
 				t.Fatal(err)
 			}
-			compiler, err := productruntime.NewRecordingTestCompiler()
-			if err != nil {
-				t.Fatal(err)
-			}
-			environments, err := environment.NewManager(ctx, control.EnvironmentRepository(), compiler, environment.NewAtomicProjection(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			environments := runtime.Environments()
 			origin, _ := originidentity.ParseProviderOrigin("https://native.example")
 			direct, _ := egressprofile.Explicit(egressprofile.Direct())
 			env := environment.Environment{ID: "acp.child", Name: "ACP child", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyObserve}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "acp.child.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: direct}}}
@@ -128,20 +119,15 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 			if _, err := environments.Publish(ctx, preview); err != nil {
 				t.Fatal(err)
 			}
-			activity := acpChildActivity{control.CaptureRunRepository()}
-			assignments, err := captureassignment.NewManager(captureassignment.DefaultOptions(control.CaptureAssignmentRepository(), environments, activity))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer assignments.Shutdown(ctx)
+			assignments := runtime.CaptureAssignments()
 			capture := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: grant.Run.ID}
 			if _, err := assignments.Create(ctx, captureassignment.CreateCommand{Capture: capture, EnvironmentID: env.ID, Source: captureassignment.SourceLaunch}); err != nil {
 				t.Fatal(err)
 			}
-			manager, err := acpobservation.NewManager(control.ACPRegistrations(), runs, assignments, environments, productruntime.SystemClock{}, acpobservation.RecordingOptions{Recorder: queue, Scopes: queue, Reader: sink})
-			if err != nil {
-				t.Fatal(err)
-			}
+			productruntime.WaitRecordingTestRuntime(t, runtime)
+			manager := runtime.ACPObservations()
+			var attachedPID, heartbeats, finishes atomic.Int64
+			childRelease := filepath.Join(directory, "child-release")
 			view := func(v capturerun.View) capturecontrol.CaptureRunView {
 				return capturecontrol.CaptureRunView{ID: v.ID, ExecutableLabel: v.ExecutableLabel, CWD: v.CWD, ProcessID: v.ProcessID, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt, ClientAdapterState: clientadapter.StatusGeneric, ClientRecognition: clientadapter.RecognitionUnknown, CatalogRevision: 1}
 			}
@@ -159,6 +145,13 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 					switch {
 					case strings.HasSuffix(r.URL.Path, "/start-acp"):
 						value, err = manager.Start(r.Context(), grant.Run.ID, grant.ControlCapability, false)
+						if err == nil {
+							select {
+							case <-sink.entered:
+							case <-r.Context().Done():
+								err = r.Context().Err()
+							}
+						}
 					case strings.HasSuffix(r.URL.Path, "/observe-acp"):
 						var snapshot acpobservation.Snapshot
 						err = json.NewDecoder(io.LimitReader(r.Body, acpobservation.MaxSnapshotBytes)).Decode(&snapshot)
@@ -173,13 +166,23 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 							var v capturerun.View
 							v, err = runs.Attach(r.Context(), grant.Run.ID, grant.ControlCapability, input.ProcessID)
 							value = view(v)
+							if err == nil {
+								attachedPID.Store(int64(input.ProcessID))
+							}
 						}
 					case strings.HasSuffix(r.URL.Path, "/heartbeat"):
 						var v capturerun.View
 						v, err = runs.Heartbeat(r.Context(), grant.Run.ID, grant.ControlCapability, 10*time.Minute)
 						value = view(v)
+						if err == nil {
+							heartbeats.Add(1)
+							err = os.WriteFile(childRelease, []byte("release"), 0600)
+						}
 					case strings.HasSuffix(r.URL.Path, "/finish"):
 						err = runs.Finish(r.Context(), grant.Run.ID, grant.ControlCapability)
+						if err == nil {
+							finishes.Add(1)
+						}
 						status = http.StatusNoContent
 					default:
 						status = http.StatusNotFound
@@ -213,7 +216,7 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 				t.Fatal(err)
 			}
 			defer stderr.Close()
-			launcher, err := runlauncher.New(runlauncher.Config{Discovery: isolatedACPDiscovery{localdiscovery.Session{Schema: localdiscovery.Schema, ProcessID: os.Getpid(), BaseURL: server.URL, InstanceID: base64.RawURLEncoding.EncodeToString(make([]byte, 20)), ControlCredential: grant.ProxyCapability.Value(), ExpiresAt: time.Now().Add(time.Hour)}}, BaseEnvironment: []string{"VIBERMATE_TASK2_ACP_CHILD=1", "GORACE=atexit_sleep_ms=0"}, Stdin: input, Stdout: output, Stderr: stderr, Getwd: func() (string, error) { return directory, nil }, ControlTimeout: time.Second, TerminationTimeout: time.Second})
+			launcher, err := runlauncher.New(runlauncher.Config{Discovery: isolatedACPDiscovery{localdiscovery.Session{Schema: localdiscovery.Schema, ProcessID: os.Getpid(), BaseURL: server.URL, InstanceID: base64.RawURLEncoding.EncodeToString(make([]byte, 20)), ControlCredential: grant.ProxyCapability.Value(), ExpiresAt: time.Now().Add(time.Hour)}}, BaseEnvironment: []string{"VIBERMATE_TASK2_ACP_CHILD=1", "VIBERMATE_TASK7_CHILD_RELEASE=" + childRelease, "GORACE=atexit_sleep_ms=0"}, Stdin: input, Stdout: output, Stderr: stderr, Getwd: func() (string, error) { return directory, nil }, HeartbeatInterval: 5 * time.Millisecond, ControlTimeout: time.Second, TerminationTimeout: time.Second})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,9 +248,12 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 			if err != nil || string(bytes) != exact {
 				t.Fatalf("ACP bytes changed: %q %v", bytes, err)
 			}
-			current, err := runs.GetRun(ctx, grant.Run.ID)
+			current, err := runtime.CaptureRunReader().GetRun(ctx, grant.Run.ID)
 			if err != nil || current.State != capturerun.StateFinished {
 				t.Fatalf("required Capture finish blocked: %+v %v", current, err)
+			}
+			if attachedPID.Load() <= 0 || heartbeats.Load() == 0 || finishes.Load() != 1 {
+				t.Fatalf("actual child supervision attachPID=%d heartbeats=%d finishes=%d", attachedPID.Load(), heartbeats.Load(), finishes.Load())
 			}
 			if sink.reads.Load() != 0 {
 				t.Fatal("startup/listing consulted optional reader")

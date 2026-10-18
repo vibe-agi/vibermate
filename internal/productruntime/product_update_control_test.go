@@ -283,13 +283,13 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		t.Fatal(err)
 	}
 	var sends atomic.Int64
-	var actualRuntime *productruntime.Runtime
+	offers := &productruntime.EgressOfferProbe{}
 	startedDecisions := map[string]egressaudit.DecisionRef{}
 	observeStart := func() {
 		if !builtin {
 			return
 		}
-		page, err := actualRuntime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			t.Error(err)
 			return
@@ -301,11 +301,11 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		}
 	}
 	options := productruntime.ProductUpdateTestOptions(t, gate)
-	r, err := productruntime.StartProductUpdateTestRuntime(t.Context(), options, updateWire{builder: builder, roots: roots, sends: &sends, before: observeStart}, builder, roots)
+	r, err := productruntime.StartProductUpdateTestRuntime(t.Context(), options, updateWire{builder: builder, roots: roots, sends: &sends, before: observeStart}, builder, roots, offers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actualRuntime = r
+	productruntime.WaitRecordingTestRuntime(t, r)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -381,7 +381,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 				if response.Code != test.status {
 					t.Errorf("actual owner boundary status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
 				}
-				page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+				page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 				if err != nil || len(page.Items) != 0 {
 					t.Fatalf("rejected input created outgoing audit %+v err=%v", page, err)
 				}
@@ -425,7 +425,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		if response.Code != 503 || sends.Load() != 0 || network.dials.Load() != 0 || network.dns.Load() != 0 || calls.Load() != 0 || nextCalls.Load() != 0 || gets.Load() != 0 {
 			t.Fatalf("unavailable default became direct/unset: status%d sends%d dial%d DNS%d", response.Code, sends.Load(), network.dials.Load(), network.dns.Load())
 		}
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		if err != nil || len(page.Items) != 0 {
 			t.Fatal("unresolved default created audit", err)
 		}
@@ -473,7 +473,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		if snapshot.QueuedRequests != 0 || snapshot.HeldBytes != 0 {
 			t.Fatal("real-wire failure retained queue budget", snapshot)
 		}
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		if err != nil || len(page.Items) != 1 {
 			t.Fatalf("real-wire failure audit lost %+v %v", page, err)
 		}
@@ -547,7 +547,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 			if gets.Load() != 0 || calls.Load() != 0 || nextCalls.Load() != 0 || network.unexpected.Load() != 0 {
 				t.Fatal("canceled/expired operation later sent/probed")
 			}
-			page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+			page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 			if err != nil || len(page.Items) != 0 {
 				t.Fatal("unsent queued update acquired outgoing audit", err)
 			}
@@ -650,7 +650,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"tag":"v0.1.24"`) || calls.Load() != wantSockets || nextCalls.Load() != 0 || gets.Load() != 1 || bad.Load() != 0 || network.unexpected.Load() != 0 {
 		t.Fatalf("actual owner closed update missing: status%d response%s sockets%d/%d GET%d bad%d unexpected%d", response.Code, response.Body.String(), calls.Load(), nextCalls.Load(), gets.Load(), bad.Load(), network.unexpected.Load())
 	}
-	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 	wantAudits := 1
 	if len(edges) > 0 && edges[0] == "mixed" {
 		wantAudits = 2
@@ -692,7 +692,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		if failed.Code != 503 || gets.Load() != 1 || sends.Load() != 2 || network.direct.Load() != 2 || network.dials.Load() != 2 || calls.Load() != 0 || nextCalls.Load() != 0 || network.unexpected.Load() != 0 {
 			t.Fatalf("failed direct update path: status%d GET%d sends%d direct%d dial%d proxy%d/%d unexpected%d", failed.Code, gets.Load(), sends.Load(), network.direct.Load(), network.dials.Load(), calls.Load(), nextCalls.Load(), network.unexpected.Load())
 		}
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 		if err != nil || len(page.Items) != 2 {
 			t.Fatal("failed direct update audit missing", err)
 		}

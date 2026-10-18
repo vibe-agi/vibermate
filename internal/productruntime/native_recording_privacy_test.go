@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	recordingpkg "github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ import (
 // must never enter stored payload/metadata, yet live continuity remains exact.
 func TestNativeTurnStateNeverPersistsThroughRuntimeHTTP(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, recording := range []string{"full", "off", "failed"} {
+		for _, recording := range []string{"full", "off", "failed", "unavailable"} {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, recording), func(t *testing.T) { runNativeStateHTTP(t, stream, recording, false, true) })
 		}
 	}
@@ -56,7 +57,12 @@ func runNativeStateHTTP(t *testing.T, streaming bool, recording string, original
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	f := newAccountReadFixture(t)
+	var f accountReadFixture
+	if recording == "unavailable" {
+		f = unavailableAccountReadFixture(t, providerauth.StaticHeaderDriverRef())
+	} else {
+		f = newAccountReadFixture(t)
+	}
 	if recording == "off" {
 		f.aggregate.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}
 	}
@@ -128,6 +134,16 @@ func runNativeStateHTTP(t *testing.T, streaming bool, recording string, original
 		waitRecording(t, f.runtime)
 		waitRecordingMirror(t, f.runtime)
 	}
+	if recording == "locked" {
+		release := holdRuntimeObservationWriter(t, f.runtime)
+		defer release()
+		stats := f.runtime.recordingBudget.Snapshot()
+		reservation, ok := f.runtime.recordingBudget.TryReserve(recordingpkg.Raw, (64<<20)-stats.ReservedBytes)
+		if !ok {
+			t.Fatal("shared byte budget was not available to saturate")
+		}
+		defer reservation.Release()
+	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
@@ -172,6 +188,12 @@ func runNativeStateHTTP(t *testing.T, streaming bool, recording string, original
 	}
 	if len(got) != 2 || got[0] != first || got[1] != sentinel {
 		t.Fatalf("live replay=%q", got)
+	}
+	if recording == "locked" {
+		exerciseAcceptanceCaptureControls(t, f.runtime)
+		if f.runtime.recordingBudget.Snapshot().ByKind[recordingpkg.Raw].Offers[recordingpkg.DroppedCapacity].Records == 0 {
+			t.Fatal("actual native live buffers did not encounter full shared budget")
+		}
 	}
 	if recording == "full" {
 		ids := []string{}

@@ -458,6 +458,14 @@ stopped, guarded APIs so each role’s WAL and recording provisioning/privacy
 metadata survive. Role SHM files are disposable. A missing optional store must
 stay visibly absent; never delete its provisioning receipt to recreate it.
 
+Agent startup, Capture renewal, forwarding and Finish use the control store.
+A missing, corrupt, locked or full observation store can leave recording
+incomplete while authorized work continues. Missing history does not prove that
+no traffic occurred. Finish closes recording admission; shutdown may discard
+queued copies and does not promise a final history row. A shutdown deadline can
+return while owned I/O still drains, so wait for the actual process/ownership
+boundary before moving or restoring its directory.
+
 Old private v1 rollback snapshots keep the original monolithic completion
 boundary and credentials. Split private v2 snapshots preserve the recorded
 layout and all persistent local files under the same private policy, and refuse

@@ -44,7 +44,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-type runtimeNativeEgressConfig struct{ choice, edge string }
+type runtimeNativeEgressConfig struct {
+	choice, edge  string
+	recorder      observationRecorderBuilder
+	fullRecording bool
+}
 
 // A contained transport seam: real Runtime/Store/receipt authority and TLS
 // remain in use. This does not qualify external VLESS/REALITY interoperability.
@@ -439,7 +443,7 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	options := testOptionsWithPaths(t, paths, hostcontract.Desktop(), f.gate)
 	options.NetworkOptions = egressnetwork.BuilderOptions{BaseDialer: f.network, SystemResolver: f.network}
 	options.OriginalTransport = &runtimeNativeWire{f: f, builder: builder, roots: f.roots}
-	f.r, e = startWithBuilders(context.Background(), options, runtimeBuildOverrides{originalProber: func() (*originaltransport.TLSProber, error) {
+	f.r, e = startWithBuilders(context.Background(), options, runtimeBuildOverrides{recorder: cfg.recorder, originalProber: func() (*originaltransport.TLSProber, error) {
 		return originaltransport.NewTLSProberWithBuilder(builder, f.roots)
 	}})
 	if e != nil {
@@ -534,6 +538,9 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://native.example")
 	env := environment.Environment{ID: "native.egress", Name: "Native egress", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyReview}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.egress.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authored}}}
+	if cfg.fullRecording {
+		env.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}
+	}
 	draft, e := f.r.Environments().SaveDraft(t.Context(), environment.DraftCommand{Candidate: env})
 	if e != nil {
 		t.Fatal(e)

@@ -43,8 +43,7 @@ func (tx *observationTransaction) Rollback() error {
 }
 func (tx *observationTransaction) Commit() error {
 	if err := tx.operation.Err(); err != nil {
-		_ = tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
 	err := tx.Tx.Commit()
 	if tx.conn != nil {

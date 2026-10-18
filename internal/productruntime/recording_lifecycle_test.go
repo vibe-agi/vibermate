@@ -570,6 +570,30 @@ func TestRuntimeFullDeclaredArchiveInventoryDoesNotGateControl(t *testing.T) {
 		id := fmt.Sprintf("declared-%03d", i)
 		archives[i] = runtimedata.LegacyArchive{ID: id, RelativeDirectory: "archives/" + id, Database: runtimepersistence.SchemaState{Identity: "vibermate-runtime", Revision: 1, InitializedAt: "2026-10-03T00:00:00Z"}}
 	}
+	// The first declared archive contains eight GiB of unrelated sparse history.
+	// Ordinary admission must not extract/copy/scan it; optional owner startup is
+	// observed separately below and the source remains untouched.
+	largePath := filepath.Join(options.Paths.DataDirectory(), archives[0].RelativeDirectory, "runtime.db")
+	if err = os.MkdirAll(filepath.Dir(largePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	large, err := os.OpenFile(largePath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = large.Truncate(8 << 30); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = large.WriteAt([]byte("unrelated retained history"), (8<<30)-64); err != nil {
+		t.Fatal(err)
+	}
+	if err = large.Close(); err != nil {
+		t.Fatal(err)
+	}
+	originalInfo, err := os.Stat(largePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	document["archives"] = archives
 	encoded, err = json.Marshal(document)
 	if err != nil {
@@ -579,11 +603,21 @@ func TestRuntimeFullDeclaredArchiveInventoryDoesNotGateControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	options.OfflineHold = &coordinatorDouble{}
+	startedAt := time.Now()
 	r, err := Start(context.Background(), options)
 	if err != nil {
 		t.Fatalf("bounded optional source limit rejected control: %v", err)
 	}
 	defer shutdownRuntime(t, r)
+	if time.Since(startedAt) > 2*time.Second {
+		t.Fatal("normal admission depended on unrelated history volume")
+	}
+	afterInfo, err := os.Stat(largePath)
+	if err != nil || !os.SameFile(originalInfo, afterInfo) || originalInfo.Size() != afterInfo.Size() || !originalInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("normal startup changed unrelated archive", err)
+	}
+	waitRecording(t, r)
+
 	if _, err = r.UsageRepository().UsagePolicy(context.Background()); err != nil {
 		t.Fatal(err)
 	}

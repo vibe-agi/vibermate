@@ -91,6 +91,7 @@ func (w *ownedRuntimeWire) RoundTrip(r *http.Request, d providertransport.Transp
 }
 
 type ownedRuntimeFixture struct {
+	offers                                EgressOfferProbe
 	r                                     *Runtime
 	gate                                  *offlinehold.Gate
 	wire                                  *ownedRuntimeWire
@@ -184,7 +185,7 @@ func newOwnedRuntimeFixture(t *testing.T, rejectTLS ...bool) *ownedRuntimeFixtur
 		t.Fatal(err)
 	}
 	options := testOptions(t, hostcontract.Desktop(), f.gate)
-	f.r, err = startWithBuilders(t.Context(), options, runtimeBuildOverrides{
+	f.r, err = startWithBuilders(t.Context(), options, runtimeBuildOverrides{egressObserver: f.offers.wrap,
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, probeRoots)
 		},
@@ -203,6 +204,7 @@ func newOwnedRuntimeFixture(t *testing.T, rejectTLS ...bool) *ownedRuntimeFixtur
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { shutdownRuntime(t, f.r) })
+	WaitRecordingTestRuntime(t, f.r)
 	for _, p := range []struct {
 		id       string
 		listener net.Listener
@@ -250,7 +252,7 @@ func newOwnedRuntimeFixture(t *testing.T, rejectTLS ...bool) *ownedRuntimeFixtur
 
 func (f *ownedRuntimeFixture) captureStarted(t *testing.T) {
 	t.Helper()
-	page, err := f.r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 50})
+	page, err := f.offers.List(t.Context(), egressaudit.PageRequest{Limit: 50})
 	if err != nil {
 		t.Error("read initial persisted audit", err)
 		return
@@ -269,7 +271,7 @@ type ownedCounts struct{ quota, history, details, consume, proxyA, proxyB, direc
 func (f *ownedRuntimeFixture) assertCounts(t *testing.T, want ownedCounts) {
 	t.Helper()
 	got := ownedCounts{f.quota.Load(), f.history.Load(), f.details.Load(), f.consume.Load(), f.dials.Load(), f.dialsB.Load(), f.network.direct.Load(), 0}
-	page, err := f.r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 50})
+	page, err := SettledEgressTestPage(t, f.r, egressaudit.PageRequest{Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +284,7 @@ func (f *ownedRuntimeFixture) assertCounts(t *testing.T, want ownedCounts) {
 
 func (f *ownedRuntimeFixture) assertAudits(t *testing.T, source egressprofile.SelectionSource, profileID string, defaultRevision, settingsRevision uint64, failed, actions int) {
 	t.Helper()
-	page, err := f.r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 50})
+	page, err := SettledEgressTestPage(t, f.r, egressaudit.PageRequest{Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +316,7 @@ func (f *ownedRuntimeFixture) assertAudits(t *testing.T, source egressprofile.Se
 
 func (f *ownedRuntimeFixture) assertEditedAudits(t *testing.T, original int) {
 	t.Helper()
-	page, err := f.r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 50})
+	page, err := SettledEgressTestPage(t, f.r, egressaudit.PageRequest{Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}

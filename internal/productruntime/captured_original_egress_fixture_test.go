@@ -55,6 +55,7 @@ import (
 )
 
 type capturedOriginalConfig struct {
+	bodyWrap             func(context.Context, io.ReadCloser) io.ReadCloser
 	recorder             observationRecorderBuilder
 	connectionEvent      func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
 	family, choice, edge string
@@ -75,6 +76,7 @@ type capturedOriginalExpected struct {
 // This wrapper owns the fixed captured read, semantic, and opaque socket seams. It does not
 // broaden runtimeOriginalWire's shared whitelist or replace the proxy/Reader.
 type capturedOriginalWire struct {
+	bodyWrap func(context.Context, io.ReadCloser) io.ReadCloser
 	builder  *egressnetwork.Builder
 	roots    *x509.CertPool
 	before   func(context.Context) error
@@ -102,7 +104,11 @@ func (w *capturedOriginalWire) RoundTrip(r *http.Request, policy egressnetwork.P
 	}
 	transport := &http.Transport{DialContext: dialer.DialContext, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: w.roots, MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second}
 	defer transport.CloseIdleConnections()
-	return transport.RoundTrip(r)
+	response, err := transport.RoundTrip(r)
+	if err == nil && w.bodyWrap != nil {
+		response.Body = w.bodyWrap(r.Context(), response.Body)
+	}
+	return response, err
 }
 
 type capturedProviderWire struct{ wire *capturedOriginalWire }
@@ -311,7 +317,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	if cfg.edge != "untrusted" {
 		roots.AddCert(f.upstream.Certificate())
 	}
-	wire := &capturedOriginalWire{builder: builder, roots: roots, semantic: cfg.family == "semantic" || cfg.family == "original_model" || cfg.family == "transformed", raw: cfg.family == "raw", before: func(ctx context.Context) error {
+	wire := &capturedOriginalWire{bodyWrap: cfg.bodyWrap, builder: builder, roots: roots, semantic: cfg.family == "semantic" || cfg.family == "original_model" || cfg.family == "transformed", raw: cfg.family == "raw", before: func(ctx context.Context) error {
 		if f.entered != nil {
 			f.first.Do(func() {
 				close(f.entered)
@@ -521,6 +527,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		}
 		capability = grant.Credential.Value()
 	}
+	WaitRecordingTestRuntime(t, f.r)
 	f.listener = httptest.NewServer(f.r.ProxyHandler())
 	t.Cleanup(f.listener.Close)
 	proxyURL, err := url.Parse(f.listener.URL)

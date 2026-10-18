@@ -3,8 +3,12 @@ package productruntime
 import (
 	"context"
 	"github.com/vibe-agi/vibermate/internal/acpobservation"
-	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"testing"
 )
 
 // External launcher integration tests cannot import runlauncher into this
@@ -17,12 +21,16 @@ type ACPRecordingTestRecorder interface {
 	Shutdown(context.Context) error
 }
 
-func NewACPRecordingTestRecorder(ctx context.Context, writer acpobservation.Writer) ACPRecordingTestRecorder {
-	budget, _ := recording.NewBudget(recording.Limits{Records: 2048, Bytes: 64 << 20})
-	recorder := newObservationRecorder(ctx, budget, nil, nil)
-	recorder.acp = writer
-	return recorder
-}
-func NewRecordingTestCompiler() (environment.Compiler, error) {
-	return productionEnvironmentCompiler(nil, nil)
+func StartACPRecordingTestRuntime(t *testing.T, writer acpobservation.Writer) (*Runtime, ACPRecordingTestRecorder, *runtimepersistence.ObservationStore) {
+	t.Helper()
+	r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
+		q := newObservationRecorder(ctx, b, nil, nil)
+		q.acp = writer
+		return q
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRecording(t, r)
+	return r, r.recorder, r.recordingStorage.current.Load().store
 }

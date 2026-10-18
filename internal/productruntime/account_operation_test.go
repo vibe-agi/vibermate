@@ -96,6 +96,7 @@ func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertranspor
 
 func TestOwnerQuotaEnrichesBankedResetsWithoutOpeningCapturedWritePath(t *testing.T) {
 	f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+	WaitRecordingTestRuntime(t, f.runtime)
 	f.wire.resetDetails = true
 	result, err := f.reader.ReadOwned(context.Background(), f.account.Account.ID, upstreamservice.CodexRateLimits)
 	if err != nil || result.Facts.RateLimitResets == nil || result.Facts.RateLimitResets.AvailableCount != 1 ||
@@ -122,6 +123,7 @@ func TestOwnerQuotaEnrichesBankedResetsWithoutOpeningCapturedWritePath(t *testin
 
 func TestOwnerRedeemsOnlyNamedCodexOAuthResetWithFrozenAccount(t *testing.T) {
 	f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+	WaitRecordingTestRuntime(t, f.runtime)
 	f.wire.resetDetails = true
 	stableID, err := providertransport.ResetRequestID("managed-b", "credit-fixture")
 	if err != nil {
@@ -140,7 +142,7 @@ func TestOwnerRedeemsOnlyNamedCodexOAuthResetWithFrozenAccount(t *testing.T) {
 		f.wire.requests[1].Header.Get("Chatgpt-Account-Id") != "workspace-B" {
 		t.Fatal("redemption escaped the selected OAuth account or preflight")
 	}
-	page, err := f.runtime.EgressAttempts().List(context.Background(), egressaudit.PageRequest{Limit: 20})
+	page, err := SettledEgressTestPage(t, f.runtime, egressaudit.PageRequest{Limit: 20})
 	if err != nil || len(page.Items) != 2 || page.Items[0].Attempt.Purpose() != egressaudit.PurposeUpstreamAccountAction {
 		t.Fatalf("missing redemption audit: %+v, %v", page.Items, err)
 	}

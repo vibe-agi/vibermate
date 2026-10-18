@@ -29,7 +29,11 @@ func TestManagedCodexModelsThroughCONNECT(t *testing.T) {
 			name = "http2"
 		}
 		t.Run(name, func(t *testing.T) {
-			f := newAccountReadFixtureWithDriver(t, providerauth.CodexOAuthDriverRef())
+			fault := "unavailable"
+			if http2 {
+				fault = "corrupt"
+			}
+			f := unavailableAccountReadFixture(t, providerauth.CodexOAuthDriverRef(), fault)
 			proxyURL := f.serveProxy(t)
 			roots := x509.NewCertPool()
 			roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
@@ -89,7 +93,7 @@ func TestManagedCodexModelsThroughCONNECT(t *testing.T) {
 }
 
 func TestCodexModelsFollowManualAccountSwitchOnExistingConnection(t *testing.T) {
-	f := newAccountReadFixture(t)
+	f := unavailableAccountReadFixture(t, providerauth.StaticHeaderDriverRef())
 	ctx := context.Background()
 	tokenC := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-C"}}`, time.Now().Add(time.Hour).Unix()))) + ".synthetic"
 	material, err := providerauth.NewMaterial(tokenC, nil, nil)

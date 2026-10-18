@@ -249,6 +249,17 @@ func TestNativeJSONAndSSEFinishBeforeOptionalBodyWriterRelease(t *testing.T) {
 					}
 					defer reservation.Release()
 				}
+				if fault != "saturated" {
+					stamp, input := nativeQueueInput(queue)
+					if queue.ObserveNativeContent(stamp, input) != recording.Accepted {
+						t.Fatal("native body prime refused")
+					}
+					select {
+					case <-writer.entered:
+					case <-time.After(time.Second):
+						t.Fatal("native body writer fault not active before measured call")
+					}
+				}
 				const call = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"synthetic_read","arguments":{"query":"synthetic"}}}`
 				type outcome struct {
 					terminal nativemcp.Terminal

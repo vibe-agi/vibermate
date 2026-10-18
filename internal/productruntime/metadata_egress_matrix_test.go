@@ -152,7 +152,8 @@ func runActualRuntimeMetadataCase(t *testing.T, tc metadataMatrixCase) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	r, err := productruntime.StartProductUpdateTestRuntime(ctx, productruntime.ProductUpdateTestOptions(t, gate), wire, builder, roots)
+	offers := &productruntime.EgressOfferProbe{}
+	r, err := productruntime.StartProductUpdateTestRuntime(ctx, productruntime.ProductUpdateTestOptions(t, gate), wire, builder, roots, offers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +164,7 @@ func runActualRuntimeMetadataCase(t *testing.T, tc metadataMatrixCase) {
 			t.Error(err)
 		}
 	}()
+	productruntime.WaitRecordingTestRuntime(t, r)
 	profile, err := r.EgressProfiles().Publish(ctx, egressprofile.PublishCommand{ID: "profile.metadata-matrix", DisplayName: "Metadata private exit", Policy: egressnetwork.Policy{Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxySOCKS5, Endpoint: proxy.Addr().String()}}})
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +177,7 @@ func runActualRuntimeMetadataCase(t *testing.T, tc metadataMatrixCase) {
 	var startedMu sync.Mutex
 	started := map[string]egressaudit.DecisionRef{}
 	wire.before = func() {
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := offers.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			t.Error(err)
 			return
@@ -263,7 +265,7 @@ func runActualRuntimeMetadataCase(t *testing.T, tc metadataMatrixCase) {
 			t.Fatalf("unexpected operation error=%v", err)
 		}
 	}
-	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err := productruntime.SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
