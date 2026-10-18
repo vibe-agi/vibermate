@@ -22,7 +22,7 @@ const shards = ['native', 'persistence', 'rest'];
 const expected = { native: [native], persistence: [persistence], rest: [...ordinary, raceOnly] };
 
 const catalog = ['TestSchemaSwitchFuture', 'TestRevision2Future', 'TestSchemaMigrationFuture',
-  'TestOrdinary', 'TestNotSchemaSwitch', 'TestRaceOnly', 'FuzzFuture', 'ExampleFuture', 'Example', 'BenchmarkFuture'];
+  'TestContentSourceFuture', 'TestContentSourceBoundsManifestBytesBeforeScan', 'TestNotContentSource', 'TestOrdinary', 'TestNotSchemaSwitch', 'TestRaceOnly', 'FuzzFuture', 'ExampleFuture', 'Example', 'BenchmarkFuture'];
 const splitModes = ['persistence-migration', 'persistence-rest'];
 
 function fakeGoMain() {
@@ -182,6 +182,9 @@ test('split persistence catalog covers Test, Example, Fuzz and future race roots
     const manifest = JSON.parse(readFileSync(go.manifest(mode)));
     assert.equal(manifest.status, 'discovered');
     assert.deepEqual(result.stdout.trim().split('\n'), manifest.selection);
+    const moved = ['TestContentSourceFuture', 'TestContentSourceBoundsManifestBytesBeforeScan'];
+    for (const name of moved) assert.equal(manifest.selection.includes(name), mode === 'persistence-migration');
+    assert.equal(manifest.selection.includes('TestNotContentSource'), mode === 'persistence-rest');
     assert.deepEqual(manifest.catalog, catalog.filter(n => !n.startsWith('Benchmark')).sort());
     assert.deepEqual(manifest.benchmarks, ['BenchmarkFuture']);
     selected.push(...manifest.selection);
