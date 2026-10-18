@@ -36,7 +36,7 @@ func (control *settingsAccountControl) SetSettings(_ context.Context, command pr
 	control.view.Account.SettingsRevision++
 	control.view.Account.EgressProfile = command.EgressProfile
 	control.view.Account.AutomaticRefresh = command.AutomaticRefresh
-	control.view.Account.DaybreakBlueEnabled = command.DaybreakBlueEnabled
+	control.view.Account.CyberAccessProgram = command.CyberAccessProgram
 	return control.view, nil
 }
 

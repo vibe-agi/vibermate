@@ -575,7 +575,7 @@ func (pipeline *Pipeline) executeCandidate(
 			transformInput,
 		)
 		if err != nil {
-			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+			return newProviderRequestFailure(request.exchangeID, err)
 		}
 		pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 		var contentPath *protocolpath.Path
@@ -652,7 +652,7 @@ func (pipeline *Pipeline) executeCandidate(
 	)
 	result.Translation = result.Translation.Merge(backendRequestReport)
 	if err != nil {
-		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+		return newProviderRequestFailure(request.exchangeID, err)
 	}
 	headers := encodedProvider.Headers()
 	if credential.mode == providerauth.CredentialManaged {
@@ -720,7 +720,7 @@ func (pipeline *Pipeline) executeCandidate(
 		transformInput,
 	)
 	if err != nil {
-		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
+		return newProviderRequestFailure(request.exchangeID, err)
 	}
 	pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 	if decoded.Stream {
@@ -868,7 +868,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		options.SecretRef = credential.secret
 		options.AuthDriverRef = credential.driver
 	}
-	return pipeline.finalizeAccountDaybreak(ctx, options)
+	return pipeline.finalizeAccountCyberMode(ctx, options)
 }
 
 func newProviderRawEvidenceContext(

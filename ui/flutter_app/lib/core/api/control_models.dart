@@ -2869,6 +2869,12 @@ final class CodexLogin {
   bool get active => state == 'pending' || state == 'exchanging';
 }
 
+const providerAccountCyberAccessPrograms = <String>[
+  'standard',
+  'daybreak_blue',
+  'daybreak_red',
+];
+
 final class ProviderAccount {
   const ProviderAccount({
     required this.id,
@@ -2890,7 +2896,7 @@ final class ProviderAccount {
     this.tokenInfo,
     this.settingsRevision = 1,
     this.automaticRefresh = false,
-    this.daybreakBlueEnabled = false,
+    this.cyberAccessProgram = 'standard',
     this.supportsAutomaticRefresh = false,
     this.egressProfile,
   });
@@ -2921,7 +2927,7 @@ final class ProviderAccount {
         'supportsAutomaticRefresh',
         'egressProfile',
       },
-      optional: const {'codexOAuth', 'tokenInfo', 'daybreakBlueEnabled'},
+      optional: const {'codexOAuth', 'tokenInfo', 'cyberAccessProgram'},
     );
     final note = requireStringValue(value, 'note', path);
     final noteRevision = requireInteger(value, 'noteRevision', path);
@@ -2968,6 +2974,12 @@ final class ProviderAccount {
       path,
     );
     final automaticRefresh = requireBoolean(value, 'automaticRefresh', path);
+    final cyberAccessProgram = value.containsKey('cyberAccessProgram')
+        ? requireString(value, 'cyberAccessProgram', path)
+        : 'standard';
+    if (!providerAccountCyberAccessPrograms.contains(cyberAccessProgram)) {
+      throw ControlContractException('$path cyber access program is invalid');
+    }
     if (automaticRefresh && !supportsAutomaticRefresh) {
       throw ControlContractException('$path unsupported automatic refresh');
     }
@@ -3026,9 +3038,7 @@ final class ProviderAccount {
         minimum: 1,
       ),
       automaticRefresh: automaticRefresh,
-      daybreakBlueEnabled: value.containsKey('daybreakBlueEnabled')
-          ? requireBoolean(value, 'daybreakBlueEnabled', path)
-          : false,
+      cyberAccessProgram: cyberAccessProgram,
       supportsAutomaticRefresh: supportsAutomaticRefresh,
       egressProfile: value['egressProfile'] == null
           ? null
@@ -3058,7 +3068,7 @@ final class ProviderAccount {
   final ProviderTokenInfo? tokenInfo;
   final int settingsRevision;
   final bool automaticRefresh;
-  final bool daybreakBlueEnabled;
+  final String cyberAccessProgram;
   final bool supportsAutomaticRefresh;
   final EgressProfileRevision? egressProfile;
 
@@ -3090,7 +3100,7 @@ final class ProviderAccount {
         tokenInfo: tokenInfo,
         settingsRevision: settingsRevision,
         automaticRefresh: automaticRefresh,
-        daybreakBlueEnabled: daybreakBlueEnabled,
+        cyberAccessProgram: cyberAccessProgram,
         supportsAutomaticRefresh: supportsAutomaticRefresh,
         egressProfile: egressProfile,
       );
@@ -3115,7 +3125,7 @@ final class ProviderAccount {
     tokenInfo: tokenInfo,
     settingsRevision: settingsRevision,
     automaticRefresh: automaticRefresh,
-    daybreakBlueEnabled: daybreakBlueEnabled,
+    cyberAccessProgram: cyberAccessProgram,
     supportsAutomaticRefresh: supportsAutomaticRefresh,
     egressProfile: egressProfile,
   );
@@ -3124,7 +3134,7 @@ final class ProviderAccount {
     required int settingsRevision,
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
-    bool? daybreakBlueEnabled,
+    String? cyberAccessProgram,
   }) => ProviderAccount(
     id: id,
     displayName: displayName,
@@ -3145,7 +3155,7 @@ final class ProviderAccount {
     tokenInfo: tokenInfo,
     settingsRevision: settingsRevision,
     automaticRefresh: automaticRefresh,
-    daybreakBlueEnabled: daybreakBlueEnabled ?? this.daybreakBlueEnabled,
+    cyberAccessProgram: cyberAccessProgram ?? this.cyberAccessProgram,
     supportsAutomaticRefresh: supportsAutomaticRefresh,
     egressProfile: egressProfile,
   );

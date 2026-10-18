@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestPreferBlueRequiresExactModelSupportAndPreservesOtherFields(t *testing.T) {
+func TestApplyPreferencePreservesOtherFields(t *testing.T) {
 	catalog, err := ParseCatalog([]byte(`{"models":[{"slug":"entitled","available_access_programs":{"cyber":["standard","daybreak_blue"]}},{"slug":"ordinary","available_access_programs":{"cyber":["standard"]}},{"slug":"unknown"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -20,16 +20,22 @@ func TestPreferBlueRequiresExactModelSupportAndPreservesOtherFields(t *testing.T
 		{"missing", "entitled", ``, true},
 		{"empty", "entitled", `,"access_programs":{}`, true},
 		{"already blue", "entitled", `,"access_programs":{"cyber":"daybreak_blue"}`, false},
-		{"explicit red", "entitled", `,"access_programs":{"cyber":"daybreak_red"}`, false},
+		{"explicit red", "entitled", `,"access_programs":{"cyber":"daybreak_red"}`, true},
 		{"unsupported model", "ordinary", `,"access_programs":{"cyber":"standard"}`, false},
 		{"unknown model", "unknown", `,"access_programs":{"cyber":"standard"}`, false},
 		{"unlisted alias", "entitled-latest", ``, false},
-		{"invalid program preserved", "entitled", `,"access_programs":{"cyber":null}`, false},
+		{"client null overridden", "entitled", `,"access_programs":{"cyber":null}`, true},
 		{"invalid object preserved", "entitled", `,"access_programs":null`, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(`{"model":"` + test.model + `","input":[{"role":"user","content":"hello"}],"opaque_counter":9007199254740993` + test.access + `}`)
-			got, changed, err := PreferBlue(body, catalog)
+			got, changed, err := ApplyPreference(body, catalog, Blue)
+			if test.model != "entitled" || test.name == "invalid object preserved" {
+				if err == nil {
+					t.Fatal("unsupported mode or invalid object must fail")
+				}
+				return
+			}
 			if err != nil || changed != test.changed {
 				t.Fatalf("changed=%v err=%v", changed, err)
 			}

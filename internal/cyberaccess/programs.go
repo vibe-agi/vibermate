@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-const DaybreakBlue = "daybreak_blue"
 const MaxCatalogBytes = 4 << 20
 
 var ErrInvalidCatalog = errors.New("cyber access program catalog is invalid")
@@ -30,7 +29,7 @@ func (catalog Catalog) Clone() Catalog {
 
 // ParsePrograms reads available_access_programs without inventing grants from
 // account names, plan names, or an omitted field. Unknown future programs remain
-// visible, but only the exact daybreak_blue value can select Blue.
+// visible, but only exact known values can authorize an account mode.
 func ParsePrograms(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, nil
@@ -101,31 +100,39 @@ func ParseCatalog(body []byte) (Catalog, error) {
 	return catalog, nil
 }
 
-// PreferBlue changes only an absent or standard cyber choice for a model whose
-// authenticated catalog explicitly advertises Blue. An explicit Red choice and
-// malformed/unknown program values retain their original upstream semantics.
-func PreferBlue(body []byte, catalog Catalog) ([]byte, bool, error) {
+// ApplyPreference makes the selected account authoritative over the client's
+// mode. Blue and Red require exact per-model evidence; an unavailable selection
+// fails instead of falling back to the client's unrelated account preference.
+// Standard is always sent explicitly and remains subject to upstream validation.
+func ApplyPreference(body []byte, catalog Catalog, mode Preference) ([]byte, bool, error) {
+	if !mode.Valid() {
+		return nil, false, ErrInvalidPreference
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(body, &root); err != nil || root == nil {
 		return nil, false, errors.New("Responses request is invalid")
 	}
 	var model string
-	if json.Unmarshal(root["model"], &model) != nil || !slices.Contains(catalog[model], DaybreakBlue) {
-		return body, false, nil
+	if mode != Standard && (json.Unmarshal(root["model"], &model) != nil || !slices.Contains(catalog[model], mode.WireValue())) {
+		return nil, false, ErrProgramUnavailable
 	}
 	programs := make(map[string]json.RawMessage)
 	if raw, exists := root["access_programs"]; exists {
 		if json.Unmarshal(raw, &programs) != nil || programs == nil {
-			return body, false, nil
+			return nil, false, errors.New("Responses access_programs must be an object")
 		}
 	}
 	if raw, exists := programs["cyber"]; exists {
 		var current string
-		if json.Unmarshal(raw, &current) != nil || current != "standard" {
+		if json.Unmarshal(raw, &current) == nil && current == mode.WireValue() {
 			return body, false, nil
 		}
 	}
-	programs["cyber"] = json.RawMessage(`"daybreak_blue"`)
+	selected, err := json.Marshal(mode.WireValue())
+	if err != nil {
+		return nil, false, err
+	}
+	programs["cyber"] = selected
 	encoded, err := json.Marshal(programs)
 	if err != nil {
 		return nil, false, err

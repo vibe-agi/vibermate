@@ -9,7 +9,7 @@ import 'package:vibermate_app/core/api/control_models.dart';
 Map<String, Object?> _account({
   int settingsRevision = 4,
   bool automaticRefresh = false,
-  bool daybreakBlueEnabled = true,
+  String cyberAccessProgram = 'daybreak_blue',
   EgressProfileRevision? egressProfile,
 }) => {
   'id': 'account.settings',
@@ -29,7 +29,7 @@ Map<String, Object?> _account({
   'deleteHeaderNames': <String>[],
   'settingsRevision': settingsRevision,
   'automaticRefresh': automaticRefresh,
-  'daybreakBlueEnabled': daybreakBlueEnabled,
+  'cyberAccessProgram': cyberAccessProgram,
   'supportsAutomaticRefresh': true,
   'egressProfile': egressProfile?.toJson(),
   'codexOAuth': {
@@ -46,7 +46,7 @@ void main() {
     () async {
       var current = _account();
       var inconsistent = false;
-      final blueWrites = <bool>[];
+      final programWrites = <String>[];
       final client = MockClient((request) async {
         expect(request.method, 'PUT');
         expect(
@@ -61,11 +61,11 @@ void main() {
           body.keys,
           unorderedEquals([
             'automaticRefresh',
-            'daybreakBlueEnabled',
+            'cyberAccessProgram',
             'egressProfile',
           ]),
         );
-        blueWrites.add(body['daybreakBlueEnabled'] as bool);
+        programWrites.add(body['cyberAccessProgram'] as String);
         if (body['egressProfile'] != null) {
           expect(body['egressProfile'], {
             'id': 'profile.direct',
@@ -77,13 +77,13 @@ void main() {
             : EgressProfileRevision.direct;
         final changed =
             current['automaticRefresh'] != body['automaticRefresh'] ||
-            current['daybreakBlueEnabled'] != body['daybreakBlueEnabled'] ||
+            current['cyberAccessProgram'] != body['cyberAccessProgram'] ||
             current['egressProfile'] != profile?.toJson();
         current = _account(
           settingsRevision:
               (current['settingsRevision'] as int) + (changed ? 1 : 0),
           automaticRefresh: body['automaticRefresh'] as bool,
-          daybreakBlueEnabled: body['daybreakBlueEnabled'] as bool,
+          cyberAccessProgram: body['cyberAccessProgram'] as String,
           egressProfile: profile,
         );
         return http.Response(
@@ -116,9 +116,12 @@ void main() {
       expect(direct.settingsRevision, 5);
       expect(direct.revision, 2);
       expect(direct.credentialEpoch, 9);
-      expect(direct.daybreakBlueEnabled, isTrue);
-      expect(direct.withNote('note', 1).daybreakBlueEnabled, isTrue);
-      expect(direct.withAssociations([], 4).daybreakBlueEnabled, isTrue);
+      expect(direct.cyberAccessProgram, 'daybreak_blue');
+      expect(direct.withNote('note', 1).cyberAccessProgram, 'daybreak_blue');
+      expect(
+        direct.withAssociations([], 4).cyberAccessProgram,
+        'daybreak_blue',
+      );
       final inherited = await api.setProviderAccountSettings(
         direct,
         egressProfile: null,
@@ -127,46 +130,53 @@ void main() {
       expect(inherited.settingsRevision, 6);
       expect(inherited.egressProfile, isNull);
       expect(inherited.withNote('note', 1).automaticRefresh, isFalse);
-      final disabled = await api.setProviderAccountSettings(
+      final standard = await api.setProviderAccountSettings(
         inherited,
         egressProfile: null,
         automaticRefresh: false,
-        daybreakBlueEnabled: false,
+        cyberAccessProgram: 'standard',
       );
-      expect(disabled.daybreakBlueEnabled, isFalse);
-      expect(disabled.settingsRevision, 7);
+      expect(standard.cyberAccessProgram, 'standard');
+      expect(standard.settingsRevision, 7);
       final noChange = await api.setProviderAccountSettings(
-        disabled,
+        standard,
         egressProfile: null,
         automaticRefresh: false,
       );
       expect(noChange.settingsRevision, 7);
-      final enabled = await api.setProviderAccountSettings(
+      final red = await api.setProviderAccountSettings(
         noChange,
         egressProfile: null,
         automaticRefresh: false,
-        daybreakBlueEnabled: true,
+        cyberAccessProgram: 'daybreak_red',
       );
-      expect(enabled.daybreakBlueEnabled, isTrue);
-      expect(enabled.settingsRevision, 8);
+      expect(red.cyberAccessProgram, 'daybreak_red');
+      expect(red.settingsRevision, 8);
       inconsistent = true;
       await expectLater(
         api.setProviderAccountSettings(
-          enabled,
+          red,
           egressProfile: null,
           automaticRefresh: true,
         ),
         throwsA(isA<ControlContractException>()),
       );
-      expect(blueWrites, [true, true, false, false, true, true]);
+      expect(programWrites, [
+        'daybreak_blue',
+        'daybreak_blue',
+        'standard',
+        'standard',
+        'daybreak_red',
+        'daybreak_red',
+      ]);
     },
   );
 
   test('projection requires complete current account settings', () {
-    final legacy = _account()..remove('daybreakBlueEnabled');
+    final legacy = _account()..remove('cyberAccessProgram');
     expect(
-      ProviderAccount.fromJson(legacy, 'account').daybreakBlueEnabled,
-      isFalse,
+      ProviderAccount.fromJson(legacy, 'account').cyberAccessProgram,
+      'standard',
     );
     for (final field in [
       'automaticRefresh',
@@ -184,8 +194,8 @@ void main() {
       );
     }
     for (final invalid in [
-      {..._account(), 'daybreakBlueEnabled': null},
-      {..._account(), 'daybreakBlueEnabled': 'true'},
+      {..._account(), 'cyberAccessProgram': null},
+      {..._account(), 'cyberAccessProgram': 'true'},
       {..._account(), 'settingsRevision': 0},
       {..._account(), 'settingsRevision': -1},
       {

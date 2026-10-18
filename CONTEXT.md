@@ -129,12 +129,12 @@ One Account credential lifecycle whose access token, rotating refresh token, pro
 _Avoid_: Login Session, Web Session, synced auth file, bearer string
 
 **Account Runtime Settings**:
-An Account's independently revisioned egress, automatic-refresh, and Daybreak Blue choices, shared by every authorized use of that Account. A new credential lease freezes these settings without changing the Account identity authorized by a published Route or rewriting an in-flight lease.
+An Account's independently revisioned egress, automatic-refresh, and cyber access mode choices, shared by every authorized use of that Account. A new credential lease freezes these settings without changing the Account identity authorized by a published Route or rewriting an in-flight lease.
 _Avoid_: Account Link, credential epoch, Capture override
 
-**Account Daybreak Blue**:
-The owner's opt-in preference to use Daybreak Blue for models that the selected Account's upstream directory explicitly permits. It replaces an unspecified or standard client choice while preserving an explicit Red choice. Disabling the preference follows the client's choice; unknown capabilities do not establish access.
-_Avoid_: Cyber account flag, entitlement grant, global safety override
+**Account Cyber Access Mode**:
+The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account. Standard is the default. The selected Account determines the request mode independently of the client's login or preference. Blue and Red require explicit upstream permission for the request model; unknown or incompatible permissions prevent the request rather than selecting another mode.
+_Avoid_: Cyber account flag, entitlement grant, security level slider
 
 **Account Automatic Refresh**:
 The owner's permission for ViberMate to rotate an Account's renewable credential without another explicit action. Disabling it preserves valid credentials and the owner's ability to request one manual refresh.

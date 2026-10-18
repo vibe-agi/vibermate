@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -124,7 +125,7 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 // fallback or a schema rewrite.
 func seedFrozenV1ProviderAccount(t *testing.T, store *Store, account provideraccount.Account) {
 	t.Helper()
-	if account.Validate() != nil || account.DaybreakBlueEnabled {
+	if account.Validate() != nil || account.CyberAccessProgram != cyberaccess.Standard {
 		t.Fatal("nonlegacy account in frozen v1 fixture")
 	}
 	profile := []byte("{}")

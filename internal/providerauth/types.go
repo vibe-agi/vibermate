@@ -8,6 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
@@ -55,8 +56,8 @@ type AccountRef struct {
 	CredentialEpoch  uint64
 	RealmID          string
 	SettingsRevision uint64
-	// DaybreakBlueEnabled is the owner's preference frozen for this lease.
-	DaybreakBlueEnabled bool
+	// CyberAccessProgram is the owner's preference frozen for this lease.
+	CyberAccessProgram cyberaccess.Preference
 	// EgressProfile is the effective, immutable network path for this lease.
 	EgressProfile  egressprofile.ProfileRevision
 	ResolvedEgress egressprofile.Resolved
@@ -66,7 +67,7 @@ func (ref AccountRef) Validate() error {
 	if !validIdentity(ref.ID) || !validIdentity(ref.RealmID) || ref.Revision == 0 ||
 		ref.Revision > MaxRevision || ref.CredentialEpoch == 0 || ref.CredentialEpoch > MaxRevision ||
 		ref.SettingsRevision == 0 || ref.SettingsRevision > MaxRevision ||
-		ref.EgressProfile.Validate() != nil {
+		!ref.CyberAccessProgram.Valid() || ref.EgressProfile.Validate() != nil {
 		return ErrInvalidAuthentication
 	}
 	if ref.ResolvedEgress.Validate() != nil || !ref.ResolvedEgress.Profile().Equal(ref.EgressProfile) {

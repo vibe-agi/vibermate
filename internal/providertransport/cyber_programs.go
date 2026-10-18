@@ -41,7 +41,7 @@ func (client *Client) AccountCyberPrograms(ctx context.Context, request Request)
 		return nil, err
 	}
 	account, ok := request.AccountRef()
-	if !ok || account.Validate() != nil || !account.DaybreakBlueEnabled ||
+	if !ok || account.Validate() != nil || account.CyberAccessProgram == cyberaccess.Standard ||
 		!upstreamendpoint.IsChatGPTCodexOrigin(request.Target().Origin()) || request.targetRef == "" ||
 		request.secretReference.String() == "" || request.authDriverRef.String() == "" {
 		return nil, errors.New("cyber program discovery scope is invalid")

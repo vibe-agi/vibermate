@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 )
 
-func TestDaybreakBlueMigrationDefaultsExistingAccountsOff(t *testing.T) {
+func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
 	fixture := populatedV1MigrationFixture(t)
 	result, err := UpgradeRevision1(context.Background(), fixture.input(t))
 	if err != nil || !result.Committed {
@@ -21,14 +23,14 @@ func TestDaybreakBlueMigrationDefaultsExistingAccountsOff(t *testing.T) {
 	store := openTestStore(t, filepath.Join(fixture.source, "runtime.db"))
 	defer shutdownTestStore(t, store)
 	account, exists, err := store.ProviderAccountRepository().Load(context.Background(), "native-legacy")
-	if err != nil || !exists || account.DaybreakBlueEnabled || account.SettingsRevision != 1 || account.Revision != 1 {
+	if err != nil || !exists || account.CyberAccessProgram != cyberaccess.Standard || account.SettingsRevision != 1 || account.Revision != 1 {
 		t.Fatalf("upgrade changed existing consent or revision: %+v %v", account, err)
 	}
-	var enabled int
-	if err := store.database.QueryRow(`SELECT daybreak_blue_enabled FROM provider_accounts WHERE account_id='native-legacy'`).Scan(&enabled); err != nil || enabled != 0 {
-		t.Fatalf("legacy consent default: %d %v", enabled, err)
+	var preference string
+	if err := store.database.QueryRow(`SELECT cyber_access_program FROM provider_accounts WHERE account_id='native-legacy'`).Scan(&preference); err != nil || preference != "standard" {
+		t.Fatalf("legacy preference default: %q %v", preference, err)
 	}
-	if _, err := store.database.Exec(`UPDATE provider_accounts SET daybreak_blue_enabled=1`); err != nil {
+	if _, err := store.database.Exec(`UPDATE provider_accounts SET cyber_access_program='daybreak_red'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := migrationAdditionsEmpty(context.Background(), store.database); !errors.Is(err, ErrUnsupportedSchema) {
@@ -36,10 +38,10 @@ func TestDaybreakBlueMigrationDefaultsExistingAccountsOff(t *testing.T) {
 	}
 }
 
-func TestEarlierPrivateV2WithoutDaybreakBlueIsRejectedUnchanged(t *testing.T) {
+func TestEarlierPrivateV2WithoutCyberAccessIsRejectedUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	database := openSQLiteForTest(t, path)
-	previous := strings.Replace(schemaV2SQL, "  daybreak_blue_enabled INTEGER NOT NULL DEFAULT 0 CHECK(daybreak_blue_enabled IN (0,1)),\n", "", 1)
+	previous := strings.Replace(schemaV2SQL, "  cyber_access_program TEXT NOT NULL DEFAULT 'standard' CHECK(cyber_access_program IN ('standard','daybreak_blue','daybreak_red')),\n", "", 1)
 	nativeExec(t, database, previous)
 	nativeExec(t, database, `INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',2,'2026-10-03T00:00:00Z')`)
 	nativeExec(t, database, `INSERT INTO provider_accounts(account_id,display_name,credential_origin,endpoint_associations,association_revision,settings_revision,egress_profile_json,automatic_refresh,realm_id,driver_ref,secret_reference,state,revision,created_at_unix_ms,updated_at_unix_ms) VALUES('preserved','Preserved','https://chatgpt.com','[]',1,1,'{}',0,'openai.chatgpt','static_header','secret://provider-account/preserved','active',1,1,1)`)

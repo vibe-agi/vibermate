@@ -358,7 +358,7 @@ abstract interface class ControlApi {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
-    bool? daybreakBlueEnabled,
+    String? cyberAccessProgram,
   });
 
   Future<ProviderAccount> replaceProviderAccountCredential({
@@ -2525,10 +2525,11 @@ final class HttpControlApi
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
-    bool? daybreakBlueEnabled,
+    String? cyberAccessProgram,
   }) async {
-    final useDaybreakBlue = daybreakBlueEnabled ?? account.daybreakBlueEnabled;
+    final selectedProgram = cyberAccessProgram ?? account.cyberAccessProgram;
     if (!_validResourceId(account.id) ||
+        !providerAccountCyberAccessPrograms.contains(selectedProgram) ||
         automaticRefresh && !account.supportsAutomaticRefresh) {
       throw const ControlContractException(
         'Provider Account settings are invalid',
@@ -2540,7 +2541,7 @@ final class HttpControlApi
       expectedRevision: account.settingsRevision,
       body: {
         'automaticRefresh': automaticRefresh,
-        'daybreakBlueEnabled': useDaybreakBlue,
+        'cyberAccessProgram': selectedProgram,
         'egressProfile': egressProfile == null
             ? null
             : {'id': egressProfile.id, 'revision': egressProfile.revision},
@@ -2550,7 +2551,7 @@ final class HttpControlApi
     final changed =
         account.egressProfile != egressProfile ||
         account.automaticRefresh != automaticRefresh ||
-        account.daybreakBlueEnabled != useDaybreakBlue;
+        account.cyberAccessProgram != selectedProgram;
     if (updated.id != account.id ||
         updated.revision != account.revision ||
         updated.kind != account.kind ||
@@ -2559,7 +2560,7 @@ final class HttpControlApi
         updated.settingsRevision !=
             account.settingsRevision + (changed ? 1 : 0) ||
         updated.automaticRefresh != automaticRefresh ||
-        updated.daybreakBlueEnabled != useDaybreakBlue ||
+        updated.cyberAccessProgram != selectedProgram ||
         updated.egressProfile != egressProfile) {
       throw const ControlContractException(
         'Provider Account settings response is inconsistent',

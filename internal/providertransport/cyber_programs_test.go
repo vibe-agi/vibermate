@@ -25,7 +25,7 @@ func TestAccountCyberProgramsUseFrozenCredentialAndIsolatedCache(t *testing.T) {
 	plan := testRequestPlanWithOrigin(t, "https://chatgpt.com")
 	request := newTestRequestWithPlan(t, gate, "blue-catalog", targetFromProviderOrigin(plan.providerOrigin), http.Header{"Authorization": {"Bearer original-client"}, "Cookie": {"private-client-cookie"}}, []byte(`{"model":"m","input":"never send this prompt to discovery"}`), plan)
 	request.relativePath = "backend-api/codex/responses"
-	request.accountRef.DaybreakBlueEnabled = true
+	request.accountRef.CyberAccessProgram = cyberaccess.Blue
 	catalog, err := client.AccountCyberPrograms(context.Background(), request)
 	if err != nil || len(catalog["m"]) != 2 {
 		t.Fatalf("catalog=%v err=%v", catalog, err)
@@ -36,7 +36,7 @@ func TestAccountCyberProgramsUseFrozenCredentialAndIsolatedCache(t *testing.T) {
 	}
 	catalog["m"][1] = "changed-by-caller"
 	got, err := client.AccountCyberPrograms(context.Background(), request)
-	if err != nil || got["m"][1] != cyberaccess.DaybreakBlue || transport.callCount() != 1 {
+	if err != nil || got["m"][1] != "daybreak_blue" || transport.callCount() != 1 {
 		t.Fatalf("cache isolation failed: %v %v count=%d", got, err, transport.callCount())
 	}
 	request.accountRef.CredentialEpoch++
@@ -66,7 +66,9 @@ func TestAccountCyberProgramsRejectUnrelatedOrDisabledScope(t *testing.T) {
 		plan := testRequestPlanWithOrigin(t, origin)
 		request := newTestRequestWithPlan(t, gate, "disabled-blue-"+strings.TrimPrefix(origin, "https://"), targetFromProviderOrigin(plan.providerOrigin), nil, []byte(`{"model":"m"}`), plan)
 		request.relativePath = "backend-api/codex/responses"
-		request.accountRef.DaybreakBlueEnabled = origin != "https://chatgpt.com"
+		if origin != "https://chatgpt.com" {
+			request.accountRef.CyberAccessProgram = cyberaccess.Blue
+		}
 		if _, err := client.AccountCyberPrograms(context.Background(), request); err == nil {
 			t.Fatal("accepted unrelated origin or disabled preference")
 		}

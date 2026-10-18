@@ -2257,7 +2257,7 @@ func exchangeStatus(err error) int {
 	switch exchange.ReasonOf(err) {
 	case exchange.ReasonInvalidExchangeRequest:
 		return http.StatusBadRequest
-	case exchange.ReasonUnsupportedClientInput:
+	case exchange.ReasonUnsupportedClientInput, exchange.ReasonCyberAccessProgramUnavailable:
 		return http.StatusUnprocessableEntity
 	case exchange.ReasonProviderStatusRejected:
 		// Keep the provider's retry signal intact. In particular, Anthropic uses

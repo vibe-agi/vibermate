@@ -3270,7 +3270,7 @@ final class WorkbenchController extends ChangeNotifier
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
-    bool? daybreakBlueEnabled,
+    String? cyberAccessProgram,
   }) async {
     if (!_beginInventoryMutation()) return null;
     try {
@@ -3278,7 +3278,7 @@ final class WorkbenchController extends ChangeNotifier
         account,
         egressProfile: egressProfile,
         automaticRefresh: automaticRefresh,
-        daybreakBlueEnabled: daybreakBlueEnabled ?? account.daybreakBlueEnabled,
+        cyberAccessProgram: cyberAccessProgram ?? account.cyberAccessProgram,
       );
       if (_disposed || data == null) return null;
       data = _dashboardWith(
@@ -4915,7 +4915,7 @@ final class WorkbenchController extends ChangeNotifier
         left.noteRevision == right.noteRevision &&
         left.settingsRevision == right.settingsRevision &&
         left.automaticRefresh == right.automaticRefresh &&
-        left.daybreakBlueEnabled == right.daybreakBlueEnabled &&
+        left.cyberAccessProgram == right.cyberAccessProgram &&
         left.supportsAutomaticRefresh == right.supportsAutomaticRefresh &&
         left.egressProfile == right.egressProfile &&
         left.credentialOrigin == right.credentialOrigin &&

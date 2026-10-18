@@ -191,14 +191,14 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 	}
 	var defaults int
 	defaultErr := db.QueryRow(`SELECT count(*) FROM runtime_egress_default WHERE singleton=1 AND revision=1 AND egress_id IS NULL AND egress_revision IS NULL`).Scan(&defaults)
-	var optedIn int
-	daybreakErr := db.QueryRow(`SELECT count(*) FROM provider_accounts WHERE daybreak_blue_enabled<>0`).Scan(&optedIn)
+	var nonstandard int
+	preferenceErr := db.QueryRow(`SELECT count(*) FROM provider_accounts WHERE cyber_access_program<>'standard'`).Scan(&nonstandard)
 	db.Close()
 	if defaultErr != nil || defaults != 1 {
 		t.Fatalf("upgrade default seed %d %v", defaults, defaultErr)
 	}
-	if daybreakErr != nil || optedIn != 0 {
-		t.Fatalf("upgrade invented Daybreak Blue consent %d %v", optedIn, daybreakErr)
+	if preferenceErr != nil || nonstandard != 0 {
+		t.Fatalf("upgrade invented a nonstandard cyber preference %d %v", nonstandard, preferenceErr)
 	}
 	if fmt.Sprint(filter(before)) != fmt.Sprint(filter(after)) {
 		t.Fatal("old logical rows changed")

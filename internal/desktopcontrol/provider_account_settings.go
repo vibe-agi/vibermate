@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 )
@@ -15,16 +16,29 @@ func (handler *Handler) setProviderAccountSettings(writer http.ResponseWriter, r
 	body, bodyErr := readJSONBody(request)
 	defer clear(body)
 	var input struct {
-		AutomaticRefresh    *bool           `json:"automaticRefresh"`
-		EgressProfile       json.RawMessage `json:"egressProfile"`
-		DaybreakBlueEnabled json.RawMessage `json:"daybreakBlueEnabled"`
+		AutomaticRefresh   *bool           `json:"automaticRefresh"`
+		EgressProfile      json.RawMessage `json:"egressProfile"`
+		CyberAccessProgram json.RawMessage `json:"cyberAccessProgram"`
 	}
 	id, idErr := provideraccount.NewID(request.PathValue("accountId"))
 	if headerErr != nil || bodyErr != nil || idErr != nil || expected >= provideraccount.MaxRevision ||
-		decodeStrictJSON(body, &input) != nil || input.AutomaticRefresh == nil || len(input.EgressProfile) == 0 || request.URL.RawQuery != "" ||
-		(len(input.DaybreakBlueEnabled) != 0 && string(input.DaybreakBlueEnabled) != "true" && string(input.DaybreakBlueEnabled) != "false") {
+		decodeStrictJSON(body, &input) != nil || input.AutomaticRefresh == nil || len(input.EgressProfile) == 0 || request.URL.RawQuery != "" {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
+	}
+	var requestedProgram cyberaccess.Preference
+	if len(input.CyberAccessProgram) != 0 {
+		var value string
+		if json.Unmarshal(input.CyberAccessProgram, &value) != nil {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
+		var err error
+		requestedProgram, err = cyberaccess.ParsePreference(value)
+		if err != nil {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
 	}
 	fingerprint := sha256.Sum256([]byte(request.Method + "\x00" + request.URL.Path + "\x00" + strconv.FormatUint(expected, 10) + "\x00" + string(body)))
 	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
@@ -49,17 +63,17 @@ func (handler *Handler) setProviderAccountSettings(writer http.ResponseWriter, r
 				return problemResponse(classifyEgressProfileError(err))
 			}
 		}
-		daybreakBlueEnabled := string(input.DaybreakBlueEnabled) == "true"
-		if len(input.DaybreakBlueEnabled) == 0 {
+		cyberAccessProgram := requestedProgram
+		if len(input.CyberAccessProgram) == 0 {
 			// Older clients replace the original settings without knowing this
 			// preference. Preserve it under the same settings-revision CAS.
 			current, err := handler.accounts.Get(request.Context(), id)
 			if err != nil {
 				return problemResponse(classifyProviderAccountError(err))
 			}
-			daybreakBlueEnabled = current.Account.DaybreakBlueEnabled
+			cyberAccessProgram = current.Account.CyberAccessProgram
 		}
-		view, err := handler.accounts.SetSettings(request.Context(), provideraccount.SettingsCommand{ID: id, ExpectedRevision: expected, EgressProfile: profile, AutomaticRefresh: *input.AutomaticRefresh, DaybreakBlueEnabled: daybreakBlueEnabled})
+		view, err := handler.accounts.SetSettings(request.Context(), provideraccount.SettingsCommand{ID: id, ExpectedRevision: expected, EgressProfile: profile, AutomaticRefresh: *input.AutomaticRefresh, CyberAccessProgram: cyberAccessProgram})
 		if err != nil {
 			return problemResponse(classifyProviderAccountError(err))
 		}

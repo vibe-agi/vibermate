@@ -67,7 +67,7 @@ type ProviderAccountResponse struct {
 	TokenInfo                *ProviderTokenInfoResponse  `json:"tokenInfo,omitempty"`
 	SettingsRevision         uint64                      `json:"settingsRevision"`
 	AutomaticRefresh         bool                        `json:"automaticRefresh"`
-	DaybreakBlueEnabled      bool                        `json:"daybreakBlueEnabled"`
+	CyberAccessProgram       string                      `json:"cyberAccessProgram"`
 	SupportsAutomaticRefresh bool                        `json:"supportsAutomaticRefresh"`
 	EgressProfile            *EgressProfileResponse      `json:"egressProfile"`
 }
@@ -327,7 +327,7 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 		Revision: view.Account.Revision, CredentialState: view.Health.State,
 		CredentialEpoch:  view.Health.CredentialEpoch,
 		SettingsRevision: view.Account.SettingsRevision, AutomaticRefresh: view.Account.AutomaticRefresh,
-		DaybreakBlueEnabled:      view.Account.DaybreakBlueEnabled,
+		CyberAccessProgram:       view.Account.CyberAccessProgram.WireValue(),
 		SupportsAutomaticRefresh: view.Account.SupportsAutomaticRefresh(),
 		SetHeaderNames:           append([]string{}, view.SetHeaderNames...),
 		DeleteHeaderNames: append(

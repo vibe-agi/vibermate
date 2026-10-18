@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -112,12 +113,12 @@ type Account struct {
 	Revision            uint64
 	// Settings are frozen when a lease is acquired, independently of the
 	// identity revision embedded in published routes. A zero profile inherits.
-	SettingsRevision    uint64
-	EgressProfile       egressprofile.ProfileRevision
-	AutomaticRefresh    bool
-	DaybreakBlueEnabled bool
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	SettingsRevision   uint64
+	EgressProfile      egressprofile.ProfileRevision
+	AutomaticRefresh   bool
+	CyberAccessProgram cyberaccess.Preference
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (account Account) Validate() error {
@@ -132,7 +133,8 @@ func (account Account) Validate() error {
 		account.SettingsRevision == 0 || account.SettingsRevision > MaxRevision ||
 		(account.EgressProfile != (egressprofile.ProfileRevision{}) && account.EgressProfile.Validate() != nil) ||
 		(account.AutomaticRefresh && !account.SupportsAutomaticRefresh()) ||
-		(account.DaybreakBlueEnabled && !account.SupportsDaybreakBlue()) ||
+		!account.CyberAccessProgram.Valid() ||
+		(account.CyberAccessProgram != cyberaccess.Standard && !account.SupportsCyberAccessPrograms()) ||
 		account.SecretRef.String() == "" ||
 		account.CreatedAt.IsZero() || account.UpdatedAt.IsZero() ||
 		account.UpdatedAt.Before(account.CreatedAt) {
@@ -153,9 +155,9 @@ func (account Account) SupportsAutomaticRefresh() bool {
 	return account.Driver == providerauth.CodexOAuthDriverRef()
 }
 
-// SupportsDaybreakBlue reports where the owner may store this preference.
+// SupportsCyberAccessPrograms identifies the account scope for cyber program selection.
 // It does not establish the account's entitlement for any request model.
-func (account Account) SupportsDaybreakBlue() bool {
+func (account Account) SupportsCyberAccessPrograms() bool {
 	return upstreamendpoint.IsChatGPTCodexOrigin(account.Origin) &&
 		(account.Driver == providerauth.CodexOAuthDriverRef() || account.Driver == providerauth.StaticHeaderDriverRef())
 }

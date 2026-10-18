@@ -14,56 +14,58 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
-type daybreakAuthority struct {
+type cyberModeAuthority struct {
 	AccountLeaseAuthority
-	enabled bool
+	mode cyberaccess.Preference
 }
 
-func (a daybreakAuthority) Acquire(ctx context.Context, request AccountLeaseRequest) (providerauth.Lease, error) {
+func (a cyberModeAuthority) Acquire(ctx context.Context, request AccountLeaseRequest) (providerauth.Lease, error) {
 	lease, err := a.AccountLeaseAuthority.Acquire(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	return daybreakLease{Lease: lease, enabled: a.enabled}, nil
+	return cyberModeLease{Lease: lease, mode: a.mode}, nil
 }
 
-type daybreakLease struct {
+type cyberModeLease struct {
 	providerauth.Lease
-	enabled bool
+	mode cyberaccess.Preference
 }
 
-func (l daybreakLease) Account() (providerauth.AccountRef, bool) {
+func (l cyberModeLease) Account() (providerauth.AccountRef, bool) {
 	account, ok := l.Lease.Account()
-	account.DaybreakBlueEnabled = l.enabled
+	account.CyberAccessProgram = l.mode
 	return account, ok
 }
 
-type daybreakProvider struct {
+type cyberModeProvider struct {
 	*providerDouble
 	catalog cyberaccess.Catalog
 	err     error
 	queries []providertransport.Request
 }
 
-func (p *daybreakProvider) AccountCyberPrograms(_ context.Context, r providertransport.Request) (cyberaccess.Catalog, error) {
+func (p *cyberModeProvider) AccountCyberPrograms(_ context.Context, r providertransport.Request) (cyberaccess.Catalog, error) {
 	p.queries = append(p.queries, r)
 	return p.catalog, p.err
 }
 
 // The directory lookup and preference must follow the selected account and the
 // final upstream model after the route applies its model mapping.
-func TestDaybreakPreferenceUsesSelectedAccountAndFinalModel(t *testing.T) {
+func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 	for _, test := range []struct {
-		name                                       string
-		enabled, supported, transform, unavailable bool
-		origin, want                               string
+		name                              string
+		mode                              cyberaccess.Preference
+		supported, transform, unavailable bool
+		origin, current, want             string
 	}{
-		{name: "manual on", enabled: true, supported: true, want: "daybreak_blue"},
-		{name: "off follows client", supported: true, want: "standard"},
-		{name: "model unsupported", enabled: true, want: "standard"},
-		{name: "unknown capability", enabled: true, unavailable: true, want: "standard"},
-		{name: "mapped model", enabled: true, supported: true, transform: true, want: "daybreak_blue"},
-		{name: "other upstream", enabled: true, supported: true, origin: "https://api.openai.com", want: "standard"},
+		{name: "Blue overrides standard", mode: cyberaccess.Blue, supported: true, current: "standard", want: "daybreak_blue"},
+		{name: "Standard overrides client Blue", current: "daybreak_blue", want: "standard"},
+		{name: "Red overrides client Blue", mode: cyberaccess.Red, supported: true, current: "daybreak_blue", want: "daybreak_red"},
+		{name: "model unsupported fails", mode: cyberaccess.Blue, current: "standard"},
+		{name: "unknown capability fails", mode: cyberaccess.Blue, unavailable: true, current: "standard"},
+		{name: "mapped model", mode: cyberaccess.Blue, supported: true, transform: true, current: "standard", want: "daybreak_blue"},
+		{name: "other upstream", mode: cyberaccess.Blue, supported: true, origin: "https://api.openai.com", current: "standard", want: "standard"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			origin := test.origin
@@ -87,16 +89,25 @@ func TestDaybreakPreferenceUsesSelectedAccountAndFinalModel(t *testing.T) {
 				model = "mapped-final"
 			}
 			if test.supported {
-				catalog[model] = []string{"standard", "daybreak_blue"}
+				catalog[model] = []string{"standard", test.mode.WireValue()}
 			}
-			provider := &daybreakProvider{providerDouble: &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse(model))}}}, catalog: catalog}
+			provider := &cyberModeProvider{providerDouble: &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse(model))}}}, catalog: catalog}
 			if test.unavailable {
 				provider.err = errors.New("directory unavailable")
 			}
-			pipeline := newTestPipeline(t, daybreakAuthority{newAccountAuthority(t, testAccount{id: "account.selected", revision: 3, epoch: 7}), test.enabled}, provider, approvedDecisions(), &attemptObserverDouble{})
+			pipeline := newTestPipeline(t, cyberModeAuthority{newAccountAuthority(t, testAccount{id: "account.selected", revision: 3, epoch: 7}), test.mode}, provider, approvedDecisions(), &attemptObserverDouble{})
 			defer shutdownPipeline(t, pipeline)
-			body := []byte(`{"model":"client-model","stream":false,"input":"hi","access_programs":{"cyber":"standard"}}`)
+			body := []byte(`{"model":"client-model","stream":false,"input":"hi","access_programs":{"cyber":"` + test.current + `"}}`)
 			result, err := pipeline.Execute(context.Background(), mustClientRequest(t, "exchange-blue", plan, body), &downstreamRecorder{})
+			if test.want == "" {
+				if ReasonOf(err) != ReasonCode("cyber_access_program_unavailable") {
+					t.Fatalf("want explicit mode unavailable, got %v", err)
+				}
+				if len(provider.requestsSnapshot()) != 0 {
+					t.Fatal("incompatible mode reached model transport")
+				}
+				return
+			}
 			if err != nil || result.Outcome != AttemptSucceeded {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -114,7 +125,7 @@ func TestDaybreakPreferenceUsesSelectedAccountAndFinalModel(t *testing.T) {
 				t.Fatalf("upstream body=%s", requests[0].Body())
 			}
 			wantQueries := 0
-			if test.enabled && test.origin == "" {
+			if test.mode != cyberaccess.Standard && test.origin == "" {
 				wantQueries = 1
 			}
 			if len(provider.queries) != wantQueries {
