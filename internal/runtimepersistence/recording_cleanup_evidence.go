@@ -61,6 +61,15 @@ func recordingCleanupRoots(source InspectionSource, mirror string, cutoff time.T
 		)
 	}
 	if !source.Current {
+		roots = append(roots,
+			recordingCleanupRoot{"acp_observations", "run_id", `(` + hidden("'managed_run'", "r.run_id") + ` OR ` + expired("expires_at_unix_ms") + `)`, nil},
+			recordingCleanupRoot{"capture_environment_assignments", "(capture_kind,capture_id)", hidden("r.capture_kind", "r.capture_id"), nil},
+			recordingCleanupRoot{"capture_runs", "run_id", `(` + hidden("'managed_run'", "r.run_id") + `) AND NOT EXISTS(SELECT 1 FROM main.acp_observations a WHERE a.run_id=r.run_id)`, nil},
+			recordingCleanupRoot{"manual_captures", "capture_id", hidden("'manual_capture'", "r.capture_id"), nil},
+			// Whole explicit clear has its own durable authority. Capture-specific
+			// approval inference is handled separately before proof destruction.
+			recordingCleanupRoot{"tool_approvals", "approval_id", `EXISTS(SELECT 1 FROM ` + mirror + `.inspection_mirror_active a JOIN ` + mirror + `.inspection_mirror_generations g USING(generation) WHERE a.singleton=1 AND g.complete=1 AND g.archive_epoch>1)`, nil},
+		)
 		roots = append(roots, recordingCleanupRoot{"runtime_exchange_agent_identities", "exchange_id", `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='exchange' AND d.identity=r.exchange_id)`, nil})
 		if source.Database.Revision == 2 {
 			nativeWhere := `(` + hidden("r.capture_kind", "r.capture_id") + ` OR (` + expired("metadata_expires_at_unix_ms") + ` AND r.completed_at_unix_ms IS NOT NULL AND NOT EXISTS(SELECT 1 FROM main.native_tool_contents nc WHERE nc.operation_id=r.operation_id AND nc.expires_at_unix_ms>` + fmt.Sprint(cutoff.UnixMilli()) + `)))`
@@ -265,8 +274,12 @@ func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *
 						batch.Attempts += uint64(n)
 					case "runtime_connection_events":
 						batch.Connections += uint64(n)
-					case "native_tool_approvals":
+					case "native_tool_approvals", "tool_approvals":
 						batch.Approvals += uint64(n)
+					case "capture_environment_assignments":
+						batch.Assignments += uint64(n)
+					case "capture_runs", "manual_captures":
+						batch.Captures += uint64(n)
 					}
 				}
 				return tx.Commit()
