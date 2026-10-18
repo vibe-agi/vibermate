@@ -11,7 +11,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -25,7 +24,7 @@ func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testi
 	options.Resources = &policy
 	options.Lifecycle.ShutdownTimeout = 40 * time.Millisecond
 	runtime := startTestRuntime(t, options)
-	waitRecording(t, runtime)
+	WaitRecordingTestRuntime(t, runtime)
 	content := runtime.recordingStorage.current.Load().content
 	var disposed atomic.Int32
 	runtime.cleanups.entries = append([]cleanupEntry{{name: "test physical completion", run: func(context.Context) error { disposed.Add(1); return nil }}}, runtime.cleanups.entries...)
@@ -64,9 +63,9 @@ func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testi
 	if !errors.Is(readErr, exchangecontent.ErrNotFound) {
 		t.Fatalf("actual content owner closed with a live body owner: %v", readErr)
 	}
-	// Public inspection is independently unavailable until Task5's mirror exists.
-	if _, err := runtime.ExchangeContents().GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull); !errors.Is(err, recording.ErrInspectionUnavailable) {
-		t.Fatalf("missing mirror fabricated public inspection: %v", err)
+	// Public inspection uses the actual complete mirror installed during setup.
+	if _, err := runtime.ExchangeContents().GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull); !errors.Is(err, exchangecontent.ErrNotFound) {
+		t.Fatalf("public inspection dependency closed before real body owner: %v", err)
 	}
 	if disposed.Load() != 0 || runtime.Status().State != RuntimeStateStopFailed {
 		t.Fatal("live owner was reported physically stopped")

@@ -119,7 +119,7 @@ func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder
 	if e != nil {
 		t.Fatal(e)
 	}
-	if recorder != nil {
+	if len(recorders) == 0 {
 		waitRecording(t, r)
 	}
 	// Task4 installs the lazy optional facade after constructing the queue.
@@ -142,7 +142,9 @@ func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder
 	if e != nil {
 		t.Fatal(e)
 	}
-	waitRecordingMirror(t, r)
+	if len(recorders) == 0 {
+		waitRecordingMirror(t, r)
+	}
 	capture, _ := captureidentity.New(captureidentity.KindManualCapture, grant.Capture.ID)
 	listener, e := net.Listen("tcp4", "127.0.0.1:0")
 	if e != nil {

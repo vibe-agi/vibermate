@@ -3,8 +3,12 @@ package productruntime
 import (
 	"bytes"
 	"context"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -30,10 +34,21 @@ func TestProductRuntimeRestoresPublishedRoutesAcrossOAuthCapabilityUpgrade(t *te
 			t.Parallel()
 			ctx := context.Background()
 			options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
-			store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
-				DatabasePath: options.Paths.DatabasePath(), BusyTimeout: runtimepersistence.DefaultBusyTimeout,
-				CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
-			})
+			owner, err := runtimedata.Acquire(options.Paths.DataDirectory())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Release()
+			host, err := instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), "server.lock"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer host.Release()
+			layout, err := runtimedata.PrepareStorageOwned(ctx, runtimedata.OwnedStorage{Directory: options.Paths.DataDirectory(), Runtime: owner, Host: host}, time.Now().UTC(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{DatabasePath: options.Paths.DatabasePath(), LayoutID: layout.ID, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -130,6 +145,13 @@ func TestProductRuntimeRestoresPublishedRoutesAcrossOAuthCapabilityUpgrade(t *te
 				}
 			}
 			if err := store.Shutdown(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := host.Release(); err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.Release(); err != nil {
 				t.Fatal(err)
 			}
 

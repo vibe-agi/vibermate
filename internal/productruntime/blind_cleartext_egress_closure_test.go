@@ -440,6 +440,9 @@ func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBui
 	if err != nil {
 		t.Fatal(err)
 	}
+	if recorder == nil {
+		WaitRecordingTestRuntime(t, f.r)
+	}
 	f.auth = "Basic " + base64.StdEncoding.EncodeToString([]byte("capture:"+grant.Credential.Value()))
 	f.server = httptest.NewUnstartedServer(f.r.ProxyHandler())
 	f.server.Config.BaseContext = func(net.Listener) context.Context {
@@ -509,8 +512,8 @@ func (f *b4Fixture) entered(b *b4DialBarrier, jobs ...*b4Job) {
 func (f *b4Fixture) start(count int) egressaudit.Attempt {
 	f.t.Helper()
 	var own egressaudit.Attempt
-	f.observe("durable start", func() bool {
-		page, err := f.r.EgressAttempts().List(f.ctx, egressaudit.PageRequest{Limit: 10})
+	f.observe("producer start", func() bool {
+		page, err := f.observations.List(f.ctx, egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			f.t.Fatal(err)
 		}
@@ -553,7 +556,7 @@ func (f *b4Fixture) terminal(start egressaudit.Attempt, want egressaudit.Decisio
 	if f.port == 443 {
 		origin = "https://blind.fixture:443"
 	}
-	if start.Terminal() || start.ID() != end.ID() || start.StartedAt() != end.StartedAt() || start.Decision() != want || end.Decision() != want || start.Parent() != end.Parent() || start.ConnectionID() != end.ConnectionID() || start.Purpose() != end.Purpose() || start.PayloadClass() != end.PayloadClass() || start.Caller() != end.Caller() || start.CallerID() != end.CallerID() || start.TargetOrigin() != end.TargetOrigin() || end.TargetOrigin() != origin || end.Purpose() != egressaudit.PurposeBlindTunnel || end.PayloadClass() != egressaudit.PayloadOpaqueTunnel || end.Caller() != egressaudit.CallerCore || end.Parent().Kind != egressaudit.ParentBlindConnection || end.Parent().ID != end.ConnectionID() || end.Parent().ExchangeID != "" || end.Outcome() != outcome || want.AccountID != "" || want.AccountSettingsRevision != 0 {
+	if start.Terminal() || start.ID() != end.ID() || !end.StartedAt().Equal(start.StartedAt().Truncate(time.Millisecond)) || start.Decision() != want || end.Decision() != want || start.Parent() != end.Parent() || start.ConnectionID() != end.ConnectionID() || start.Purpose() != end.Purpose() || start.PayloadClass() != end.PayloadClass() || start.Caller() != end.Caller() || start.CallerID() != end.CallerID() || start.TargetOrigin() != end.TargetOrigin() || end.TargetOrigin() != origin || end.Purpose() != egressaudit.PurposeBlindTunnel || end.PayloadClass() != egressaudit.PayloadOpaqueTunnel || end.Caller() != egressaudit.CallerCore || end.Parent().Kind != egressaudit.ParentBlindConnection || end.Parent().ID != end.ConnectionID() || end.Parent().ExchangeID != "" || end.Outcome() != outcome || want.AccountID != "" || want.AccountSettingsRevision != 0 {
 		f.t.Fatalf("own attempt mutated start=%+v terminal=%+v want=%+v outcome=%s", start, end, want, outcome)
 	}
 	if outcome == egressaudit.OutcomeCompleted && (end.BytesOut() == 0 || end.BytesIn() == 0) {

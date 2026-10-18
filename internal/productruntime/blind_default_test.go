@@ -208,6 +208,7 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool, socksMo
 	if _, err = r.CaptureAssignments().Create(t.Context(), captureassignment.CreateCommand{Capture: capture, EnvironmentID: environment.SystemTransparentID, Source: captureassignment.SourceSystemTransparent}); err != nil {
 		t.Fatal(err)
 	}
+	WaitRecordingTestRuntime(t, r)
 	server := httptest.NewUnstartedServer(r.ProxyHandler())
 	if hold {
 		server.Config.BaseContext = func(net.Listener) context.Context {
@@ -493,6 +494,14 @@ func runActualRuntimeBlindDefault(t *testing.T, hold, publicDenied bool, socksMo
 	}
 	if firstCount.Load() != wantFirst || secondCount.Load() != 1 || network.denied.Load() != 0 {
 		t.Fatalf("first%d second%d denied%d", firstCount.Load(), secondCount.Load(), network.denied.Load())
+	}
+	drain, cancelDrain := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancelDrain()
+	if err := gate.Drain(drain); err != nil {
+		t.Fatal("actual blind producers did not join", err)
+	}
+	if _, err := SettledEgressTestPage(t, r, egressaudit.PageRequest{Limit: 10}); err != nil {
+		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {

@@ -527,7 +527,9 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 		}
 		capability = grant.Credential.Value()
 	}
-	WaitRecordingTestRuntime(t, f.r)
+	if cfg.recorder == nil {
+		WaitRecordingTestRuntime(t, f.r)
+	}
 	f.listener = httptest.NewServer(f.r.ProxyHandler())
 	t.Cleanup(f.listener.Close)
 	proxyURL, err := url.Parse(f.listener.URL)

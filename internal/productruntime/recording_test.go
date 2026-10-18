@@ -96,7 +96,6 @@ func TestRealCapturedForwardingWhileHistoryWriterBlocked(t *testing.T) {
 			f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: family, choice: "builtin", recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
 				return primeBlockedRecordingQueue(t, ctx, b, sink)
 			}})
-			waitRecording(t, f.r)
 			run := newOriginalForwardRun(t, f)
 			first := run.start(t)
 			assertOriginalForwardReply(t, f, first.join(t), false)
@@ -116,7 +115,6 @@ func TestRealBlindAndCleartextWhileHistoryWriterBlocked(t *testing.T) {
 			f := newB4Fixture(t, port, func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
 				return primeBlockedRecordingQueue(t, ctx, b, sink)
 			})
-			waitRecording(t, f.r)
 			for range 2 {
 				flight := f.job(func(context.Context) b4Result { return f.wire(port == 443) })
 				f.finish(flight, 200)
@@ -342,7 +340,7 @@ func TestTimedOutCapturePreparationRemainsOwnedUntilWriterSettles(t *testing.T) 
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(sink.release) }) }
 			r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
-				return primeBlockedRecordingQueue(t, ctx, b, sink)
+				return newObservationRecorder(ctx, b, sink, sink)
 			}})
 			if err != nil {
 				release()

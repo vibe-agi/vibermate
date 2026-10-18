@@ -127,6 +127,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		})
 	}
 	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
+	WaitRecordingTestRuntime(t, f.runtime)
 	stopped = f.runtime
 	wantCredential := "Bearer " + f.token
 	if original {

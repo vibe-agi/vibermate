@@ -171,6 +171,7 @@ func TestRuntimeJSONAndSSEFinishAndCloseBodiesWhileRecordingBlocked(t *testing.T
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
 				f := newAccountReadFixture(t)
+				WaitRecordingTestRuntime(t, f.runtime)
 				if mode == "tiny_optional" {
 					p := f.runtime.bodyAdmission.Policy()
 					p.Content.RetainedBytes, p.Content.CanonicalBytes, p.Content.StructureBytes = 1, 1, 1
