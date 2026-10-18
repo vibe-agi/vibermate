@@ -201,6 +201,9 @@ func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *
 	if err := s.certifyRecordingAuditClosure(ctx, control, m, cutoff); err != nil {
 		return released, err
 	}
+	if err := s.CertifyRecordingDenialTail(ctx, control); err != nil {
+		return released, err
+	}
 	if err := s.PublishInspectionMirror(ctx, control); err != nil {
 		return released, err
 	}

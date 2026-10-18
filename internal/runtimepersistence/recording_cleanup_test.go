@@ -561,3 +561,47 @@ func TestRecordingPhysicalLegacyNativeBatchesDoNotCascadePastGCOrCounts(t *testi
 		t.Fatalf("cascade bypassed measured graph cleanup: ops=%d contents=%d bodies=%d chunks=%d approvals=%d released=%+v once=%d/%d scopes=%d/%d", operations, contents, bodies, chunks, approvals, released, onceAfter, onceBefore, scopesAfter, scopesBefore)
 	}
 }
+
+func TestRecordingCleanupCertifiesUnacknowledgedDenialTailBeforeProofRemoval(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	root := rawEvidenceRecordForTest("uncertified-proof", 1, rawevidence.LayerProviderEgress, []byte("expired private body"), []byte(`{"version":1,"headers":[]}`))
+	root.ScopeID = "audit-a"
+	root.AttemptID = ""
+	root.ConnectionID = ""
+	root.ExchangeID = "uncertified-exchange"
+	root.ObservedAt = now.Add(-2 * time.Hour)
+	root.ExpiresAt = now.Add(-time.Hour)
+	if err := newRawEvidenceRepository(f.legacy, newOperationGate()).AppendBatch(t.Context(), []rawevidence.StoredEnvelope{root}, root.ObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	nativeExec(t, f.control.store.database, `CREATE TEMP TRIGGER fail_denial_certificate BEFORE UPDATE ON main.recording_denial_coverage BEGIN SELECT RAISE(ABORT,'synthetic required certificate failure'); END`)
+	if err := f.current.DenyRecordingIdentities(t.Context(), f.control, "exchange", []string{root.ExchangeID}); err == nil {
+		t.Fatal("certificate fault did not reach actual required write")
+	}
+	nativeExec(t, f.control.store.database, `DROP TRIGGER temp.fail_denial_certificate`)
+	before, err := f.control.ReadInspectionSnapshot(t.Context(), nil)
+	if err != nil || before.Stamp.DenialCount != 0 {
+		t.Fatal("failed control certificate advanced", err)
+	}
+	token, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	released, err := f.current.PurgeRecordingEvidence(t.Context(), f.control, token, now)
+	if err != nil || released.Envelopes != 1 {
+		t.Fatalf("resume actual proof purge: %+v %v", released, err)
+	}
+	after, err := f.control.ReadInspectionSnapshot(t.Context(), nil)
+	if err != nil || after.Stamp.DenialCount != 1 {
+		t.Fatalf("proof was destroyed under an uncertified denial tail: count=%d %v", after.Stamp.DenialCount, err)
+	}
+	nativeExec(t, f.current.store.database, `DELETE FROM recording_denials`)
+	if err = f.current.PublishInspectionMirror(t.Context(), f.control); !errors.Is(err, ErrRecordingPrivacyUnavailable) {
+		t.Fatalf("lost resumed denial coverage was silently recertified empty: %v", err)
+	}
+	if _, err = f.control.UsagePolicyRepository().UsagePolicy(t.Context()); err != nil {
+		t.Fatal("negative proof loss gated required control", err)
+	}
+}

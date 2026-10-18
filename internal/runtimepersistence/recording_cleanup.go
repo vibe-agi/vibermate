@@ -154,6 +154,9 @@ func (s *ObservationStore) PurgeExpiredRecordingUsage(ctx context.Context, contr
 	}
 	// Certification is complete for every source before any source loses a cap-
 	// bearing root. On restart an uncertified tail is certified before deletion.
+	if err = s.CertifyRecordingDenialTail(ctx, control); err != nil {
+		return removed, err
+	}
 	if err = s.PublishInspectionMirror(ctx, control); err != nil {
 		return removed, err
 	}

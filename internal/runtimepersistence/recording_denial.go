@@ -105,6 +105,19 @@ func (s *ObservationStore) DenyRecordingIdentities(ctx context.Context, control 
 			return ErrInspectionUnavailable
 		}
 	}
+	return s.certifyRecordingIdentities(ctx, control, kind, ids)
+}
+
+// CertifyRecordingDenialTail is maintenance-only recovery. A failed required
+// CAS may leave a conservative FULL-committed tail that selectors now skip.
+// Verify the whole chain and require that tail in control before destroying
+// any roots, even when retry selected no new IDs. All history SQL returns
+// before the fixed-size reliable CAS; failure is never treated as success.
+func (s *ObservationStore) CertifyRecordingDenialTail(ctx context.Context, control *ControlStore) error {
+	return s.certifyRecordingIdentities(ctx, control, "", nil)
+}
+
+func (s *ObservationStore) certifyRecordingIdentities(ctx context.Context, control *ControlStore, kind string, ids []string) error {
 	snapshot, err := control.ReadInspectionSnapshot(ctx, nil)
 	if err != nil {
 		return err
