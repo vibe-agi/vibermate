@@ -26,10 +26,11 @@ import (
 )
 
 type nativeManagementFixture struct {
-	checks  nativeFixtureChecks
-	client  *http.Client
-	origin  string
-	session servercontrol.WebSession
+	authority nativetool.AuthorityRepository
+	checks    nativeFixtureChecks
+	client    *http.Client
+	origin    string
+	session   servercontrol.WebSession
 }
 
 func (fixture *nativeManagementFixture) createContainmentCapture(ctx context.Context, id environment.EnvironmentID) capturecontrol.ManualCaptureGrant {
@@ -54,7 +55,7 @@ func newNativeManagementFixture(ctx context.Context, t nativeFixtureChecks, host
 	}
 	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}
 	t.Cleanup(transport.CloseIdleConnections)
-	fixture := &nativeManagementFixture{checks: t, origin: "https://" + host.Status().ListenAddress, client: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	fixture := &nativeManagementFixture{authority: host.Runtime().NativeToolRepository(), checks: t, origin: "https://" + host.Status().ListenAddress, client: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	key, err := os.ReadFile(host.Status().RecoveryKeyPath)
 	if err != nil {
 		t.Fatal("private recovery key unavailable")
@@ -142,7 +143,8 @@ func (fixture *nativeManagementFixture) rejectPending(ctx context.Context, captu
 }
 
 // Only the private synthetic stream fixture calls this authenticated user
-// decision. It establishes no production content-profile classification.
+// decision. Its tool call uses the tagged exact synthetic profile; this does
+// not establish a production classification for another tool or definition.
 func (fixture *nativeManagementFixture) allowStreamPending(ctx context.Context, capture captureidentity.Reference) string {
 	path := "/api/v1/captures/" + capture.Key() + "/native-tools/approvals"
 	deadline := time.Now().Add(8 * time.Second)
@@ -159,9 +161,20 @@ func (fixture *nativeManagementFixture) allowStreamPending(ctx context.Context, 
 			if approval.CaptureKey != capture.Key() {
 				fixture.checks.Fatal("stream approval Capture mismatch")
 			}
+			id, parseErr := nativetool.NewID(approval.OperationID)
+			operation, operationErr := fixture.authority.Get(ctx, id)
+			fixture.checks.Logf("stream pending diagnostic kind=%s preview=%s sourceReadValid=%t", operation.Kind, approval.PreviewState, parseErr == nil && operationErr == nil)
 			status, data = fixture.request(ctx, "POST", path+"/"+approval.ID+"/actions/decide", fixture.session.WriteToken, desktopcontrol.NativeDecisionDTO{Decision: nativetool.DecisionAllowOnce, BindingDigest: approval.BindingDigest}, map[string]string{"If-Match": strconv.FormatUint(approval.Revision, 10), "Idempotency-Key": "native-stream-allow-" + approval.ID})
 			var decided desktopcontrol.NativeApprovalDTO
-			if status != 200 || json.Unmarshal(data, &decided) != nil || decided.State != "allowed" {
+			decodeErr := json.Unmarshal(data, &decided)
+			if status != 200 || decodeErr != nil || decided.State != "allowed" {
+				var problem struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				_ = json.Unmarshal(data, &problem)
+				fixture.checks.Logf("stream Allow diagnostic status=%d state=%q decode=%v code=%q approvalRevision=%d", status, decided.State, decodeErr, problem.Error.Code, approval.Revision)
 				fixture.checks.Fatal("authenticated stream Allow failed")
 			}
 			return approval.ID
@@ -232,7 +245,8 @@ func (fixture *nativeManagementFixture) allowSyntheticPending(ctx context.Contex
 	fixture.checks.Fatal("synthetic approval missing")
 }
 
-func (fixture *nativeManagementFixture) verifySyntheticFull(ctx context.Context, op nativetool.Operation, probe nativeProfileProbe) {
+func (fixture *nativeManagementFixture) verifySyntheticFull(ctx context.Context, observed nativetool.InspectionOperation, probe nativeProfileProbe) {
+	op := observed.Operation
 	path := "/api/v1/captures/" + op.Capture.Key() + "/native-tools/operations/" + op.ID.String()
 	status, data := fixture.request(ctx, "GET", path, fixture.session.ReadToken, nil, nil)
 	var view desktopcontrol.NativeOperationDTO
@@ -243,9 +257,9 @@ func (fixture *nativeManagementFixture) verifySyntheticFull(ctx context.Context,
 		name       string
 		retained   bool
 		descriptor desktopcontrol.NativePartDescriptor
-		stored     *nativetool.ContentDescriptor
+		stored     *nativetool.InspectionContentDescriptor
 	}{
-		{"tool_arguments", probe.argumentsRetained, view.Content.Arguments, op.Arguments}, {"tool_result", probe.resultRetained, view.Content.Result, op.Result},
+		{"tool_arguments", probe.argumentsRetained, view.Content.Arguments, observed.Arguments}, {"tool_result", probe.resultRetained, view.Content.Result, observed.Result},
 	} {
 		if !part.retained {
 			if part.stored != nil || part.descriptor.State != "unavailable" || part.descriptor.Digest != "" {

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	exchangeAuditDatabaseName = "runtime.db"
+	exchangeAuditDatabaseName = "observations.db"
 	exchangeAuditResultLimit  = 1024
 )
 
@@ -66,6 +66,14 @@ func openExchangeAuditReader(
 	ctx context.Context,
 	dataDirectory string,
 ) (*exchangeAuditReader, error) {
+	return openPrivateAuditReader(ctx, dataDirectory, exchangeAuditDatabaseName, true)
+}
+
+func openControlAuditReader(ctx context.Context, dataDirectory string) (*exchangeAuditReader, error) {
+	return openPrivateAuditReader(ctx, dataDirectory, "runtime.db", false)
+}
+
+func openPrivateAuditReader(ctx context.Context, dataDirectory, filename string, activities bool) (*exchangeAuditReader, error) {
 	if ctx == nil {
 		return nil, errors.New("Exchange audit context is nil")
 	}
@@ -78,7 +86,7 @@ func openExchangeAuditReader(
 	if err != nil {
 		return nil, fmt.Errorf("validate Exchange audit data directory: %w", err)
 	}
-	databasePath := filepath.Join(dataDirectory, exchangeAuditDatabaseName)
+	databasePath := filepath.Join(dataDirectory, filename)
 	databaseInfo, err := privateAuditPath(databasePath, false, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("validate Exchange audit database: %w", err)
@@ -150,8 +158,16 @@ func openExchangeAuditReader(
 		directoryInfo: directoryInfo,
 		databaseInfo:  databaseInfo,
 	}
-	if _, err := reader.latestSequence(ctx); err != nil {
-		return fail(err)
+	if activities {
+		if _, err := reader.latestSequence(ctx); err != nil {
+			return fail(err)
+		}
+	} else {
+		var identity string
+		var revision int
+		if err := connection.QueryRowContext(ctx, `SELECT schema_identity,schema_revision FROM runtime_metadata WHERE singleton=1`).Scan(&identity, &revision); err != nil || identity != "vibermate-control" || revision != 3 {
+			return fail(errors.New("native authority audit requires exact control role"))
+		}
 	}
 	return reader, nil
 }

@@ -253,7 +253,7 @@ func TestNativeSSEReconnectDoesNotRepeatToolCall(t *testing.T) {
 	if binary == "" || node == "" {
 		t.Skip("requires exact160 client and pinned Node")
 	}
-	result, err := runNativePolicyCase(context.Background(), t.TempDir(), nativePinnedClient{nativeMCPClientReport: nativeMCPClientReport{Version: "0.160.0"}, invocation: binary}, node, "sse_reconnect")
+	result, err := runNativePolicyCase(context.Background(), t.TempDir(), nativePinnedClient{nativeMCPClientReport: nativeMCPClientReport{Version: "0.160.0"}, invocation: binary}, node, "sse_reconnect", t.Logf)
 	if err != nil || result.Outcome != "passed" || result.Reason != "sse_resumed_without_call_replay" {
 		t.Fatalf("SSE reconnect=%+v err=%v", result, err)
 	}
