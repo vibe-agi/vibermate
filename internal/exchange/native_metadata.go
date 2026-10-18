@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"net/http"
@@ -54,12 +55,42 @@ func nativeResponseHeaders(source http.Header) http.Header {
 	return result
 }
 
-// Only hashes and ownership live here, never the provider's opaque token.
-// State is not persisted, serialized into diagnostics, or inferred from a
-// client-supplied value. A Runtime restart deliberately loses these bindings.
+const (
+	maxCodexTurnStates   = 2048
+	maxCodexTurnAliases  = 16
+	maxCodexTurnRequests = 2048
+	codexTurnStateTTL    = 24 * time.Hour
+)
+
 type codexTurnStateBinding struct {
 	scope, owner [32]byte
-	expires      time.Time
+	hasTurn      bool
+}
+
+// Codex retains its first turn token even when a managed account changes. Only
+// hashes of tokens actually returned in this scope can name the current owner.
+// The current owner's token is an explicitly owned, bounded ephemeral buffer;
+// it is zeroed on ownership change, cancellation, expiry, eviction and shutdown.
+// Neither the buffer nor its aliases are persisted or exposed in diagnostics.
+type codexTurnState struct {
+	owner                [32]byte
+	generation, admitted uint64
+	token                []byte
+	aliases              [][32]byte
+	expires              time.Time
+	expiry               *time.Timer
+}
+
+// Admission order, not response arrival order, establishes ownership. A late
+// response must present the same operation witness and ownership generation.
+type codexTurnRequestWitness struct {
+	id          string
+	sequence    uint64
+	ctx, client context.Context
+	stop        func() bool
+	binding     codexTurnStateBinding
+	generation  uint64
+	bound       bool
 }
 
 func codexTurnBinding(request ClientRequest, selection frozenSelection, account providerauth.AccountRef, decoded protocolcore.Request) (codexTurnStateBinding, bool) {
@@ -80,11 +111,11 @@ func codexTurnBinding(request ClientRequest, selection frozenSelection, account 
 			turn = value.Value
 		}
 	}
-	scope, _ := json.Marshal([]any{request.CaptureAdmissionRef(), request.admission.CredentialRevision(), session, headers.Get("Thread-Id")})
+	scope, _ := json.Marshal([]any{request.CaptureAdmissionRef(), request.admission.CredentialRevision(), session, headers.Get("Thread-Id"), turn})
 	owner, _ := json.Marshal([]any{account, selection.environmentID.String(), selection.routeID.String(),
 		selection.routeRevision, selection.target.Origin().String(), selection.targetRef, selection.targetRevision,
 		selection.protocolPlanID.String(), selection.protocolPlanRevision, decoded.EffectiveModel, turn})
-	return codexTurnStateBinding{scope: sha256.Sum256(scope), owner: sha256.Sum256(owner)}, true
+	return codexTurnStateBinding{scope: sha256.Sum256(scope), owner: sha256.Sum256(owner), hasTurn: turn != ""}, true
 }
 
 func codexTurnToken(headers http.Header) string {
@@ -114,51 +145,177 @@ func (pipeline *Pipeline) replayCodexTurnState(request ClientRequest, selection 
 		}
 	}
 	token := codexTurnToken(source)
-	if token == "" {
+	if token == "" && len(headerValuesFold(source, codexTurnStateHeader)) != 0 {
 		return
 	}
-	key := sha256.Sum256([]byte(token))
 	pipeline.mu.Lock()
 	defer pipeline.mu.Unlock()
-	stored, known := pipeline.turnStates[key]
-	if known && stored.scope == binding.scope && stored.owner == binding.owner && pipeline.now().Before(stored.expires) {
-		headers.Set(codexTurnStateHeader, token)
-	} else if known && stored.scope == binding.scope {
-		delete(pipeline.turnStates, key)
+	witness := pipeline.turnStateRequests[request.exchangeID]
+	if pipeline.closing || witness == nil || witness.ctx.Err() != nil || witness.client.Err() != nil {
+		return
+	}
+	pipeline.expireCodexTurnStatesLocked()
+	state := pipeline.turnStates[binding.scope]
+	if token != "" && state != nil && !slices.Contains(state.aliases, sha256.Sum256([]byte(token))) {
+		// An unknown/foreign client token proves no relationship to this state.
+		return
+	}
+	if state != nil && witness.sequence < state.admitted && state.owner != binding.owner {
+		return
+	}
+	if state != nil && token == "" && len(state.aliases) != 0 {
+		// A fresh client without an anchor cannot inherit another request's
+		// aliases, even if it supplies the same session and turn identifiers.
+		if witness.sequence < state.admitted {
+			return
+		}
+		pipeline.removeCodexTurnStateLocked(binding.scope)
+		state = nil
+	}
+	if state != nil && state.owner != binding.owner && !binding.hasTurn {
+		// Session/thread identity alone cannot prove that this is the same turn.
+		// Preserve legacy same-owner replay, but never translate an old owner's
+		// anchor into a new owner's token without explicit turn evidence.
+		pipeline.removeCodexTurnStateLocked(binding.scope)
+		state = nil
+	}
+	if state == nil {
+		// A response may establish fresh state even if the incoming client had
+		// an unrecognized token. That token is never forwarded or made an alias.
+		state = pipeline.newCodexTurnStateLocked(binding, witness.sequence)
+	} else if state.owner != binding.owner {
+		clear(state.token)
+		state.token = nil
+		state.owner = binding.owner
+		state.generation = witness.sequence
+	}
+	state.admitted = max(state.admitted, witness.sequence)
+	witness.binding, witness.generation, witness.bound = binding, state.generation, true
+	if token != "" && len(state.token) != 0 {
+		headers.Set(codexTurnStateHeader, string(state.token))
 	}
 }
 
 func (pipeline *Pipeline) managedResponseHeaders(request ClientRequest, selection frozenSelection, frozen providertransport.Request, decoded protocolcore.Request, source http.Header) http.Header {
 	headers := nativeResponseHeaders(source)
+	if isNativeCodexSelection(request, selection) {
+		rewriteMappedModelHeaders(headers, decoded.RequestedModel, decoded.EffectiveModel)
+	}
 	token := codexTurnToken(headers)
 	headers.Del(codexTurnStateHeader)
 	account, _ := frozen.AccountRef()
+	if isNativeCodexSelection(request, selection) {
+		scopeManagedModelETag(headers, request, selection, account)
+	}
 	binding, ok := codexTurnBinding(request, selection, account, decoded)
 	if token == "" || !ok {
 		return headers
 	}
-	now := pipeline.now()
-	binding.expires = now.Add(24 * time.Hour)
-	key := sha256.Sum256([]byte(token))
 	pipeline.mu.Lock()
 	defer pipeline.mu.Unlock()
-	// ponytail: bounded scan of at most 2048 bindings; use an eviction queue if
-	// measured metadata throughput makes this scan significant.
-	var oldest [32]byte
-	oldestAt := binding.expires
-	for existing, value := range pipeline.turnStates {
-		if !now.Before(value.expires) || (value.scope == binding.scope && value.owner != binding.owner) {
-			delete(pipeline.turnStates, existing)
-			continue
-		}
-		if !value.expires.After(oldestAt) {
-			oldest, oldestAt = existing, value.expires
-		}
+	pipeline.expireCodexTurnStatesLocked()
+	witness := pipeline.turnStateRequests[request.exchangeID]
+	state := pipeline.turnStates[binding.scope]
+	if pipeline.closing || witness == nil || !witness.bound || witness.ctx.Err() != nil || witness.client.Err() != nil ||
+		witness.binding != binding || state == nil || state.owner != binding.owner || state.generation != witness.generation {
+		return headers
 	}
-	if len(pipeline.turnStates) >= 2048 {
-		delete(pipeline.turnStates, oldest)
+	if len(state.token) == 0 {
+		state.token = []byte(token)
 	}
-	pipeline.turnStates[key] = binding
+	key := sha256.Sum256([]byte(token))
+	if !slices.Contains(state.aliases, key) {
+		if len(state.aliases) == maxCodexTurnAliases {
+			// Preserve the first client anchor across arbitrary account switches.
+			state.aliases = slices.Delete(state.aliases, 1, 2)
+		}
+		state.aliases = append(state.aliases, key)
+	}
 	headers.Set(codexTurnStateHeader, token)
 	return headers
+}
+
+func (pipeline *Pipeline) beginCodexTurnRequestLocked(id string, ctx, client context.Context) *codexTurnRequestWitness {
+	if len(pipeline.turnStateRequests) >= maxCodexTurnRequests || pipeline.turnStateRequests[id] != nil || pipeline.turnStateSequence == ^uint64(0) {
+		return nil
+	}
+	pipeline.turnStateSequence++
+	witness := &codexTurnRequestWitness{id: id, sequence: pipeline.turnStateSequence, ctx: ctx, client: client}
+	pipeline.turnStateRequests[id] = witness
+	witness.stop = context.AfterFunc(ctx, func() {
+		pipeline.mu.Lock()
+		defer pipeline.mu.Unlock()
+		pipeline.cancelCodexTurnRequestLocked(witness)
+	})
+	return witness
+}
+
+func (pipeline *Pipeline) cancelCodexTurnRequestLocked(witness *codexTurnRequestWitness) {
+	if witness.bound {
+		state := pipeline.turnStates[witness.binding.scope]
+		if state != nil && state.owner == witness.binding.owner && state.generation == witness.generation {
+			pipeline.removeCodexTurnStateLocked(witness.binding.scope)
+		}
+		witness.bound = false
+	}
+}
+
+func (pipeline *Pipeline) finishCodexTurnRequestLocked(witness *codexTurnRequestWitness) {
+	if witness == nil {
+		return
+	}
+	witness.stop()
+	if witness.ctx.Err() != nil || witness.client.Err() != nil {
+		pipeline.cancelCodexTurnRequestLocked(witness)
+	}
+	if pipeline.turnStateRequests[witness.id] == witness {
+		delete(pipeline.turnStateRequests, witness.id)
+	}
+}
+
+func (pipeline *Pipeline) newCodexTurnStateLocked(binding codexTurnStateBinding, sequence uint64) *codexTurnState {
+	if len(pipeline.turnStates) >= maxCodexTurnStates {
+		var oldest [32]byte
+		var candidate *codexTurnState
+		for scope, state := range pipeline.turnStates {
+			if candidate == nil || state.expires.Before(candidate.expires) || (state.expires.Equal(candidate.expires) && state.admitted < candidate.admitted) {
+				oldest, candidate = scope, state
+			}
+		}
+		pipeline.removeCodexTurnStateLocked(oldest)
+	}
+	state := &codexTurnState{owner: binding.owner, generation: sequence, admitted: sequence, expires: pipeline.now().Add(codexTurnStateTTL)}
+	pipeline.turnStates[binding.scope] = state
+	state.expiry = time.AfterFunc(codexTurnStateTTL, func() {
+		pipeline.mu.Lock()
+		defer pipeline.mu.Unlock()
+		if pipeline.turnStates[binding.scope] == state {
+			pipeline.removeCodexTurnStateLocked(binding.scope)
+		}
+	})
+	return state
+}
+
+func (pipeline *Pipeline) expireCodexTurnStatesLocked() {
+	now := pipeline.now()
+	for scope, state := range pipeline.turnStates {
+		if !now.Before(state.expires) {
+			pipeline.removeCodexTurnStateLocked(scope)
+		}
+	}
+}
+
+func (pipeline *Pipeline) removeCodexTurnStateLocked(scope [32]byte) {
+	if state := pipeline.turnStates[scope]; state != nil {
+		state.expiry.Stop()
+		clear(state.token)
+		state.token = nil
+		delete(pipeline.turnStates, scope)
+	}
+}
+
+func (pipeline *Pipeline) clearCodexTurnStatesLocked() {
+	for scope := range pipeline.turnStates {
+		pipeline.removeCodexTurnStateLocked(scope)
+	}
 }

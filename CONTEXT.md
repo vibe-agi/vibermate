@@ -133,7 +133,7 @@ An Account's independently revisioned egress, automatic-refresh, and cyber acces
 _Avoid_: Account Link, credential epoch, Capture override
 
 **Account Cyber Access Mode**:
-The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account. Standard is the default. The selected Account determines the request mode independently of the client's login or preference. Blue and Red require explicit upstream permission for the request model; unknown or incompatible permissions prevent the request rather than selecting another mode.
+The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account. Standard is the default. The selected Account determines the request mode independently of the client's login or preference. Blue and Red require explicit upstream permission for the request model; unknown or incompatible permissions prevent the request rather than selecting another mode. Native Codex Guardian reviewer/classifier requests derive Blue from either Daybreak mode, with the same account and exact model permission check.
 _Avoid_: Cyber account flag, entitlement grant, security level slider
 
 **Account Automatic Refresh**:
@@ -208,6 +208,10 @@ _Avoid_: Session state, cache, persistent script storage
 One exact requested-model to upstream-model rewrite scoped to an Upstream Route. An unmatched requested model preserves its original opaque identifier.
 _Avoid_: Model family, provider alias, fuzzy match
 
+**Native Model Directory**:
+The complete Codex model catalog read with one authorized Account's frozen credentials. A mapped name advertises its actual target's capabilities; an unavailable target supplies no alias. Catalog validators are scoped to the Account, credential, settings and frozen Route, so a manual account switch cannot validate the previous account's catalog. Discovery does not execute an Account Selector.
+_Avoid_: Global supported-model list, inferred entitlement
+
 **Client Session**:
 The client-native, resumable identity that owns one or more related conversations. Its identifier is opaque and may survive a resume operation.
 _Avoid_: Capture, request session
@@ -230,6 +234,7 @@ _Avoid_: Prompt similarity, inferred source, permanent source copy
 
 **Session Continuity**:
 When an upstream execution target changes, the next model receives the portable prior conversation: instructions, user and Assistant messages, and completed tool calls and results. Provider-private reasoning, caches, and encrypted state remain evidence but are not part of this guarantee.
+Native Codex routing tokens have a separate, bounded in-memory lifetime. An observed client anchor can identify the current account's newly accepted token within the same Capture, session and turn; the previous account's token is never sent to the new account. Ownership generations reject late responses. Retained token bytes are cleared on ownership changes, cancellation, expiry, eviction and shutdown, and are never persisted.
 _Avoid_: Transparent forwarding, exact provider-state continuity
 
 **Session Handoff**:

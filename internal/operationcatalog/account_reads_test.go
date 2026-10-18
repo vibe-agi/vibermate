@@ -33,3 +33,19 @@ func TestCodexQuotaIsAnExplicitReadOnlyAccountOperation(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexModelDirectoryUsesAccountReadAuthority(t *testing.T) {
+	catalog, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := protocolspec.SelectOperation(catalog.Definitions(), protocolspec.RequestTarget{
+		Method: "GET", Path: "/backend-api/codex/models", RawQuery: "client_version=0.163.0", Transport: protocolspec.ClientOperationTransportHTTP,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Kind() != protocolspec.ClientOperationAccountRead || op.Revision() != 2 || op.BodyKind() != protocolspec.ClientOperationBodyNone {
+		t.Fatalf("model directory has wrong authority: kind=%s revision=%d", op.Kind(), op.Revision())
+	}
+}

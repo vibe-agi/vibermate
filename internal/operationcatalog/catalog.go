@@ -41,7 +41,7 @@ const (
 	// host alone would send this control plane into the model pipeline.
 	OpenAICodexResponsesCreateID               = "openai-codex-responses-create"
 	OpenAICodexResponsesWebSocketUnsupportedID = "openai-codex-responses-websocket-unsupported"
-	OpenAICodexModelsProbeID                   = "openai-codex-models-probe"
+	OpenAICodexModelsProbeID                   = upstreamservice.CodexModels
 	OpenAICodexAccountsCheckID                 = "openai-codex-accounts-check"
 	OpenAIPluginsFeaturedProbeID               = "openai-plugins-featured-probe"
 	OpenAIPluginsInstalledID                   = "openai-ps-plugins-installed-probe"
@@ -158,12 +158,6 @@ func BuiltIn() (Catalog, error) {
 		allowedQueryKeys []string
 		payloadClass     protocolspec.OperationPayloadClass
 	}{
-		{
-			OpenAICodexModelsProbeID,
-			"/backend-api/codex/models",
-			[]string{"client_version"},
-			protocolspec.OperationPayloadControl,
-		},
 		{
 			OpenAICodexAccountsCheckID,
 			upstreamservice.CodexWorkspaceRoutingPath,

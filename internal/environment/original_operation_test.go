@@ -15,7 +15,7 @@ func TestOriginalOperationOriginFreezesAliasBesideManagedRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		facts := RequestFacts{Target: protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/codex/models", RawQuery: "client_version=synthetic", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}
+		facts := RequestFacts{Target: protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/plugins/featured", RawQuery: "platform=synthetic", Transport: protocolspec.ClientOperationTransportHTTP}, DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1}
 		plan, err := snapshot.ResolveConnectionRequest(binding, facts)
 		if err != nil {
 			t.Fatal(err)
@@ -29,6 +29,14 @@ func TestOriginalOperationOriginFreezesAliasBesideManagedRoutes(t *testing.T) {
 		}
 		if _, ok := plan.OriginalOrigin(); ok {
 			t.Fatal("managed model route acquired original-account authority")
+		}
+		facts.Target = protocolspec.RequestTarget{Method: "GET", Path: "/backend-api/codex/models", RawQuery: "client_version=0.163.0", Transport: protocolspec.ClientOperationTransportHTTP}
+		models, err := snapshot.ResolveConnectionRequest(binding, facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := models.OriginalOperationOrigin(); ok {
+			t.Fatal("managed model directory acquired original-account authority")
 		}
 		facts.Target = protocolspec.RequestTarget{Method: "POST", Path: "/v1/responses", Transport: protocolspec.ClientOperationTransportHTTP}
 		semantic, err := snapshot.ResolveConnectionRequest(binding, facts)

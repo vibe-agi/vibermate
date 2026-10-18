@@ -566,6 +566,14 @@ func TestModelMappingsAreCanonicalAndCompiledWithoutAliasing(t *testing.T) {
 	if _, mapped := route.ResolveModelMapping("A-client"); mapped {
 		t.Fatal("compiled mapping performed a non-exact match")
 	}
+	aliases := route.ModelAliases()
+	if len(aliases) != 2 || aliases[0].RequestedModel != "a-client" || aliases[0].UpstreamModel != "relay:opaque-a" {
+		t.Fatalf("compiled aliases = %+v", aliases)
+	}
+	aliases[0].UpstreamModel = "changed"
+	if upstream, _ := route.ResolveModelMapping("a-client"); upstream != "relay:opaque-a" {
+		t.Fatal("model alias view mutated the frozen route")
+	}
 }
 
 func TestModelMappingsRejectDuplicateRequestedModels(t *testing.T) {

@@ -13,6 +13,11 @@ import (
 
 const CodexRateLimits = "codex-account-rate-limits"
 const CodexUsageHistory = "codex-account-usage-history"
+
+// Preserve the established operation ID while revising its authority from an
+// original-credential probe to a managed-account read.
+const CodexModels = "openai-codex-models-probe"
+const MaxCodexModelsBodyBytes = 4 << 20
 const CodexWorkspaceRoutingPath = "/backend-api/wham/accounts/check"
 
 // CodexResetCreditDetails is owner-only. It is not a client operation and is
@@ -24,19 +29,28 @@ var ErrHistoryDenied = errors.New("account history requires explicit route permi
 
 // Read is a sealed service contract, not an arbitrary HTTP request.
 type Read struct {
-	id     string
-	path   string
-	origin originidentity.ProviderOrigin
+	id       string
+	path     string
+	origin   originidentity.ProviderOrigin
+	rawQuery string
 }
 
 func (read Read) ID() string                            { return read.id }
 func (read Read) Path() string                          { return read.path }
 func (read Read) Origin() originidentity.ProviderOrigin { return read.origin }
-func (read Read) AdapterID() string                     { return "chatgpt-codex" }
-func (read Read) AdapterRevision() uint64               { return 1 }
+func (read Read) RawQuery() string                      { return read.rawQuery }
+func (read Read) IsModelDirectory() bool                { return read.id == CodexModels }
+func (read Read) MaximumBodyBytes() int {
+	if read.IsModelDirectory() {
+		return MaxCodexModelsBodyBytes
+	}
+	return 2 << 20
+}
+func (read Read) AdapterID() string       { return "chatgpt-codex" }
+func (read Read) AdapterRevision() uint64 { return 1 }
 func (read Read) Validate() error {
 	resolved, err := ResolveRead(read.origin, read.id)
-	if err != nil || resolved.path != read.path {
+	if err != nil || resolved.path != read.path || validateReadQuery(read.id, read.rawQuery) != nil {
 		return ErrUnsupported
 	}
 	return nil
@@ -59,7 +73,12 @@ func AccountOperations() []protocolspec.ClientOperationOptions {
 	history := quota
 	history.ID, _ = protocolspec.NewClientOperationID(CodexUsageHistory)
 	history.PathPattern = "/backend-api/wham/profiles/me"
-	return []protocolspec.ClientOperationOptions{quota, history}
+	models := quota
+	models.ID, _ = protocolspec.NewClientOperationID(CodexModels)
+	models.Revision = 2
+	models.PathPattern = "/backend-api/codex/models"
+	models.AllowedQueryKeys = []string{"client_version"}
+	return []protocolspec.ClientOperationOptions{quota, history, models}
 }
 
 // AllowsClientRead recognizes service-owned account reads outside the client's

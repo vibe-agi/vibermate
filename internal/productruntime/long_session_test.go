@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -375,9 +376,19 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		payload["tools"] = []any{map[string]any{"type": "function", "name": "f", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}
 	}
 	body, err := json.Marshal(payload)
-	wantBody = body
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantBody = body
+	if !original && !crossChat {
+		// Preserve the exact complete native history while accounting for the
+		// managed account's explicit mode; client recording still uses body.
+		providerPayload := maps.Clone(payload)
+		providerPayload["access_programs"] = map[string]string{"cyber": "standard"}
+		wantBody, err = json.Marshal(providerPayload)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if four != nil {
 		lease.Release()
