@@ -1054,7 +1054,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if probingProfile {
 		callArguments = profileProbe.arguments
 	}
-	if probingProfile && len(profileProbe.text) > 2<<20 {
+	if probingProfile {
 		// Positive persistence assertions require an initialized observation role
 		// and the real launched Capture mirror before measured client traffic.
 		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
