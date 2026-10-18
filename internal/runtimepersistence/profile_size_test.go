@@ -1,6 +1,7 @@
 package runtimepersistence
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,16 +47,65 @@ func TestMigratedPublishedLargeProfileBindsAndStarts(t *testing.T) {
 		t.Fatalf("current stage: %+v %v", result, err)
 	}
 	f.assertLegacyPreserved(t)
-	store := openTestStore(t, filepath.Join(f.source, "runtime.db"))
-	p, exists, err := store.EgressProfileRepository().LoadRevision(t.Context(), "profile.example", 1)
-	if err != nil || !exists {
-		shutdownTestStore(t, store)
+	// Extract only from a private copy, retaining committed source WAL bytes.
+	source := filepath.Join(f.source, "runtime.db")
+	db := openSQLiteForTest(t, source)
+	nativeExec(t, db, `PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE provider_accounts SET note=note`)
+	copyPath := filepath.Join(t.TempDir(), "runtime.db")
+	before := map[string][]byte{}
+	for _, suffix := range []string{"", "-wal"} {
+		data, err := os.ReadFile(source + suffix)
+		if err != nil || len(data) == 0 {
+			t.Fatalf("read retained source %q: %v", suffix, err)
+		}
+		before[suffix] = data
+		if err := os.WriteFile(copyPath+suffix, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for suffix, want := range before {
+			got, err := os.ReadFile(source + suffix)
+			if err != nil || !bytes.Equal(want, got) {
+				t.Errorf("retained source %q changed: %v", suffix, err)
+			}
+		}
+	})
+	target := filepath.Join(t.TempDir(), "control.db")
+	const layout = "migrated-large-profile"
+	proof, err := ExtractControl(t.Context(), ControlExtraction{SourcePath: copyPath, TargetPath: target, LayoutID: layout, ArchiveID: "legacy"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	store, id, revision := nativeFixtureOnStore(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, true, nil, store, p)
-	repo := store.NativeToolRepository()
+	if proof.Source.Identity != "vibermate-runtime" || proof.Source.Revision != 3 {
+		t.Fatalf("wrong extracted source: %+v", proof.Source)
+	}
+	digest, rows, err := CertifyStagedControlProjection(t.Context(), target, layout, 3)
+	if err != nil || digest != proof.ProjectionDigest || rows != proof.Rows {
+		t.Fatalf("staged control certification: rows=%d err=%v", rows, err)
+	}
+	control, err := OpenControl(t.Context(), ControlOptions{DatabasePath: target, LayoutID: layout, BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownTestStore(t, control.store) })
+	// Compare original account/configuration/profile columns before the native
+	// fixture writes its own environment and capture authority.
+	columns := map[string][]string{}
+	for _, table := range []string{"provider_accounts", "upstream_endpoints", "environment_revisions", "environment_revision_counters", "egress_profile_heads", "egress_profile_revisions"} {
+		columns[table] = f.columns[table]
+	}
+	if !reflect.DeepEqual(nativeFingerprint(t, db, columns), nativeFingerprint(t, control.store.database, columns)) {
+		t.Fatal("extraction changed original account, configuration or profile bytes")
+	}
+	p, exists, err := control.EgressProfileRepository().LoadRevision(t.Context(), "profile.example", 1)
+	if err != nil || !exists {
+		t.Fatal(err)
+	}
+	store, id, revision := nativeFixtureOnStore(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, true, nil, control.store, p)
+	repo := control.NativeToolRepository()
 	now := time.Now().UTC()
-	nativeAllow(t, repo, id, now)
+	nativeAllow(t, store.NativeToolRepository(), id, now)
 	receipt, err := repo.Start(t.Context(), id, "migrated-large-profile", revision, now)
 	if err != nil {
 		t.Fatal(err)
