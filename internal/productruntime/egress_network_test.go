@@ -476,7 +476,14 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		bodyMatches := string(encoded) == body
 		if managed || semantic {
 			var fields map[string]json.RawMessage
-			bodyMatches = json.Unmarshal(encoded, &fields) == nil && len(fields) == 3 && string(fields["model"]) == `"synthetic"` && string(fields["input"]) == `"hello"` && string(fields["stream"]) == "false"
+			wantFields := 3
+			if managed {
+				wantFields++ // The managed account owns an explicit Standard selection.
+			}
+			bodyMatches = json.Unmarshal(encoded, &fields) == nil && len(fields) == wantFields && string(fields["model"]) == `"synthetic"` && string(fields["input"]) == `"hello"` && string(fields["stream"]) == "false"
+			if managed {
+				bodyMatches = bodyMatches && string(fields["access_programs"]) == `{"cyber":"standard"}`
+			}
 		}
 		if r.Method != method || r.Host != "chatgpt.com" || r.URL.RequestURI() != path || r.Header.Get("Authorization") != wantAuthorization || !bodyMatches || r.Header.Get("Proxy-Authorization") != "" {
 			bad.Add(1)

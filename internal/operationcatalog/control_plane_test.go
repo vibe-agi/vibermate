@@ -145,7 +145,11 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 		if probeErr != nil {
 			t.Fatalf("%s: %v", test.path, probeErr)
 		}
-		if probe.Kind() != pathcapability.KindOpaque ||
+		wantKind := pathcapability.KindOpaque
+		if test.path == "/backend-api/codex/models" {
+			wantKind = pathcapability.KindAccountRead
+		}
+		if probe.Kind() != wantKind ||
 			probe.PayloadClass() != test.payload {
 			t.Fatalf(
 				"%s kind=%q payload=%q",
@@ -166,7 +170,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 	if err != nil {
 		t.Fatalf("versioned models probe: %v", err)
 	}
-	if versionedModelsProbe.Kind() != pathcapability.KindOpaque ||
+	if versionedModelsProbe.Kind() != pathcapability.KindAccountRead ||
 		versionedModelsProbe.PayloadClass() != protocolspec.OperationPayloadControl {
 		t.Fatalf(
 			"versioned models probe kind=%q payload=%q",

@@ -21,6 +21,13 @@ type settingsAccountControl struct {
 	calls int
 }
 
+func (control *settingsAccountControl) Get(_ context.Context, id provideraccount.ID) (provideraccount.View, error) {
+	if id != control.view.Account.ID {
+		return provideraccount.View{}, provideraccount.ErrAccountNotFound
+	}
+	return control.view, nil
+}
+
 func (control *settingsAccountControl) SetSettings(_ context.Context, command provideraccount.SettingsCommand) (provideraccount.View, error) {
 	control.calls++
 	if command.ID != control.view.Account.ID || command.ExpectedRevision != control.view.Account.SettingsRevision {
@@ -29,6 +36,7 @@ func (control *settingsAccountControl) SetSettings(_ context.Context, command pr
 	control.view.Account.SettingsRevision++
 	control.view.Account.EgressProfile = command.EgressProfile
 	control.view.Account.AutomaticRefresh = command.AutomaticRefresh
+	control.view.Account.CyberAccessProgram = command.CyberAccessProgram
 	return control.view, nil
 }
 

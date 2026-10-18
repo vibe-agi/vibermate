@@ -50,6 +50,9 @@ func (wire *accountReadWire) RoundTrip(request *http.Request, _ providertranspor
 	wire.mu.Lock()
 	wire.requests = append(wire.requests, request.Clone(request.Context()))
 	wire.mu.Unlock()
+	if request.URL.Path == "/backend-api/codex/models" {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}, "Etag": {`"catalog-global"`}, "Set-Cookie": {"upstream-cookie"}}, Body: io.NopCloser(strings.NewReader(managedCodexCatalogFixture))}, transportprofile.Evidence{}, nil
+	}
 	if request.URL.Path == "/backend-api/wham/rate-limit-reset-credits/consume" {
 		body, err := io.ReadAll(request.Body)
 		_ = request.Body.Close()

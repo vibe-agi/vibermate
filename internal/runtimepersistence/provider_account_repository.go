@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -35,7 +36,7 @@ const (
 
 const providerAccountColumns = `account_id, display_name, credential_origin, endpoint_associations, association_revision, realm_id, driver_ref,
  secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms, note, note_revision,
- settings_revision, egress_profile_json, automatic_refresh`
+ settings_revision, egress_profile_json, automatic_refresh, cyber_access_program`
 
 func newProviderAccountRepository(
 	database *sql.DB,
@@ -154,9 +155,9 @@ func (repository *providerAccountRepository) write(ctx context.Context, expected
 	var result sql.Result
 	if kind == accountWriteSettings {
 		result, err = transaction.ExecContext(permit.context,
-			`UPDATE provider_accounts SET settings_revision=?, egress_profile_json=?, automatic_refresh=?, updated_at_unix_ms=?
+			`UPDATE provider_accounts SET settings_revision=?, egress_profile_json=?, automatic_refresh=?, cyber_access_program=?, updated_at_unix_ms=?
  WHERE account_id=? AND revision=? AND association_revision=? AND note_revision=? AND settings_revision=?`,
-			int64(candidate.SettingsRevision), string(encodedProfile), candidate.AutomaticRefresh, candidate.UpdatedAt.UnixMilli(),
+			int64(candidate.SettingsRevision), string(encodedProfile), candidate.AutomaticRefresh, candidate.CyberAccessProgram.WireValue(), candidate.UpdatedAt.UnixMilli(),
 			candidate.ID.String(), int64(candidate.Revision), int64(candidate.AssociationRevision), int64(candidate.NoteRevision), int64(expected))
 	} else if kind == accountWriteNote {
 		result, err = transaction.ExecContext(permit.context,
@@ -174,13 +175,13 @@ func (repository *providerAccountRepository) write(ctx context.Context, expected
 			`INSERT INTO provider_accounts(
 			   account_id, display_name, credential_origin, endpoint_associations, association_revision, realm_id, driver_ref,
 			   secret_reference, state, revision,
-			   created_at_unix_ms, updated_at_unix_ms, note, note_revision, settings_revision, egress_profile_json, automatic_refresh
-			  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			   created_at_unix_ms, updated_at_unix_ms, note, note_revision, settings_revision, egress_profile_json, automatic_refresh, cyber_access_program
+			  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id) DO NOTHING`,
 			candidate.ID.String(), candidate.DisplayName, candidate.Origin.String(), candidate.Associations.String(), int64(candidate.AssociationRevision), candidate.RealmID,
 			candidate.Driver.String(), candidate.SecretRef.String(), string(candidate.State),
 			int64(candidate.Revision), candidate.CreatedAt.UnixMilli(), candidate.UpdatedAt.UnixMilli(), candidate.Note, int64(candidate.NoteRevision),
-			int64(candidate.SettingsRevision), string(encodedProfile), candidate.AutomaticRefresh,
+			int64(candidate.SettingsRevision), string(encodedProfile), candidate.AutomaticRefresh, candidate.CyberAccessProgram.WireValue(),
 		)
 	} else {
 		result, err = transaction.ExecContext(
@@ -359,10 +360,11 @@ func scanProviderAccount(row providerAccountRow) (provideraccount.Account, error
 	var settingsRevision int64
 	var egressProfile string
 	var automaticRefresh bool
+	var cyberAccessProgram string
 	if err := row.Scan(
 		&id, &displayName, &originValue, &associationsValue, &associationRevision, &realmID, &driverValue,
 		&secretValue, &state, &revision, &createdAt, &updatedAt, &note, &noteRevision,
-		&settingsRevision, &egressProfile, &automaticRefresh,
+		&settingsRevision, &egressProfile, &automaticRefresh, &cyberAccessProgram,
 	); err != nil {
 		return provideraccount.Account{}, err
 	}
@@ -371,7 +373,8 @@ func scanProviderAccount(row providerAccountRow) (provideraccount.Account, error
 	associations, associationErr := provideraccount.ParseEndpointAssociations(associationsValue)
 	driver, driverErr := providerauth.NewDriverRef(driverValue)
 	secret, secretErr := secretstore.ParseReference(secretValue)
-	if idErr != nil || originErr != nil || associationErr != nil || associationRevision <= 0 || driverErr != nil || secretErr != nil ||
+	program, programErr := cyberaccess.ParsePreference(cyberAccessProgram)
+	if idErr != nil || originErr != nil || associationErr != nil || associationRevision <= 0 || driverErr != nil || secretErr != nil || programErr != nil ||
 		revision <= 0 || createdAt <= 0 || updatedAt < createdAt {
 		return provideraccount.Account{}, provideraccount.ErrInvalidAccount
 	}
@@ -381,6 +384,7 @@ func scanProviderAccount(row providerAccountRow) (provideraccount.Account, error
 		Revision: uint64(revision), CreatedAt: time.UnixMilli(createdAt).UTC(),
 		UpdatedAt:        time.UnixMilli(updatedAt).UTC(),
 		SettingsRevision: uint64(settingsRevision), AutomaticRefresh: automaticRefresh,
+		CyberAccessProgram: program,
 	}
 	if err := json.Unmarshal([]byte(egressProfile), &account.EgressProfile); err != nil {
 		return provideraccount.Account{}, provideraccount.ErrInvalidAccount

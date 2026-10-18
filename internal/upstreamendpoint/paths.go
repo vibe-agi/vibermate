@@ -11,7 +11,9 @@ import (
 // chatGPTCatalogClientVersion is the catalog compatibility contract used by
 // this adapter (also covered by the Codex control-plane fixtures), not a claim
 // about the user's installed CLI version. Catalog discovery has no client run.
-const chatGPTCatalogClientVersion = "0.153.4"
+// Codex 0.163.0 includes the per-model available_access_programs contract used
+// for Daybreak discovery. Explicit account versions still take precedence.
+const chatGPTCatalogClientVersion = "0.163.0"
 
 // IsChatGPTCodexOrigin identifies the Codex service, not every endpoint that
 // happens to speak Responses. It never changes the credential's origin/realm.

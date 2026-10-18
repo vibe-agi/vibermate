@@ -3,6 +3,7 @@ package providerauth
 import (
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 )
 
@@ -28,7 +29,9 @@ func TestDriverAndAccountIdentityAreTyped(t *testing.T) {
 	missingResolved.ResolvedEgress = egressprofile.Resolved{}
 	mismatchedResolved := account
 	mismatchedResolved.EgressProfile.DisplayName = "not the frozen effective profile"
-	for _, incomplete := range []AccountRef{missingRevision, missingProfile, missingResolved, mismatchedResolved} {
+	invalidPreference := account
+	invalidPreference.CyberAccessProgram = cyberaccess.Preference("unknown")
+	for _, incomplete := range []AccountRef{missingRevision, missingProfile, missingResolved, mismatchedResolved, invalidPreference} {
 		if incomplete.Validate() == nil {
 			t.Fatal("managed account without explicit settings was accepted")
 		}

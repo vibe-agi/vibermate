@@ -139,6 +139,7 @@ type Client struct {
 	rawTimeout     time.Duration
 	rawBodyBytes   int
 	clock          func() time.Time
+	cyberCatalogs  map[cyberCatalogKey]cachedCyberCatalog
 	operations     map[*clientOperation]struct{}
 	closing        bool
 	changed        chan struct{}

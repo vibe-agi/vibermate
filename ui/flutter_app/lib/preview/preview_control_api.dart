@@ -2194,6 +2194,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
         deleteHeaderNames: account.deleteHeaderNames,
         settingsRevision: account.settingsRevision,
         automaticRefresh: account.automaticRefresh,
+        cyberAccessProgram: account.cyberAccessProgram,
         supportsAutomaticRefresh: account.supportsAutomaticRefresh,
         egressProfile: account.egressProfile,
         tokenInfo: account.tokenInfo,
@@ -2318,6 +2319,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
       credentialEpoch: current.credentialEpoch + 1,
       settingsRevision: current.settingsRevision,
       automaticRefresh: current.automaticRefresh,
+      cyberAccessProgram: current.cyberAccessProgram,
       supportsAutomaticRefresh: current.supportsAutomaticRefresh,
       egressProfile: current.egressProfile,
       setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
@@ -2367,6 +2369,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
       credentialEpoch: current.credentialEpoch + 1,
       settingsRevision: current.settingsRevision,
       automaticRefresh: current.automaticRefresh,
+      cyberAccessProgram: current.cyberAccessProgram,
       supportsAutomaticRefresh: current.supportsAutomaticRefresh,
       egressProfile: current.egressProfile,
       setHeaderNames: current.setHeaderNames,
@@ -2418,6 +2421,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
+    String? cyberAccessProgram,
   }) async {
     _requireOpen();
     final index = _accounts.indexWhere((value) => value.id == account.id);
@@ -2430,7 +2434,9 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
       );
     }
     final current = _accounts[index];
-    if (automaticRefresh && !current.supportsAutomaticRefresh ||
+    final selectedProgram = cyberAccessProgram ?? current.cyberAccessProgram;
+    if (!providerAccountCyberAccessPrograms.contains(selectedProgram) ||
+        automaticRefresh && !current.supportsAutomaticRefresh ||
         egressProfile != null &&
             await egressProfileRevision(
                   egressProfile.id,
@@ -2443,11 +2449,13 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
     }
     final changed =
         current.egressProfile != egressProfile ||
-        current.automaticRefresh != automaticRefresh;
+        current.automaticRefresh != automaticRefresh ||
+        current.cyberAccessProgram != selectedProgram;
     final updated = current.withSettings(
       settingsRevision: current.settingsRevision + (changed ? 1 : 0),
       egressProfile: egressProfile,
       automaticRefresh: automaticRefresh,
+      cyberAccessProgram: selectedProgram,
     );
     _accounts[index] = updated;
     return updated;

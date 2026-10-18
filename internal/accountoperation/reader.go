@@ -108,6 +108,7 @@ func New(options Options) (*Reader, error) {
 type Source struct {
 	ConnectionID string
 	OperationID  string
+	RawQuery     string
 }
 type Facts struct {
 	upstreamservice.Facts
@@ -122,6 +123,7 @@ type Facts struct {
 type Result struct {
 	Body  []byte
 	Facts Facts
+	ETag  string
 }
 
 func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.RequestPlan, source Source) (Result, error) {
@@ -130,6 +132,10 @@ func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.Request
 		return Result{}, err
 	}
 	read, err := upstreamservice.ResolveRead(route.ProviderTarget().Origin, plan.Operation().ID().String())
+	if err != nil {
+		return Result{}, err
+	}
+	read, err = read.WithRawQuery(source.RawQuery)
 	if err != nil {
 		return Result{}, err
 	}
@@ -144,11 +150,26 @@ func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.Request
 		return Result{}, ErrUnavailable
 	}
 	defer lease.Release()
-	request, err := providertransport.NewCapturedAccountRead(plan, lease, source.ConnectionID, source.OperationID)
+	request, err := providertransport.NewCapturedAccountRead(plan, lease, source.ConnectionID, source.OperationID, read.RawQuery())
 	if err != nil {
 		return Result{}, err
 	}
-	return reader.execute(ctx, request, read, lease)
+	result, err := reader.execute(ctx, request, read, lease)
+	if err != nil || !read.IsModelDirectory() {
+		return result, err
+	}
+	result.Body, err = transformCapturedModelCatalog(result.Body, route)
+	if err != nil {
+		return Result{}, err
+	}
+	account, _ := lease.Account()
+	target := route.ProviderTarget()
+	result.ETag = upstreamservice.ModelCatalogETag(result.ETag, upstreamservice.ModelCatalogScope{
+		EnvironmentID: plan.EnvironmentID().String(), EnvironmentRevision: uint64(plan.EnvironmentRevision()),
+		RouteID: route.ID().String(), RouteRevision: uint64(route.Revision()),
+		EndpointID: target.ID, EndpointRevision: uint64(target.Revision), Origin: target.Origin.String(), Account: account,
+	})
+	return result, nil
 }
 
 func (reader *Reader) execute(ctx context.Context, request providertransport.AccountReadRequest, read upstreamservice.Read, lease providerauth.Lease) (Result, error) {
@@ -173,11 +194,12 @@ func (reader *Reader) execute(ctx context.Context, request providertransport.Acc
 	if err != nil || contentType != "application/json" {
 		return Result{}, ErrInvalidResponse
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20+1))
+	limit := read.MaximumBodyBytes()
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	if ctx.Err() != nil {
 		return Result{}, ctx.Err()
 	}
-	if err != nil || len(body) > 2<<20 {
+	if err != nil || len(body) > limit {
 		return Result{}, ErrInvalidResponse
 	}
 	facts, err := read.Project(body)
@@ -188,7 +210,11 @@ func (reader *Reader) execute(ctx context.Context, request providertransport.Acc
 	if !ok {
 		return Result{}, ErrInvalidResponse
 	}
-	return Result{Body: body, Facts: Facts{AccountID: account.ID, CredentialEpoch: account.CredentialEpoch,
+	etag := ""
+	if read.IsModelDirectory() {
+		etag = upstreamservice.ModelValidator(response.Header, "Etag")
+	}
+	return Result{Body: body, ETag: etag, Facts: Facts{AccountID: account.ID, CredentialEpoch: account.CredentialEpoch,
 		Origin: read.Origin().String(), AdapterID: read.AdapterID(), AdapterRevision: read.AdapterRevision(), ObservedAt: reader.clock().UTC(),
 		State: "known", Facts: facts}}, nil
 }
