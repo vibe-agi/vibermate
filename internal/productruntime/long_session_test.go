@@ -304,7 +304,7 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	var recorder exchangecontent.Recorder = f.runtime.contents
 	var transformedHTTP *transformHTTPRecorder
 	if stages > 0 {
-		transformedHTTP = &transformHTTPRecorder{t: t, Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), completed: make(chan string, 1)}
+		transformedHTTP = &transformHTTPRecorder{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), completed: make(chan string, 1)}
 		recorder = transformedHTTP
 	}
 	var four *fourHTTPContentSource

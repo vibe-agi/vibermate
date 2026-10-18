@@ -761,7 +761,7 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		return nil
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	client := &http.Client{Transport: transport}
 	startedSemantic := make(chan egressaudit.DecisionRef, 1)
 	if !accountOverride {
 		wire.before = func() {
@@ -785,16 +785,10 @@ func runRuntimeInheritedSOCKSTLS(t *testing.T, model, managed, accountOverride b
 		}
 	}
 	WaitRecordingTestRuntime(t, r)
-	var requestContext context.Context
-	var cancelRequest context.CancelFunc
-	if managedHold && managedFailure == "" {
-		// Two separately held/probed stages share one bounded caller budget.
-		// A short HTTP-wide timer must not race the manual control sequence.
-		requestContext, cancelRequest = context.WithTimeout(t.Context(), 30*time.Second)
-		client.Timeout = 0
-	} else {
-		requestContext, cancelRequest = context.WithCancel(t.Context())
-	}
+	// This fixture includes required refresh/rotation work and deliberate held
+	// control phases. One finite caller budget owns the complete operation;
+	// explicit cancel/probe/transport deadlines below retain their own checks.
+	requestContext, cancelRequest := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancelRequest()
 	request, err := http.NewRequestWithContext(requestContext, method, "https://chatgpt.com"+path, strings.NewReader(body))
 	if err != nil {

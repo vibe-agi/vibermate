@@ -31,7 +31,6 @@ type transformHTTPRecorder struct {
 	sink      exchangecontent.SourceRecorder
 	completed chan string
 	requests  atomic.Int32
-	t         *testing.T
 }
 
 func (r *transformHTTPRecorder) RecordSource(ctx context.Context, source *exchangecontent.Source) error {
@@ -51,7 +50,6 @@ func (r *transformHTTPRecorder) RecordScopedSource(ctx context.Context, scope re
 		r.requests.Add(1)
 	}
 	if err := r.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source); err != nil {
-		r.t.Logf("transform actual scoped writer rejected response=%t scopeValid=%v cause=%v", source.Metadata().Response != nil, scope.Validate(), err)
 		return err
 	}
 	if source.Metadata().Response != nil {
