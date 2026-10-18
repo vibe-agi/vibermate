@@ -10,9 +10,19 @@ import (
 	"time"
 )
 
-// InspectControl verifies the exact mandatory role without initializing it or
+// InspectControl verifies the mandatory role schema without initializing it or
 // touching optional sources. The owned directory protocol excludes writers.
-func InspectControl(ctx context.Context, path, layout string) (state SchemaState, result error) {
+func InspectControl(ctx context.Context, path, layout string) (SchemaState, error) {
+	return inspectControl(ctx, path, layout, false)
+}
+
+// ValidateCurrentControl certifies the existing required rows at an activated
+// recovery boundary. It never compares with an old projection or opens history.
+// The directory owner excludes writers throughout this read-only snapshot.
+func ValidateCurrentControl(ctx context.Context, path, layout string) (SchemaState, error) {
+	return inspectControl(ctx, path, layout, true)
+}
+func inspectControl(ctx context.Context, path, layout string, validateRows bool) (state SchemaState, result error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || !roleID(layout) {
 		return state, ErrUnsupportedSchema
@@ -35,6 +45,11 @@ func InspectControl(ctx context.Context, path, layout string) (state SchemaState
 	initialized, err := time.Parse(time.RFC3339Nano, state.InitializedAt)
 	if err != nil || initialized.IsZero() || initialized.Location() != time.UTC {
 		return state, ErrUnsupportedSchema
+	}
+	if validateRows {
+		if err = validateRequiredControlRows(ctx, tx); err != nil {
+			return state, err
+		}
 	}
 	return state, tx.Commit()
 }
@@ -90,16 +105,7 @@ func CertifyStagedControlProjection(ctx context.Context, path, layout string, so
 		return digest, 0, err
 	}
 	defer tx.Rollback()
-	if err = extractionIntegrity(ctx, tx, `PRAGMA main.integrity_check`); err != nil {
-		return digest, 0, err
-	}
-	if err = extractionNoRows(ctx, tx, `PRAGMA main.foreign_key_check`); err != nil {
-		return digest, 0, err
-	}
-	if err = validateExtractedControl(ctx, tx); err != nil {
-		return digest, 0, err
-	}
-	if err = validateExtractedNative(ctx, tx); err != nil {
+	if err = validateRequiredControlRows(ctx, tx); err != nil {
 		return digest, 0, err
 	}
 	h := sha256.New()
@@ -113,4 +119,21 @@ func CertifyStagedControlProjection(ctx context.Context, path, layout string, so
 	}
 	copy(digest[:], h.Sum(nil))
 	return digest, count, tx.Commit()
+}
+
+func validateRequiredControlRows(ctx context.Context, tx *sql.Tx) error {
+	var err error
+	if err = extractionIntegrity(ctx, tx, `PRAGMA main.integrity_check`); err != nil {
+		return err
+	}
+	if err = extractionNoRows(ctx, tx, `PRAGMA main.foreign_key_check`); err != nil {
+		return err
+	}
+	if err = validateExtractedControl(ctx, tx); err != nil {
+		return err
+	}
+	if err = validateExtractedNative(ctx, tx); err != nil {
+		return err
+	}
+	return nil
 }

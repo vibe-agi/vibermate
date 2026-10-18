@@ -256,7 +256,12 @@ func (h *Handler) getNativeContent(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, 410, "native_content_unavailable")
 		return
 	}
+	defer clear(encoded)
 	if err = h.nativeInspection.Check(r.Context(), op.Token); err != nil {
+		writeProblem(w, 410, "native_content_unavailable")
+		return
+	}
+	if !descriptor.ExpiresAt.After(h.clock.Now().UTC()) {
 		writeProblem(w, 410, "native_content_unavailable")
 		return
 	}

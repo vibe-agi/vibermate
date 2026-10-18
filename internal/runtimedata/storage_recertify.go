@@ -154,7 +154,7 @@ func (r storageCutoverRunner) finishActivated(ctx context.Context, owned OwnedSt
 	if receipt.Phase != "activated" {
 		return StorageLayout{}, ErrBackupInvalid
 	}
-	state, err := runtimepersistence.InspectControl(ctx, filepath.Join(root, "runtime.db"), receipt.Layout.ID)
+	state, err := runtimepersistence.ValidateCurrentControl(ctx, filepath.Join(root, "runtime.db"), receipt.Layout.ID)
 	if err != nil {
 		return StorageLayout{}, err
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"image"
 	"image/png"
@@ -252,4 +253,46 @@ func TestNativeRecordedRouterUnavailableAndDeleteDuringRead(t *testing.T) {
 			}, changes...)
 		})
 	}
+}
+
+type expiryDuringNativeFinalCheck struct {
+	nativetool.InspectionReader
+	clock  *decisionClock
+	expiry time.Time
+	checks int
+}
+
+func (r *expiryDuringNativeFinalCheck) Check(ctx context.Context, token recording.InspectionToken) error {
+	if err := r.InspectionReader.Check(ctx, token); err != nil {
+		return err
+	}
+	r.checks++
+	// Calls internal to the actual reader bypass this outer wrapper. This is
+	// the HTTP disclosure check, after its final metadata fetch and encoding.
+	r.clock.now = r.expiry
+	return nil
+}
+func TestNativeRecordedRouterOriginalExpiryDuringFinalCheck(t *testing.T) {
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	nativemcp.ExerciseNativeRecordedControl(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, `{"content":[{"type":"text","text":"must not disclose after deadline"}]}`, func(_ *runtimepersistence.Store, manuals manualcapture.Controller, capture captureidentity.Reference, op nativetool.Operation, reader nativetool.InspectionReader, _ func(bool)) {
+		observed, err := reader.Get(context.Background(), capture, op.ID)
+		if err != nil || observed.Result == nil {
+			t.Fatal(err)
+		}
+		clock := &decisionClock{now: time.Now().UTC()}
+		guarded := &expiryDuringNativeFinalCheck{InspectionReader: reader, clock: clock, expiry: observed.Result.ExpiresAt}
+		router := recordedRouter(t, runtime, guarded, manuals, clock)
+		path := "/api/v1/captures/" + capture.Key() + "/native-tools/operations/" + op.ID.String()
+		response := recordedGET(router, path+"/content?part=tool_result", capability(3))
+		if guarded.checks != 1 || response.Code != 410 || strings.Contains(response.Body.String(), "must not disclose") {
+			t.Fatalf("expired final HTTP disclosure: checks=%d status=%d body=%s", guarded.checks, response.Code, response.Body)
+		}
+		// Expired content must not erase known completed lifecycle/descriptor.
+		metadata := recordedGET(router, path, capability(3))
+		recordedStatus(t, metadata, 200)
+		if !strings.Contains(metadata.Body.String(), `"state":"completed"`) || !strings.Contains(metadata.Body.String(), `"state":"expired"`) {
+			t.Fatalf("expired descriptor/lifecycle lost: %s", metadata.Body)
+		}
+	})
 }

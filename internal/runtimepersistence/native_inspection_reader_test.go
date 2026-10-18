@@ -292,3 +292,42 @@ func TestNativeInspectionRetainsExpiredDescriptorForKnownLifecycle(t *testing.T)
 		t.Fatalf("expired original descriptor lost: %+v %v", got, err)
 	}
 }
+
+func TestNativeInspectionReadContentRechecksOriginalExpiryAfterFinalVisibility(t *testing.T) {
+	r, current, control, v := nativeInspectionFixture(t)
+	r.catalog.timeout = 30 * time.Second
+	v.Identity.ExpiresAt = time.Now().UTC().Truncate(time.Millisecond).Add(2 * time.Second)
+	v.Identity.CreatedAt = v.Identity.ExpiresAt.Add(-24 * time.Hour)
+	v.ObservedAt = v.Identity.CreatedAt
+	if err := current.PutNativeContent(context.Background(), v); err != nil {
+		t.Fatal(err)
+	}
+	op, err := r.Get(context.Background(), v.Identity.Scope.Capture, v.Identity.OperationID)
+	if err != nil || op.Result == nil {
+		t.Fatalf("original descriptor: %+v %v", op, err)
+	}
+	checks := 0
+	r.visibility = &nativeFinalExpiryVisibility{ControlStore: control, beforeCheck: func() {
+		checks++
+		if checks == 2 {
+			if !time.Now().Before(op.Result.ExpiresAt) {
+				t.Fatal("fixture expired before final check")
+			}
+			time.Sleep(time.Until(op.Result.ExpiresAt) + time.Millisecond)
+		}
+	}}
+	body, err := r.ReadContent(context.Background(), nativetool.InspectionContentRequest{Token: op.Token, Capture: op.Operation.Capture, OperationID: op.Operation.ID, Part: v.Part, Descriptor: *op.Result, Limit: 128 << 10})
+	if checks != 2 || !errors.Is(err, ErrInspectionChanged) || len(body) != 0 {
+		t.Fatalf("original expiry crossed final check: checks=%d body=%q err=%v", checks, body, err)
+	}
+}
+
+type nativeFinalExpiryVisibility struct {
+	*ControlStore
+	beforeCheck func()
+}
+
+func (v *nativeFinalExpiryVisibility) RecheckInspectionStamp(ctx context.Context, s recording.InspectionStamp) error {
+	v.beforeCheck()
+	return v.ControlStore.RecheckInspectionStamp(ctx, s)
+}

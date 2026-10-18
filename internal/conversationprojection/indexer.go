@@ -48,6 +48,7 @@ type Indexer struct {
 }
 
 type scanScope struct {
+	view     recording.InspectionToken
 	before   int64
 	cursor   string
 	repaired bool
@@ -101,12 +102,17 @@ func (indexer *Indexer) Reindex(
 	defer indexer.mu.Unlock()
 	scope, knownScope := indexer.scopes[request.CaptureRunID]
 	var expiry time.Time
-	check, err := indexer.beginInspection(ctx)
+	view, check, err := indexer.beginInspection(ctx)
 	if err != nil {
 		clear(indexer.scopes)
 		return err
 	}
-	next := scanScope{repaired: scope.repaired}
+	// A completed scan has no cursor left to reject. Bind its repaired flag
+	// to the same full view as partial progress before selecting incremental mode.
+	if indexer.inspection && scope.view != view {
+		scope = scanScope{view: view}
+	}
+	next := scanScope{repaired: scope.repaired, view: scope.view}
 	if err := indexer.reindex(ctx, request, scope, &next, &expiry, func() error { return check(expiry) }); err != nil {
 		// A failed projection may have persisted its identity first. Force the
 		// next pass to inspect those rows again instead of skipping them.
@@ -336,7 +342,7 @@ func (indexer *Indexer) InspectIdentity(ctx context.Context, exchangeID string) 
 	if indexer == nil || ctx == nil {
 		return IdentityInspection{}, activity.ErrInvalidEvent
 	}
-	check, err := indexer.beginInspection(ctx)
+	_, check, err := indexer.beginInspection(ctx)
 	if err != nil {
 		return IdentityInspection{}, err
 	}

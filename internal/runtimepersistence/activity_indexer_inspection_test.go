@@ -167,3 +167,76 @@ func TestActivityIndexerInspectionDoesNotRepairAfterVisibilityChange(t *testing.
 		t.Fatalf("stale repair admitted: %v %+v", err, writer.calls)
 	}
 }
+
+func TestActivityIndexerInspectionCompletedScanResetsForNewView(t *testing.T) {
+	for _, change := range []string{"source", "control"} {
+		t.Run(change, func(t *testing.T) {
+			f := newEgressInspectionFixture(t)
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			identity := agentconversation.ClientIdentity{Client: "codex", SessionID: "session", SessionResumable: true, ProviderResponseID: "response", Source: agentconversation.ClientIdentitySourceLocalState, Confidence: "exact", ObservedAt: now}
+			put := func(id string) activity.Record {
+				t.Helper()
+				record := inspectionActivity("event-"+id, id, activity.KindExchangeCompleted, now)
+				written, err := f.current.ActivityRepository().(activity.ScopedRepository).AppendScoped(ctx, f.scope, record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = f.current.ConversationIdentityRepository().(activity.ScopedConversationIdentityWriter).PutScopedConversationIdentity(ctx, f.scope, id, identity); err != nil {
+					t.Fatal(err)
+				}
+				return written
+			}
+			put("first-view")
+			reader := newActivityInspectionTestReader(t, f)
+			writer := &inspectionRepairCapture{}
+			indexer, err := conversationprojection.New(conversationprojection.Options{Activities: reader, Contents: reader.content, IdentityInspection: reader, RepairWriter: writer, CaptureRuns: inspectionRunReader{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := activity.ConversationIndexRequest{CaptureRunID: "audit-a", Limit: 10}
+			if err = indexer.Reindex(ctx, request); err != nil || !indexer.CaptureRunCaughtUp("audit-a") || len(writer.calls) != 1 {
+				t.Fatalf("first complete scan: %+v %v", writer.calls, err)
+			}
+			if err = indexer.Reindex(ctx, request); err != nil || len(writer.calls) != 1 {
+				t.Fatalf("same view did not retain incremental state: %+v %v", writer.calls, err)
+			}
+			added := put("new-view")
+			if change == "source" {
+				m, err := reader.catalog.BeginMaintenance(ctx, 2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = m.Publish(reader.catalog.sources); err != nil {
+					t.Fatal(err)
+				}
+				if err = m.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				nativeExec(t, f.control.store.database, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1`)
+				seedCompleteInspectionMirror(t, f.current, f.control)
+			}
+			token, err := reader.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer.calls = nil
+			if err = indexer.Reindex(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, repair := range writer.calls {
+				if repair.Root.ExchangeID == added.SubjectID {
+					found = true
+					if !repair.Root.Current || repair.Root.Token != token || repair.Root.Sequence != added.Sequence || repair.Root.ActivityID != added.ID || repair.Root.Scope != f.scope || repair.Identity.SessionID != identity.SessionID {
+						t.Fatalf("repair lost originals: %+v", repair)
+					}
+				}
+			}
+			if !found || !indexer.CaptureRunCaughtUp("audit-a") {
+				t.Fatalf("completed scan skipped new view's current repair root: %+v", writer.calls)
+			}
+		})
+	}
+}

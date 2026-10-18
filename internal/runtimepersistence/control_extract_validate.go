@@ -12,8 +12,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 )
 
-// All checks run against the transformed private target, with ordinary CHECKs
-// enabled. Source frozen CHECKs and required FK closure were checked separately.
+// These semantic checks apply to both a transformed private target and current
+// required control. Ordinary integrity/FK checks run separately in the same snapshot.
 // No validator uses current time, mutates lifecycle, or consults optional data.
 func validateExtractedControl(ctx context.Context, tx *sql.Tx) error {
 	scans := []struct {
@@ -125,6 +125,16 @@ func validateExtractedControl(ctx context.Context, tx *sql.Tx) error {
 			return errors.Join(ErrUnsupportedSchema, err)
 		}
 	}
+	policy, err := scanUsagePolicy(tx.QueryRowContext(ctx, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+	if err != nil {
+		return err
+	}
+	if err = policy.Validate(); err != nil {
+		return err
+	}
+	if _, err = loadEgressDefault(ctx, tx); err != nil {
+		return err
+	}
 	var rules int64
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM connection_rules`).Scan(&rules); err != nil || rules > connectionpolicy.MaxRules {
 		return errors.Join(ErrUnsupportedSchema, err)
@@ -139,6 +149,9 @@ func validateExtractedControl(ctx context.Context, tx *sql.Tx) error {
 		`SELECT 1 FROM code_library_transform_heads h WHERE NOT EXISTS(SELECT 1 FROM code_library_transform_revisions r WHERE r.transform_id=h.transform_id AND r.revision=h.current_revision)`,
 		`SELECT 1 FROM code_library_account_selector_heads h WHERE NOT EXISTS(SELECT 1 FROM code_library_account_selector_revisions r WHERE r.selector_id=h.selector_id AND r.revision=h.current_revision)`,
 		`SELECT 1 FROM native_tool_once WHERE claimed_at_unix_ms<=0`,
+		// A retained operation's Start claim cannot name a future scope.
+		// Retired once barriers remain independent, not execution proof.
+		`SELECT 1 FROM native_tool_once w JOIN native_tool_operations o ON o.operation_id=w.operation_id JOIN native_tool_scopes s ON s.capture_kind=w.capture_kind AND s.capture_id=w.capture_id WHERE w.authority_revision>s.revision`,
 		`SELECT 1 FROM native_tool_inbound i JOIN native_tool_operations o ON o.operation_id=i.operation_id JOIN native_tool_sessions s ON s.session_id=i.session_id WHERE i.request_kind<>o.rpc_kind OR s.capture_kind<>o.capture_kind OR s.capture_id<>o.capture_id OR s.environment_id<>o.environment_id OR s.environment_revision<>o.environment_revision OR s.environment_digest<>o.environment_digest`,
 
 		`SELECT 1 FROM manual_captures m WHERE m.owner_kind='proxy_client_binding' AND NOT EXISTS(SELECT 1 FROM proxy_client_bindings b WHERE b.binding_id=m.owner_id)`,

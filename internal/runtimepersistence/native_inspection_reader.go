@@ -430,6 +430,10 @@ func (r *NativeInspectionReader) ReadContent(ctx context.Context, q nativetool.I
 		clear(result)
 		return nil, err
 	}
+	if !actual.ExpiresAt.After(time.Now().UTC()) {
+		clear(result)
+		return nil, ErrInspectionChanged
+	}
 	return result, nil
 }
 

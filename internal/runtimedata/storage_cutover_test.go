@@ -1,6 +1,7 @@
 package runtimedata
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -650,5 +651,78 @@ func TestOwnedStorageStageOwnershipCannotBeSubstituted(t *testing.T) {
 	}
 	if extracted {
 		t.Fatal("extractor entered a directory not held by its private guards")
+	}
+}
+
+func TestOwnedStorageActivatedReceiptRefusesDamagedCurrentControl(t *testing.T) {
+	for _, damage := range []struct{ name, sql string }{
+		{"missing-singleton", `DELETE FROM runtime_usage_policy`},
+		{"check", `PRAGMA ignore_check_constraints=ON; UPDATE runtime_usage_policy SET retention_days=0; PRAGMA ignore_check_constraints=OFF`},
+		{"logical-head", `INSERT INTO egress_profile_heads VALUES('missing',1)`},
+		{"native-fk", `INSERT INTO native_tool_deliveries(attempt_id,operation_id,connection_id,payload_class,target_origin,policy_id,policy_revision,rule_id,proxy_id,proxy_revision,selection_source,default_revision,started_at_unix_ms) VALUES('orphan','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','connection','none','https://example.test','policy',1,'rule','direct',1,'flow',0,1)`},
+	} {
+		t.Run(damage.name, func(t *testing.T) {
+			owned := storageCutoverFixture(t, 2)
+			runner := newStorageCutoverRunner()
+			runner.barrier = func(ctx context.Context, name string) error {
+				if name == "receipt-activated" {
+					return errors.New("stop after activation")
+				}
+				return ctx.Err()
+			}
+			if _, err := runner.prepare(context.Background(), owned, time.Now().UTC(), nil); err == nil {
+				t.Fatal("activation fixture did not stop")
+			}
+			receiptPath := filepath.Join(owned.Directory, schemaUpgradeReceiptName)
+			receipt, err := os.ReadFile(receiptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			layout, err := ReadStorageLayout(owned.Directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Activated recovery cannot depend on retained optional history.
+			if err = os.Remove(filepath.Join(owned.Directory, layout.Archives[0].RelativeDirectory, "runtime.db")); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(owned.Directory, "runtime.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(damage.sql); err != nil {
+				t.Fatal(err)
+			}
+			if damage.name == "check" {
+				var days int
+				if err = db.QueryRow(`SELECT retention_days FROM runtime_usage_policy`).Scan(&days); err != nil || days != 0 {
+					t.Fatalf("damage not persisted: %d %v", days, err)
+				}
+			}
+			if err = db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resumed := newStorageCutoverRunner()
+			resumed.extract = func(context.Context, runtimepersistence.ControlExtraction) (runtimepersistence.ControlExtractionProof, error) {
+				t.Fatal("activated recovery opened old projection")
+				return runtimepersistence.ControlExtractionProof{}, nil
+			}
+			if _, err = resumed.prepare(context.Background(), owned, time.Now().UTC(), nil); err == nil {
+				t.Fatal("damaged current required authority admitted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("current authority mutated: %v", err)
+			}
+			pending, err := os.ReadFile(receiptPath)
+			if err != nil || !bytes.Equal(receipt, pending) {
+				t.Fatalf("failed reconciliation consumed receipt: %v", err)
+			}
+		})
 	}
 }
