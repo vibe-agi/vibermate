@@ -2,7 +2,11 @@ package runtimedata
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -58,6 +62,8 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 	if err = store.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
+	freezePublishedBackupFixture(t, source)
+	originalAudit := snapshotBackupTable(t, filepath.Join(source, "runtime.db"), "runtime_egress_attempts")
 	// The storage owner requires canonical targets; backupFixture's parent is
 	// already symlink-resolved, unlike macOS's /var temporary spelling.
 	backup, target := filepath.Join(filepath.Dir(source), "default-backup"), filepath.Join(filepath.Dir(source), "default-restore")
@@ -67,21 +73,44 @@ func TestBackupRestoresExactGlobalDefaultRevision(t *testing.T) {
 	if err = Restore(ctx, backup, target); err != nil {
 		t.Fatal(err)
 	}
-	store = openBackupStore(t, filepath.Join(target, "runtime.db"))
-	defer store.Shutdown(ctx)
-	setting, err := store.EgressDefaultRepository().LoadDefault(ctx)
+	restoredControl := openBackupControlReader(t, target)
+	setting, err := restoredControl.EgressDefaultRepository().LoadDefault(ctx)
 	if err != nil || setting.Revision != 2 || setting.Profile == nil || !setting.Profile.Equal(profile) {
 		t.Fatalf("restored default %+v %v", setting, err)
 	}
-	page, err := store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(page.Items) != 2 {
-		t.Fatal("actual backup/restore lost typed frozen selection or terminal history", err)
+	assertBackupEgressAttempt(t, backupHistoryPath(t, target), terminal)
+	assertBackupEgressAttempt(t, backupHistoryPath(t, target), localTerminal)
+	restoredAudit := snapshotBackupTable(t, backupHistoryPath(t, target), "runtime_egress_attempts")
+	if len(restoredAudit) != 2 || !slices.Equal(originalAudit, restoredAudit) {
+		t.Fatal("actual backup/restore changed exact global/transport target, source, bytes or terminal")
 	}
-	seen := make(map[string]egressaudit.Attempt)
-	for _, item := range page.Items {
-		seen[item.Attempt.ID()] = item.Attempt
+}
+
+func assertBackupEgressAttempt(t *testing.T, path string, want egressaudit.Attempt) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if seen[terminal.ID()] != terminal || seen[localTerminal.ID()] != localTerminal {
-		t.Fatal("actual backup/restore changed global/transport target, source, bytes or terminal")
+	defer db.Close()
+	const query = `SELECT attempt_id,connection_id,purpose,payload_class,parent_kind,parent_id,parent_exchange_id,caller_kind,caller_id,target_origin,policy_id,policy_revision,policy_authority,rule_id,proxy_id,proxy_revision,account_id,account_settings_revision,selection_source,default_revision,reused_transport,started_at_unix_ms,completed_at_unix_ms,outcome,error_class,bytes_out,bytes_in,byte_counts_known FROM runtime_egress_attempts WHERE attempt_id=?`
+	b := func(v bool) int64 {
+		if v {
+			return 1
+		}
+		return 0
+	}
+	d, p := want.Decision(), want.Parent()
+	expected := []any{want.ID(), want.ConnectionID(), string(want.Purpose()), string(want.PayloadClass()), string(p.Kind), p.ID, p.ExchangeID, string(want.Caller()), want.CallerID(), want.TargetOrigin(), d.PolicyID, int64(d.PolicyRevision), string(d.Authority), d.RuleID, d.ProxyID, int64(d.ProxyRevision), d.AccountID, int64(d.AccountSettingsRevision), string(d.SelectionSource), int64(d.DefaultRevision), b(want.ReusedTransport()), want.StartedAt().UnixMilli(), want.CompletedAt().UnixMilli(), string(want.Outcome()), want.ErrorClass(), want.BytesOut(), want.BytesIn(), b(want.ByteCountsKnown())}
+	actual := make([]any, len(expected))
+	ptrs := make([]any, len(expected))
+	for i := range actual {
+		ptrs[i] = &actual[i]
+	}
+	if err = db.QueryRow(query, want.ID()).Scan(ptrs...); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatal(fmt.Sprintf("restored terminal differs: want=%#v got=%#v", expected, actual))
 	}
 }

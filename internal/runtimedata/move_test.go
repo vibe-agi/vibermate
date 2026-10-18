@@ -25,7 +25,11 @@ func fixture(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("CREATE TABLE evidence (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO evidence VALUES (1, 'retained evidence')"); err != nil {
+	ddl, err := os.ReadFile("../runtimepersistence/schema/v1.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(ddl) + ";INSERT INTO runtime_metadata VALUES(1,'vibermate-runtime',1,'2026-10-03T00:00:00Z');INSERT INTO code_library_collections VALUES ('one', 'retained evidence')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -134,7 +138,7 @@ func TestCopyIncludesUncheckpointedWAL(t *testing.T) {
 	defer db.Close()
 	// Simulate the durable leftovers of an unclean exit, holding this test's
 	// connection only to keep SQLite from deleting the WAL before the copy.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO evidence VALUES (2, 'wal record')"); err != nil {
+	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO code_library_collections VALUES ('two', 'wal record')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Copy(context.Background(), source, target); err != nil {
@@ -147,7 +151,7 @@ func TestCopyIncludesUncheckpointedWAL(t *testing.T) {
 	}
 	defer copied.Close()
 	var value string
-	if err := copied.QueryRow("SELECT value FROM evidence WHERE id=2").Scan(&value); err != nil || value != "wal record" {
+	if err := copied.QueryRow("SELECT display_name FROM code_library_collections WHERE collection_id='two'").Scan(&value); err != nil || value != "wal record" {
 		t.Fatalf("WAL evidence lost: %q %v", value, err)
 	}
 }

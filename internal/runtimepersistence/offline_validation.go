@@ -247,8 +247,13 @@ func ValidateOfflineRole(ctx context.Context, path, identity string, revision in
 				return errors.Join(ErrRecordingPrivacyUnavailable, err)
 			}
 			copy(state.Stamp.DenialHash[:], hash)
-		} else if _, err = readRecordingDenialCoverage(ctx, tx, "main", expected); err != nil {
-			return err
+		} else {
+			if _, err = readRecordingDenialCoverage(ctx, tx, "main", expected); err != nil {
+				return err
+			}
+			if err = validateOfflineObservationRows(ctx, tx); err != nil {
+				return err
+			}
 		}
 		return tx.Commit()
 	})

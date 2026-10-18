@@ -286,6 +286,7 @@ func TestRevision2OwnedPendingPublicBackupAndMoveProduceNoOutput(t *testing.T) {
 }
 func TestRevision2OwnedOrdinaryManifestRejectsOperationalReceipt(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	backup := filepath.Join(filepath.Dir(source), "backup")
 	if err := Backup(context.Background(), source, backup, time.Now().UTC()); err != nil {
 		t.Fatal(err)

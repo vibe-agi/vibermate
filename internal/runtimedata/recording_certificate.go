@@ -173,7 +173,7 @@ func ReadRecordingMaintenanceCertificate(root string) (certificate RecordingMain
 			if source.RelativePath != "observations.db" || source.Database.Identity != "vibermate-observations" || source.Database.Revision != 1 || source.ProvenanceSHA256 != "" {
 				return certificate, true, ErrBackupInvalid
 			}
-		} else if source.RelativePath != "archives/"+source.ID+"/runtime.db" || source.Database.Identity != "vibermate-runtime" || (source.Database.Revision != 1 && source.Database.Revision != 2) || !recordingCertificateHash(source.ProvenanceSHA256) {
+		} else if source.RelativePath != "archives/"+source.ID+"/runtime.db" || source.Database.Identity != "vibermate-runtime" || (source.Database.Revision != 1 && source.Database.Revision != 2 && source.Database.Revision != 3) || !recordingCertificateHash(source.ProvenanceSHA256) {
 			return certificate, true, ErrBackupInvalid
 		}
 	}
