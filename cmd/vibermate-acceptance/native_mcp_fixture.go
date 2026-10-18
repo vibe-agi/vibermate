@@ -1064,8 +1064,9 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		profileCapture := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID}
 		readyDeadline := time.Now().Add(6 * time.Second)
 		for {
-			_, readyErr := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: profileCapture, Limit: 1})
-			if readyErr == nil && host.Runtime().Status().Recording.State == productruntime.RecordingAvailable {
+			_, readyErr := host.Runtime().ConnectionEvents().List(ctx, connectionevent.PageRequest{Limit: 1})
+			selection, selectionErr := host.Runtime().CaptureObservations().ReadCaptureObservation(ctx, profileCapture)
+			if readyErr == nil && selectionErr == nil && selection.Selection.Visible && selection.Selection.Scope.Capture == profileCapture && selection.Selection.Scope.Fence.CaptureGeneration > 0 && host.Runtime().Status().Recording.State == productruntime.RecordingAvailable {
 				break
 			}
 			if time.Now().After(readyDeadline) || ctx.Err() != nil {

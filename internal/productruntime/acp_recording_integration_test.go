@@ -189,8 +189,17 @@ func TestACPRealChildFinishesWhileIndependentSnapshotWriterIsHeld(t *testing.T) 
 					}
 				}
 				if err != nil {
-					t.Error(err)
-					status = http.StatusServiceUnavailable
+					current, readErr := runtime.CaptureRunReader().GetRun(ctx, grant.Run.ID)
+					if strings.HasSuffix(r.URL.Path, "/heartbeat") && errors.Is(err, capturerun.ErrCapabilityRejected) && readErr == nil && current.State == capturerun.StateFinished {
+						// A real heartbeat already in flight when Finish commits must
+						// be denied, as the actual control endpoint does. It grants
+						// no renewal after the independently verified terminal state.
+						t.Log("late heartbeat correctly rejected after required Finish")
+						status = http.StatusForbidden
+					} else {
+						t.Errorf("ACP control rejection action=%s state=%s read=%v cause=%v", filepath.Base(r.URL.Path), current.State, readErr, err)
+						status = http.StatusServiceUnavailable
+					}
 				}
 				w.WriteHeader(status)
 				if value != nil {
