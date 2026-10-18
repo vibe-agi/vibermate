@@ -24,7 +24,12 @@ import 'native_tool_approval_test.dart'
         nativeApprovalID;
 
 void main() {
-  for (final action in ['form_reply', 'url_reply', 'verification_reply']) {
+  for (final action in [
+    'form_reply',
+    'url_reply',
+    'verification_reply',
+    'ping_reply',
+  ]) {
     testWidgets(
       'native callback HTTP approval row accepts empty catalog name $action',
       (tester) async {
@@ -46,6 +51,18 @@ void main() {
           () => api.nativeApproval(nativeCapture, nativeApprovalID),
         ))!;
         final copy = AppCopy.forLanguage(AppLanguage.english);
+        if (action == 'ping_reply') {
+          expect(
+            copy('native.action.ping_reply'),
+            'Reply to the server’s connection check',
+          );
+          expect(
+            AppCopy.forLanguage(AppLanguage.simplifiedChinese)(
+              'native.action.ping_reply',
+            ),
+            '回复服务器的连接检查',
+          );
+        }
         await tester.pumpWidget(
           MaterialApp(
             theme: ViberTheme.light().copyWith(

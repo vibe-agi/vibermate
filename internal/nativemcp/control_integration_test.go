@@ -37,7 +37,7 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 	for _, scenario := range []struct {
 		name string
 		run  func(*testing.T, func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval))
-	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"callback_delayed_start", nil}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
+	}{{"ping", nativemcp.ExerciseNativePingControl}, {"callback", nativemcp.ExerciseNativePendingControl}, {"callback_delayed_start", nil}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var complete func()
 			run := scenario.run
@@ -132,7 +132,11 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 					t.Fatalf("missing bound preview %+v", dto)
 				}
 				intent := dto.Preview.Intents[0]
-				if strings.HasPrefix(scenario.name, "callback") {
+				if scenario.name == "ping" {
+					if intent.Action != "ping_reply" || intent.ToolName != "" || len(intent.Arguments) != 0 || intent.Truncated || intent.Target == "" {
+						t.Fatalf("safe registered-ping preview %+v", dto)
+					}
+				} else if strings.HasPrefix(scenario.name, "callback") {
 					if intent.Action != "form_reply" || len(intent.Arguments) != 0 {
 						t.Fatalf("safe registered-parent preview %+v", dto)
 					}

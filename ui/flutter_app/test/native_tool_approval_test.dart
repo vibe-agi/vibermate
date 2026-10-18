@@ -474,6 +474,32 @@ void main() {
       }
     },
   );
+  test('registered ping summary rejects payload and presentation changes', () {
+    for (final extra in [
+      {'arguments': <String, dynamic>{}},
+      {'toolName': 'invented'},
+      {'truncated': true},
+      {'action': 'unknown_reply'},
+    ]) {
+      final fixture = nativeApprovalFixture();
+      fixture['preview'] = {
+        'intents': [
+          {
+            'toolName': '',
+            'action': 'ping_reply',
+            'target': 'https://native.example',
+            'truncated': false,
+            ...extra,
+          },
+        ],
+        'truncated': false,
+      };
+      expect(
+        () => NativeApproval.fromJson(fixture, nativeCapture),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+  });
   test(
     'native refresh removes resolved IDs even when pending page is empty',
     () async {

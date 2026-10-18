@@ -332,6 +332,14 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 // Test-only bridge lets the external control integration use the same native
 // fixture without an import cycle or any test hook in production code.
 func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
+	exerciseNativePendingControl(t, false, check)
+}
+
+func ExerciseNativePingControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
+	exerciseNativePendingControl(t, true, check)
+}
+
+func exerciseNativePendingControl(t *testing.T, ping bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	t.Helper()
 	f := newNativeControlFixture(t)
 	f.handshake(t)
@@ -341,10 +349,15 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 	}
 	defer manuals.Shutdown(context.Background())
 	replied := make(chan struct{}, 1)
-	const callback = `{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"callback-private-sentinel","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}}`
-	const reply = `{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"form-proof-private-sentinel"}}}`
+	callback := `{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"callback-private-sentinel","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}}`
+	reply := `{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"form-proof-private-sentinel"}}}`
+	if ping {
+		callback = `{"jsonrpc":"2.0","id":17,"method":"ping"}`
+		reply = `{"jsonrpc":"2.0","id":17,"result":{}}`
+	}
+	replyCount := 0
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
-		if strings.Contains(string(body), `"method":"tools/call"`) {
+		if r.Method == "GET" || strings.Contains(string(body), `"method":"tools/call"`) {
 			reader, writer := io.Pipe()
 			go func() {
 				defer writer.Close()
@@ -354,24 +367,41 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 				case <-r.Context().Done():
 					return
 				}
-				io.WriteString(writer, "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[]}}\n\n")
+				if !ping {
+					io.WriteString(writer, "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[]}}\n\n")
+				}
 			}()
 			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: reader}, nil
 		}
+		if string(body) != reply {
+			t.Error("registered reply wire changed")
+		}
+		replyCount++
 		replied <- struct{}{}
 		return &http.Response{StatusCode: 202, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	}
-	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	var parent CapturedRequest
+	if ping {
+		parent = f.captured(t, "GET", "", "synthetic-session")
+	} else {
+		parent = f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	}
 	parents := startNativeControl(t, f, parent)
-	f.approve(t, parent.id)
+	if !ping {
+		f.approve(t, parent.id)
+	}
 	deadline := time.Now().Add(time.Second)
 	found := false
+	var registeredSession *session
 	for time.Now().Before(deadline) {
 		e := f.executor.(*executor)
 		e.mu.Lock()
 		for _, s := range e.scopes[f.capture.Key()].sessions {
 			s.mu.Lock()
 			found = s.parents["17"] != nil
+			if found {
+				registeredSession = s
+			}
 			s.mu.Unlock()
 			if found {
 				break
@@ -389,12 +419,47 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 	child := f.captured(t, "POST", reply, "synthetic-session")
 	children := startNativeControl(t, f, child)
 	approval := waitNativeQuestion(t, f, child.id)
+	if ping {
+		e := f.executor.(*executor)
+		r, err := parseRequest([]byte(reply), e.limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, _, witness, err := e.bindRequest(child, r, registeredSession, registeredSession.parents["17"].binding.Plan())
+		if err != nil || witness == nil || witness.Verify(child.id, binding) != nil {
+			t.Fatal("real ping child witness unavailable")
+		}
+		for _, missing := range []string{"observer", "classification", "live"} {
+			registeredSession.mu.Lock()
+			p := registeredSession.parents["17"]
+			saved := *p
+			switch missing {
+			case "observer":
+				p.observer = nil
+			case "classification":
+				p.kind = ""
+			case "live":
+				p.consumed = true
+			}
+			registeredSession.mu.Unlock()
+			preview, err := e.previewIntents(binding, nil, r, registeredSession)
+			registeredSession.mu.Lock()
+			*p = saved
+			registeredSession.mu.Unlock()
+			if err != nil || len(preview) != 0 {
+				t.Fatalf("counterfeit ping preview accepted missing %s", missing)
+			}
+		}
+	}
 	check(f.executor, f.store, manuals, f.capture, approval)
 	if result := children(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("child %+v", result)
 	}
 	if result := parents(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("parent %+v", result)
+	}
+	if replyCount != 1 {
+		t.Fatalf("registered reply sends %d", replyCount)
 	}
 	before := f.transport.sends()
 	if before != 5 {

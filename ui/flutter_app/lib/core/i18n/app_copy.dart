@@ -88,6 +88,7 @@ final class AppCopy {
     'native.truncated':
         'Parameters are shortened. Approval applies to the complete frozen request.',
     'native.action.tool_call': 'Call tool',
+    'native.action.ping_reply': 'Reply to the server’s connection check',
     'native.action.form_reply': 'Send the client’s form response',
     'native.action.url_reply': 'Send the client’s consent response',
     'native.action.verification_reply':
@@ -3182,6 +3183,7 @@ final class AppCopy {
     'native.unavailable': '详情已不可用，请重新发起审批。',
     'native.truncated': '参数已缩短显示。审批适用于完整的已固定请求。',
     'native.action.tool_call': '调用工具',
+    'native.action.ping_reply': '回复服务器的连接检查',
     'native.action.form_reply': '发送客户端的表单回复',
     'native.action.url_reply': '发送客户端的授权回复',
     'native.action.verification_reply': '发送客户端的验证回复',

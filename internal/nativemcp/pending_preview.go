@@ -67,13 +67,22 @@ func (e *executor) previewIntents(b nativetool.Binding, intents []protocolcore.T
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		parent := s.parents[string(r.id)]
-		if parent == nil || parent.consumed || parent.sensitive == nil {
+		if parent == nil || parent.consumed {
 			return nil, nil
 		}
 		// Only the live registered parent and its already-verified child binding
 		// supply this summary. No callback parameter or reply field is projected.
 		parentID, ok := b.ParentOperationID()
-		if !ok || parentID != parent.operation || b.Plan().EnvironmentDigest() != parent.binding.Plan().EnvironmentDigest() {
+		if !ok || parentID != parent.operation || b.Plan().EnvironmentDigest() != parent.binding.Plan().EnvironmentDigest() || b.Plan().Route().TargetOrigin != parent.binding.Plan().Route().TargetOrigin {
+			return nil, nil
+		}
+		// The ordinary summary requires the positively classified closed ping
+		// observer. Its exact request/reply witness and issued callback binding
+		// have already been verified before this preview is retained.
+		if parent.observer != nil && parent.kind == string(nativetool.CallbackPing) {
+			return []NativeIntentPreview{{Action: "ping_reply", Target: parent.binding.Plan().Route().TargetOrigin.String()}}, nil
+		}
+		if parent.sensitive == nil {
 			return nil, nil
 		}
 		action := ""

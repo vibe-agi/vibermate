@@ -601,6 +601,7 @@ final class NativeIntentPreview {
           : null;
     } else {
       if (!const {
+            'ping_reply',
             'form_reply',
             'url_reply',
             'verification_reply',
