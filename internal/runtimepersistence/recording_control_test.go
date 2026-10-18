@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
 
@@ -183,5 +186,106 @@ func TestRecordingMissingCleanupStateCannotAcknowledgeIntent(t *testing.T) {
 	retained, err := control.UsagePolicyRepository().UsagePolicy(t.Context())
 	if err != nil || retained.Revision != policy.Revision {
 		t.Fatal("failed intent partially committed policy")
+	}
+}
+
+func TestRecordingRequiredClearCommitsWhileHistoryHeld(t *testing.T) {
+	control := inspectionControlFixture(t)
+	_, current := inspectionSourcesFixture(t)
+	seedOwnedApprovalCaptures(t, control)
+	if err := control.ToolApprovalRepository().Create(t.Context(), ownedApproval(t, "owned-clear", "doomed")); err != nil {
+		t.Fatal(err)
+	}
+	_ = pendingNetworkAsk(t, control.store)
+	before, err := control.UsagePolicyRepository().UsagePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := current.store.database.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO capture_observations VALUES('manual_capture','doomed',1,7,1,1000,2000)`); err != nil {
+		t.Fatal(err)
+	}
+	clearer, ok := any(control).(interface {
+		ClearRecordingArchive(context.Context) (resourcedeletion.Released, uint64, error)
+	})
+	if !ok {
+		t.Fatal("required split archive clear unavailable")
+	}
+	deadline, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	released, epoch, err := clearer.ClearRecordingArchive(deadline)
+	if err != nil || epoch != 2 || released.Captures != 2 || released.Approvals != 2 {
+		t.Fatalf("required clear: %+v epoch=%d %v", released, epoch, err)
+	}
+	state, err := control.RecordingCleanupState(deadline)
+	if err != nil || state.RequestedRevision != 1 || state.CompletedRevision != 0 {
+		t.Fatalf("clear omitted durable pending work: %+v %v", state, err)
+	}
+	after, err := control.UsagePolicyRepository().UsagePolicy(deadline)
+	if err != nil || after.Enabled != before.Enabled || after.RetentionDays != before.RetentionDays || after.Revision != before.Revision+1 {
+		t.Fatalf("clear changed config or missed original interval: %+v %v", after, err)
+	}
+	nativeExec(t, control.store.database, `INSERT INTO recording_capture_fences VALUES('manual_capture','new-after-clear',1,0)`)
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = current.PublishInspectionMirror(t.Context(), control); err != nil {
+		t.Fatal(err)
+	}
+	var denied int
+	if err = current.store.database.QueryRow(`SELECT deleted FROM inspection_mirror_fences WHERE mirror_generation=(SELECT generation FROM inspection_mirror_active) AND capture_id='doomed'`).Scan(&denied); err != nil || denied != 1 {
+		t.Fatal("clear forgot captured tombstone", err)
+	}
+}
+
+func TestRecordingRequiredClearRollsBackWithoutReliableIntent(t *testing.T) {
+	control := inspectionControlFixture(t)
+	seedOwnedApprovalCaptures(t, control)
+	if err := control.ToolApprovalRepository().Create(t.Context(), ownedApproval(t, "not-cleared", "doomed")); err != nil {
+		t.Fatal(err)
+	}
+	nativeExec(t, control.store.database, `DELETE FROM recording_cleanup_state`)
+	released, epoch, err := control.ClearRecordingArchive(t.Context())
+	if err == nil || epoch != 0 || released != (resourcedeletion.Released{}) {
+		t.Fatalf("missing reliable intent reported clear: %+v %d %v", released, epoch, err)
+	}
+	snapshot, err := control.ReadInspectionSnapshot(t.Context(), nil)
+	if err != nil || snapshot.Stamp.ArchiveEpoch != 1 {
+		t.Fatalf("failed clear advanced epoch: %+v %v", snapshot, err)
+	}
+	if _, err = control.ToolApprovalRepository().Get(t.Context(), "not-cleared"); err != nil {
+		t.Fatal("failed clear removed approval", err)
+	}
+	var captures, deleted int
+	if err = control.store.database.QueryRow(`SELECT (SELECT count(*) FROM manual_captures),(SELECT count(*) FROM recording_capture_fences WHERE deleted=1)`).Scan(&captures, &deleted); err != nil || captures != 2 || deleted != 0 {
+		t.Fatalf("failed clear altered ownership: %d %d %v", captures, deleted, err)
+	}
+}
+
+func TestRecordingRequiredClearRetainsNativeReplayAndConfiguration(t *testing.T) {
+	control := inspectionControlFixture(t)
+	_, id, revision := nativeFixtureOnStore(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, true, nil, control.store, egressprofile.Direct())
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	nativeAllow(t, control.store.NativeToolRepository(), id, now)
+	if _, err := control.NativeToolRepository().Start(t.Context(), id, "clear-native-once", revision, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.NativeToolRepository().Finish(t.Context(), id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	var beforeOnce, beforeConfig int
+	if err := control.store.database.QueryRow(`SELECT (SELECT count(*) FROM native_tool_once),(SELECT count(*) FROM environment_revisions)`).Scan(&beforeOnce, &beforeConfig); err != nil || beforeOnce == 0 || beforeConfig == 0 {
+		t.Fatal("fixture lacks required native/config facts", err)
+	}
+	if _, _, err := control.ClearRecordingArchive(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var afterOnce, afterConfig, closed int
+	if err := control.store.database.QueryRow(`SELECT (SELECT count(*) FROM native_tool_once),(SELECT count(*) FROM environment_revisions),(SELECT count(*) FROM native_tool_scopes WHERE state='closed' AND replay_barrier=1)`).Scan(&afterOnce, &afterConfig, &closed); err != nil || afterOnce != beforeOnce || afterConfig != beforeConfig || closed == 0 {
+		t.Fatalf("clear changed reliable safety/config: once=%d/%d config=%d/%d closed=%d %v", afterOnce, beforeOnce, afterConfig, beforeConfig, closed, err)
 	}
 }

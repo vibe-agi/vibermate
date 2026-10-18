@@ -571,6 +571,9 @@ func startWithBuilders(
 		}
 		return fail("tool approval recovery", buildErr)
 	}
+	if owner, ok := approvals.(toolapproval.ArchiveClearAuthority); ok {
+		optional.clearAuthority = owner
+	}
 	if owner, ok := approvals.(toolapproval.CaptureCanceler); ok {
 		nativeRevoker.installApprovals(owner)
 	}
@@ -1044,7 +1047,7 @@ func startWithBuilders(
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
 		recordingBudget:    recordingBudget,
-		evidenceArchive:    optional,
+		evidenceArchive:    recordingArchive{delegate: optional, recorder: recorder, raw: rawEvidence, revoker: nativeRevoker},
 		archiveBarrier:     archiveBarrier,
 		provider:           provider,
 		original:           original,
@@ -1083,9 +1086,10 @@ func (r *Runtime) Status() RuntimeStatus {
 		}
 	}
 	if r.recordingStorage != nil {
+		status.Recording.CleanupPending = status.Recording.CleanupPending || r.recordingStorage.cleanupPending.Load()
 		select {
 		case <-r.recordingStorage.done:
-			status.Recording.CleanupPending = r.recordingStorage.closeErr != nil
+			status.Recording.CleanupPending = r.recordingStorage.closeErr != nil || r.recordingStorage.cleanupPending.Load()
 		default:
 		}
 	}
@@ -1232,7 +1236,7 @@ func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
 // the whole-archive clear. A Host must expose the destructive action with this
 // exact runtime-owned instance so holder discovery cannot race a new Capture.
 func (r *Runtime) EvidenceArchiveBarrier() evidencearchive.ClearBarrier {
-	return unavailableArchiveBarrier{}
+	return r.archiveBarrier
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.

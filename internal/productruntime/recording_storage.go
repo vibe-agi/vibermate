@@ -19,21 +19,23 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
-	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
-	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 // One fixed lifecycle owner retains every optional handle until real I/O has
 // returned. Worker queues and synchronous disclosure/repair share this owner.
 type recordingStorage struct {
+	clearAuthority      toolapproval.ArchiveClearAuthority
+	cleanupPending      atomic.Bool
+	cleanupWake         chan struct{}
 	provisioning        string
 	dataGuard           *instanceguard.Guard
 	publish             func(context.Context, string, string, *instanceguard.Guard) error
@@ -92,7 +94,7 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(owner)
-	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
+	s := &recordingStorage{provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), cleanupWake: make(chan struct{}, 1), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
 		options: runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: recordingSourceID(layout), ContentLimits: limits, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout}}
 	if overrides.publishObservations != nil {
 		s.publish = overrides.publishObservations
@@ -102,6 +104,10 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 	}
 	if overrides.recoverEgress != nil {
 		s.recover = overrides.recoverEgress
+	}
+	state, stateErr := control.RecordingCleanupState(owner)
+	if stateErr != nil || state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0 {
+		s.markCleanupPending()
 	}
 	// These immutable facades never hold a control transaction or connection.
 	if q.connections == nil {
@@ -181,6 +187,15 @@ func (s *recordingStorage) run() {
 						}
 					} else {
 						s.tracker.recordingState(RecordingAvailable)
+					}
+				}
+			case <-s.cleanupWake:
+				if !s.unsafeMaintenance.Load() {
+					if err := s.refreshMirror(sinks.store); err != nil {
+						s.tracker.recordingState(RecordingDegraded)
+						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
+							s.invalidateRecordingSource()
+						}
 					}
 				}
 			case request := <-s.maintenanceRequests:
@@ -424,15 +439,6 @@ func (s *recordingStorage) PutConversationIdentity(context.Context, string, agen
 	return recording.ErrObservationDiscarded
 }
 
-// Physical cleanup/tombstone publication is Task5. Refusal is atomic and must
-// never claim empty, complete, or erased evidence during this checkpoint.
-func (s *recordingStorage) DeleteCapture(context.Context, string, string) (resourcedeletion.Released, error) {
-	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
-}
-func (s *recordingStorage) ClearEvidence(context.Context) (resourcedeletion.Released, error) {
-	return resourcedeletion.Released{}, recording.ErrInspectionUnavailable
-}
-
 func (s *recordingStorage) RepairConversation(ctx context.Context, repair activity.ConversationRepair) error {
 	if !repair.Root.Current || repair.Root.SourceID != s.options.ArchiveID {
 		return recording.ErrObservationDiscarded
@@ -480,12 +486,6 @@ func readRecordingProvision(path string) ([]byte, error) {
 		return nil, recording.ErrInspectionUnavailable
 	}
 	return b, nil
-}
-
-type unavailableArchiveBarrier struct{}
-
-func (unavailableArchiveBarrier) BeginClear(context.Context) (evidencearchive.Release, error) {
-	return nil, recording.ErrInspectionUnavailable
 }
 
 // This runs only on the existing fixed lifecycle owner. Polling durable control

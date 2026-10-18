@@ -83,3 +83,17 @@ func (repository *toolApprovalRepository) CancelOwnedCapture(ctx context.Context
 	}
 	return records, nil
 }
+
+// Missing historical ownership remains unknown, never inferred from absence of
+// optional history or silently relabeled global. This indexed scalar is only
+// used by explicit administration, not an ordinary recording callback.
+func (s *ControlStore) UnknownCaptureApprovalOwnership(ctx context.Context) (bool, error) {
+	operation, finish, err := s.store.operations.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	var unknown bool
+	err = s.store.reads.QueryRowContext(operation, `SELECT EXISTS(SELECT 1 FROM tool_approvals WHERE owner_kind='unknown' AND kind='tool_intent')`).Scan(&unknown)
+	return unknown, err
+}

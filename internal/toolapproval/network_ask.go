@@ -150,6 +150,11 @@ func (authority *Authority) awaitDecision(
 	}
 	authority.mu.Unlock()
 
+	publication, err := authority.acquirePublication(operation)
+	if err != nil {
+		return false, "approval_unavailable", err
+	}
+	defer publication()
 	pending, entry, joined := authority.waiters.join(aggregateKey, record.ID)
 	waitingOn := entry.recordID
 	authority.rememberEphemeralSubjectLabels(
@@ -196,6 +201,7 @@ func (authority *Authority) awaitDecision(
 	authority.notifyLocked()
 	authority.mu.Unlock()
 
+	publication()
 	var resolved Record
 	select {
 	case resolved = <-pending.result:

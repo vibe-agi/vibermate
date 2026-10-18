@@ -386,9 +386,9 @@ func (b recordingArchiveBarrier) BeginClear(ctx context.Context) (evidencearchiv
 
 type observationRecorderBuilder func(context.Context, *recording.Budget, connectionevent.ScopedStore, egressaudit.ScopedAttemptStore) *observationRecorder
 
-// Administrative deletion follows revocation/holder checks. Rejoining the
-// terminal producers here covers callbacks that run after Capture Finish's
-// earlier Raw barrier. No live forwarding path calls this method.
+// Administrative deletion commits required intent after real authority
+// revocation/holder checks. The optional owner later joins all writers before
+// physical cleanup; required deletion never waits for optional recording.
 type recordingArchive struct {
 	raw      rawEvidenceRuntime
 	delegate resourcedeletion.Archive
@@ -406,24 +406,7 @@ func (a recordingArchive) DeleteCapture(ctx context.Context, kind, id string) (r
 			return resourcedeletion.Released{}, err
 		}
 	}
-	var terminal rawevidence.TerminalScope
-	if a.raw != nil {
-		terminal, err = a.recorder.prepareScope(ctx, a.raw, rawevidence.ScopeKind(kind), id, nil)
-		if err != nil {
-			return resourcedeletion.Released{}, err
-		}
-		defer terminal.Abort()
-	}
-	if a.raw == nil {
-		if err := a.recorder.Flush(ctx); err != nil {
-			return resourcedeletion.Released{}, err
-		}
-	}
-	released, err := a.delegate.DeleteCapture(ctx, kind, id)
-	if err == nil && terminal != nil {
-		terminal.Commit()
-	}
-	return released, err
+	return a.delegate.DeleteCapture(ctx, kind, id)
 }
 func (a recordingArchive) ClearEvidence(ctx context.Context) (resourcedeletion.Released, error) {
 	return a.delegate.ClearEvidence(ctx)

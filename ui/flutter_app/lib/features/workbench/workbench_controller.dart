@@ -2096,9 +2096,13 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed) {
         throw const ControlContractException('storage cleanup is unavailable');
       }
-      storageCleanupNotice = 'settings.storage.cleanup_complete';
       if (outcome.deleted) {
-        _discardNativeReader();
+        storageCleanupNotice = outcome.released?.cleanupPending == true
+            ? 'settings.storage.cleanup_pending'
+            : outcome.released?.countsIncomplete == true
+            ? 'settings.storage.cleanup_partial'
+            : 'settings.storage.cleanup_complete';
+        _invalidateEvidenceCaches();
       }
       await refreshStorageLocation();
       return outcome;

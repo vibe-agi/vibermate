@@ -26,7 +26,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
-	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
@@ -533,20 +532,22 @@ func TestRuntimeActualHTTPUsesBoundedRawFacade(t *testing.T) {
 	}
 }
 
-func TestUnavailableArchiveAdministrationDoesNotAdvanceRecordingEpoch(t *testing.T) {
+func TestArchiveBarrierAcquisitionDoesNotAdvanceRecordingEpoch(t *testing.T) {
 	r := startTestRuntime(t, testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
 	defer shutdownRuntime(t, r)
 	waitRecording(t, r)
 	before := r.recorder.epoch.Value()
-	release, err := r.EvidenceArchiveBarrier().BeginClear(context.Background())
-	if release != nil {
-		release()
+	release, err := r.EvidenceArchiveBarrier().BeginClear(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, recording.ErrInspectionUnavailable) || r.recorder.epoch.Value() != before {
-		t.Fatalf("unavailable administration admitted or changed epoch: %d -> %d %v", before, r.recorder.epoch.Value(), err)
+	release()
+	if r.recorder.epoch.Value() != before {
+		t.Fatal("mere barrier release advanced recording epoch")
 	}
-	if released, err := r.EvidenceArchive().ClearEvidence(context.Background()); !errors.Is(err, recording.ErrInspectionUnavailable) || released != (resourcedeletion.Released{}) {
-		t.Fatal("unavailable clear claimed success", err)
+	state, err := r.storage.RecordingCleanupState(t.Context())
+	if err != nil || state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0 {
+		t.Fatalf("mere barrier acquisition requested cleanup: %+v %v", state, err)
 	}
 }
 

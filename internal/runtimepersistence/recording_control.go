@@ -189,3 +189,58 @@ func (s *ControlStore) CompleteRecordingCleanup(ctx context.Context, target, gen
 		return nil
 	})
 }
+
+// ClearRecordingArchive is the required phase only. The caller owns the actual
+// Capture-creation/holder and approval-publication boundaries. One FULL commit
+// revokes old authority, advances original coordinates, and records the whole-
+// inventory obligation; no optional handle or history operation is involved.
+func (s *ControlStore) ClearRecordingArchive(ctx context.Context) (released resourcedeletion.Released, epoch uint64, result error) {
+	if s == nil || ctx == nil {
+		return released, 0, ErrInvalidCaptureTarget
+	}
+	operation, finish, err := s.store.operations.begin(ctx)
+	if err != nil {
+		return released, 0, err
+	}
+	defer finish()
+	now := time.Now().UTC()
+	err = fullSynchronousTransaction(operation, s.store.database, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(operation, `UPDATE runtime_storage_state SET archive_epoch=archive_epoch+1,visibility_revision=visibility_revision+1 WHERE singleton=1 RETURNING archive_epoch`).Scan(&epoch); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(operation, `UPDATE recording_capture_fences SET deleted=1`); err != nil {
+			return err
+		}
+		if err := revokeNativeScopesWhere(operation, tx, "state<>'closed'", now); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(operation, `UPDATE native_tool_scopes SET state='closed',replay_barrier=1`); err != nil {
+			return err
+		}
+		// Keep the collection configuration; an enabled collector begins a new
+		// original interval. Its old caps remain until all old copies are purged.
+		var policyRevision uint64
+		if err := tx.QueryRowContext(operation, `UPDATE runtime_usage_policy SET revision=revision+1,collecting_since_unix_ms=CASE WHEN enabled=1 THEN max(coalesce(collecting_since_unix_ms,0),?) ELSE collecting_since_unix_ms END WHERE singleton=1 RETURNING revision`, now.UnixMilli()+1).Scan(&policyRevision); err != nil {
+			return err
+		}
+		for _, table := range []string{"tool_approvals", "native_tool_approvals", "native_tool_operations", "capture_environment_assignments", "capture_runs", "manual_captures"} {
+			count, err := deleteCounted(operation, tx, `DELETE FROM `+table)
+			if err != nil {
+				return err
+			}
+			switch table {
+			case "tool_approvals", "native_tool_approvals":
+				released.Approvals += count
+			case "capture_environment_assignments":
+				released.Assignments = count
+			case "capture_runs", "manual_captures":
+				released.Captures += count
+			}
+		}
+		return requestRecordingCleanup(operation, tx, now)
+	})
+	if err != nil {
+		return resourcedeletion.Released{}, 0, err
+	}
+	return released, epoch, nil
+}

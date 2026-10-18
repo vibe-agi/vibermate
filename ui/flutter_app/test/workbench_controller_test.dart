@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/account_facts_models.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/api/runtime_storage.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
@@ -17,6 +18,21 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test('pending cleanup never reports physical completion', () async {
+    final fixture = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: _PendingCleanupApi(fixture),
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    final outcome = await controller.cleanupExpiredEvidence();
+    expect(outcome.deleted, isTrue);
+    expect(controller.storageCleanupNotice, 'settings.storage.cleanup_pending');
+    expect(controller.storageCleanupError, isNull);
+  });
   for (final clear in [false, true]) {
     test(
       'explicit deletion invalidates late nested inspection $clear',
@@ -2817,4 +2833,31 @@ final class _DeletionInspectionApi extends _UsageTrackingApi {
     String callId, {
     String? cursor,
   }) => tools.future;
+}
+
+final class _PendingCleanupApi extends _UsageTrackingApi {
+  _PendingCleanupApi(super.delegate);
+  @override
+  Future<RuntimeStorageLocation> storageLocation() =>
+      delegate.storageLocation();
+  @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async =>
+      const DeletionOutcome(
+        deleted: true,
+        holderCount: 0,
+        holders: [],
+        released: DeletionReleased(
+          exchanges: 0,
+          envelopes: 0,
+          activities: 0,
+          connections: 0,
+          attempts: 0,
+          approvals: 0,
+          assignments: 0,
+          captures: 0,
+          cleanupPending: true,
+          countsIncomplete: true,
+          privacyMetadataRetained: true,
+        ),
+      );
 }

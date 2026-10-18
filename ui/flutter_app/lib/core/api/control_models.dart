@@ -11896,9 +11896,13 @@ final class DeletionHolder {
   final String detail;
 }
 
-/// What a completed delete released.
+/// Verified removals and the remaining cleanup/ownership limits.
 final class DeletionReleased {
   const DeletionReleased({
+    this.cleanupPending = false,
+    this.countsIncomplete = false,
+    this.approvalOwnershipUnknown = false,
+    this.privacyMetadataRetained = false,
     required this.exchanges,
     required this.envelopes,
     required this.activities,
@@ -11924,8 +11928,26 @@ final class DeletionReleased {
         'assignments',
         'captures',
       },
+      optional: const {
+        'cleanupPending',
+        'countsIncomplete',
+        'approvalOwnershipUnknown',
+        'privacyMetadataRetained',
+      },
     );
-    return DeletionReleased(
+    final result = DeletionReleased(
+      cleanupPending: value.containsKey('cleanupPending')
+          ? requireBoolean(value, 'cleanupPending', path)
+          : false,
+      countsIncomplete: value.containsKey('countsIncomplete')
+          ? requireBoolean(value, 'countsIncomplete', path)
+          : false,
+      approvalOwnershipUnknown: value.containsKey('approvalOwnershipUnknown')
+          ? requireBoolean(value, 'approvalOwnershipUnknown', path)
+          : false,
+      privacyMetadataRetained: value.containsKey('privacyMetadataRetained')
+          ? requireBoolean(value, 'privacyMetadataRetained', path)
+          : false,
       exchanges: requireInteger(value, 'exchanges', path),
       envelopes: requireInteger(value, 'envelopes', path),
       activities: requireInteger(value, 'activities', path),
@@ -11935,8 +11957,19 @@ final class DeletionReleased {
       assignments: requireInteger(value, 'assignments', path),
       captures: requireInteger(value, 'captures', path),
     );
+    if ((result.cleanupPending || result.approvalOwnershipUnknown) &&
+        !result.countsIncomplete) {
+      throw ControlContractException(
+        '$path cannot report complete counts while cleanup or ownership is unresolved',
+      );
+    }
+    return result;
   }
 
+  final bool cleanupPending;
+  final bool countsIncomplete;
+  final bool approvalOwnershipUnknown;
+  final bool privacyMetadataRetained;
   final int exchanges;
   final int envelopes;
   final int activities;

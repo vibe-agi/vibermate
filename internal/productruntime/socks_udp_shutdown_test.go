@@ -122,6 +122,11 @@ func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder
 	if recorder != nil {
 		waitRecording(t, r)
 	}
+	// Task4 installs the lazy optional facade after constructing the queue.
+	// This held-writer fixture delegates to that actual scoped sink.
+	if block.scoped == nil {
+		block.scoped = r.recordingStorage
+	}
 	t.Cleanup(func() {
 		block.unblock()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -137,6 +142,7 @@ func newUDPShutdownFixture(t *testing.T, recorders ...observationRecorderBuilder
 	if e != nil {
 		t.Fatal(e)
 	}
+	waitRecordingMirror(t, r)
 	capture, _ := captureidentity.New(captureidentity.KindManualCapture, grant.Capture.ID)
 	listener, e := net.Listen("tcp4", "127.0.0.1:0")
 	if e != nil {

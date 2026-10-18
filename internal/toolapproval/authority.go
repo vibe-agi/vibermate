@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/semaphore"
 	"hash"
 	"io"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -116,6 +118,7 @@ type waiter struct {
 }
 
 type Authority struct {
+	publication      *semaphore.Weighted
 	nativeRepository nativetool.LifecycleAuthority
 	repository       Repository
 	clock            Clock
@@ -149,6 +152,7 @@ func New(ctx context.Context, options Options) (*Authority, error) {
 		return nil, fmt.Errorf("recover tool approvals: %w", err)
 	}
 	return &Authority{
+		publication:            semaphore.NewWeighted(math.MaxInt64),
 		nativeRepository:       options.NativeRepository,
 		repository:             options.Repository,
 		clock:                  options.Clock,
@@ -243,6 +247,11 @@ func (authority *Authority) Decide(
 		return exchange.ToolDecision{}, ErrRuntimeStopping
 	}
 	authority.mu.Unlock()
+	publication, err := authority.acquirePublication(operation)
+	if err != nil {
+		return exchange.ToolDecision{}, err
+	}
+	defer publication()
 	// An identical pending question joins the existing entry, so a repeat of
 	// the same group is one prompt answered once rather than a second prompt.
 	pending, entry, joined := authority.waiters.join(record.AggregateKey, record.ID)
@@ -287,6 +296,7 @@ func (authority *Authority) Decide(
 	authority.mu.Lock()
 	authority.notifyLocked()
 	authority.mu.Unlock()
+	publication()
 	var resolved Record
 	select {
 	case resolved = <-pending.result:
@@ -370,6 +380,11 @@ func (authority *Authority) DecideApproval(
 		return View{}, err
 	}
 	defer finish()
+	publication, err := authority.acquirePublication(operation)
+	if err != nil {
+		return View{}, err
+	}
+	defer publication()
 	record, err := authority.repository.Decide(
 		operation,
 		command,

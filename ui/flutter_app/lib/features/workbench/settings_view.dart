@@ -3811,7 +3811,7 @@ final class _StorageDisclosure extends StatelessWidget {
 
   String _archiveConsequence(DeletionReleased preview) {
     return '${copy('deletion.archive.consequence')}\n\n'
-        '${copy.format('settings.storage.archive_preview', {'captures': preview.captures, 'exchanges': preview.exchanges, 'envelopes': preview.envelopes})}';
+        '${copy.format(preview.countsIncomplete ? 'settings.storage.archive_preview_partial' : 'settings.storage.archive_preview', {'captures': preview.captures, 'exchanges': preview.exchanges, 'envelopes': preview.envelopes})}';
   }
 
   Future<void> _chooseStorage(BuildContext context) async {

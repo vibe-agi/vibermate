@@ -12,7 +12,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
-	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -164,6 +163,7 @@ func TestRealUDPWhileHistoryWriterBlocked(t *testing.T) {
 func TestLateRuntimeTerminalCannotReappearAfterArchiveClear(t *testing.T) {
 	r := startTestRuntime(t, testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
 	defer shutdownRuntime(t, r)
+	waitRecording(t, r)
 	stamp := r.recorder.ScopeStamp(captureidentity.Reference{})
 	a, err := egressaudit.New(egressaudit.NewInput{ObservationStamp: stamp, ID: "runtime-clear", Purpose: egressaudit.PurposeUpdate, PayloadClass: egressaudit.PayloadRuntime, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentRuntimeAction, ID: "runtime-action"}, Caller: egressaudit.CallerCore, TargetOrigin: "https://example.test", Decision: egressaudit.BuiltInDirectDecision(egressaudit.AuthorityRuntime), StartedAt: time.Now().UTC()})
 	if err != nil {
@@ -191,6 +191,7 @@ func TestLateRuntimeTerminalCannotReappearAfterArchiveClear(t *testing.T) {
 	if r.egressCompletion.ObserveEgress(terminal.ObservationStamp(), terminal) != recording.DroppedStale {
 		t.Fatal("late runtime terminal accepted after clear")
 	}
+	waitRecordingMirror(t, r)
 	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{})
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("history resurrected: %+v %v", page, err)
@@ -215,7 +216,7 @@ func TestRecorderOwnerCancellationClosesAdmission(t *testing.T) {
 	}
 }
 
-func TestCaptureDeletionJoinsLateUDPObservations(t *testing.T) {
+func TestCaptureDeletionFencesLateUDPWithoutWaitingForHistory(t *testing.T) {
 	f := newUDPShutdownFixture(t)
 	id, _ := manualcapture.ParseID(f.capture.ID)
 	if _, err := f.runtime.ManualCaptures().Revoke(t.Context(), manualcapture.RevokeCommand{Owner: manualcapture.NewLocalOwnerScope(), ID: id, ExpectedCredentialRevision: 1}); err != nil {
@@ -223,20 +224,26 @@ func TestCaptureDeletionJoinsLateUDPObservations(t *testing.T) {
 	}
 	f.firstTerminal(t)
 	f.network.requireClosed(t)
-	// The control operation is terminal, but its final observation is still in
-	// actual writer I/O. Physical erase must not acknowledge this as drained.
-	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	// Required deletion is acknowledged while the actual accepted optional
+	// terminal remains owned. It reports pending physical work explicitly.
+	short, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if _, err := f.runtime.EvidenceArchive().DeleteCapture(short, string(f.capture.Kind), f.capture.ID); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("deletion did not wait for late terminal: %v", err)
+	released, err := f.runtime.EvidenceArchive().DeleteCapture(short, string(f.capture.Kind), f.capture.ID)
+	if err != nil || !released.CleanupPending || !released.CountsIncomplete {
+		t.Fatalf("required deletion waited for history or claimed erase: %+v %v", released, err)
+	}
+	if f.runtime.recordingBudget.Snapshot().ReservedRecords == 0 {
+		t.Fatal("deletion released still-owned terminal")
+	}
+	state, err := f.runtime.storage.RecordingCleanupState(t.Context())
+	if err != nil || state.RequestedRevision <= state.CompletedRevision {
+		t.Fatalf("held writer falsely acknowledged physical cleanup: %+v %v", state, err)
 	}
 	f.repository.unblock()
-	if _, err := f.runtime.EvidenceArchive().DeleteCapture(t.Context(), string(f.capture.Kind), f.capture.ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := f.runtime.recorder.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	waitRecordingMirror(t, f.runtime)
 	attempts, err := f.runtime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Purpose: egressaudit.PurposeDatagram})
 	if err != nil || len(attempts.Items) != 0 {
 		t.Fatalf("deleted UDP attempts reappeared: %+v %v", attempts, err)
@@ -342,18 +349,8 @@ func TestLiveRecordingStampsRemainAllocationFreeAtCapacityAndAfterDrain(t *testi
 	}
 }
 
-type scopeFenceArchive struct{ deletes int }
-
-func (a *scopeFenceArchive) DeleteCapture(context.Context, string, string) (resourcedeletion.Released, error) {
-	a.deletes++
-	return resourcedeletion.Released{}, nil
-}
-func (a *scopeFenceArchive) ClearEvidence(context.Context) (resourcedeletion.Released, error) {
-	return resourcedeletion.Released{}, nil
-}
-
-func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
-	for _, path := range []string{"managed_prepare", "manual_prepare", "delete"} {
+func TestTimedOutCapturePreparationRemainsOwnedUntilWriterSettles(t *testing.T) {
+	for _, path := range []string{"managed_prepare", "manual_prepare"} {
 		t.Run(path, func(t *testing.T) {
 			sink := &blockedObservationStore{make(chan struct{}, 1), make(chan struct{})}
 			var releaseOnce sync.Once
@@ -374,13 +371,7 @@ func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
 			}
 			waitRecording(t, r)
 			id, stamp := recordingAuthorityScope(t, r, captureKind)
-			store := &scopeFenceArchive{}
-			archive := recordingArchive{raw: r.rawEvidence, recorder: r.recorder, delegate: store}
 			perform := func(ctx context.Context, target string) error {
-				if path == "delete" {
-					_, err := archive.DeleteCapture(ctx, string(captureKind), target)
-					return err
-				}
 				// This is the administrative settlement primitive. Normal
 				// Capture Finish has its separate non-durability test.
 				terminal, err := r.recorder.prepareScope(ctx, r.rawEvidence, kind, target, nil)
@@ -418,9 +409,6 @@ func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
 				t.Fatalf("slot retry installed another Raw fence: %v", err)
 			}
 			other.Release()
-			if store.deletes != 0 {
-				t.Fatal("timed-out deletion acknowledged physical erase")
-			}
 			release()
 			joined, cancelJoined := context.WithTimeout(t.Context(), time.Second)
 			defer cancelJoined()
@@ -428,16 +416,10 @@ func TestTimedOutCaptureFenceRemainsOwnedUntilWriterSettles(t *testing.T) {
 				t.Fatalf("settled worker failed to release admin slot: %v", err)
 			}
 			lease, err = r.rawEvidence.BeginScope(joined, kind, id)
-			if path == "delete" {
-				if !errors.Is(err, rawevidence.ErrScopeTerminal) || store.deletes != 1 {
-					t.Fatal("successful erase did not seal scope")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("settled aborted prepare did not reopen scope: %v", err)
-				}
-				lease.Release()
+			if err != nil {
+				t.Fatalf("settled aborted prepare did not reopen scope: %v", err)
 			}
+			lease.Release()
 		})
 	}
 }

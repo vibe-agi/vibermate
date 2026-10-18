@@ -22,27 +22,37 @@ import (
 // plane one contract: persistence owns how the graph is removed, while the
 // caller can report exactly what disappeared without importing SQLite types.
 type Released struct {
-	Exchanges   uint64
-	Envelopes   uint64
-	Activities  uint64
-	Connections uint64
-	Attempts    uint64
-	Approvals   uint64
-	Assignments uint64
-	Captures    uint64
+	// Counts include only verified committed removals. Pending physical work or
+	// unproven legacy approval ownership makes the total explicitly incomplete.
+	CleanupPending           bool
+	CountsIncomplete         bool
+	ApprovalOwnershipUnknown bool
+	PrivacyMetadataRetained  bool
+	Exchanges                uint64
+	Envelopes                uint64
+	Activities               uint64
+	Connections              uint64
+	Attempts                 uint64
+	Approvals                uint64
+	Assignments              uint64
+	Captures                 uint64
 }
 
 // Add returns the combined receipt of two committed deletions.
 func (released Released) Add(other Released) Released {
 	return Released{
-		Exchanges:   released.Exchanges + other.Exchanges,
-		Envelopes:   released.Envelopes + other.Envelopes,
-		Activities:  released.Activities + other.Activities,
-		Connections: released.Connections + other.Connections,
-		Attempts:    released.Attempts + other.Attempts,
-		Approvals:   released.Approvals + other.Approvals,
-		Assignments: released.Assignments + other.Assignments,
-		Captures:    released.Captures + other.Captures,
+		CleanupPending:           released.CleanupPending || other.CleanupPending,
+		CountsIncomplete:         released.CountsIncomplete || other.CountsIncomplete,
+		ApprovalOwnershipUnknown: released.ApprovalOwnershipUnknown || other.ApprovalOwnershipUnknown,
+		PrivacyMetadataRetained:  released.PrivacyMetadataRetained || other.PrivacyMetadataRetained,
+		Exchanges:                released.Exchanges + other.Exchanges,
+		Envelopes:                released.Envelopes + other.Envelopes,
+		Activities:               released.Activities + other.Activities,
+		Connections:              released.Connections + other.Connections,
+		Attempts:                 released.Attempts + other.Attempts,
+		Approvals:                released.Approvals + other.Approvals,
+		Assignments:              released.Assignments + other.Assignments,
+		Captures:                 released.Captures + other.Captures,
 	}
 }
 

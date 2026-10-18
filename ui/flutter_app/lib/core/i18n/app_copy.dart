@@ -817,16 +817,24 @@ final class AppCopy {
     'deletion.endpoint.consequence':
         'It stops being available for new routes. Past Exchanges keep naming '
         'where they went.',
+    'deletion.cleanup_pending':
+        'Deleted from view. Physical cleanup is pending.',
+    'deletion.counts_incomplete':
+        'Confirmed removals only; the total is incomplete.',
+    'deletion.approval_ownership_unknown':
+        'Some older approvals have unknown Capture ownership and are retained.',
+    'deletion.privacy_metadata_retained':
+        'Privacy and duplicate-action protection metadata is retained.',
     'deletion.capture.title': 'Delete this Capture?',
     'deletion.capture.consequence':
-        'Every Exchange, Turn, usage observation and Raw HTTP envelope recorded under it is '
-        'removed, and the bytes are released. This cannot be undone.',
+        'This Capture and its recorded data stop appearing. Physical cleanup continues separately. '
+        'Older approvals with unknown ownership may remain. Identifiers needed to prevent deleted '
+        'records from returning or actions from repeating may be retained indefinitely. This cannot be undone.',
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
-        'Every Capture, all usage statistics and recorded evidence are removed. Traffic policies, '
-        'upstream services and accounts are kept. Logical records go and queries stop '
-        'answering; this does not claim erasure from disk snapshots or '
-        'backups.',
+        'All Captures, usage statistics, approval questions and recorded evidence stop appearing. '
+        'Physical cleanup continues separately. Saved rules, traffic policies, upstream services and accounts remain. '
+        'Privacy and duplicate-action identifiers may be retained indefinitely; backups and disk snapshots are unaffected.',
     'common.back': 'Back',
     'common.loading': 'Loading…',
     'common.retry': 'Retry',
@@ -2496,11 +2504,17 @@ final class AppCopy {
         '{exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries are past their retention deadlines.',
     'settings.storage.cleanup_title': 'Clean expired evidence?',
     'settings.storage.cleanup_consequence':
-        'Only evidence past its own retention deadline is removed. Active and unexpired evidence, traffic policies, services and accounts remain. SQLite can reuse the pages, but the file may not shrink and this does not claim secure SSD erasure.',
+        'Expired records and their dependent audit history are removed. Unrelated unexpired evidence and configuration remain. Physical cleanup may stay pending, and privacy identifiers may be retained indefinitely. Backups and disk snapshots are unaffected.',
     'settings.storage.cleanup_action': 'Clean expired evidence',
     'settings.storage.cleanup_complete': 'Expired evidence was cleaned.',
+    'settings.storage.cleanup_pending':
+        'Cleanup was requested. Physical cleanup is pending.',
+    'settings.storage.cleanup_partial':
+        'Confirmed removals are reported; the total remains incomplete.',
     'settings.storage.archive_preview':
-        'Current snapshot: {captures} Captures, {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries.',
+        'Stored copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes.',
+    'settings.storage.archive_preview_partial':
+        'Known copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes. Totals are incomplete.',
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
@@ -3731,13 +3745,18 @@ final class AppCopy {
     'deletion.environment.consequence': '它将不再可用于新的运行。已记录的证据仍保留每轮实际使用的修订版本。',
     'deletion.endpoint.title': '删除这个上游服务？',
     'deletion.endpoint.consequence': '它将不再可用于新的路由。历史调用记录仍会保留实际去向。',
+    'deletion.cleanup_pending': '已从记录视图中移除，物理清理尚未完成。',
+    'deletion.counts_incomplete': '数量仅包含已确认移除的记录，总数尚不完整。',
+    'deletion.approval_ownership_unknown': '部分旧审批无法确认所属的运行记录，因此会保留。',
+    'deletion.privacy_metadata_retained': '用于隐私保护和防止重复执行的元数据会保留。',
     'deletion.capture.title': '删除这条运行记录？',
     'deletion.capture.consequence':
-        '其中的所有 Agent 调用、轮次、用量统计和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
+        '这条运行记录及其已记录的数据将不再显示，物理清理会继续进行。归属不明的旧审批可能保留。'
+        '为防止已删记录再次出现或操作重复执行，相关标识可能无限期保留。此操作不可撤销。',
     'deletion.archive.title': '清空证据存档？',
     'deletion.archive.consequence':
-        '所有运行记录、用量统计与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
-        '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
+        '所有运行记录、用量统计、审批请求和已记录证据将不再显示，物理清理会继续进行。'
+        '已保存的规则、流量策略、上游服务和账号会保留。隐私和防重复执行标识可能无限期保留；备份与磁盘快照不受影响。',
     'common.back': '返回',
     'common.loading': '正在加载…',
     'common.retry': '重试',
@@ -5148,11 +5167,15 @@ final class AppCopy {
         '已有 {exchanges} 条语义调用和 {envelopes} 条 Raw HTTP 边界超过保留期。',
     'settings.storage.cleanup_title': '清理过期证据？',
     'settings.storage.cleanup_consequence':
-        '只移除已经超过各自保留期的证据。运行中和未过期的证据、流量策略、服务与账号都会保留。SQLite 可复用释放的页面，但文件未必缩小；此操作不声称对 SSD 安全擦除。',
+        '过期记录及其关联的审计历史会被移除；无关的未过期证据和配置会保留。物理清理可能尚未完成，隐私保护标识可能无限期保留。备份和磁盘快照不受影响。',
     'settings.storage.cleanup_action': '清理过期证据',
     'settings.storage.cleanup_complete': '过期证据已清理。',
+    'settings.storage.cleanup_pending': '已请求清理，物理清理尚未完成。',
+    'settings.storage.cleanup_partial': '已报告确认移除的记录，总数仍不完整。',
     'settings.storage.archive_preview':
-        '当前快照：{captures} 条运行记录、{exchanges} 条语义调用、{envelopes} 条 Raw HTTP 边界。',
+        '已存储的副本：{captures} 条运行记录、{exchanges} 条语义记录、{envelopes} 个 Raw HTTP 信封。',
+    'settings.storage.archive_preview_partial':
+        '已知副本：{captures} 条运行记录、{exchanges} 条语义记录、{envelopes} 个 Raw HTTP 信封，总数尚不完整。',
     'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
     'settings.storage.move_hint':
         '请先停止运行中的 Capture，再使用这里的可验证操作进行迁移、备份或恢复。不要单独复制正在使用的 runtime.db；备份会有意排除服务商凭据、钥匙串项目和外部 TLS 文件。',
