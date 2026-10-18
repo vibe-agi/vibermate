@@ -14,10 +14,110 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
+import 'package:vibermate_app/features/workbench/runtime_connection_guide.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets('incomplete zero-count storage preview keeps cleanup available', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _CompletedCleanupApi(fixture)..completed = true;
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    controller.storageLocation = await api.storageLocation();
+    controller.settingsTab = controller.settingsDestinations.indexOf(
+      SettingsDestination.safety,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: SettingsView(
+            controller: controller,
+            copy: AppCopy.forLanguage(AppLanguage.english),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final cleanup = find.byKey(const Key('storage-cleanup-expired'));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('storage-cleanup-preview')),
+      240,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const Key('settings-safety-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(cleanup, findsOneWidget);
+    expect(
+      find.text('No expired evidence is waiting for cleanup.'),
+      findsNothing,
+    );
+  });
+  test('cleanup acceptance does not await held optional statistics', () async {
+    final fixture = PreviewControlApi();
+    final api = _HeldCleanupStatisticsApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    final pending = controller.cleanupExpiredEvidence();
+    await api.entered.future;
+    try {
+      final outcome = await pending.timeout(const Duration(milliseconds: 100));
+      expect(outcome.deleted, isTrue);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+    } finally {
+      api.returned.complete(await fixture.storageLocation());
+      await pending;
+    }
+  });
+  test(
+    'completed managed cleanup replaces pending notice only with certificate',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _CompletedCleanupApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.data = await fixture.loadDashboard();
+      await controller.cleanupExpiredEvidence();
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      api.completed = true;
+      await controller.refreshStorageLocation();
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_partial',
+      );
+      expect(controller.storageLocationFailed, isFalse);
+    },
+  );
   test('pending cleanup never reports physical completion', () async {
     final fixture = PreviewControlApi();
     final controller = WorkbenchController(
@@ -2860,4 +2960,53 @@ final class _PendingCleanupApi extends _UsageTrackingApi {
           privacyMetadataRetained: true,
         ),
       );
+}
+
+final class _CompletedCleanupApi extends _PendingCleanupApi {
+  _CompletedCleanupApi(super.delegate);
+  bool completed = false;
+  @override
+  Future<RuntimeStorageLocation> storageLocation() async {
+    final value = await delegate.storageLocation();
+    final counts = <String, Object>{
+      'exchanges': 0,
+      'envelopes': 0,
+      'activities': 0,
+      'connections': 0,
+      'attempts': 0,
+      'approvals': 0,
+      'assignments': 0,
+      'captures': 0,
+      'cleanupPending': !completed,
+      'countsIncomplete': true,
+      'privacyMetadataRetained': true,
+    };
+    return RuntimeStorageLocation.fromJson({
+      'backend': 'sqlite',
+      'dataDirectory': value.dataDirectory,
+      'databasePath': value.databasePath,
+      'collectedAt': value.collectedAt.toIso8601String(),
+      'databaseBytes': value.databaseBytes,
+      'walBytes': value.walBytes,
+      'sharedMemoryBytes': value.sharedMemoryBytes,
+      'evidenceBytes': value.evidenceBytes,
+      'reusableBytes': value.reusableBytes,
+      'filesystemAvailableBytes': value.filesystemAvailableBytes,
+      'lowSpaceThresholdBytes': value.lowSpaceThresholdBytes,
+      'capacityState': value.capacityState,
+      'cleanupPreview': counts,
+      if (completed) 'lastCleanup': {...counts, 'cleanupPending': false},
+    });
+  }
+}
+
+final class _HeldCleanupStatisticsApi extends _PendingCleanupApi {
+  _HeldCleanupStatisticsApi(super.delegate);
+  final entered = Completer<void>();
+  final returned = Completer<RuntimeStorageLocation>();
+  @override
+  Future<RuntimeStorageLocation> storageLocation() {
+    entered.complete();
+    return returned.future;
+  }
 }

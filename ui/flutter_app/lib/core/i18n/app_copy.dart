@@ -2483,8 +2483,8 @@ final class AppCopy {
         'The selected data directory is unavailable. Reconnect its disk or restore the directory and retry. No empty database has been created.',
     'settings.storage.database': 'SQLite database',
     'settings.storage.refresh': 'Refresh storage snapshot',
-    'settings.storage.database_size': 'Database file',
-    'settings.storage.wal_size': 'Write-ahead log',
+    'settings.storage.database_size': 'Database files',
+    'settings.storage.wal_size': 'Write-ahead logs',
     'settings.storage.evidence_size': 'Evidence pages',
     'settings.storage.reusable_size': 'Reusable in SQLite',
     'settings.storage.unknown': 'Unavailable',
@@ -2497,11 +2497,13 @@ final class AppCopy {
     'settings.storage.capacity_unavailable':
         'The Runtime could not read free space for this volume. Database statistics are still shown.',
     'settings.storage.measurement_scope':
-        'Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
+        'File sizes include all Runtime databases and retained archives. Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
     'settings.storage.cleanup_empty':
         'No expired evidence is waiting for cleanup.',
     'settings.storage.cleanup_preview':
         '{exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries are past their retention deadlines.',
+    'settings.storage.cleanup_preview_partial':
+        'Known expired copies: {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries. Totals may be incomplete.',
     'settings.storage.cleanup_title': 'Clean expired evidence?',
     'settings.storage.cleanup_consequence':
         'Expired records and their dependent audit history are removed. Unrelated unexpired evidence and configuration remain. Physical cleanup may stay pending, and privacy identifiers may be retained indefinitely. Backups and disk snapshots are unaffected.',
@@ -5161,10 +5163,12 @@ final class AppCopy {
         '所连接 Runtime 的可用空间已低于阈值。继续记录前，请释放空间、迁移 App 数据目录或扩容服务端卷。',
     'settings.storage.capacity_unavailable': 'Runtime 无法读取该卷的剩余空间；数据库统计仍可查看。',
     'settings.storage.measurement_scope':
-        '“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
+        '文件大小包含所有 Runtime 数据库及保留的归档。“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
     'settings.storage.cleanup_empty': '目前没有超过保留期、等待清理的证据。',
     'settings.storage.cleanup_preview':
         '已有 {exchanges} 条语义调用和 {envelopes} 条 Raw HTTP 边界超过保留期。',
+    'settings.storage.cleanup_preview_partial':
+        '已知过期副本：{exchanges} 条语义 Exchange 和 {envelopes} 条 Raw HTTP 边界记录。总数可能不完整。',
     'settings.storage.cleanup_title': '清理过期证据？',
     'settings.storage.cleanup_consequence':
         '过期记录及其关联的审计历史会被移除；无关的未过期证据和配置会保留。物理清理可能尚未完成，隐私保护标识可能无限期保留。备份和磁盘快照不受影响。',

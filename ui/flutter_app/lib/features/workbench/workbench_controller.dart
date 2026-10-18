@@ -2072,6 +2072,13 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed) return;
       previousStorageLocation = storageLocation;
       storageLocation = location;
+      if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
+          !location.cleanupPreview.cleanupPending &&
+          location.lastCleanup != null) {
+        storageCleanupNotice = location.lastCleanup!.countsIncomplete
+            ? 'settings.storage.cleanup_partial'
+            : 'settings.storage.cleanup_complete';
+      }
     } catch (_) {
       if (_disposed) return;
       storageLocationFailed = true;
@@ -2104,7 +2111,7 @@ final class WorkbenchController extends ChangeNotifier
             : 'settings.storage.cleanup_complete';
         _invalidateEvidenceCaches();
       }
-      await refreshStorageLocation();
+      unawaited(refreshStorageLocation());
       return outcome;
     } catch (error) {
       if (!_disposed) storageCleanupError = _describeError(error);

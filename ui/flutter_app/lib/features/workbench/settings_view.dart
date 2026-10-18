@@ -4092,33 +4092,39 @@ final class _StorageCleanup extends StatelessWidget {
   Widget build(BuildContext context) {
     final preview = location.cleanupPreview;
     final pending = preview.exchanges + preview.envelopes;
+    final summary = preview.cleanupPending
+        ? copy('settings.storage.cleanup_pending')
+        : preview.countsIncomplete
+        ? copy.format('settings.storage.cleanup_preview_partial', {
+            'exchanges': preview.exchanges,
+            'envelopes': preview.envelopes,
+          })
+        : pending == 0
+        ? copy('settings.storage.cleanup_empty')
+        : copy.format('settings.storage.cleanup_preview', {
+            'exchanges': preview.exchanges,
+            'envelopes': preview.envelopes,
+          });
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          pending == 0
-              ? copy('settings.storage.cleanup_empty')
-              : copy.format('settings.storage.cleanup_preview', {
-                  'exchanges': preview.exchanges,
-                  'envelopes': preview.envelopes,
-                }),
+          summary,
           key: const Key('storage-cleanup-preview'),
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        if (pending > 0)
+        if (pending > 0 || preview.countsIncomplete || preview.cleanupPending)
           TextButton.icon(
             key: const Key('storage-cleanup-expired'),
-            onPressed: controller.storageCleanupRunning
+            onPressed:
+                controller.storageCleanupRunning || preview.cleanupPending
                 ? null
                 : () => showDialog<DeletionOutcome>(
                     context: context,
                     builder: (_) => DeletionConfirmation(
                       copy: copy,
                       title: copy('settings.storage.cleanup_title'),
-                      subject: copy.format('settings.storage.cleanup_preview', {
-                        'exchanges': preview.exchanges,
-                        'envelopes': preview.envelopes,
-                      }),
+                      subject: summary,
                       consequence: copy('settings.storage.cleanup_consequence'),
                       confirmLabel: copy('settings.storage.cleanup_action'),
                       onConfirm: controller.cleanupExpiredEvidence,
