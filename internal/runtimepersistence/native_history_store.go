@@ -110,6 +110,9 @@ func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.Re
 	if err := validateNativeHistory(h); err != nil {
 		return err
 	}
+	if !h.Observation.MetadataExpiresAt.After(time.Now()) {
+		return recording.ErrObservationDiscarded
+	}
 	operation, finish, err := s.store.operations.begin(ctx)
 	if err != nil {
 		return err
