@@ -327,25 +327,14 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			Dart:    "Dart " + expectedDartVersion,
 			Xcode:   expectedXcodeVersion,
 		},
-		ConfigurationSHA256: map[string]string{
-			"go.mod":                              hash,
-			"go.sum":                              hash,
-			"ui/flutter_app/.metadata":            hash,
-			"ui/flutter_app/pubspec.yaml":         hash,
-			"ui/flutter_app/pubspec.lock":         hash,
-			"ui/flutter_app/tool/flutter-sdk.env": hash,
-			"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj": hash,
-			"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig":  hash,
-			"ui/flutter_app/macos/Runner/Configs/Release.xcconfig":  hash,
-			"ui/flutter_app/macos/Runner/Info.plist":                hash,
-			"ui/flutter_app/macos/Runner/Release.entitlements":      hash,
-		},
+		ConfigurationSHA256: producerConfigurationFixture(t, hash),
 		NestedCodeSHA256: map[string]string{
 			"app-framework":           strings.Repeat("d", 64),
 			"file-selector-framework": strings.Repeat("8", 64),
 			"flutter-macos-framework": strings.Repeat("e", 64),
 			"url-launcher-framework":  strings.Repeat("9", 64),
 			"vibermated":              strings.Repeat("b", 64),
+			"vibermate-xray":          strings.Repeat("f", 64),
 			"vibermate":               strings.Repeat("c", 64),
 		},
 	}
@@ -356,6 +345,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 		{Role: "daemon", SHA256: strings.Repeat("b", 64)},
 		{Role: "flutter-macos-framework", SHA256: strings.Repeat("e", 64)},
 		{Role: "launcher", SHA256: strings.Repeat("c", 64)},
+		{Role: "vibermate-xray", SHA256: strings.Repeat("f", 64)},
 	}
 	if err := validateDesktopBuildManifest(
 		manifest,
@@ -365,6 +355,35 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 	); err != nil {
 		t.Fatalf("valid manifest was rejected: %v", err)
 	}
+	// Exercise the complete captured producer inventory, not only the old subset.
+	for name, digest := range manifest.ConfigurationSHA256 {
+		delete(manifest.ConfigurationSHA256, name)
+		if err := validateDesktopBuildManifest(manifest, source, "development", artifacts); err == nil {
+			t.Fatalf("missing configuration %s accepted", name)
+		}
+		manifest.ConfigurationSHA256[name] = digest
+	}
+	manifest.ConfigurationSHA256["extra"] = hash
+	if err := validateDesktopBuildManifest(manifest, source, "development", artifacts); err == nil {
+		t.Fatal("extra configuration accepted")
+	}
+	delete(manifest.ConfigurationSHA256, "extra")
+	for name, digest := range manifest.NestedCodeSHA256 {
+		delete(manifest.NestedCodeSHA256, name)
+		if err := validateDesktopBuildManifest(manifest, source, "development", artifacts); err == nil {
+			t.Fatalf("missing nested member %s accepted", name)
+		}
+		manifest.NestedCodeSHA256[name] = hash
+		if err := validateDesktopBuildManifest(manifest, source, "development", artifacts); err == nil {
+			t.Fatalf("tampered nested member %s accepted", name)
+		}
+		manifest.NestedCodeSHA256[name] = digest
+	}
+	manifest.NestedCodeSHA256["extra"] = hash
+	if err := validateDesktopBuildManifest(manifest, source, "development", artifacts); err == nil {
+		t.Fatal("extra nested member accepted")
+	}
+	delete(manifest.NestedCodeSHA256, "extra")
 	manifest.NestedCodeSHA256["vibermated"] = hash
 	if err := validateDesktopBuildManifest(
 		manifest,
@@ -420,4 +439,23 @@ func TestDesktopBuildManifestRejectsUnknownFields(t *testing.T) {
 	if _, err := readDesktopBuildManifest(path); err == nil {
 		t.Fatal("unknown Desktop build manifest field was accepted")
 	}
+}
+
+func producerConfigurationFixture(t *testing.T, digest string) map[string]string {
+	t.Helper()
+	payload, err := os.ReadFile("../../internal/acceptancereport/testdata/desktop-build-inventory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory struct {
+		Configuration []string `json:"configuration"`
+	}
+	if err := json.Unmarshal(payload, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	result := make(map[string]string)
+	for _, name := range inventory.Configuration {
+		result[name] = digest
+	}
+	return result
 }

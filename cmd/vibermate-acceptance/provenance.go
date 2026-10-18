@@ -117,59 +117,10 @@ func collectAcceptanceProvenance(
 		return provenance, fmt.Errorf("read Desktop build manifest: %w", err)
 	}
 
-	bundle, err := acceptancereport.DigestBundle(config.desktopAppPath)
+	artifacts, err := collectArtifactProvenance(config, acceptancePath, desktopPath, clientPath, manifestPath)
 	if err != nil {
-		return provenance, fmt.Errorf("digest Desktop App bundle: %w", err)
+		return provenance, err
 	}
-	bundle.Role = "desktop-app-bundle"
-	artifacts := []artifactProvenance{bundle}
-	for _, artifact := range []struct {
-		role string
-		path string
-	}{
-		{role: "desktop-app-executable", path: desktopPath},
-		{
-			role: "app-framework",
-			path: filepath.Join(
-				config.desktopAppPath,
-				"Contents", "Frameworks", "App.framework", "Versions", "A", "App",
-			),
-		},
-		{
-			role: "flutter-macos-framework",
-			path: filepath.Join(
-				config.desktopAppPath,
-				"Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
-			),
-		},
-		{role: "daemon", path: config.daemonPath},
-		{
-			role: "file-selector-framework",
-			path: filepath.Join(config.desktopAppPath,
-				"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
-		},
-		{
-			role: "url-launcher-framework",
-			path: filepath.Join(config.desktopAppPath,
-				"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
-		},
-		{role: "launcher", path: config.launcherPath},
-		{role: "acceptance", path: acceptancePath},
-		{role: "client-entrypoint", path: clientPath},
-		{role: "desktop-build-manifest", path: manifestPath},
-	} {
-		evidence, digestErr := acceptancereport.DigestArtifact(
-			artifact.role,
-			artifact.path,
-		)
-		if digestErr != nil {
-			return provenance, digestErr
-		}
-		artifacts = append(artifacts, evidence)
-	}
-	sort.Slice(artifacts, func(left, right int) bool {
-		return artifacts[left].Role < artifacts[right].Role
-	})
 	provenance.Artifacts = artifacts
 
 	goBinaries := make([]goBinaryEvidence, 0, 3)
@@ -297,10 +248,19 @@ func validateDesktopBuildManifest(
 	requiredConfiguration := []string{
 		"go.mod",
 		"go.sum",
+		"tool/vless-kernel/kernel-lock.json",
+		"tool/vless-kernel/dependency.patch",
+		"tool/vless-kernel/upstream.commit",
+		"tool/vless-kernel/LICENSE.upstream",
+		"tool/vless-kernel/build_kernel.py",
+		"tool/vless-kernel/package_kernel.py",
+		"tool/vless-kernel/verify_package.mjs",
 		"ui/flutter_app/.metadata",
 		"ui/flutter_app/pubspec.yaml",
 		"ui/flutter_app/pubspec.lock",
 		"ui/flutter_app/tool/flutter-sdk.env",
+		"ui/flutter_app/macos/Podfile",
+		"ui/flutter_app/macos/Podfile.lock",
 		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
 		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
 		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
@@ -329,12 +289,13 @@ func validateDesktopBuildManifest(
 		"url-launcher-framework":  artifactDigests["url-launcher-framework"],
 		"vibermate":               artifactDigests["launcher"],
 		"vibermated":              artifactDigests["daemon"],
+		"vibermate-xray":          artifactDigests["vibermate-xray"],
 	}
 	if len(manifest.NestedCodeSHA256) != len(wantedNestedCode) {
 		return errors.New("Desktop build manifest nested-code evidence is incomplete")
 	}
 	for name, digest := range wantedNestedCode {
-		if manifest.NestedCodeSHA256[name] != digest {
+		if !validSHA256(digest) || manifest.NestedCodeSHA256[name] != digest {
 			return errors.New(
 				"Desktop build manifest does not identify the packaged nested code",
 			)
@@ -646,4 +607,64 @@ func toolVersion(
 		return "", fmt.Errorf("%s toolchain version is invalid", label)
 	}
 	return version, nil
+}
+
+// collectArtifactProvenance binds the actual packaged bytes. The kernel belongs
+// to the separate locked Xray build, not commonSourceEvidence's product binaries.
+func collectArtifactProvenance(config config, acceptancePath, desktopPath, clientPath, manifestPath string) ([]artifactProvenance, error) {
+	bundle, err := acceptancereport.DigestBundle(config.desktopAppPath)
+	if err != nil {
+		return nil, fmt.Errorf("digest Desktop App bundle: %w", err)
+	}
+	bundle.Role = "desktop-app-bundle"
+	artifacts := []artifactProvenance{bundle}
+	for _, artifact := range []struct {
+		role string
+		path string
+	}{
+		{role: "desktop-app-executable", path: desktopPath},
+		{
+			role: "app-framework",
+			path: filepath.Join(
+				config.desktopAppPath,
+				"Contents", "Frameworks", "App.framework", "Versions", "A", "App",
+			),
+		},
+		{
+			role: "flutter-macos-framework",
+			path: filepath.Join(
+				config.desktopAppPath,
+				"Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+			),
+		},
+		{role: "daemon", path: config.daemonPath},
+		{
+			role: "file-selector-framework",
+			path: filepath.Join(config.desktopAppPath,
+				"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
+		},
+		{
+			role: "url-launcher-framework",
+			path: filepath.Join(config.desktopAppPath,
+				"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
+		},
+		{role: "launcher", path: config.launcherPath},
+		{role: "vibermate-xray", path: filepath.Join(config.desktopAppPath, "Contents", "MacOS", "vibermate-xray")},
+		{role: "acceptance", path: acceptancePath},
+		{role: "client-entrypoint", path: clientPath},
+		{role: "desktop-build-manifest", path: manifestPath},
+	} {
+		evidence, digestErr := acceptancereport.DigestArtifact(
+			artifact.role,
+			artifact.path,
+		)
+		if digestErr != nil {
+			return nil, digestErr
+		}
+		artifacts = append(artifacts, evidence)
+	}
+	sort.Slice(artifacts, func(left, right int) bool {
+		return artifacts[left].Role < artifacts[right].Role
+	})
+	return artifacts, nil
 }
