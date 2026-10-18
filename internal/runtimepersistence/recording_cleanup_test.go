@@ -414,3 +414,150 @@ func TestRecordingPhysicalNativeAllCopiesAndOlderSnapshots(t *testing.T) {
 		t.Fatalf("legacy cleanup altered safety or retained expired roots: %d %d once=%d/%d %v", operations, contents, onceAfter, onceBefore, err)
 	}
 }
+
+func TestRecordingPhysicalNativeBatchesRespectLatestForeignKey(t *testing.T) {
+	f := newEgressInspectionFixture(t)
+	_, template := nativeIndependentHistoryFixture(t)
+	template.Scope = f.scope
+	template.Observation.Operation.Capture = f.scope.Capture
+	template.Observation.Operation.RecordingScope = f.scope
+	tx, err := f.current.store.database.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	// Valid immutable snapshots have no shared row-order contract with the
+	// separate latest-pointer table. Put latest revisions first in reverse order.
+	for i := 101; i >= 1; i-- {
+		terminal := template
+		terminal.Observation.Operation.ID = nativetool.ID(fmt.Sprintf("%032x", i))
+		if _, err = tx.Exec(`INSERT INTO native_history_snapshots(`+nativeHistoryColumns+`) VALUES(`+strings.TrimSuffix(strings.Repeat("?,", 28), ",")+`)`, nativeHistoryArgs(terminal)...); err != nil {
+			t.Fatal(err)
+		}
+		older := terminal
+		older.Observation.Operation.Revision--
+		older.Observation.Operation.State = "started"
+		older.Observation.Operation.CompletedAt = nil
+		older.Observation.Operation.Reason = ""
+		older.Observation.Operation.BytesIn = nil
+		older.Observation.Operation.BytesOut = nil
+		older.Observation.EventKind = "started"
+		if err = older.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`INSERT INTO native_history_snapshots(`+nativeHistoryColumns+`) VALUES(`+strings.TrimSuffix(strings.Repeat("?,", 28), ",")+`)`, nativeHistoryArgs(older)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = tx.Exec(`INSERT INTO native_history_latest SELECT operation_id,max(operation_revision) FROM native_history_snapshots GROUP BY operation_id ORDER BY operation_id`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	token, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	if _, err = f.current.PurgeRecordingEvidence(t.Context(), f.control, token, template.Observation.MetadataExpiresAt.Add(time.Second)); err != nil {
+		t.Fatalf("bounded cleanup cannot progress with legal pointer/snapshot order: %v", err)
+	}
+	var remaining int
+	if err = f.current.store.database.QueryRow(`SELECT (SELECT count(*) FROM native_history_snapshots)+(SELECT count(*) FROM native_history_latest)`).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("batch frontier left snapshots/pointers: %d %v", remaining, err)
+	}
+}
+
+func TestRecordingPhysicalLegacyNativeBatchesDoNotCascadePastGCOrCounts(t *testing.T) {
+	reader, current, control, op := nativeInspectionLegacyFixture(t)
+	legacy, err := sql.Open("sqlite", filepath.Join(reader.catalog.root, reader.catalog.sources[0].RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Close()
+	cutoff := op.MetadataExpiresAt.Add(time.Hour)
+	nativeExec(t, legacy, `INSERT INTO native_tool_once VALUES(?,?,randomblob(32),?,randomblob(32),'preserved-native-once',?,1)`, op.Capture.Kind, op.Capture.ID, op.ID, op.CreatedAt.UnixMilli())
+	nativeExec(t, legacy, `UPDATE native_tool_contents SET expires_at_unix_ms=? WHERE operation_id=?`, cutoff.Add(time.Hour).UnixMilli(), op.ID)
+	columns := nativeColumns(t, legacy, "native_tool_operations")
+	projections := append([]string(nil), columns...)
+	for i, column := range columns {
+		switch strings.Trim(column, `"`) {
+		case "operation_id":
+			projections[i] = "?"
+		case "state":
+			projections[i] = "'received'"
+		case "terminal_reason":
+			projections[i] = "''"
+		case "completed_at_unix_ms", "bytes_in", "bytes_out":
+			projections[i] = "NULL"
+		}
+	}
+	bindingColumns := nativeColumns(t, legacy, "native_tool_bindings")
+	bindingProjections := append([]string(nil), bindingColumns...)
+	for i, column := range bindingColumns {
+		if strings.Trim(column, `"`) == "operation_id" {
+			bindingProjections[i] = "?"
+		}
+	}
+	tx, err := legacy.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for i := 1; i <= 101; i++ {
+		id := fmt.Sprintf("%032x", i)
+		if _, err = tx.Exec(`INSERT INTO native_tool_operations(`+strings.Join(columns, ",")+`) SELECT `+strings.Join(projections, ",")+` FROM native_tool_operations WHERE operation_id=?`, id, op.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`INSERT INTO native_tool_bindings(`+strings.Join(bindingColumns, ",")+`) SELECT `+strings.Join(bindingProjections, ",")+` FROM native_tool_bindings WHERE operation_id=?`, id, op.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`UPDATE native_tool_operations SET state='completed',terminal_reason='completed',completed_at_unix_ms=? WHERE operation_id=?`, op.CompletedAt.UnixMilli(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 101; i >= 1; i-- {
+		id := fmt.Sprintf("%032x", i)
+		if _, err = tx.Exec(`INSERT INTO native_tool_approvals VALUES(?,?,zeroblob(32),1,'allowed',1,10,2,?,3)`, fmt.Sprintf("%032x", 1102-i), id, fmt.Sprintf("native-batch-approval-%04d", i)); err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range []string{"tool_arguments", "tool_result"} {
+			var digest []byte
+			if i == 101 && part == "tool_result" {
+				err = tx.QueryRow(`SELECT body_digest FROM native_tool_contents WHERE operation_id=? AND part='tool_result'`, op.ID).Scan(&digest)
+			} else {
+				digest, err = storeEvidenceBody(t.Context(), tx, []byte(fmt.Sprintf("exclusive native body %s %s", id, part)))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(`INSERT INTO native_tool_contents VALUES(?,?,?,?)`, id, part, digest, cutoff.Add(-time.Minute).UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var onceBefore, scopesBefore int
+	if err = legacy.QueryRow(`SELECT (SELECT count(*) FROM native_tool_once),(SELECT count(*) FROM native_tool_scopes)`).Scan(&onceBefore, &scopesBefore); err != nil {
+		t.Fatal(err)
+	}
+	token, err := reader.catalog.BeginMaintenance(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	released, err := current.PurgeRecordingEvidence(t.Context(), control, token, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operations, contents, bodies, chunks, approvals, onceAfter, scopesAfter int
+	if err = legacy.QueryRow(`SELECT (SELECT count(*) FROM native_tool_operations WHERE operation_id BETWEEN ? AND ?),(SELECT count(*) FROM native_tool_contents),(SELECT count(*) FROM runtime_evidence_bodies),(SELECT count(*) FROM runtime_evidence_chunks),(SELECT count(*) FROM native_tool_approvals),(SELECT count(*) FROM native_tool_once),(SELECT count(*) FROM native_tool_scopes)`, fmt.Sprintf("%032x", 1), fmt.Sprintf("%032x", 101)).Scan(&operations, &contents, &bodies, &chunks, &approvals, &onceAfter, &scopesAfter); err != nil {
+		t.Fatal(err)
+	}
+	if operations != 0 || contents != 1 || bodies != 1 || chunks != 1 || approvals != 0 || released.Approvals != 101 || onceAfter != onceBefore || scopesAfter != scopesBefore {
+		t.Fatalf("cascade bypassed measured graph cleanup: ops=%d contents=%d bodies=%d chunks=%d approvals=%d released=%+v once=%d/%d scopes=%d/%d", operations, contents, bodies, chunks, approvals, released, onceAfter, onceBefore, scopesAfter, scopesBefore)
+	}
+}

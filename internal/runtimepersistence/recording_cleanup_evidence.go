@@ -50,9 +50,12 @@ func recordingCleanupRoots(source InspectionSource, mirror string, cutoff time.T
 
 		historyWhere := `(` + hidden("r.capture_kind", "r.capture_id") + ` OR ` + expired("metadata_expires_at_unix_ms") + `)`
 		selectedHistory := `SELECT h.operation_id FROM main.native_history_snapshots h WHERE ` + strings.ReplaceAll(historyWhere, "r.", "h.")
+		// Separate bounded selectors have no shared row order. A snapshot batch
+		// may remove only rows whose exact latest FK was actually retired; later
+		// latest batches guarantee progress without disabling immediate constraints.
 		roots = append(roots,
 			recordingCleanupRoot{"native_history_latest", "operation_id", `r.operation_id IN(` + selectedHistory + `)`, nil},
-			recordingCleanupRoot{"native_history_snapshots", "(operation_id,operation_revision)", historyWhere, nil},
+			recordingCleanupRoot{"native_history_snapshots", "(operation_id,operation_revision)", `(` + historyWhere + `) AND NOT EXISTS(SELECT 1 FROM main.native_history_latest l WHERE l.operation_id=r.operation_id AND l.operation_revision=r.operation_revision)`, nil},
 			recordingCleanupRoot{"native_inspection_index", "operation_id", `(` + hidden("r.capture_kind", "r.capture_id") + ` OR (NOT EXISTS(SELECT 1 FROM main.native_history_snapshots h WHERE h.operation_id=r.operation_id) AND NOT EXISTS(SELECT 1 FROM main.native_tool_contents nc WHERE nc.operation_id=r.operation_id)))`, nil},
 			recordingCleanupRoot{"runtime_egress_attempts", "attempt_id", `r.parent_kind='client_operation' AND r.parent_id IN(` + selectedHistory + `)`, map[string]string{"attempt": "r.attempt_id"}},
 		)
@@ -222,6 +225,12 @@ func (s *ObservationStore) PurgeRecordingEvidence(ctx context.Context, control *
 				// Audit identities are purged whole, even when one surviving scope is live.
 				roots = append(roots, recordingCleanupRoot{"runtime_egress_attempts", "attempt_id", `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='attempt' AND d.identity=r.attempt_id)`, nil}, recordingCleanupRoot{"runtime_connection_events", "sequence", `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='connection' AND d.identity=r.connection_id)`, nil})
 				for _, root := range roots {
+					// Children must actually pass their measured GC/count helpers before
+					// a parent may cascade. This mutation guard must not narrow the earlier
+					// proof-root selection, which still sees every eligible native operation.
+					if root.table == "native_tool_operations" {
+						root.where = `(` + root.where + `) AND NOT EXISTS(SELECT 1 FROM main.native_tool_contents nc WHERE nc.operation_id=r.operation_id) AND NOT EXISTS(SELECT 1 FROM main.native_tool_approvals na WHERE na.operation_id=r.operation_id)`
+					}
 					query := `DELETE FROM ` + root.table + ` WHERE ` + root.key + ` IN(SELECT ` + strings.Trim(root.key, "()") + ` FROM ` + root.table + ` r WHERE ` + root.where + ` LIMIT 100)`
 					var n int64
 					switch root.table {

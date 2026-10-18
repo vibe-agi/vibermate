@@ -54,28 +54,37 @@ func deleteExchangeContent(ctx context.Context, tx *sql.Tx, query string, args .
 		// Retry a parent after removing its last child, even if an earlier probe
 		// found it still referenced. A global visited set would leak ancestors.
 		roots = append(roots, parent)
-		messages = append(messages, message)
+		// Probe immediately: repeated/shared messages remain referenced until
+		// their last node is actually removed. Do not accumulate one digest per
+		// historical node across a potentially100001-deep chain.
+		if err := releaseExchangeContentMessage(ctx, tx, message); err != nil {
+			return 0, err
+		}
 	}
 	for _, digest := range uniqueStrings(messages) {
-		if digest == "" {
-			continue
-		}
-		var manifest string
-		err := tx.QueryRowContext(ctx, `DELETE FROM runtime_exchange_content_messages
-		 WHERE digest=?
-		 AND NOT EXISTS(SELECT 1 FROM runtime_exchange_content_transcripts WHERE message_digest=?)
-		 AND NOT EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE response_message_digest=?)
-		 AND NOT EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE system_message_digest=?)
-		 RETURNING block_manifest`, digest, digest, digest, digest).Scan(&manifest)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return 0, fmt.Errorf("release transcript message: %w", err)
-		}
-		if err := purgeUnreferencedContentBlocks(ctx, tx, manifest); err != nil {
+		if err := releaseExchangeContentMessage(ctx, tx, digest); err != nil {
 			return 0, err
 		}
 	}
 	return count, nil
+}
+
+func releaseExchangeContentMessage(ctx context.Context, tx *sql.Tx, digest string) error {
+	if digest == "" {
+		return nil
+	}
+	var manifest string
+	err := tx.QueryRowContext(ctx, `DELETE FROM runtime_exchange_content_messages
+ WHERE digest=?
+ AND NOT EXISTS(SELECT 1 FROM runtime_exchange_content_transcripts WHERE message_digest=?)
+ AND NOT EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE response_message_digest=?)
+ AND NOT EXISTS(SELECT 1 FROM runtime_exchange_contents WHERE system_message_digest=?)
+ RETURNING block_manifest`, digest, digest, digest, digest).Scan(&manifest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("release transcript message: %w", err)
+	}
+	return purgeUnreferencedContentBlocks(ctx, tx, manifest)
 }
