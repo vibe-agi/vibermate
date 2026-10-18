@@ -3305,7 +3305,9 @@ final class WorkbenchController extends ChangeNotifier
         }
         if (!_disposed) inventoryError = 'provider_accounts.settings.conflict';
       } else if (!_disposed) {
-        inventoryError = 'provider_accounts.settings.failed';
+        inventoryError = error is TimeoutException
+            ? _describeError(error)
+            : 'provider_accounts.settings.failed';
       }
       return null;
     } finally {

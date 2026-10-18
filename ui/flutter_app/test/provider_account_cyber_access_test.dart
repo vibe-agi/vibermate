@@ -9,6 +9,8 @@ import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
+import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
+import 'package:vibermate_app/features/workbench/control_failure_notice.dart';
 import 'package:vibermate_app/features/workbench/provider_accounts_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -220,6 +222,83 @@ void main() {
     );
   });
 
+  for (final language in [AppLanguage.english, AppLanguage.simplifiedChinese]) {
+    testWidgets(
+      'timed out mode save shows uncertain outcome and refreshes saved state in $language',
+      (tester) async {
+        final api = _CyberApi()..timeoutAfterSettingsCommit = true;
+        final controller = await _mount(tester, api, language: language);
+        await _expand(tester);
+        await tester.pumpAndSettle();
+        final confirmed = _account(controller);
+        await _choose(tester, 'daybreak_blue');
+
+        // The server saved the PUT; a missing response cannot confirm failure.
+        final saved = (await api.preview.loadDashboard()).accounts.singleWhere(
+          (account) => account.id == confirmed.id,
+        );
+        expect(api.settingsWrites, 1);
+        expect(saved.cyberAccessProgram, 'daybreak_blue');
+        expect(saved.settingsRevision, confirmed.settingsRevision + 1);
+        expect(_account(controller).cyberAccessProgram, 'standard');
+        expect(
+          _account(controller).settingsRevision,
+          confirmed.settingsRevision,
+        );
+        expect(_select(tester).initialValue, 'standard');
+        expect(controller.inventoryNotice, isNull);
+
+        final copy = AppCopy.forLanguage(language);
+        final expected = copy('error.control_timeout');
+        expect(
+          expected,
+          contains(
+            language == AppLanguage.english
+                ? 'The operation may already have completed.'
+                : '操作可能已经完成。',
+          ),
+        );
+        expect(
+          expected,
+          contains(
+            language == AppLanguage.english
+                ? 'Refresh to check the latest state before deciding whether to retry.'
+                : '请先刷新并检查最新状态，再决定是否重试。',
+          ),
+        );
+        final notice = tester.widget<InlineNotice>(
+          find.descendant(
+            of: find.byType(ControlFailureNotice),
+            matching: find.byType(InlineNotice),
+          ),
+        );
+        expect(notice.message, expected);
+        expect(find.text(expected), findsOneWidget);
+        expect(
+          find.text(copy('provider_accounts.settings.failed')),
+          findsNothing,
+        );
+
+        await tester.tap(
+          find.byKey(const Key('provider-accounts-refresh-all')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          _account(controller).cyberAccessProgram,
+          saved.cyberAccessProgram,
+        );
+        expect(_account(controller).settingsRevision, saved.settingsRevision);
+        expect(_select(tester).initialValue, 'daybreak_blue');
+        expect(
+          api.settingsWrites,
+          1,
+        ); // Refresh is a read, never mutation replay.
+        expect(controller.errorMessage, isNull);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('failed save restores the persisted selection', (tester) async {
     final api = _CyberApi()..settingsFailure = StateError('offline');
     final controller = await _mount(tester, api);
@@ -413,6 +492,7 @@ Future<WorkbenchController> _mount(
     terminalCommands: PreviewTerminalCommandService(),
     previewMode: true,
     closeRuntime: api.preview.close,
+    initialPreferences: WorkbenchPreferences(language: language),
   );
   addTearDown(controller.dispose);
   controller.data = await api.preview.loadDashboard();
@@ -453,6 +533,8 @@ final class _CyberApi extends Fake implements ControlApi {
   Completer<UpstreamModelCatalog>? pending;
   Object? failure;
   Object? settingsFailure;
+  bool timeoutAfterSettingsCommit = false;
+  int settingsWrites = 0;
   Map<String, List<String>?>? modelPrograms;
 
   Future<UpstreamModelCatalog> catalog(
@@ -502,18 +584,29 @@ final class _CyberApi extends Fake implements ControlApi {
       preview.accountFacts(id, history: history);
 
   @override
+  Future<DashboardData> loadDashboard() => preview.loadDashboard();
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() => preview.pendingApprovals();
+
+  @override
   Future<ProviderAccount> setProviderAccountSettings(
     ProviderAccount account, {
     required EgressProfileRevision? egressProfile,
     required bool automaticRefresh,
     String? cyberAccessProgram,
-  }) {
-    if (settingsFailure != null) return Future.error(settingsFailure!);
-    return preview.setProviderAccountSettings(
+  }) async {
+    settingsWrites++;
+    if (settingsFailure != null) throw settingsFailure!;
+    final saved = await preview.setProviderAccountSettings(
       account,
       egressProfile: egressProfile,
       automaticRefresh: automaticRefresh,
       cyberAccessProgram: cyberAccessProgram,
     );
+    if (timeoutAfterSettingsCommit) {
+      throw ControlRequestTimeout(const Duration(seconds: 30));
+    }
+    return saved;
   }
 }

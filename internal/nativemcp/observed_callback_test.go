@@ -401,7 +401,12 @@ func (observer approvalPublicationObserver) RequestApproval(ctx context.Context,
 func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 	// This is a capacity/reclamation test, not a pre-publication latency SLA.
 	// Keep the real three-second decision expiry and bound the entire fixture.
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	deadline, bounded := t.Deadline()
+	if !bounded {
+		deadline = time.Now().Add(15 * time.Minute)
+	}
+	// Leave teardown time within the runner's normal or race execution budget.
+	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
 	defer cancel()
 	published := make(chan nativetool.Approval, 1)
 	f := newNativeFixtureWithApprovalObservation(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, authoredEgress(t, egressprofile.Direct()), toolapproval.Config{DecisionTimeout: 3 * time.Second}, func(approval nativetool.Approval) {
@@ -511,7 +516,14 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 		done := make(chan Terminal, 1)
 		go func() { done <- f.executor.Serve(ctx, child, httptest.NewRecorder()) }()
 		approval := awaitApproval(child.id, done)
-		if _, err := f.store.NativeToolRepository().DecideApproval(ctx, nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionDeny, IdempotencyKey: "capacity-deny-" + identity, ObservedAt: time.Now().UTC()}); err != nil {
+		decisionStarted := time.Now().UTC()
+		if _, err := f.store.NativeToolRepository().DecideApproval(ctx, nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionDeny, IdempotencyKey: "capacity-deny-" + identity, ObservedAt: decisionStarted}); err != nil {
+			t.Logf("callback=%d published=%+v decisionStarted=%s decisionElapsed=%s", i+1, approval, decisionStarted.Format(time.RFC3339Nano), time.Since(decisionStarted))
+			dumpFailure()
+			proof, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			latest, readErr := f.store.NativeToolRepository().GetApproval(proof, approval.ID)
+			stop()
+			t.Logf("latest approval=%+v read=%v", latest, readErr)
 			t.Fatal(err)
 		}
 		if got := awaitTerminal(done); got.Outcome == OutcomeCompleted {
