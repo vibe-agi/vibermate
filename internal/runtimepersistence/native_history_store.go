@@ -118,12 +118,12 @@ func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.Re
 		return err
 	}
 	defer finish()
-	tx, err := s.store.database.BeginTx(operation, nil)
+	tx, err := beginObservationTransaction(operation, s.store.database)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := checkRecordingReplayAdmission(operation, tx, h.Scope); err != nil {
+	if err := checkRecordingReplayAdmission(operation, tx.Tx, h.Scope); err != nil {
 		return err
 	}
 	p := h.Observation.Operation
@@ -145,7 +145,7 @@ func (s *ObservationStore) PutNativeHistory(ctx context.Context, h nativetool.Re
 	if expiryErr != nil && !errors.Is(expiryErr, sql.ErrNoRows) {
 		return expiryErr
 	}
-	if err := publishNativeInspectionIndex(operation, tx, inspectionIdentity(p), h.Scope, p.Revision); err != nil {
+	if err := publishNativeInspectionIndex(operation, tx.Tx, inspectionIdentity(p), h.Scope, p.Revision); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(operation, `INSERT INTO native_history_snapshots(`+nativeHistoryColumns+`) VALUES(`+strings.TrimSuffix(strings.Repeat("?,", 28), ",")+`)`, nativeHistoryArgs(h)...); err != nil {

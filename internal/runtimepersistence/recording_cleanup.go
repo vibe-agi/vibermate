@@ -167,7 +167,7 @@ func (s *ObservationStore) PurgeExpiredRecordingUsage(ctx context.Context, contr
 				if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=FULL`); err != nil {
 					return err
 				}
-				tx, err := conn.BeginTx(ctx, nil)
+				tx, err := beginObservationOnConn(ctx, conn, nil)
 				if err != nil {
 					return err
 				}

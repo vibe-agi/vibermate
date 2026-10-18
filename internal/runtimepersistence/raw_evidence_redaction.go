@@ -32,13 +32,13 @@ func (repository *rawEvidenceRepository) RedactionSalt(
 		return nil, err
 	}
 	defer finish()
-	transaction, err := repository.database.BeginTx(operation, nil)
+	transaction, err := beginObservationTransaction(operation, repository.database)
 	if err != nil {
 		return nil, fmt.Errorf("begin raw evidence redaction salt: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
 
-	salt, err := readRedactionSalt(operation, transaction)
+	salt, err := readRedactionSalt(operation, transaction.Tx)
 	if err == nil {
 		return salt, nil
 	}
@@ -60,7 +60,7 @@ func (repository *rawEvidenceRepository) RedactionSalt(
 	}
 	// Re-read rather than returning the generated value: a concurrent creator
 	// may have won, and the stored row is the only authority.
-	salt, err = readRedactionSalt(operation, transaction)
+	salt, err = readRedactionSalt(operation, transaction.Tx)
 	if err != nil {
 		return nil, err
 	}

@@ -41,7 +41,7 @@ func nextRecordingDenialHash(previous [32]byte, kind, id string) [32]byte {
 // negative state only and can never authorize destructive source cleanup.
 func readRecordingDenialCoverage(ctx context.Context, tx *sql.Tx, alias string, expected recording.InspectionStamp) (certificate recordingDenialCertificate, result error) {
 	defer func() {
-		if result != nil {
+		if result != nil && !errors.Is(result, context.Canceled) && !errors.Is(result, context.DeadlineExceeded) {
 			result = errors.Join(ErrRecordingPrivacyUnavailable, result)
 		}
 	}()
@@ -128,7 +128,7 @@ func (s *ObservationStore) certifyRecordingIdentities(ctx context.Context, contr
 	}
 	defer finish()
 	var certificate recordingDenialCertificate
-	err = fullSynchronousTransaction(operation, s.store.database, func(tx *sql.Tx) error {
+	err = fullSynchronousObservationTransaction(operation, s.store.database, func(tx *sql.Tx) error {
 		var err error
 		certificate, err = readRecordingDenialCoverage(operation, tx, "main", snapshot.Stamp)
 		if err != nil {
@@ -187,7 +187,13 @@ func (s *ControlStore) certifyRecordingDenials(ctx context.Context, previous rec
 	})
 }
 
-func fullSynchronousTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) (result error) {
+func fullSynchronousTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) error {
+	return fullSynchronousOwnedTransaction(ctx, db, work, false)
+}
+func fullSynchronousObservationTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error) error {
+	return fullSynchronousOwnedTransaction(ctx, db, work, true)
+}
+func fullSynchronousOwnedTransaction(ctx context.Context, db *sql.DB, work func(*sql.Tx) error, observation bool) (result error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
@@ -202,13 +208,20 @@ func fullSynchronousTransaction(ctx context.Context, db *sql.DB, work func(*sql.
 		_, err := conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA synchronous=NORMAL`)
 		result = errors.Join(result, err)
 	}()
-	tx, err := conn.BeginTx(ctx, nil)
+	txContext := ctx
+	if observation {
+		txContext = context.WithoutCancel(ctx)
+	}
+	tx, err := conn.BeginTx(txContext, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if err = work(tx); err != nil {
 		return err
+	}
+	if observation && ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("certify recording privacy state: %w", err)

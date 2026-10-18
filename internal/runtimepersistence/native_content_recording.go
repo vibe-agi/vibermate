@@ -58,12 +58,12 @@ func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.Co
 		return err
 	}
 	defer finish()
-	tx, err := s.store.database.BeginTx(operation, nil)
+	tx, err := beginObservationTransaction(operation, s.store.database)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := checkRecordingReplayAdmission(operation, tx, v.Identity.Scope); err != nil {
+	if err := checkRecordingReplayAdmission(operation, tx.Tx, v.Identity.Scope); err != nil {
 		return err
 	}
 	existing, _, err := scanNativeContent(tx.QueryRowContext(operation, `SELECT `+nativeContentColumns+` FROM native_tool_contents WHERE operation_id=? LIMIT 1`, v.Identity.OperationID))
@@ -85,7 +85,7 @@ func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.Co
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	digest, err := storeEvidenceBody(operation, tx, v.Body)
+	digest, err := storeEvidenceBody(operation, tx.Tx, v.Body)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (s *ObservationStore) PutNativeContent(ctx context.Context, v nativetool.Co
 	if err != nil {
 		return err
 	}
-	if err := publishNativeInspectionIndex(operation, tx, v.Identity.InspectionIdentity(), v.Identity.Scope, 0); err != nil {
+	if err := publishNativeInspectionIndex(operation, tx.Tx, v.Identity.InspectionIdentity(), v.Identity.Scope, 0); err != nil {
 		return err
 	}
 	return tx.Commit()

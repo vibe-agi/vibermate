@@ -37,13 +37,13 @@ func (s *Store) PutACP(ctx context.Context, r acpobservation.Record) (writeErr e
 		return err
 	}
 	defer finish()
-	tx, err := s.database.BeginTx(operation, nil)
+	tx, err := beginObservationTransaction(operation, s.database)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	if s.observationOnly {
-		if err := checkRecordingReplayAdmission(operation, tx, r.Scope); err != nil {
+		if err := checkRecordingReplayAdmission(operation, tx.Tx, r.Scope); err != nil {
 			return err
 		}
 	}

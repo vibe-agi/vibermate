@@ -823,3 +823,22 @@ func TestFailedStartGuardHandoffIsAtomicWithActualCompletion(t *testing.T) {
 		t.Fatal("duplicate handoff released a later owner")
 	}
 }
+
+// Invalidation closes admission/catalog but must not dispose an idle certified
+// physical writer. This distinguishes it from canceled in-flight Raw SQL.
+func TestRuntimeIdleRecordingInvalidationKeepsCleanShutdown(t *testing.T) {
+	r, err := Start(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRecording(t, r)
+	r.recordingStorage.invalidateRecordingSource()
+	if err := r.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.ShutdownDone():
+	default:
+		t.Fatal("shutdown ownership did not join")
+	}
+}
