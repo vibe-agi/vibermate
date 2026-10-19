@@ -230,6 +230,10 @@ func executeContext(
 		err = nil
 	}
 	if err != nil {
+		var managedFailure *runlauncher.ManagedAuthError
+		if errors.As(err, &managedFailure) {
+			return 2, launchFailureKey(err)
+		}
 		return 2, keyUsage
 	}
 	launcherConfig := runlauncher.Config{
@@ -273,7 +277,7 @@ func executeContext(
 	if acp != nil {
 		code, err = launcher.RunACP(ctx, runlauncher.ACPLaunchRequest{Command: acp.command, RecordContent: acp.recordContent})
 	} else {
-		code, err = launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: run.environmentID, Command: run.command})
+		code, err = launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: run.environmentID, Command: run.command, ManagedAuth: run.managedAuth})
 	}
 	if err == nil {
 		return code, ""
@@ -305,6 +309,10 @@ func executeContext(
 }
 
 func launchFailureKey(err error) string {
+	var managedFailure *runlauncher.ManagedAuthError
+	if errors.As(err, &managedFailure) {
+		return "cli.error.managedAuth." + managedFailure.Reason
+	}
 	var probeFailure *runlauncher.CodexProbeFailure
 	if errors.As(err, &probeFailure) {
 		return "cli.error.codexProbeFailed"
@@ -349,6 +357,7 @@ func launchFailureKey(err error) string {
 }
 
 type runConfig struct {
+	managedAuth   bool
 	environmentID environment.EnvironmentID
 	server        serverconnection.Target
 	command       []string
@@ -363,9 +372,18 @@ func parseRun(arguments []string) (runConfig, error) {
 	var server serverconnection.Target
 	seenEnvironment := false
 	seenServer := false
+	managedAuth := false
 	index := 1
 	for index < len(arguments) && arguments[index] != "--" {
 		option := arguments[index]
+		if option == "--managed-auth" {
+			if managedAuth {
+				return runConfig{}, errors.New("--managed-auth may only be specified once")
+			}
+			managedAuth = true
+			index++
+			continue
+		}
 		if index+1 >= len(arguments) {
 			return runConfig{}, errors.New(option + " requires a value")
 		}
@@ -400,7 +418,11 @@ func parseRun(arguments []string) (runConfig, error) {
 		index+1 >= len(arguments) || arguments[index+1] == "" {
 		return runConfig{}, errors.New("run requires -- followed by a command")
 	}
+	if managedAuth && environmentID == "" {
+		return runConfig{}, runlauncher.ErrManagedAuthEnvironmentRequired
+	}
 	return runConfig{
+		managedAuth:   managedAuth,
 		environmentID: environmentID,
 		server:        server,
 		command:       append([]string(nil), arguments[index+1:]...),

@@ -361,6 +361,10 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 		err  error
 		want string
 	}{
+		{err: runlauncher.ErrManagedAuthEnvironmentRequired, want: "cli.error.managedAuth.environmentRequired"},
+		{err: runlauncher.ErrManagedAuthClientRequired, want: "cli.error.managedAuth.clientRequired"},
+		{err: runlauncher.ErrManagedAuthDestinationRequired, want: "cli.error.managedAuth.managedDestinationRequired"},
+		{err: runlauncher.ErrManagedAuthConflict, want: "cli.error.managedAuth.conflict"},
 		{err: runlauncher.ErrEnvironmentNotFound, want: keyEnvironmentMissing},
 		{err: runlauncher.ErrEnvironmentUnavailable, want: keyEnvironmentDown},
 		{err: runlauncher.ErrClientTargetNotConfigured, want: keyClientTargetNotConfigured},
@@ -863,5 +867,45 @@ func TestControlTimeoutDetailUsesFailureWording(t *testing.T) {
 				t.Fatalf("timeout classified as rejection: output=%q err=%v", stderr.String(), err)
 			}
 		})
+	}
+}
+
+func TestParseRunManagedAuth(t *testing.T) {
+	got, err := parseRun([]string{"run", "--env", "work", "--managed-auth", "--", "codex", "resume", "fixture-id"})
+	if err != nil {
+		t.Fatalf("opt-in rejected: %v", err)
+	}
+	if !got.managedAuth || got.environmentID.String() != "work" || !slices.Equal(got.command, []string{"codex", "resume", "fixture-id"}) {
+		t.Fatalf("opt-in invocation changed: %+v", got)
+	}
+	for _, args := range [][]string{
+		{"run", "--managed-auth", "--", "codex"},
+		{"run", "--env", "work", "--managed-auth", "--managed-auth", "--", "codex"},
+		{"run", "--env", "work", "--codex-provider", "--", "codex"},
+		{"run", "--env", "work", "--managed-auth=true", "--", "codex"},
+		{"run", "--env", "work", "--managed-auth", "true", "--", "codex"},
+		{"run", "--env", "work", "--managed-auth", "--"},
+	} {
+		if _, err := parseRun(args); err == nil {
+			t.Errorf("invalid opt-in accepted: %v", args)
+		}
+	}
+}
+
+func TestManagedAuthDiagnosticsAreLocalized(t *testing.T) {
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, locale := range []locales.Locale{locales.EnglishUS, locales.SimplifiedChinese} {
+		for _, key := range []string{"cli.managedAuth.active", "cli.error.managedAuth.environmentRequired", "cli.error.managedAuth.clientRequired", "cli.error.managedAuth.managedDestinationRequired", "cli.error.managedAuth.conflict"} {
+			if message, err := catalogs.Render(locale, key, nil); err != nil || message == "" {
+				t.Fatalf("missing managed-auth diagnostic: %s %s %v", locale, key, err)
+			}
+		}
+	}
+	code, key := execute([]string{"run", "--managed-auth", "--", "codex"}, []string{"LANG=en_US.UTF-8"}, &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 2 || key != "cli.error.managedAuth.environmentRequired" {
+		t.Fatalf("missing environment diagnostic: %d %s", code, key)
 	}
 }

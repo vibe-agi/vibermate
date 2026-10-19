@@ -50,6 +50,12 @@ func classifyCodexInvocation(args []string) (codexInvocationKind, error) {
 // arity could turn a value into a command and omit required isolation. Prompt
 // text and variadic image values are opaque, and -- ends option parsing.
 func parseCodexInvocation(args []string) (codexInvocationKind, bool, error) {
+	return walkCodexInvocation(args, nil)
+}
+
+// visit receives only parsed options, never positional prompts or option values
+// interpreted as options. Policy consumers share this fail-closed grammar.
+func walkCodexInvocation(args []string, visit func(name, value string) error) (codexInvocationKind, bool, error) {
 	kind, noDaemon := codexInteractive, false
 	scope := "root"
 	for i := 0; i < len(args); i++ {
@@ -108,6 +114,11 @@ func parseCodexInvocation(args []string) (codexInvocationKind, bool, error) {
 				if attached {
 					return 0, false, ErrCodexIsolationUnsupported
 				}
+				if visit != nil {
+					if err := visit(name, ""); err != nil {
+						return 0, false, err
+					}
+				}
 				continue
 			}
 			if !codexValueOption(name, scope) {
@@ -122,6 +133,11 @@ func parseCodexInvocation(args []string) (codexInvocationKind, bool, error) {
 			}
 			if value == "" {
 				return 0, false, ErrCodexIsolationUnsupported
+			}
+			if visit != nil {
+				if err := visit(name, value); err != nil {
+					return 0, false, err
+				}
 			}
 			// Clap's variadic scan applies only to a separate image value.
 			// An attached long/compact short value ends at this argv token.

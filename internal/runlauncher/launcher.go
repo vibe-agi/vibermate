@@ -99,6 +99,7 @@ type Launcher struct {
 // together with the exact child invocation. When absent, the Capture records
 // traffic while each request continues to its original destination.
 type LaunchRequest struct {
+	ManagedAuth   bool
 	EnvironmentID environment.EnvironmentID
 	Command       []string
 }
@@ -182,6 +183,9 @@ func (launcher *Launcher) Run(
 	command := append([]string(nil), request.Command...)
 	if launcher == nil || ctx == nil || len(command) == 0 || command[0] == "" {
 		return 1, errors.New("launcher requires a context and command")
+	}
+	if request.ManagedAuth && request.EnvironmentID == "" {
+		return 1, ErrManagedAuthEnvironmentRequired
 	}
 	if request.EnvironmentID != "" {
 		if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
@@ -281,6 +285,14 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	var providerArguments []string
+	if request.ManagedAuth {
+		providerArguments, environment, err = prepareManagedAuth(grant, request.EnvironmentID, command[1:], launcher.config.BaseEnvironment, environment)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+	}
 	childArguments, err := buildChildArguments(
 		command,
 		launcher.config.BaseEnvironment,
@@ -307,6 +319,10 @@ func (launcher *Launcher) Run(
 			}
 			return 1, err
 		}
+	}
+	if request.ManagedAuth {
+		childArguments = append(providerArguments, childArguments...)
+		launcher.announceManagedAuth()
 	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
 
