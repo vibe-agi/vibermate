@@ -29,7 +29,7 @@ func TestOwnershipAcrossLanes(t *testing.T) {
 		t.Fatalf("ownership lost: %+v", s)
 	}
 	// Dequeue transfers the same pointer: it does not release ownership.
-	dequeued := queued
+	dequeued := *queued
 	producer.Release()
 	producer.Release()
 	if !dequeued.TryGrow(32) {
@@ -38,6 +38,10 @@ func TestOwnershipAcrossLanes(t *testing.T) {
 	dequeued.Shrink(32)
 	worker.Release()
 	dequeued.Release()
+	queued.Release()
+	if queued.TryGrow(1) {
+		t.Fatal("value copy released only one alias")
+	}
 	if s := b.Snapshot(); s.ReservedRecords != 0 || s.ReservedBytes != 0 {
 		t.Fatalf("leak: %+v", s)
 	}

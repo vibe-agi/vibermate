@@ -566,14 +566,10 @@ func runRetainedBodyJoin(t *testing.T, expired bool) {
 		<-sink.entered
 	}
 	requestCtx := t.Context()
-	var cancelRequest context.CancelFunc
 	var releaseWitness func()
 	defer func() {
 		if releaseWitness != nil {
 			releaseWitness()
-		}
-		if cancelRequest != nil {
-			cancelRequest()
 		}
 	}()
 	var retirement <-chan time.Time
@@ -596,7 +592,9 @@ func runRetainedBodyJoin(t *testing.T, expired bool) {
 		f.transport.Proxy = http.ProxyURL(proxy)
 		// The client timer is not the expiry source. This one held-owner case
 		// gives actual setup/deadline retirement a separate bounded caller budget.
-		requestCtx, cancelRequest = context.WithTimeout(t.Context(), 30*time.Second)
+		bounded, cancelRequest := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancelRequest()
+		requestCtx = bounded
 		f.client.Timeout = 0
 		expiry = time.UnixMilli(grant.Run.ExpiresAt.UnixMilli()).UTC()
 		expiredID = grant.Run.ID

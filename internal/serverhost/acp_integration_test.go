@@ -37,6 +37,7 @@ func TestRemoteACPUsesRuntimeLoginAndOwnerOnlyManagement(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer shutdownServer(t, host)
+			waitServerRecording(t, host.Runtime())
 			origin := host.Status().Scheme + "://" + host.Status().ListenAddress
 			config := runlauncher.RemoteConfig{Target: mustServerTarget(t, origin), StateDirectory: filepath.Join(root, "client-state"), DisplayName: "ACP test editor", Clock: productruntime.SystemClock{}, Random: rand.Reader}
 			loginRemoteTestUser(t, host, config)
@@ -78,6 +79,24 @@ func TestRemoteACPUsesRuntimeLoginAndOwnerOnlyManagement(t *testing.T) {
 				}
 				done <- err
 			}()
+			// The child is attached but no ACP payload has been sent. Wait for the
+			// original Capture to be included in the optional visibility mirror.
+			attachDeadline := time.Now().Add(10 * time.Second)
+			for {
+				captures, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(captures.Items) == 1 && captures.Items[0].ProcessID > 0 {
+					break
+				}
+				if time.Now().After(attachDeadline) {
+					t.Fatal("ACP child did not attach")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			waitServerRecording(t, host.Runtime())
+
 			if _, err := io.WriteString(editorInput, "{\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1}}\n"); err != nil {
 				t.Fatal(err)
 			}
@@ -91,6 +110,7 @@ func TestRemoteACPUsesRuntimeLoginAndOwnerOnlyManagement(t *testing.T) {
 			if err := <-done; err != nil {
 				t.Fatal(err)
 			}
+			waitServerRecordingSettled(t, host.Runtime())
 			page, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
 			if err != nil || len(page.Items) != 1 {
 				t.Fatal("missing remote Capture")

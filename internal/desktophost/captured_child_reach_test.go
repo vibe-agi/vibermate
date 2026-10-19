@@ -41,6 +41,13 @@ const (
 // needs no external tool and still exercises a real process through the real
 // launcher.
 func TestMain(m *testing.M) {
+	if os.Getenv("VIBERMATE_RECORDING_FIXTURE_HANDOFF") == "1" {
+		fmt.Fprint(os.Stdout, "R")
+		marker := make([]byte, 1)
+		if _, err := io.ReadFull(os.Stdin, marker); err != nil || marker[0] != 'G' {
+			os.Exit(2)
+		}
+	}
 	if os.Getenv(childManagedEnvironment) != "" {
 		os.Exit(runCapturedManagedRequest())
 	}
@@ -279,15 +286,28 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	input, release, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer release.Close()
+	ready, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	defer output.Close()
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery: sessionFile,
 		BaseEnvironment: []string{
 			"PATH=/usr/bin:/bin",
+			"VIBERMATE_RECORDING_FIXTURE_HANDOFF=1",
 			childMarkerEnvironment + "=http://" +
 				listener.Addr().String() + "/probe",
 		},
-		Stdin:              strings.NewReader(""),
-		Stdout:             io.Discard,
+		Stdin:              input,
+		Stdout:             output,
 		Stderr:             os.Stderr,
 		HeartbeatInterval:  10 * time.Millisecond,
 		ControlTimeout:     2 * time.Second,
@@ -301,14 +321,29 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		20*time.Second,
 	)
 	defer cancelRun()
-	exitCode, err := launcher.Run(runContext, transparentLaunch(os.Args[0]))
-	if err != nil || exitCode != 0 {
-		t.Fatalf(
-			"a captured child could not reach a non-model host: exit=%d err=%v",
-			exitCode,
-			err,
-		)
+	done := make(chan error, 1)
+	go func() {
+		code, err := launcher.Run(runContext, transparentLaunch(os.Args[0]))
+		if err == nil && code != 0 {
+			err = fmt.Errorf("child exit %d", code)
+		}
+		output.Close()
+		done <- err
+	}()
+	deadline, _ := runContext.Deadline()
+	ready.SetReadDeadline(deadline)
+	marker := make([]byte, 1)
+	if _, err := io.ReadFull(ready, marker); err != nil || marker[0] != 'R' {
+		t.Fatalf("child handoff: %q %v", marker, err)
 	}
+	waitHostInspection(t, host.Runtime())
+	if _, err := release.Write([]byte("G")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	waitHostRecordingSettled(t, host.Runtime())
 
 	// A successful fetch alone proves nothing: Go's default proxy function
 	// skips loopback, so the child could have connected directly. The proxy

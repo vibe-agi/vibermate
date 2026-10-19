@@ -39,7 +39,6 @@ func TestCandidateDeepResponseAndNextHistoryThroughCompleteAndPagedHTTP(t *testi
 	}
 	runtime := startRuntimeWithSecrets(t, newCredentialStoreFixture(), exchange.ResourcePolicy{Content: limits, RequestBytes: requestBytes, ResponseBytes: responseBytes, SlotBytes: requestBytes + responseBytes, ActiveBytes: 4 * (requestBytes + responseBytes)})
 	defer shutdownRuntime(t, runtime)
-	ctx := context.Background()
 	raw := `{"a":` + strings.Repeat("[", 9999) + "0" + strings.Repeat("]", 9999) + "}"
 	arguments, err := protocolcore.NewJSONObject([]byte(raw), protocolcore.MaxToolJSONBytes)
 	if err != nil {
@@ -53,9 +52,9 @@ func TestCandidateDeepResponseAndNextHistoryThroughCompleteAndPagedHTTP(t *testi
 	text, _ := protocolcore.NewTextBlock("question")
 	request := protocolcore.Request{RequestedModel: "m", EffectiveModel: "m", Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{text}}}}
 	response := protocolcore.Response{ID: "response-deep", RequestedModel: "m", EffectiveModel: "m", ReportedModel: "m", StopReason: protocolcore.StopReasonToolUse, Blocks: []protocolcore.ContentBlock{call}}
-	parent := exchangecontent.ParentRef{CaptureRunID: "deep-run"}
+	captureID, scope := createScopedFixtureCapture(t, runtime)
+	parent := exchangecontent.ParentRef{CaptureRunID: captureID}
 	frozen := exchangecontent.FrozenRef{EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1}
-	recorder := runtime.ExchangeContents().(exchangecontent.SourceRecorder)
 	for _, id := range []string{"deep-response", "deep-next-history"} {
 		var terminal *protocolcore.Response = &response
 		if id == "deep-next-history" {
@@ -66,17 +65,12 @@ func TestCandidateDeepResponseAndNextHistoryThroughCompleteAndPagedHTTP(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = recorder.RecordSource(ctx, source); err != nil {
-			t.Fatal(err)
-		}
+		appendScopedFixtureContent(t, runtime, scope, source)
 		conversation, err := agentconversation.Project(agentconversation.ProjectionInput{CaptureRunID: parent.CaptureRunID, ExchangeID: id, SourceDisplayName: "Codex", Request: &request})
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = runtime.Activities().Record(ctx, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "deep-connection", Conversation: conversation})
-		if err != nil {
-			t.Fatal(err)
-		}
+		appendScopedFixtureActivity(t, runtime, scope, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "deep-connection", Conversation: conversation})
 	}
 	app, err := desktopcontrol.New(desktopcontrol.Options{ContentLimits: &limits, Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: desktopcontrol.SystemClock{}})
 	if err != nil {

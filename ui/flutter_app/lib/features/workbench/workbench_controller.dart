@@ -904,6 +904,7 @@ final class WorkbenchController extends ChangeNotifier
   bool storageLocationLoading = false;
   int _storageLocationGeneration = 0;
   bool _storageLocationRefreshRequested = false;
+  Future<void>? _storageLocationRefresh;
   bool storageLocationFailed = false;
   bool storageCleanupRunning = false;
   bool storageArchivePreviewLoading = false;
@@ -1517,7 +1518,7 @@ final class WorkbenchController extends ChangeNotifier
       WidgetsFlutterBinding.ensureInitialized().addObserver(this);
       _observingLifecycle = true;
     }
-    await refresh();
+    await _refreshDashboard(awaitDetail: false);
     if (_disposed) return;
     if (terminalManagement) await _maintainTerminalCommand();
     if (_disposed) return;
@@ -1709,9 +1710,13 @@ final class WorkbenchController extends ChangeNotifier
     await _refreshDashboard(selectDefaults: selectDefaults);
   }
 
-  Future<bool> refreshCodexReauthorizationAccount() => _refreshDashboard();
+  Future<bool> refreshCodexReauthorizationAccount() =>
+      _refreshDashboard(awaitDetail: false);
 
-  Future<bool> _refreshDashboard({bool selectDefaults = false}) async {
+  Future<bool> _refreshDashboard({
+    bool selectDefaults = false,
+    bool awaitDetail = true,
+  }) async {
     if (_disposed || inventoryMutating || environmentMutating) return false;
     final generation = ++_dashboardGeneration;
     captureOverviewRefresh += 1;
@@ -1727,10 +1732,19 @@ final class WorkbenchController extends ChangeNotifier
       loading = false;
       _startProviderAccountQuotaPolling();
       notifyListeners();
+      final refreshes = <Future<void>>[refreshPendingApprovals()];
       if (selectedCapture != null) {
-        unawaited(_loadCaptureDetail(selectedCapture!));
+        // Explicit refresh awaits visible evidence; initialization and account
+        // readiness remain independent of this optional read. Approval
+        // discovery starts concurrently in both cases.
+        final detail = _loadCaptureDetail(selectedCapture!);
+        if (awaitDetail) {
+          refreshes.add(detail);
+        } else {
+          unawaited(detail);
+        }
       }
-      await refreshPendingApprovals();
+      await Future.wait(refreshes);
       if (section == WorkbenchSection.network) {
         unawaited(_refreshNetwork());
       }
@@ -2094,45 +2108,58 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<void> refreshStorageLocation() async {
     if (_disposed) return;
-    if (storageLocationLoading) {
+    final running = _storageLocationRefresh;
+    if (running != null) {
       _storageLocationRefreshRequested = true;
+      await running;
       return;
     }
-    storageLocationLoading = true;
+    final completion = Completer<void>();
+    final refresh = completion.future;
+    _storageLocationRefresh = refresh;
     try {
-      do {
-        _storageLocationRefreshRequested = false;
-        final generation = _storageLocationGeneration;
-        storageLocationFailed = false;
-        notifyListeners();
-        try {
-          final location = await _api.storageLocation();
-          if (_disposed) return;
-          // Cleanup acceptance invalidates both the statistics and certificate
-          // from earlier reads. The owner drains the queued fresh read below.
-          if (generation != _storageLocationGeneration) continue;
-          previousStorageLocation = storageLocation;
-          storageLocation = location;
-          if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
-              !location.cleanupPreview.cleanupPending &&
-              location.lastCleanup != null) {
-            storageCleanupNotice = location.lastCleanup!.countsIncomplete
-                ? 'settings.storage.cleanup_partial'
-                : 'settings.storage.cleanup_complete';
-          }
-        } catch (_) {
-          if (_disposed) return;
-          if (generation == _storageLocationGeneration) {
-            storageLocationFailed = true;
-          }
-        }
-      } while (_storageLocationRefreshRequested && !_disposed);
+      await _refreshStorageLocationLoop();
     } finally {
+      if (identical(_storageLocationRefresh, refresh)) {
+        _storageLocationRefresh = null;
+      }
+      completion.complete();
       if (!_disposed) {
         storageLocationLoading = false;
         notifyListeners();
       }
     }
+  }
+
+  Future<void> _refreshStorageLocationLoop() async {
+    storageLocationLoading = true;
+    do {
+      _storageLocationRefreshRequested = false;
+      final generation = _storageLocationGeneration;
+      storageLocationFailed = false;
+      notifyListeners();
+      try {
+        final location = await _api.storageLocation();
+        if (_disposed) return;
+        // Cleanup acceptance invalidates both the statistics and certificate
+        // from earlier reads. The owner drains the queued fresh read below.
+        if (generation != _storageLocationGeneration) continue;
+        previousStorageLocation = storageLocation;
+        storageLocation = location;
+        if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
+            !location.cleanupPreview.cleanupPending &&
+            location.lastCleanup != null) {
+          storageCleanupNotice = location.lastCleanup!.countsIncomplete
+              ? 'settings.storage.cleanup_partial'
+              : 'settings.storage.cleanup_complete';
+        }
+      } catch (_) {
+        if (_disposed) return;
+        if (generation == _storageLocationGeneration) {
+          storageLocationFailed = true;
+        }
+      }
+    } while (_storageLocationRefreshRequested && !_disposed);
   }
 
   Future<DeletionOutcome> cleanupExpiredEvidence() async {
@@ -3483,7 +3510,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<void> finishCodexReauthorization(ProviderAccount account) async {
     invalidateProviderAccountQuota(account);
-    await refresh();
+    await _refreshDashboard(awaitDetail: false);
     if (_disposed) return;
     inventoryNotice = 'account_reauthorized';
     notifyListeners();
@@ -3958,6 +3985,13 @@ final class WorkbenchController extends ChangeNotifier
     if (selectedCaptureKey == captureKey &&
         selectedAssignment != null &&
         captureDetailError == null) {
+      // Assignment can finish before optional detail during initialization.
+      // Explicit selection still promises complete visible evidence, while
+      // retaining independently loaded approval state for this same Capture.
+      final capture = selectedCapture;
+      if (_captureDetailLoads != 0 && capture != null) {
+        await _loadCaptureDetail(capture);
+      }
       return;
     }
     selectedCaptureKey = captureKey;
@@ -4558,6 +4592,7 @@ final class WorkbenchController extends ChangeNotifier
       if (error.status == 404 &&
           error.reasonCode == 'capture_assignment_not_found' &&
           !capture.isManual &&
+          capture.observation == 'waiting_for_traffic' &&
           !capture.running &&
           capture.managedRun?.processId == null) {
         return null;

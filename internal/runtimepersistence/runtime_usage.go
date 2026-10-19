@@ -50,59 +50,68 @@ func (store *Store) setUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	defer finish()
-	tx, err := store.database.BeginTx(operation, nil)
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	defer tx.Rollback()
-	current, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	since := now.Truncate(time.Millisecond)
-	if since.Before(now) {
-		since = since.Add(time.Millisecond)
-	}
-	result, err := tx.ExecContext(operation, `UPDATE runtime_usage_policy SET enabled=?,retention_days=?,revision=revision+1,
+	var updated runtimeusage.CollectionPolicy
+	apply := func(tx *sql.Tx) error {
+		current, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+		if err != nil {
+			return err
+		}
+		since := now.Truncate(time.Millisecond)
+		if since.Before(now) {
+			since = since.Add(time.Millisecond)
+		}
+		result, err := tx.ExecContext(operation, `UPDATE runtime_usage_policy SET enabled=?,retention_days=?,revision=revision+1,
  collecting_since_unix_ms=CASE WHEN enabled=0 AND ?=1 THEN ? ELSE collecting_since_unix_ms END WHERE singleton=1 AND revision=?`,
-		policy.Enabled, policy.RetentionDays, policy.Enabled, since.UnixMilli(), policy.Revision)
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	if count, err := result.RowsAffected(); err != nil || count != 1 {
-		return runtimeusage.CollectionPolicy{}, runtimeusage.ErrPolicyConflict
-	}
-	// Shorter retention applies immediately. Lengthening never resurrects or
-	// extends records collected under a shorter consented retention period.
-	if controlOnly && policy.RetentionDays < current.RetentionDays {
-		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_rules WHERE retention_days>=? AND through_policy_revision<=?`, policy.RetentionDays, current.Revision); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+			policy.Enabled, policy.RetentionDays, policy.Enabled, since.UnixMilli(), policy.Revision)
+		if err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_rules(retention_days,through_policy_revision) VALUES(?,?) ON CONFLICT(retention_days) DO UPDATE SET through_policy_revision=MAX(through_policy_revision,excluded.through_policy_revision)`, policy.RetentionDays, current.Revision); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+		if count, err := result.RowsAffected(); err != nil || count != 1 {
+			return runtimeusage.ErrPolicyConflict
 		}
-	}
-	if !controlOnly && policy.RetentionDays < current.RetentionDays {
-		// The new cap dominates every longer cap over older sequences. One row
-		// per duration bounds pending work even if settings change repeatedly.
-		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+		// Shorter retention applies immediately. Lengthening never resurrects or
+		// extends records collected under a shorter consented retention period.
+		if controlOnly && policy.RetentionDays < current.RetentionDays {
+			if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_rules WHERE retention_days>=? AND through_policy_revision<=?`, policy.RetentionDays, current.Revision); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_rules(retention_days,through_policy_revision) VALUES(?,?) ON CONFLICT(retention_days) DO UPDATE SET through_policy_revision=MAX(through_policy_revision,excluded.through_policy_revision)`, policy.RetentionDays, current.Revision); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_caps(retention_days,through_sequence)
+		if !controlOnly && policy.RetentionDays < current.RetentionDays {
+			// The new cap dominates every longer cap over older sequences. One row
+			// per duration bounds pending work even if settings change repeatedly.
+			if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_caps(retention_days,through_sequence)
  SELECT ?,sequence FROM runtime_usage_observations ORDER BY sequence DESC LIMIT 1`, policy.RetentionDays); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+				return err
+			}
 		}
+		if controlOnly {
+			if err := requestRecordingCleanup(operation, tx, now); err != nil {
+				return err
+			}
+		}
+		updated, err = scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+		return err
 	}
 	if controlOnly {
-		if err := requestRecordingCleanup(operation, tx, now); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+		err = fullSynchronousTransaction(operation, store.database, apply)
+	} else {
+		var tx *sql.Tx
+		tx, err = store.database.BeginTx(operation, nil)
+		if err == nil {
+			defer tx.Rollback()
+			err = apply(tx)
+			if err == nil {
+				err = tx.Commit()
+			}
 		}
 	}
-	updated, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
 	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	return updated, nil

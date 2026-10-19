@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -544,4 +545,65 @@ func TestRuntimeRepeatedActualRawInitializationFailureRetainsFirstCause(t *testi
 	if status := r.Status(); status.State != RuntimeStateStopped || status.RecordingFailure == nil || status.Recording.CleanupPending {
 		t.Fatalf("retry failure health/ownership: %+v", status)
 	}
+}
+
+// Long batching keeps actual Raw work accepted but uncommitted until Flush.
+// Filling the shared budget then denies the worker's scratch growth, without
+// fabricating a settlement or a storage error.
+func TestProductRuntimeStatusReportsAcceptedDiscardedObservationLoss(t *testing.T) {
+	r := startTestRuntime(t, testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}))
+	defer shutdownRuntime(t, r)
+	waitRecording(t, r)
+	repo := &countingStatusRawRepository{Repository: r.recordingStorage.current.Load().store.RawEvidenceRepository()}
+	config := rawevidence.DefaultConfig()
+	config.FlushInterval = time.Hour
+	raw, err := rawevidence.Open(t.Context(), rawevidence.Options{Repository: repo, Budget: r.recordingBudget, Random: rand.Reader, Clock: r.clock, Config: config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Shutdown(context.Background())
+	stamp := r.recorder.ScopeStamp(captureidentity.Reference{})
+	observation := rawevidence.Observation{Context: rawevidence.Context{ObservationStamp: stamp, ScopeKind: rawevidence.ScopeRuntime, ExchangeID: "scratch-discard", AccountID: "synthetic-account", AccountRevision: 1, CredentialEpoch: 1, UpstreamEndpointID: "synthetic-endpoint", UpstreamEndpointRevision: 1, Recording: rawevidence.RecordingFull, RetentionDays: 1}, Layer: rawevidence.LayerProviderEgress, Method: "GET", Scheme: "https", Authority: "example.test", Path: "/", Complete: true, Representation: "http_message"}
+	if got := raw.TryObserve(stamp, observation); got != recording.Accepted {
+		t.Fatal("Raw not accepted", got)
+	}
+	stats := r.recordingBudget.Snapshot()
+	occupied, ok := r.recordingBudget.TryReserve(recording.Content, (64<<20)-stats.ReservedBytes)
+	if !ok {
+		t.Fatal("cannot occupy remaining shared bytes")
+	}
+	defer occupied.Release()
+	if err := raw.Flush(t.Context(), rawevidence.Watermark{}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.appends.Load() != 0 || !stamp.Current() {
+		t.Fatal("scratch refusal reached writer or invalidated original scope")
+	}
+	stats = r.recordingBudget.Snapshot()
+	if stats.ByKind[recording.Raw].Settlements[recording.Discarded].Records != 1 {
+		t.Fatalf("Raw worker did not settle known loss: %+v", stats)
+	}
+	occupied.Release()
+	status := r.Status()
+	if status.Recording.Dropped != 1 || status.Recording.Unconfirmed != 0 || status.Recording.State != RecordingDegraded || status.RecordingFailure != nil {
+		t.Fatalf("known worker loss hidden or fabricated write error: %+v", status)
+	}
+	if status.Recording.ReservedRecords != 0 || status.Recording.ReservedBytes != 0 {
+		t.Fatal("settled Raw retained capacity")
+	}
+	// Required control remains available after the optional loss.
+	dir := t.TempDir()
+	if _, err := r.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", CatalogRevision: 1, Lifetime: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type countingStatusRawRepository struct {
+	rawevidence.Repository
+	appends atomic.Int32
+}
+
+func (r *countingStatusRawRepository) AppendBatch(ctx context.Context, rows []rawevidence.StoredEnvelope, at time.Time) error {
+	r.appends.Add(1)
+	return r.Repository.AppendBatch(ctx, rows, at)
 }

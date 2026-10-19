@@ -102,10 +102,16 @@ func TestServerSOCKSAccessAddressRejectedWithoutListener(t *testing.T) {
 }
 
 func TestSOCKSListenerHonorsServerIPAllowlist(t *testing.T) {
-	options := serverOptions(t, t.TempDir())
+	root := t.TempDir()
+	options := serverOptions(t, root)
 	options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
 	options.SOCKSListenAddress = "127.0.0.1:0"
 	options.TrustedProxies, _ = ipallowlist.Parse([]string{"127.0.0.1/32"})
+	seed, e := serverhost.Start(t.Context(), serverOptions(t, root))
+	if e != nil {
+		t.Fatal(e)
+	}
+	shutdownServer(t, seed)
 	store, e := ipallowlist.Open(filepath.Join(options.Runtime.Paths.DataDirectory(), "server-admin"), time.Now)
 	if e != nil {
 		t.Fatal(e)

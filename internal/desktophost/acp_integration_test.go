@@ -96,6 +96,24 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 					t.Fatalf("protocol response: %q %v; launcher: %v (%v); stderr: %s", line, err, launchErr, errors.Unwrap(launchErr), data)
 				}
 			}
+			// The child is attached but no ACP payload has been sent. Wait for the
+			// original Capture to be included in the optional visibility mirror.
+			attachDeadline := time.Now().Add(10 * time.Second)
+			for {
+				captures, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(captures.Items) == 1 && captures.Items[0].ProcessID > 0 {
+					break
+				}
+				if time.Now().After(attachDeadline) {
+					t.Fatal("ACP child did not attach")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			waitHostInspection(t, host.Runtime())
+
 			exchange(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}`, `"protocolVersion":1`)
 			exchange(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/editor/project","mcpServers":[]}}`, `"sessionId":"native-session"`)
 			if scenario.sleep {
@@ -136,6 +154,7 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 				data, _ := os.ReadFile(stderr.Name())
 				t.Fatalf("launcher: %v, stderr: %s", err, data)
 			}
+			waitHostRecordingSettled(t, host.Runtime())
 			page, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
 			if err != nil || len(page.Items) != 1 {
 				t.Fatalf("capture registration: %+v %v", page, err)

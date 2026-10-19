@@ -124,6 +124,18 @@ func (store *Store) DeleteCapture(
 	if _, err := deleteNativeContents(operation, transaction, `operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, captureKind, captureID); err != nil {
 		return CaptureDeletion{}, err
 	}
+	nativeAttempts, err := deleteCounted(
+		operation,
+		transaction,
+		`DELETE FROM native_tool_deliveries
+		  WHERE operation_id IN (SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`,
+		captureKind,
+		captureID,
+	)
+	if err != nil {
+		return CaptureDeletion{}, fmt.Errorf("delete Capture native deliveries: %w", err)
+	}
+	deletion.Attempts += nativeAttempts
 	if _, err := transaction.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, captureKind, captureID); err != nil {
 		return CaptureDeletion{}, err
 	}

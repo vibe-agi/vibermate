@@ -423,7 +423,7 @@ func TestSchemaSwitchPreparationThresholdAndCurrent2(t *testing.T) {
 			t.Fatalf("threshold=%v %v", got, err)
 		}
 	}
-	current, _ := backupFixture(t)
+	current := frozenRevision2UpgradeFixture(t)
 	owner, host := upgradeGuards(t, current)
 	if _, err := UpgradeSchemaOwned(context.Background(), current, filepath.Join(filepath.Dir(current), "unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("small current2 prepared"); return nil }); err != nil {
 		t.Fatal(err)
@@ -431,7 +431,7 @@ func TestSchemaSwitchPreparationThresholdAndCurrent2(t *testing.T) {
 }
 
 func TestSchemaSwitchCurrent2RequiresOwnershipThroughInspection(t *testing.T) {
-	source, _ := backupFixture(t)
+	source := frozenRevision2UpgradeFixture(t)
 	owner, host := upgradeGuards(t, source)
 	runner := newSchemaUpgradeRunner()
 	inspect := runner.inspect
@@ -488,7 +488,7 @@ func TestSchemaSwitchPendingPublicBackupAndMoveProduceNoOutput(t *testing.T) {
 	}
 }
 func TestSchemaSwitchOrdinaryManifestRejectsOperationalReceipt(t *testing.T) {
-	source, _ := backupFixture(t)
+	source := frozenRevision2UpgradeFixture(t)
 	backup := filepath.Join(filepath.Dir(source), "backup")
 	if err := Backup(context.Background(), source, backup, time.Now().UTC()); err != nil {
 		t.Fatal(err)

@@ -56,60 +56,61 @@ func (s *ControlStore) DeleteCapture(ctx context.Context, kind, id string) (rele
 		return released, err
 	}
 	defer finish()
-	tx, err := s.store.database.BeginTx(operation, nil)
+	err = fullSynchronousTransaction(operation, s.store.database, func(tx *sql.Tx) error {
+		table, column := "capture_runs", "run_id"
+		if ref.Kind == captureidentity.KindManualCapture {
+			table, column = "manual_captures", "capture_id"
+		}
+		var exists int
+		if err := tx.QueryRowContext(operation, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+`=?)`, id).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return resourcedeletion.ErrTargetNotFound
+		}
+		fence, err := tx.ExecContext(operation, `UPDATE recording_capture_fences SET deleted=1 WHERE capture_kind=? AND capture_id=? AND deleted=0`, kind, id)
+		if err != nil {
+			return err
+		}
+		count, err := fence.RowsAffected()
+		if err != nil || count != 1 {
+			return errors.Join(ErrInspectionUnavailable, err)
+		}
+		if _, err = tx.ExecContext(operation, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1 WHERE singleton=1`); err != nil {
+			return err
+		}
+		if err = requestRecordingCleanup(operation, tx, time.Now().UTC()); err != nil {
+			return err
+		}
+		if err = revokeNativeScope(operation, tx, ref, time.Now().UTC()); err != nil {
+			return err
+		}
+		if released.Approvals, err = deleteCounted(operation, tx, `DELETE FROM native_tool_approvals WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, kind, id); err != nil {
+			return err
+		}
+		generalApprovals, err := deleteCounted(operation, tx, `DELETE FROM tool_approvals WHERE owner_kind='capture' AND owner_capture_kind=? AND owner_capture_id=?`, kind, id)
+		if err != nil {
+			return err
+		}
+		released.Approvals += generalApprovals
+		if released.Attempts, err = deleteCounted(operation, tx, `DELETE FROM native_tool_deliveries WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, kind, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(operation, `UPDATE native_tool_scopes SET state='closed',replay_barrier=1 WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
+			return err
+		}
+		if released.Assignments, err = deleteCounted(operation, tx, `DELETE FROM capture_environment_assignments WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
+			return err
+		}
+		if released.Captures, err = deleteCounted(operation, tx, `DELETE FROM `+table+` WHERE `+column+`=?`, id); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		return released, err
-	}
-	defer tx.Rollback()
-	table, column := "capture_runs", "run_id"
-	if ref.Kind == captureidentity.KindManualCapture {
-		table, column = "manual_captures", "capture_id"
-	}
-	var exists int
-	if err = tx.QueryRowContext(operation, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+`=?)`, id).Scan(&exists); err != nil {
-		return released, err
-	}
-	if exists != 1 {
-		return released, resourcedeletion.ErrTargetNotFound
-	}
-	fence, err := tx.ExecContext(operation, `UPDATE recording_capture_fences SET deleted=1 WHERE capture_kind=? AND capture_id=? AND deleted=0`, kind, id)
-	if err != nil {
-		return released, err
-	}
-	count, err := fence.RowsAffected()
-	if err != nil || count != 1 {
-		return released, errors.Join(ErrInspectionUnavailable, err)
-	}
-	if _, err = tx.ExecContext(operation, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1 WHERE singleton=1`); err != nil {
-		return released, err
-	}
-	if err = requestRecordingCleanup(operation, tx, time.Now().UTC()); err != nil {
-		return released, err
-	}
-	if err = revokeNativeScope(operation, tx, ref, time.Now().UTC()); err != nil {
-		return released, err
-	}
-	if released.Approvals, err = deleteCounted(operation, tx, `DELETE FROM native_tool_approvals WHERE operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, kind, id); err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	generalApprovals, err := deleteCounted(operation, tx, `DELETE FROM tool_approvals WHERE owner_kind='capture' AND owner_capture_kind=? AND owner_capture_id=?`, kind, id)
-	if err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	released.Approvals += generalApprovals
-	if _, err = tx.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	if _, err = tx.ExecContext(operation, `UPDATE native_tool_scopes SET state='closed',replay_barrier=1 WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	if released.Assignments, err = deleteCounted(operation, tx, `DELETE FROM capture_environment_assignments WHERE capture_kind=? AND capture_id=?`, kind, id); err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	if released.Captures, err = deleteCounted(operation, tx, `DELETE FROM `+table+` WHERE `+column+`=?`, id); err != nil {
-		return resourcedeletion.Released{}, err
-	}
-	if err = tx.Commit(); err != nil {
 		return resourcedeletion.Released{}, err
 	}
 	return released, nil
@@ -126,15 +127,9 @@ func (s *ControlStore) RequestRecordingCleanup(ctx context.Context, now time.Tim
 		return err
 	}
 	defer finish()
-	tx, err := s.store.database.BeginTx(operation, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err = requestRecordingCleanup(operation, tx, now); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return fullSynchronousTransaction(operation, s.store.database, func(tx *sql.Tx) error {
+		return requestRecordingCleanup(operation, tx, now)
+	})
 }
 
 // ClaimRecordingCleanup returns target, catalog generation and frozen cutoff.

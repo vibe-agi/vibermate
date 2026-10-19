@@ -2,6 +2,7 @@ package productruntime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,30 +43,61 @@ func (writer *observationUsageWriter) RecordUsage(context.Context, runtimeusage.
 	return writer.err
 }
 
+// Complements the actual SQL append-fault matrix in runtimepersistence and
+// the real host forwarding/restart test: every async failure stage keeps its
+// public warning without changing required readiness or actual owner drain.
 func TestQueuedObservationWarningPreservesReadinessAndCleanShutdown(t *testing.T) {
-	tracker := newStatusTracker("warning", hostcontract.KindDesktop, time.Now())
-	tracker.commitInitialized(3)
-	budget, _ := recording.NewBudget(recording.Limits{Records: 2, Bytes: 64 << 20})
-	q := newObservationRecorder(context.Background(), budget, nil, nil)
-	q.reportFailure = tracker.failRecording
-	writer := &warningPreparedActivity{failingPreparedActivity{writes: make(chan activity.Record, 1)}}
-	observer := activityAttemptObserver{queue: q, recorder: writer}
-	if err := observer.ObserveStart(context.Background(), exchange.StartObservation{ObservationStamp: q.ScopeStamp(captureidentity.Reference{})}); err != nil {
-		t.Fatal(err)
+	for _, stage := range []string{"activity_start", "activity_terminal", "usage"} {
+		t.Run(stage, func(t *testing.T) {
+			tracker := newStatusTracker("warning", hostcontract.KindDesktop, time.Now())
+			tracker.commitInitialized(3)
+			budget, _ := recording.NewBudget(recording.Limits{Records: 2, Bytes: 64 << 20})
+			q := newObservationRecorder(t.Context(), budget, nil, nil)
+			q.reportFailure = tracker.failRecording
+			defer q.Shutdown(context.Background())
+			writer := &warningPreparedActivity{failingPreparedActivity{writes: make(chan activity.Record, 1)}}
+			observer := activityAttemptObserver{queue: q, recorder: writer}
+			now := time.Now().UTC()
+			since := now.Add(-time.Hour)
+			q.publishUsagePolicy(runtimeusage.CollectionPolicy{Revision: 1, Enabled: true, RetentionDays: 7, CollectingSince: &since})
+			if stage == "usage" {
+				observer.recorder = &successfulWarningActivity{warningPreparedActivity: *writer}
+				observer.usage = &collectedUsageSink{values: make(chan runtimeusage.CollectedObservation, 1), err: errors.New("selected Usage append failure")}
+			}
+			stamp := q.ScopeStamp(captureidentity.Reference{})
+			var err error
+			if stage == "activity_start" {
+				err = observer.ObserveStart(t.Context(), exchange.StartObservation{ObservationStamp: stamp})
+			} else {
+				err = observer.ObserveTerminal(t.Context(), exchange.AttemptObservation{ObservationStamp: stamp, ExchangeID: "warning-exchange", Outcome: exchange.AttemptSucceeded, StartedAt: now, OccurredAt: now})
+			}
+			if err != nil {
+				t.Fatal("optional failure reached producer", err)
+			}
+			if err := q.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			status := tracker.snapshot()
+			if status.State != RuntimeStateInitialized || status.Storage != StorageStateHealthy || status.RecordingFailure == nil || status.RecordingFailure.Operation != stage || !status.RecordingFailure.Valid() {
+				t.Fatalf("asynchronous warning lost or authority failed: %+v", status)
+			}
+			if stats := budget.Snapshot(); stats.ReservedRecords != 0 || stats.ReservedBytes != 0 {
+				t.Fatal("settled warning leaked owner", stats)
+			}
+			tracker.beginStopping()
+			err = q.Shutdown(t.Context())
+			tracker.finishStopping(time.Now(), err)
+			if tracker.snapshot().State != RuntimeStateStopped {
+				t.Fatal("optional loss prevented clean shutdown")
+			}
+		})
 	}
-	if err := q.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	status := tracker.snapshot()
-	if status.State != RuntimeStateInitialized || status.Storage != StorageStateHealthy || status.RecordingFailure == nil || status.RecordingFailure.Operation != "activity_start" {
-		t.Fatalf("asynchronous warning lost or authority failed: %+v", status)
-	}
-	tracker.beginStopping()
-	err := q.Shutdown(context.Background())
-	tracker.finishStopping(time.Now(), err)
-	if tracker.snapshot().State != RuntimeStateStopped {
-		t.Fatal("optional loss prevented clean shutdown")
-	}
+}
+
+type successfulWarningActivity struct{ warningPreparedActivity }
+
+func (s *successfulWarningActivity) RecordScopedPrepared(_ context.Context, _ recording.Scope, r activity.Record) (activity.Record, error) {
+	return r, nil
 }
 
 type discardedPreparedActivity struct{ failingPreparedActivity }

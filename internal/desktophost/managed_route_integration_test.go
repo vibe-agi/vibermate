@@ -100,7 +100,7 @@ func TestManagedAnthropicRouteUsesOnlyFrozenAccountAcrossRestart(t *testing.T) {
 	accountID := createManagedAccount(t, first.Runtime().ProviderAccounts(), endpointID)
 	environmentID := publishManagedEnvironment(t, first, provider.URL, endpointID, accountID)
 	firstDigest := resolveEnvironmentDigest(t, first, environmentID)
-	runManagedChild(t, paths, environmentID, false)
+	runManagedChild(t, first, paths, environmentID, false)
 	assertManagedObservation(t, <-observed)
 	assertManagedEvidence(t, first, environmentID, accountID)
 	shutdownHost(t, first)
@@ -116,7 +116,7 @@ func TestManagedAnthropicRouteUsesOnlyFrozenAccountAcrossRestart(t *testing.T) {
 		view.Health.CredentialEpoch != 1 {
 		t.Fatalf("recovered ProviderAccount = %+v, %v", view, err)
 	}
-	runManagedChild(t, paths, environmentID, false)
+	runManagedChild(t, second, paths, environmentID, false)
 	assertManagedObservation(t, <-observed)
 	assertManagedEvidence(t, second, environmentID, accountID)
 
@@ -127,7 +127,7 @@ func TestManagedAnthropicRouteUsesOnlyFrozenAccountAcrossRestart(t *testing.T) {
 	if err := secondSecrets.Delete(context.Background(), account.Account.SecretRef); err != nil {
 		t.Fatal(err)
 	}
-	runManagedChild(t, paths, environmentID, true)
+	runManagedChild(t, second, paths, environmentID, true)
 	select {
 	case got := <-observed:
 		t.Fatalf("missing managed credential reached provider: %+v", got)
@@ -178,7 +178,7 @@ func TestManagedClaudeOAuthRouteUsesBearerCredential(t *testing.T) {
 		t, host.Runtime().ProviderAccounts(), endpointID, providerauth.StaticHeaderDriverRef(),
 	)
 	environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID)
-	runManagedChild(t, paths, environmentID, false)
+	runManagedChild(t, host, paths, environmentID, false)
 
 	got := <-observed
 	if got.path != "/v1/messages" || got.authorization != "Bearer "+managedSecret ||
@@ -222,7 +222,7 @@ func TestManagedRouteUsesConfiguredAPIPrefixExactlyOnce(t *testing.T) {
 			endpointID := createManagedEndpoint(t, host.Runtime().UpstreamEndpoints(), origin)
 			accountID := createManagedAccount(t, host.Runtime().ProviderAccounts(), endpointID)
 			environmentID := publishManagedEnvironment(t, host, origin, endpointID, accountID)
-			runManagedChild(t, paths, environmentID, false)
+			runManagedChild(t, host, paths, environmentID, false)
 		})
 	}
 }
@@ -259,7 +259,7 @@ func TestManagedTransformCannotOverrideRouteModel(t *testing.T) {
 			Policy: messagetransform.Policy{RequestJavaScript: `const payload = JSON.parse(request.body); payload.model = "script-model"; request.body = JSON.stringify(payload);`},
 		}}
 	})
-	runManagedChild(t, paths, environmentID, true)
+	runManagedChild(t, host, paths, environmentID, true)
 	select {
 	case got := <-observed:
 		t.Fatalf("transform escaped Model Mapping and reached the upstream: %s", got)
@@ -301,7 +301,7 @@ func TestManagedNonStreamingRequestCanWaitForModelComputation(t *testing.T) {
 	endpointID := createManagedEndpoint(t, host.Runtime().UpstreamEndpoints(), provider.URL)
 	accountID := createManagedAccount(t, host.Runtime().ProviderAccounts(), endpointID)
 	environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID)
-	runManagedChild(t, paths, environmentID, false)
+	runManagedChild(t, host, paths, environmentID, false)
 	assertManagedEvidence(t, host, environmentID, accountID)
 }
 
@@ -509,7 +509,7 @@ func TestManagedAnthropicNativeDefinitionsDoNotBypassClientToolPolicy(t *testing
 				environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID, func(value *environment.Environment) {
 					value.PolicySet = &environment.PolicySet{ToolMode: environment.ToolPolicyStrict}
 				})
-				runManagedChild(t, paths, environmentID, false, childManagedBody+"="+request,
+				runManagedChild(t, host, paths, environmentID, false, childManagedBody+"="+request,
 					childManagedResponse+"="+want, childManagedStatus+"="+wantStatus)
 				page, err := host.Runtime().Activities().ListExchanges(context.Background(), activity.PageRequest{Limit: 1, EnvironmentID: environmentID.String()})
 				if err != nil || len(page.Items) != 1 || page.Items[0].ReasonCode != "tool_decision_rejected" {
@@ -611,7 +611,7 @@ func TestManagedAnthropicRoutePreservesUpstreamErrors(t *testing.T) {
 			endpointID := createManagedEndpoint(t, host.Runtime().UpstreamEndpoints(), provider.URL)
 			accountID := createManagedAccount(t, host.Runtime().ProviderAccounts(), endpointID)
 			environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID)
-			runManagedChild(t, paths, environmentID, false,
+			runManagedChild(t, host, paths, environmentID, false,
 				childManagedBody+"="+request, childManagedResponse+"="+wantBody, childManagedStatus+"="+strconv.Itoa(test.status),
 				childManagedHeaders+`={"Retry-After":"60","Retry-After-Ms":"60000","Request-Id":"synthetic-request-id","X-Should-Retry":"false","Set-Cookie":"","Authorization":"","X-Codex-Turn-State":""}`)
 		})
@@ -659,7 +659,7 @@ func assertManagedAnthropicResponseWithToolPolicy(t *testing.T, mode environment
 		t.Fatal(err)
 	}
 	for round, body := range bodies {
-		runManagedChild(t, paths, environmentID, false, childManagedBody+"="+body, childManagedResponse+"="+response)
+		runManagedChild(t, host, paths, environmentID, false, childManagedBody+"="+body, childManagedResponse+"="+response)
 		var got, want any
 		if err := json.Unmarshal([]byte(<-observed), &got); err != nil {
 			t.Fatal(err)
@@ -941,13 +941,7 @@ func resolveEnvironmentDigest(
 	return snapshot.Digest().String()
 }
 
-func runManagedChild(
-	t *testing.T,
-	paths desktophost.Paths,
-	environmentID environment.EnvironmentID,
-	expectFailure bool,
-	extraEnvironment ...string,
-) {
+func runManagedChild(t *testing.T, host *desktophost.Host, paths desktophost.Paths, environmentID environment.EnvironmentID, expectFailure bool, extraEnvironment ...string) {
 	t.Helper()
 	discovery, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
@@ -957,9 +951,22 @@ func runManagedChild(
 		t.Fatal(err)
 	}
 	var stderr strings.Builder
+	input, release, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer release.Close()
+	ready, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	defer output.Close()
 	baseEnvironment := []string{
 		"PATH=/usr/bin:/bin",
 		childManagedEnvironment + "=1",
+		"VIBERMATE_RECORDING_FIXTURE_HANDOFF=1",
 		"ANTHROPIC_API_KEY=client-ambient-secret",
 		"ANTHROPIC_AUTH_TOKEN=client-ambient-auth-token",
 		"CLAUDE_CODE_OAUTH_TOKEN=client-oauth-secret",
@@ -971,7 +978,7 @@ func runManagedChild(
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery:       discovery,
 		BaseEnvironment: baseEnvironment,
-		Stdin:           strings.NewReader(""), Stdout: io.Discard, Stderr: &stderr,
+		Stdin:           input, Stdout: output, Stderr: &stderr,
 		HeartbeatInterval: 10 * time.Millisecond,
 		ControlTimeout:    2 * time.Second, CreateTimeout: 5 * time.Second,
 		TerminationTimeout: 2 * time.Second,
@@ -981,13 +988,29 @@ func runManagedChild(
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
-	exitCode, err := launcher.Run(ctx, runlauncher.LaunchRequest{
-		EnvironmentID: environmentID,
-		Command:       []string{os.Args[0]},
-	})
-	if err != nil || exitCode != 0 {
-		t.Fatalf("managed child exit=%d err=%v stderr=%s", exitCode, err, stderr.String())
+	done := make(chan error, 1)
+	go func() {
+		code, err := launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: environmentID, Command: []string{os.Args[0]}})
+		if err == nil && code != 0 {
+			err = fmt.Errorf("child exit %d", code)
+		}
+		output.Close()
+		done <- err
+	}()
+	deadline, _ := ctx.Deadline()
+	ready.SetReadDeadline(deadline)
+	marker := make([]byte, 1)
+	if _, err := io.ReadFull(ready, marker); err != nil || marker[0] != 'R' {
+		t.Fatalf("child handoff: %q %v", marker, err)
 	}
+	waitHostInspection(t, host.Runtime())
+	if _, err := release.Write([]byte("G")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("managed child: %v stderr=%s", err, stderr.String())
+	}
+	waitHostRecordingSettled(t, host.Runtime())
 }
 
 type hostClock struct{}

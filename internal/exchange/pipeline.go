@@ -2678,6 +2678,10 @@ func (pipeline *Pipeline) executeStream(
 			frozenRequest,
 			metadata,
 		)
+		// A failed attempt may be retried. Release its owned transform
+		// reservation before waiting for the next send; deferring this to the
+		// outer retry loop would retain every failed attempt until exhaustion.
+		rawCapture.Discard()
 		if streamErr == nil {
 			return nil
 		}

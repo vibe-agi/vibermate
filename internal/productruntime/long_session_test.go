@@ -322,11 +322,6 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	if acceptance != nil {
 		recorder = &longSessionAcceptanceRecorder{Recorder: recorder, sink: recorder.(exchangecontent.SourceRecorder), t: t}
 	}
-	var requestRecorded chan struct{}
-	if scenario == "script_cancel" {
-		requestRecorded = make(chan struct{})
-		recorder = &notifyingLongSessionSource{Recorder: f.runtime.contents, sink: f.runtime.contents.(exchangecontent.SourceRecorder), done: requestRecorded}
-	}
 	var held *heldLongSessionSource
 	if holdFinal {
 		held = &heldLongSessionSource{Recorder: f.runtime.contents, sink: f.runtime.contents.(exchangecontent.SourceRecorder), entered: make(chan struct{}), release: make(chan struct{})}
@@ -505,19 +500,12 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 		defer cancel()
 		done := make(chan error, 1)
 		go func() { _, err := pipeline.Execute(scriptContext, request, &longSessionDownstream{}); done <- err }()
-		// Finish the actual synchronous Store write before stack observation:
-		// repeatedly taking all-goroutine stacks during SQLite work perturbs its
-		// unchanged observer deadline and is not a valid script-entry barrier.
-		select {
-		case <-requestRecorded:
-		case err := <-done:
-			t.Fatalf("request recording did not finish: %v", err)
-		}
-		// Observe the real VM executing the operator function. Sampling is
-		// throttled because Stack(all=true) stops the world; elapsed time is
-		// never the causal proof and failure to observe entry fails this test.
-		stack := make([]byte, 128<<10)
-		ticker := time.NewTicker(10 * time.Millisecond)
+		// Recording is optional and asynchronous: waiting for its callback
+		// can consume the script deadline before cancellation even starts.
+		// Observe the actual VM frame instead, retaining a complete bounded
+		// stack snapshot even when the full suite has many goroutines.
+		stack := make([]byte, 256<<10)
+		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -526,7 +514,21 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 			case <-ticker.C:
 			}
 			n := goRuntime.Stack(stack, true)
-			if bytes.Contains(stack[:n], []byte("messagetransform.executeAndExportStage")) && bytes.Contains(stack[:n], []byte("goja.(*vm).run")) {
+			if n == len(stack) {
+				if len(stack) >= 4<<20 {
+					t.Fatal("script-entry stack snapshot exceeded bounded fixture capacity")
+				}
+				stack = make([]byte, 2*len(stack))
+				continue
+			}
+			entered := false
+			for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
+				if bytes.Contains(goroutine, []byte("messagetransform.executeAndExportStage")) && bytes.Contains(goroutine, []byte("goja.(*vm).run")) {
+					entered = true
+					break
+				}
+			}
+			if entered {
 				break
 			}
 		}
@@ -708,27 +710,6 @@ func (h *heldLongSessionSource) RecordScopedSource(ctx context.Context, scope re
 		<-h.release
 	}
 	return h.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, s)
-}
-
-type notifyingLongSessionSource struct {
-	exchangecontent.Recorder
-	sink exchangecontent.SourceRecorder
-	done chan struct{}
-}
-
-func (h *notifyingLongSessionSource) RecordSource(ctx context.Context, s *exchangecontent.Source) error {
-	err := h.sink.RecordSource(ctx, s)
-	if s.Metadata().Response == nil {
-		close(h.done)
-	}
-	return err
-}
-func (h *notifyingLongSessionSource) RecordScopedSource(ctx context.Context, scope recording.Scope, s *exchangecontent.Source) error {
-	err := h.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, s)
-	if s.Metadata().Response == nil {
-		close(h.done)
-	}
-	return err
 }
 
 type longSessionDownstream struct{ bytes.Buffer }

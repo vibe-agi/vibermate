@@ -23,8 +23,9 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	t.Parallel()
 	runtime := startRuntime(t)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
+	captureID, scope := createScopedFixtureCapture(t, runtime)
 	conversation, err := agentconversation.Project(agentconversation.ProjectionInput{
-		CaptureRunID: "run-read-cost", ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
+		CaptureRunID: captureID, ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
 		// A legacy body-author projection can disagree with the later native
 		// identity. Reads must stay available while the index repairs it.
 		Request: &protocolcore.Request{Messages: []protocolcore.Message{{
@@ -34,17 +35,14 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+	appendScopedFixtureActivity(t, runtime, scope, activity.Event{
 		Kind: activity.KindExchangeCompleted, SubjectID: "exchange-read-cost",
 		EnvironmentID: "policy-read-cost", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
 		ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1,
 		Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun,
 		SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified,
-		CaptureRunID: "run-read-cost", ConnectionID: "connection-read-cost", Conversation: conversation,
+		CaptureRunID: captureID, ConnectionID: "connection-read-cost", Conversation: conversation,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	indexer := &readCostIndexer{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
@@ -57,16 +55,20 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	}
 	indexer.identity = &deeperIdentity
 	deeperConversation, err := agentconversation.Project(agentconversation.ProjectionInput{
-		CaptureRunID: "run-read-cost", ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
+		CaptureRunID: captureID, ExchangeID: "exchange-read-cost", SourceDisplayName: "Codex",
 		ClientIdentity: &deeperIdentity,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	retained, err := runtime.Activities().GetExchange(t.Context(), "exchange-read-cost")
+	if err != nil || retained.InspectionRoot == nil {
+		t.Fatalf("missing original inspection coordinates for repair: %v", err)
+	}
 	indexer.onRelease = func() error {
-		return runtime.ConversationProjectionWriter().ReprojectConversation(
-			context.Background(), "exchange-read-cost", deeperConversation,
-		)
+		return runtime.ConversationRepairWriter().RepairConversation(t.Context(), activity.ConversationRepair{
+			Root: *retained.InspectionRoot, Identity: deeperIdentity,
+		})
 	}
 	newApplication := func(indexer *readCostIndexer) *desktopcontrol.Handler {
 		application, err := desktopcontrol.New(desktopcontrol.Options{
@@ -86,7 +88,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/exchanges/exchange-read-cost",
 		"/api/v1/activities?conversationId=" + url.QueryEscape(conversation.ProjectionID),
-		"/api/v1/activities/summary?captureRunId=run-read-cost",
+		"/api/v1/activities/summary?captureRunId=" + captureID,
 	} {
 		response := httptest.NewRecorder()
 		application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -105,7 +107,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 		}
 	}
 	response := httptest.NewRecorder()
-	application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId=run-read-cost", nil))
+	application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "exchange-read-cost") {
 		t.Fatalf("directory must return durable evidence: status=%d body=%s", response.Code, response.Body)
 	}
@@ -126,7 +128,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	default:
 	}
 	again := httptest.NewRecorder()
-	application.ServeHTTP(again, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId=run-read-cost", nil))
+	application.ServeHTTP(again, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil))
 	if again.Code != http.StatusOK || indexer.reindexes.Load() != 1 {
 		t.Fatalf("read during enrichment: status=%d scans=%d", again.Code, indexer.reindexes.Load())
 	}
@@ -140,7 +142,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 		t.Fatalf("directory scheduled %d scans, want one", indexer.reindexes.Load())
 	}
 	updated := httptest.NewRecorder()
-	application.ServeHTTP(updated, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId=run-read-cost", nil))
+	application.ServeHTTP(updated, httptest.NewRequest(http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil))
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), deeperConversation.ProjectionID) {
 		t.Fatalf("directory did not expose completed enrichment: status=%d body=%s", updated.Code, updated.Body)
 	}
@@ -154,7 +156,7 @@ func TestEvidencePointReadsDoNotReindexTheArchive(t *testing.T) {
 	activityApplication := newApplication(activityIndexer)
 	activityResponse := httptest.NewRecorder()
 	activityApplication.ServeHTTP(activityResponse, httptest.NewRequest(
-		http.MethodGet, "/api/v1/activities?kind=exchange&captureRunId=run-read-cost", nil,
+		http.MethodGet, "/api/v1/activities?kind=exchange&captureRunId="+captureID, nil,
 	))
 	if activityResponse.Code != http.StatusOK || !strings.Contains(activityResponse.Body.String(), "exchange-read-cost") {
 		t.Fatalf("Activity read waited for enrichment or lost evidence: status=%d body=%s", activityResponse.Code, activityResponse.Body)

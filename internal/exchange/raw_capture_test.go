@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -256,3 +258,41 @@ func TestTransformRawDigestRequiresLogicalEOFNotSemanticTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedStreamAttemptReleasesRawBeforeRetry(t *testing.T) {
+	account := testAccount{id: "account.selected", revision: 3, epoch: 7}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{clientProtocol: environment.ClientProtocolOpenAIResponses, destination: environment.DestinationKindUpstream, providerOrigin: "https://api.openai.com", backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough, accounts: []testAccount{account}, preferred: account.id, transform: messagetransform.Policy{ResponseJavaScript: `response.headers["x-transform"]="yes";`}})
+	first := streamResponse(200, nil)
+	first.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
+	provider := &providerDouble{results: []providerResult{{response: first}, {response: streamResponse(200, strings.NewReader(string(originalResponsesTerminalWire(t))))}}}
+	pipeline := newTestPipeline(t, newAccountAuthority(t, account), provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	budget, _ := recording.NewBudget(recording.Limits{Records: 16, Bytes: 8 << 20})
+	raw, err := rawevidence.Open(t.Context(), rawevidence.Options{Budget: budget, Repository: &transformRawRepository{}, Random: bytes.NewReader(bytes.Repeat([]byte{1}, 64)), Clock: rawevidence.SystemClock{}, Config: rawevidence.DefaultConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Shutdown(context.Background())
+	pipeline.rawEvidence = raw
+	pipeline.hold.MaxTransportResends = 1
+	pipeline.hold.AllowResendAfterProviderResponse = true
+	waited := false
+	pipeline.retryWaiter = rawRetryWitness(func(ctx context.Context) error {
+		waited = true
+		if err := raw.Flush(ctx, rawevidence.Watermark{}); err != nil {
+			return err
+		}
+		if stats := budget.Snapshot(); stats.ReservedRecords != 0 || stats.ReservedBytes != 0 {
+			return fmt.Errorf("failed attempt retained Raw during retry: %+v", stats)
+		}
+		return nil
+	})
+	_, err = pipeline.Execute(t.Context(), mustClientRequest(t, "retry-raw-owned", plan, streamingResponsesClientRequest()), &downstreamRecorder{})
+	if err != nil || !waited || provider.callCount() != 2 {
+		t.Fatalf("retry ownership boundary: waited=%t calls=%d err=%v", waited, provider.callCount(), err)
+	}
+}
+
+type rawRetryWitness func(context.Context) error
+
+func (w rawRetryWitness) WaitForRetry(ctx context.Context, _ RetryObservation) error { return w(ctx) }

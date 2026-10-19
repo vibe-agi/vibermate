@@ -107,8 +107,10 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
     sharedMemoryBytes: 1 << 20,
     evidenceBytes: 128 << 20,
     reusableBytes: _expiredStorageCleaned ? 20 << 20 : 16 << 20,
-    filesystemAvailableBytes: 24 << 30,
-    lowSpaceThresholdBytes: 1 << 30,
+    // Keep these values above JavaScript's 32-bit bitwise range; Flutter web
+    // otherwise wraps `24 << 30` to zero and creates an invalid healthy state.
+    filesystemAvailableBytes: 24 * 1024 * 1024 * 1024,
+    lowSpaceThresholdBytes: 1024 * 1024 * 1024,
     capacityState: 'healthy',
     cleanupPreview: DeletionReleased(
       exchanges: _expiredStorageCleaned ? 0 : 3,

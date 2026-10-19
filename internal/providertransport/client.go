@@ -384,9 +384,9 @@ func (client *Client) Do(
 			rawEnabled = rawContext.Recording != rawevidence.RecordingOff
 		}
 	}
-	// The core attempt is durable before either optional Raw evidence or the
-	// first outbound byte. Raw persistence can degrade without weakening this
-	// auditable routing/credential/attempt boundary.
+	// Offer the body-free attempt before optional Raw evidence and the first
+	// outbound byte. The recorder is best-effort: losing this optional audit
+	// must not block the required provider request or claim durable evidence.
 	record, recordErr := client.beginAudit(operationContext, frozen)
 	if recordErr != nil {
 		stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)

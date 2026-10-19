@@ -2739,9 +2739,9 @@ func (handler *Handler) serveBlindTunnel(
 	}
 	defer actionLease.Release()
 
-	// The attempt is durable before Dial reaches egress admission or opens a
-	// socket. A failed dial is still evidence of the exact destination that was
-	// attempted; an audit failure means no external connection is permitted.
+	// Offer the body-free attempt before Dial reaches egress admission or opens
+	// a socket. A failed dial is still useful audit input, but losing this
+	// optional record must not block the required blind connection.
 	record, err := handler.beginBlindAudit(
 		request.Context(),
 		egressID,

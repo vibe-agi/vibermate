@@ -1081,6 +1081,11 @@ func (r *Runtime) Status() RuntimeStatus {
 					status.Recording.Dropped += count.Records
 				}
 			}
+			// An accepted item can still be classified as a known discard after
+			// the worker checks its original scope/privacy fence. It is a truthful
+			// loss signal, distinct from Unconfirmed (where the write outcome is
+			// unknown), and must remain visible to hosts.
+			status.Recording.Dropped += kind.Settlements[recording.Discarded].Records
 			status.Recording.Unconfirmed += kind.Settlements[recording.Unconfirmed].Records
 		}
 		if status.Recording.State == RecordingAvailable && (status.Recording.Dropped > 0 || status.Recording.Unconfirmed > 0) {

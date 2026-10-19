@@ -131,10 +131,11 @@ func TestObservationRoleActivitySearchHasNoControlDependency(t *testing.T) {
 	}
 	defer observations.Shutdown(ctx)
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	scope := recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run-search"}, Fence: recording.Fence{ArchiveEpoch: 1, CaptureGeneration: 1}}
 	record := activity.Record{ID: "activity-search", OccurredAt: now, Kind: activity.KindExchangeCompleted, SubjectID: "exchange-search", Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "frozen-agent", SourceRecognition: activity.SourceRecognitionConfigured, CaptureRunID: "run-search", ConnectionID: "connection-search"}
 	record.WorkspaceID, record.WorkspaceLabel, record.CaptureLabel = "workspace-frozen", "Frozen workspace", "frozen-executable"
 	setFrozenExecutionEvidence(&record, "search")
-	if _, err := observations.ActivityRepository().Append(ctx, record); err != nil {
+	if _, err := observations.ActivityRepository().(activity.ScopedRepository).AppendScoped(ctx, scope, record); err != nil {
 		t.Fatal(err)
 	}
 	// Newer unrelated rows must not crowd a matching row out before filtering.
@@ -146,7 +147,9 @@ func TestObservationRoleActivitySearchHasNoControlDependency(t *testing.T) {
 	other.WorkspaceLabel = "Other"
 	other.CaptureLabel = "other-executable"
 	other.SourceDisplayName = "other-agent"
-	if _, err := observations.ActivityRepository().Append(ctx, other); err != nil {
+	otherScope := scope
+	otherScope.Capture.ID = "other-run"
+	if _, err := observations.ActivityRepository().(activity.ScopedRepository).AppendScoped(ctx, otherScope, other); err != nil {
 		t.Fatal(err)
 	}
 	for _, needle := range []string{"workspace-frozen", "Frozen workspace", "frozen-executable", "frozen-agent"} {

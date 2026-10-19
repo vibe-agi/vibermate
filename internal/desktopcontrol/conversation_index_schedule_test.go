@@ -36,13 +36,14 @@ func TestConversationDirectoryDoesNotReindexWhenWatermarkIsIdle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordExchange(t, runtime, "exchange-idle-1", "run-idle")
+	captureID, _ := createScopedFixtureCapture(t, runtime)
+	recordExchange(t, runtime, "exchange-idle-1", captureID)
 
 	getDirectory := func() {
 		t.Helper()
 		response := httptest.NewRecorder()
 		application.ServeHTTP(response, httptest.NewRequest(
-			http.MethodGet, "/api/v1/conversations?captureRunId=run-idle", nil,
+			http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil,
 		))
 		if response.Code != http.StatusOK {
 			t.Fatalf("directory status=%d body=%s", response.Code, response.Body)
@@ -63,7 +64,7 @@ func TestConversationDirectoryDoesNotReindexWhenWatermarkIsIdle(t *testing.T) {
 		t.Fatalf("idle watermark re-armed enrichment: scans=%d", got)
 	}
 
-	recordExchange(t, runtime, "exchange-idle-2", "run-idle")
+	recordExchange(t, runtime, "exchange-idle-2", captureID)
 	clock.advance(6 * time.Second)
 	getDirectory()
 	waitFor(t, func() bool { return indexer.reindexes.Load() == 2 }, "enrichment after new activity")
@@ -89,10 +90,11 @@ func TestConversationDirectoryKeepsSchedulingPartialIndexPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordExchange(t, runtime, "exchange-partial-1", "run-partial")
+	captureID, _ := createScopedFixtureCapture(t, runtime)
+	recordExchange(t, runtime, "exchange-partial-1", captureID)
 	response := httptest.NewRecorder()
 	application.ServeHTTP(response, httptest.NewRequest(
-		http.MethodGet, "/api/v1/conversations?captureRunId=run-partial", nil,
+		http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil,
 	))
 	if response.Code != http.StatusOK {
 		t.Fatalf("directory status=%d", response.Code)
@@ -101,7 +103,7 @@ func TestConversationDirectoryKeepsSchedulingPartialIndexPasses(t *testing.T) {
 	clock.advance(6 * time.Second)
 	again := httptest.NewRecorder()
 	application.ServeHTTP(again, httptest.NewRequest(
-		http.MethodGet, "/api/v1/conversations?captureRunId=run-partial", nil,
+		http.MethodGet, "/api/v1/conversations?captureRunId="+captureID, nil,
 	))
 	if again.Code != http.StatusOK {
 		t.Fatalf("directory status=%d", again.Code)
@@ -120,7 +122,7 @@ func recordExchange(t *testing.T, runtime *productruntime.Runtime, exchangeID, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+	appendScopedFixtureActivity(t, runtime, scopedFixtureScope(captureRunID), activity.Event{
 		Kind: activity.KindExchangeCompleted, SubjectID: exchangeID,
 		EnvironmentID: "policy-idle", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("b", 64),
 		ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1,
@@ -128,9 +130,6 @@ func recordExchange(t *testing.T, runtime *productruntime.Runtime, exchangeID, c
 		SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified,
 		CaptureRunID: captureRunID, ConnectionID: "connection-" + exchangeID, Conversation: conversation,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
 func waitFor(t *testing.T, ready func() bool, label string) {

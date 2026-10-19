@@ -20,6 +20,43 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'storage refresh owns reentrant notification demand until fresh read',
+    () async {
+      final fixture = PreviewControlApi();
+      final location = await fixture.storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      Future<void>? coalesced;
+      var requested = false;
+      var completed = false;
+      controller.addListener(() {
+        if (controller.storageLocationLoading && !requested) {
+          requested = true;
+          coalesced = controller.refreshStorageLocation().then((_) {
+            completed = true;
+          });
+        }
+      });
+      final first = controller.refreshStorageLocation();
+      expect(api.reads, hasLength(1));
+      api.reads.first.complete(location);
+      await Future<void>.delayed(Duration.zero);
+      expect(api.reads, hasLength(2));
+      expect(completed, isFalse);
+      api.reads.last.complete(location);
+      await first;
+      await coalesced;
+      expect(completed, isTrue);
+      expect(controller.storageLocationLoading, isFalse);
+    },
+  );
   testWidgets('incomplete zero-count storage preview keeps cleanup available', (
     tester,
   ) async {
@@ -96,8 +133,8 @@ void main() {
         'settings.storage.cleanup_pending',
       );
       // Concurrent demand must coalesce with the acceptance refresh.
-      await controller.refreshStorageLocation();
-      await controller.refreshStorageLocation();
+      unawaited(controller.refreshStorageLocation());
+      unawaited(controller.refreshStorageLocation());
       api.reads.first.complete(oldCompletedLocation);
       await tester.pump();
 
@@ -201,7 +238,7 @@ void main() {
           api.reads.first.complete(completedLocation);
           await tester.pump();
           expect(api.reads, hasLength(2));
-          await controller.refreshStorageLocation();
+          unawaited(controller.refreshStorageLocation());
         }
         controller.dispose();
         api.reads.last.completeError(
@@ -1020,8 +1057,9 @@ void main() {
     );
     await controller.initialize();
     expect(controller.data!.accounts, isNotEmpty);
-    // Initial quota reads intentionally complete independently of initialize.
-    // Settle them before measuring unchanged inventory poll notifications.
+    // Initial detail and quota reads complete independently of initialize.
+    // Settle their public completion boundaries before counting poll changes.
+    await controller.selectCapture(controller.selectedCaptureKey!);
     await controller.ensureProviderAccountQuotas(controller.data!.accounts);
     var notifications = 0;
     controller.addListener(() => notifications++);

@@ -69,8 +69,10 @@ build-linux-distributions:
 	tool/linux-release/build-linux-distributions.sh "$$version" ui/flutter_app/build/web dist/linux-release && \
 	tool/linux-release/verify-linux-distributions.sh "$$version" dist/linux-release
 
+# Full persistence and Runtime matrices exceed Go's default package watchdog.
+# This process limit does not alter any product operation deadline.
 test:
-	go test ./...
+	go test -timeout=30m ./...
 
 # Finite per-package process containment for race instrumentation; this
 # watchdog does not change product operation deadlines.
