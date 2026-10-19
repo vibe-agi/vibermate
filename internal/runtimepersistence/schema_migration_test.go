@@ -114,9 +114,7 @@ func seedPopulatedV1(t *testing.T, store *Store) {
 	record.AccountID = ""
 	record.AccountRevision = 0
 	record.CredentialEpoch = 0
-	if _, err := store.ActivityRepository().Append(ctx, record); err != nil {
-		t.Fatal(err)
-	}
+	seedFrozenV1Activity(t, store, record)
 	insertUsageFixture(t, store, runtimeusage.Observation{ExchangeID: "legacy-usage", CaptureRunID: "legacy-run", Source: "member", OccurredAt: now, Status: activity.StatusSucceeded, EnvironmentID: "native-legacy", EnvironmentName: "Frozen legacy", UpstreamModel: "legacy-model", Client: "codex", Usage: protocolcore.Usage{InputUncached: protocolcore.UsageValue{Known: true, Tokens: 11, Source: "fixture"}}}, now.Add(24*time.Hour))
 }
 
@@ -671,5 +669,101 @@ func TestSchemaMigrationDurabilityJournalGuardAndDeadlineRemainUnknown(t *testin
 				t.Fatalf("%s promoted readable v2: %+v %v", fault, result, err)
 			}
 		})
+	}
+}
+
+// Fixture writes freeze every released Activity field; current Append intentionally
+// records additional observation-role display columns absent from released v1.
+func seedFrozenV1Activity(t *testing.T, store *Store, record activity.Record) {
+	t.Helper()
+	candidate := record
+	candidate.Sequence = 1
+	if err := candidate.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transportEvidence, err := encodeTransportEvidence(record.Transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnosis activity.Diagnosis
+	if record.Diagnosis != nil {
+		diagnosis = *record.Diagnosis
+	}
+	_, err = store.database.ExecContext(
+		context.Background(),
+		`INSERT INTO runtime_activities (
+		     activity_id,
+		     occurred_at_unix_ms,
+		     kind,
+		     environment_id,
+		     environment_revision,
+		     environment_digest,
+		     client_endpoint_id,
+		     client_endpoint_revision,
+		     protocol_plan_id,
+		     protocol_plan_revision,
+		     route_id,
+		     route_revision,
+		     account_id,
+		     account_revision,
+		     credential_epoch,
+		     subject_id,
+		     status,
+		     reason_code,
+		     source_kind,
+		     source_display_name,
+		     source_recognition,
+		     capture_run_id,
+		     manual_capture_id,
+		     connection_id,
+		     conversation_projection_id,
+		     conversation_display_name,
+		     conversation_kind,
+		     conversation_evidence,
+		     conversation_actor,
+		     provider_status,
+		     provider_field, provider_error_code,
+		     client_field,
+		     client_path,
+		     transport_evidence_json
+		 )
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID,
+		toUnixMillis(record.OccurredAt),
+		string(record.Kind),
+		record.EnvironmentID,
+		record.EnvironmentRevision,
+		record.EnvironmentDigest,
+		record.ClientEndpointID,
+		record.ClientEndpointRevision,
+		record.ProtocolPlanID,
+		record.ProtocolPlanRevision,
+		record.RouteID,
+		record.RouteRevision,
+		record.AccountID,
+		record.AccountRevision,
+		record.CredentialEpoch,
+		record.SubjectID,
+		string(record.Status),
+		record.ReasonCode,
+		string(record.SourceKind),
+		record.SourceDisplayName,
+		string(record.SourceRecognition),
+		record.CaptureRunID,
+		record.ManualCaptureID,
+		record.ConnectionID,
+		conversationProjectionID(record.Conversation),
+		conversationDisplayName(record.Conversation),
+		conversationKind(record.Conversation),
+		conversationEvidence(record.Conversation),
+		conversationActor(record.Conversation),
+		diagnosis.ProviderStatus,
+		diagnosis.ProviderField, diagnosis.ProviderErrorCode,
+		diagnosis.ClientField,
+		diagnosis.ClientPath,
+		transportEvidence,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 }

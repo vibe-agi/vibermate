@@ -1061,7 +1061,7 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+	appendScopedFixtureActivity(t, runtime, globalFixtureScope(), activity.Event{
 		Kind: activity.KindExchangeCompleted, EnvironmentID: environmentID,
 		EnvironmentRevision: 3, EnvironmentDigest: "4141414141414141414141414141414141414141414141414141414141414141",
 		ClientEndpointID: "endpoint-activity", ClientEndpointRevision: 2,
@@ -1076,9 +1076,6 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 			Evidence:     agentconversation.EvidenceUndecodedExchange,
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
@@ -1104,11 +1101,12 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 	t.Parallel()
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
+	captureID, scope := createScopedFixtureCapture(t, runtime)
 	environmentID, err := environment.NewEnvironmentID("environment-conversation")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+	appendScopedFixtureActivity(t, runtime, scope, activity.Event{
 		Kind: activity.KindExchangeCompleted, EnvironmentID: environmentID,
 		EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
 		ClientEndpointID: "endpoint-conversation", ClientEndpointRevision: 1,
@@ -1117,16 +1115,13 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 		SubjectID: "exchange-conversation", Status: activity.StatusSucceeded,
 		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex",
 		SourceRecognition: activity.SourceRecognitionVerified,
-		CaptureRunID:      "run-conversation", ConnectionID: "connection-conversation",
+		CaptureRunID:      captureID, ConnectionID: "connection-conversation",
 		Conversation: agentconversation.Ref{
-			ProjectionID: "capture_run:run-conversation:agent:reviewer",
+			ProjectionID: "capture_run:" + captureID + ":agent:reviewer",
 			DisplayName:  "reviewer", Kind: agentconversation.KindAgent,
 			Evidence: agentconversation.EvidenceExplicitActor, Actor: "/root/reviewer",
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
@@ -1139,7 +1134,7 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 	}
 	response := environmentRequest(t, application, http.MethodGet, "/api/v1/conversations?limit=1", 0, "", nil)
 	if response.Code != http.StatusOK ||
-		!bytes.Contains(response.Body.Bytes(), []byte(`"id":"capture_run:run-conversation:agent:reviewer"`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"id":"capture_run:`+captureID+`:agent:reviewer"`)) ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"turnCount":1`)) {
 		t.Fatalf("Conversation status=%d body=%s", response.Code, response.Body.Bytes())
 	}
@@ -1147,7 +1142,7 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 		t,
 		application,
 		http.MethodGet,
-		"/api/v1/conversations?limit=1&captureRunId=run-conversation",
+		"/api/v1/conversations?limit=1&captureRunId="+captureID,
 		0,
 		"",
 		nil,
@@ -1168,7 +1163,7 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 		t,
 		application,
 		http.MethodGet,
-		"/api/v1/conversations?captureRunId=run-conversation&manualCaptureId=manual-one",
+		"/api/v1/conversations?captureRunId="+captureID+"&manualCaptureId=manual-one",
 		0,
 		"",
 		nil,
@@ -1188,11 +1183,12 @@ func TestOriginalDestinationConversationDoesNotRequireSyntheticUpstreamRoute(
 	t.Parallel()
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
+	captureID, scope := createScopedFixtureCapture(t, runtime)
 	environmentID, err := environment.NewEnvironmentID("system_transparent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+	appendScopedFixtureActivity(t, runtime, scope, activity.Event{
 		Kind: activity.KindExchangeCompleted, EnvironmentID: environmentID,
 		EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
 		ClientEndpointID: "endpoint.system.chatgpt", ClientEndpointRevision: 1,
@@ -1200,18 +1196,15 @@ func TestOriginalDestinationConversationDoesNotRequireSyntheticUpstreamRoute(
 		SubjectID: "exchange-original-conversation", Status: activity.StatusSucceeded,
 		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
 		SourceRecognition: activity.SourceRecognitionVerified,
-		CaptureRunID:      "run-original-conversation",
+		CaptureRunID:      captureID,
 		ConnectionID:      "connection-original-conversation",
 		Conversation: agentconversation.Ref{
-			ProjectionID: "capture_run:run-original-conversation:main",
+			ProjectionID: "capture_run:" + captureID + ":main",
 			DisplayName:  "codex",
 			Kind:         agentconversation.KindMain,
 			Evidence:     agentconversation.EvidenceCaptureRun,
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
@@ -1224,8 +1217,8 @@ func TestOriginalDestinationConversationDoesNotRequireSyntheticUpstreamRoute(
 	}
 
 	for _, path := range []string{
-		"/api/v1/activities?kind=exchange&captureRunId=run-original-conversation",
-		"/api/v1/conversations?captureRunId=run-original-conversation",
+		"/api/v1/activities?kind=exchange&captureRunId=" + captureID,
+		"/api/v1/conversations?captureRunId=" + captureID,
 	} {
 		response := environmentRequest(t, application, http.MethodGet, path, 0, "", nil)
 		if response.Code != http.StatusOK ||

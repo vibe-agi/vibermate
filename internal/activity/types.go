@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -92,6 +93,9 @@ type Event struct {
 	ReasonCode             string
 	SourceKind             SourceKind
 	SourceDisplayName      string
+	WorkspaceID            string
+	WorkspaceLabel         string
+	CaptureLabel           string
 	SourceRecognition      SourceRecognition
 	CaptureRunID           string
 	ManualCaptureID        string
@@ -178,6 +182,15 @@ func (event Event) Validate() error {
 	}
 	isExchange := event.Kind == KindExchangeStarted ||
 		event.Kind == KindExchangeCompleted
+	if !validSearchResultText(event.WorkspaceID, 128) || !validSearchResultText(event.WorkspaceLabel, 120) || !validSearchResultText(event.CaptureLabel, 256) {
+		return ErrInvalidEvent
+	}
+	if (event.WorkspaceID != "" || event.WorkspaceLabel != "") && event.SourceKind != SourceCaptureRun {
+		return ErrInvalidEvent
+	}
+	if event.CaptureLabel != "" && event.SourceKind != SourceCaptureRun && event.SourceKind != SourceManualProxy {
+		return ErrInvalidEvent
+	}
 	if isExchange {
 		if !hasExecution ||
 			validateIdentity("source display name", event.SourceDisplayName, false) != nil ||
@@ -658,6 +671,8 @@ func (evidence TransportEvidence) Clone() TransportEvidence {
 
 // Record is the immutable durable projection returned by readers.
 type Record struct {
+	InspectionCursor       string                 `json:"-"`
+	InspectionRoot         *InspectionRoot        `json:"-"`
 	Sequence               int64                  `json:"sequence"`
 	ID                     string                 `json:"id"`
 	OccurredAt             time.Time              `json:"occurredAt"`
@@ -679,6 +694,9 @@ type Record struct {
 	ReasonCode             string                 `json:"reasonCode,omitempty"`
 	SourceKind             SourceKind             `json:"sourceKind,omitempty"`
 	SourceDisplayName      string                 `json:"sourceDisplayName,omitempty"`
+	WorkspaceID            string                 `json:"workspaceId,omitempty"`
+	WorkspaceLabel         string                 `json:"workspaceLabel,omitempty"`
+	CaptureLabel           string                 `json:"captureLabel,omitempty"`
 	SourceRecognition      SourceRecognition      `json:"sourceRecognition,omitempty"`
 	CaptureRunID           string                 `json:"captureRunId,omitempty"`
 	ManualCaptureID        string                 `json:"manualCaptureId,omitempty"`
@@ -750,8 +768,13 @@ func (diagnosis Diagnosis) validate() error {
 }
 
 func (record Record) Validate() error {
-	if record.Sequence <= 0 ||
-		record.OccurredAt.IsZero() ||
+	if record.Sequence <= 0 {
+		return ErrInvalidEvent
+	}
+	return record.validatePrepared()
+}
+func (record Record) validatePrepared() error {
+	if record.OccurredAt.IsZero() ||
 		validateIdentity("Activity ID", record.ID, false) != nil {
 		return ErrInvalidEvent
 	}
@@ -797,6 +820,9 @@ func (record Record) Validate() error {
 		ReasonCode:             record.ReasonCode,
 		SourceKind:             record.SourceKind,
 		SourceDisplayName:      record.SourceDisplayName,
+		WorkspaceID:            record.WorkspaceID,
+		WorkspaceLabel:         record.WorkspaceLabel,
+		CaptureLabel:           record.CaptureLabel,
 		SourceRecognition:      record.SourceRecognition,
 		CaptureRunID:           record.CaptureRunID,
 		ManualCaptureID:        record.ManualCaptureID,
@@ -843,6 +869,7 @@ func diagnosisValue(value *Diagnosis) Diagnosis {
 }
 
 type PageRequest struct {
+	Cursor                   string
 	BeforeSequence           int64
 	Limit                    int
 	CaptureRunID             string
@@ -858,7 +885,7 @@ type PageRequest struct {
 }
 
 func (request PageRequest) Validate() error {
-	if request.BeforeSequence < 0 ||
+	if request.BeforeSequence < 0 || len(request.Cursor) > 512 || request.Cursor != "" && request.BeforeSequence != 0 || strings.ContainsAny(request.Cursor, "\r\n\t ") ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
 		(request.CaptureRunID != "" && request.ManualCaptureID != "") ||
@@ -907,6 +934,8 @@ func (request PageRequest) Validate() error {
 }
 
 type Page struct {
+	Consumed           int      `json:"-"`
+	NextCursor         string   `json:"nextCursor,omitempty"`
 	Items              []Record `json:"items"`
 	NextBeforeSequence int64    `json:"nextBeforeSequence,omitempty"`
 }
@@ -915,6 +944,7 @@ type Page struct {
 // the first sequence at which the runtime could prove each projection. Existing
 // Conversations therefore never jump when a new Turn arrives.
 type ConversationIndexRequest struct {
+	Cursor              string
 	BeforeFirstSequence int64
 	Limit               int
 	CaptureRunID        string
@@ -922,7 +952,7 @@ type ConversationIndexRequest struct {
 }
 
 func (request ConversationIndexRequest) Validate() error {
-	if request.BeforeFirstSequence < 0 || request.Limit <= 0 ||
+	if request.BeforeFirstSequence < 0 || len(request.Cursor) > 512 || request.Cursor != "" && request.BeforeFirstSequence != 0 || strings.ContainsAny(request.Cursor, "\r\n\t ") || request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
 		(request.CaptureRunID != "" && request.ManualCaptureID != "") {
 		return ErrInvalidEvent
@@ -965,6 +995,7 @@ func (record ConversationRecord) Validate() error {
 }
 
 type ConversationPage struct {
+	NextCursor              string
 	Items                   []ConversationRecord
 	NextBeforeFirstSequence int64
 }
@@ -981,9 +1012,16 @@ type Repository interface {
 
 // ConversationIdentityRepository retains exact client session/actor/provider
 // identifiers independently from retention-bound semantic content.
-type ConversationIdentityRepository interface {
-	PutConversationIdentity(context.Context, string, agentconversation.ClientIdentity) error
+type ConversationIdentityReader interface {
 	GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error)
+}
+type ConversationIdentityRepository interface {
+	ConversationIdentityReader
+	PutConversationIdentity(context.Context, string, agentconversation.ClientIdentity) error
+}
+type IdentityInspectionReader interface {
+	ConversationIdentityReader
+	recording.InspectionBoundary
 }
 
 // ConversationProjectionWriter replaces only the rebuildable Conversation
@@ -1004,6 +1042,33 @@ type Reader interface {
 	ListExchanges(context.Context, PageRequest) (Page, error)
 	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
 	Search(context.Context, SearchQuery) (SearchPage, error)
+}
+
+// InspectionRoot locates the original retained request row. It is not an
+// execution capability. A repair sink must still validate the current source,
+// generation and exact existing row/scope in its conditional transaction.
+type InspectionRoot struct {
+	SourceID               string
+	Current                bool
+	Token                  recording.InspectionToken
+	Scope                  recording.Scope
+	Sequence               int64
+	ActivityID, ExchangeID string
+}
+type ConversationRepair struct {
+	Root     InspectionRoot
+	Identity agentconversation.ClientIdentity
+}
+
+// RepairConversation may only merge identity and rebuild the projection of
+// this existing current row. It must not create/copy an archived Activity or
+// issue a fresh recording scope. Production lifecycle ownership is separate.
+type ConversationRepairWriter interface {
+	RepairConversation(context.Context, ConversationRepair) error
+}
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
 }
 
 type Runtime interface {

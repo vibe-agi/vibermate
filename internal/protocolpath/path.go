@@ -136,6 +136,9 @@ type Stream interface {
 type PendingTerminal interface {
 	ToolIntents() []protocolcore.ToolIntent
 	DecodedResponse() protocolcore.Response
+	// BorrowDecodedResponse is immutable and remains valid through synchronous
+	// observation preparation, including after Approve/Reject. Never queue it.
+	BorrowDecodedResponse() protocolcore.Response
 	TranslationReport() protocolcore.TranslationReport
 	Approve() ([]byte, error)
 	Reject() error

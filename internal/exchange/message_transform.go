@@ -169,20 +169,18 @@ func applyResponseMessageTransform(
 }
 
 type streamMessageTransformer struct {
+	capture    *rawevidence.CaptureBuffer
 	turn       *messagetransform.PipelineTurn
 	statusCode int
 	headers    http.Header
 	decoder    *ssewire.Decoder
 
-	beforeHeaders  http.Header
-	afterHeaders   http.Header
-	protected      http.Header
-	headerReady    bool
-	finished       bool
-	finishErr      error
-	input          bytes.Buffer
-	inputBytes     int64
-	inputTruncated bool
+	beforeHeaders http.Header
+	afterHeaders  http.Header
+	protected     http.Header
+	headerReady   bool
+	finished      bool
+	finishErr     error
 }
 
 func newStreamMessageTransformer(
@@ -312,14 +310,7 @@ func (transformer *streamMessageTransformer) Feed(
 	if transformer == nil {
 		return bytes.Clone(fragment), false, nil
 	}
-	transformer.inputBytes += int64(len(fragment))
-	remaining := maxCompleteResponseBytes - transformer.input.Len()
-	if remaining > 0 {
-		_, _ = transformer.input.Write(fragment[:min(remaining, len(fragment))])
-	}
-	if len(fragment) > remaining {
-		transformer.inputTruncated = true
-	}
+	transformer.capture.ObserveBytes(fragment, "")
 	events, err := transformer.decoder.Feed(fragment)
 	if err != nil {
 		return nil, false, err
@@ -366,22 +357,6 @@ func (transformer *streamMessageTransformer) Feed(
 		_, _ = encoded.Write(wire)
 	}
 	return encoded.Bytes(), becameReady, nil
-}
-
-func (transformer *streamMessageTransformer) Input() (
-	messagetransform.ResponseMessage,
-	int64,
-	bool,
-) {
-	if transformer == nil {
-		return messagetransform.ResponseMessage{}, 0, false
-	}
-	return messagetransform.ResponseMessage{
-		StatusCode: transformer.statusCode,
-		Streaming:  true,
-		Headers:    transformer.headers.Clone(),
-		Body:       bytes.Clone(transformer.input.Bytes()),
-	}, transformer.inputBytes, !transformer.inputTruncated
 }
 
 func (transformer *streamMessageTransformer) Finish() error {

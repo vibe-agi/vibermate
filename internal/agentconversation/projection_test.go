@@ -1,6 +1,7 @@
 package agentconversation_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -541,5 +542,66 @@ func request(
 		Messages: []protocolcore.Message{{
 			Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{block}, Agent: agent,
 		}},
+	}
+}
+
+func TestProjectionFactsPrepareWithoutAllocationsAndKeepGrouping(t *testing.T) {
+	request := protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{{Name: "openai_responses.session_id", Value: "session"}, {Name: "openai_responses.thread_id", Value: "thread"}}}
+	input := agentconversation.ProjectionInput{CaptureRunID: "run", ExchangeID: "exchange", SourceDisplayName: "Client", Request: &request}
+	var facts agentconversation.ProjectionFacts
+	if n := testing.AllocsPerRun(10, func() {
+		var err error
+		facts, err = agentconversation.PrepareProjection(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Fatalf("optional preparation allocated before reservation: %v", n)
+	}
+	request.ProtocolEvidence[0].Value = "changed"
+	got, err := facts.Materialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ProtocolEvidence[0].Value = "session"
+	input.CaptureRunID = "other-run"
+	input.ExchangeID = "other-exchange"
+	other, err := agentconversation.PrepareProjection(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := other.Materialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != agentconversation.KindMain || got.Evidence != agentconversation.EvidenceExplicitSession || got.ProjectionID != want.ProjectionID {
+		t.Fatalf("exact session grouping lost: %+v / %+v", got, want)
+	}
+}
+func TestProjectionFactsRetainAmbiguousActorWithoutBodyGraph(t *testing.T) {
+	blocks := make([]protocolcore.ContentBlock, 24)
+	for i := range blocks {
+		blocks[i].Agent = &protocolcore.AgentMessageContext{AgentName: fmt.Sprintf("actor-%d", i)}
+	}
+	request := protocolcore.Request{Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: blocks}}}
+	input := agentconversation.ProjectionInput{CaptureRunID: "run", ExchangeID: "exchange", SourceDisplayName: "Client", Request: &request}
+	var facts agentconversation.ProjectionFacts
+	if n := testing.AllocsPerRun(10, func() {
+		var err error
+		facts, err = agentconversation.PrepareProjection(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Fatalf("actor preparation allocated a collection: %v", n)
+	}
+	clear(blocks)
+	request.Messages = nil
+	got, err := facts.Materialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != agentconversation.KindIsolatedExchange || got.Evidence != agentconversation.EvidenceAmbiguousActor {
+		t.Fatalf("ambiguity lost after producer release: %+v", got)
 	}
 }

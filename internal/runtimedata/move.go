@@ -6,19 +6,16 @@ package runtimedata
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
-	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	_ "modernc.org/sqlite"
 )
 
 const lockName = "runtime-data.lock"
@@ -75,7 +72,7 @@ func copyDataDirectory(
 	target string,
 	kind dataCopyKind,
 	createdAt time.Time,
-) error {
+) (result error) {
 	if ctx == nil || !filepath.IsAbs(source) || !filepath.IsAbs(target) ||
 		filepath.Clean(source) != source || filepath.Clean(target) != target ||
 		source == string(filepath.Separator) || target == string(filepath.Separator) {
@@ -100,20 +97,29 @@ func copyDataDirectory(
 		return ErrCopy
 	}
 	defer guard.Release()
-	if kind != dataCopyRestore {
-		// An attached server can hold its host lock beyond the Runtime lifetime.
-		serverGuard, err := instanceguard.Acquire(filepath.Join(source, "server.lock"))
-		if err != nil {
-			if errors.Is(err, instanceguard.ErrAlreadyOwned) {
-				return ErrBusy
-			}
-			return ErrCopy
+	host, err := instanceguard.Acquire(filepath.Join(source, "server.lock"))
+	if err != nil {
+		return snapshotLockError(err)
+	}
+	defer host.Release()
+	if err = refusePendingExport(source); err != nil {
+		if kind == dataCopyRestore {
+			return ErrBackupInvalid
 		}
-		defer serverGuard.Release()
-		// An unresolved upgrade must be reconciled in its original owned root;
-		// exporting or relocating it could lose that private preservation proof.
-		if _, err := os.Lstat(filepath.Join(source, schemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
-			return ErrSchemaUpgradeIncomplete
+		return err
+	}
+	before, err := schemaSnapshotFiles(ctx, source, false)
+	if err != nil {
+		return snapshotOperationError(ctx, ErrCopy)
+	}
+	var sourceRoles backupRoles
+	if kind != dataCopyRestore {
+		_, sourceRoles, err = inspectBackupRoles(ctx, source)
+		if err != nil {
+			if kind == dataCopyMove {
+				return snapshotOperationError(ctx, errors.Join(ErrValidation, err))
+			}
+			return errors.Join(ErrBackupIncompatible, err)
 		}
 	}
 	if kind == dataCopyRestore {
@@ -127,11 +133,22 @@ func copyDataDirectory(
 	if err := os.Mkdir(target, 0o700); err != nil {
 		return ErrTarget
 	}
+	defer func() {
+		if result != nil && kind == dataCopyBackup {
+			_ = os.Remove(filepath.Join(target, backupManifestName))
+		}
+	}()
 	targetGuard, err := Acquire(target)
 	if err != nil {
 		return ErrBusy
 	}
 	defer targetGuard.Release()
+	targetHost, err := instanceguard.Acquire(filepath.Join(target, "server.lock"))
+	if err != nil {
+		return snapshotLockError(err)
+	}
+	defer targetHost.Release()
+	shm := roleSHMPaths(source)
 	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -143,7 +160,7 @@ func copyDataDirectory(
 		if err != nil || rel == "." {
 			return err
 		}
-		if skip, subtree := skipDataCopyEntry(kind, rel, entry); skip {
+		if skip, subtree := skipDataCopyEntry(kind, rel, entry); skip || shm[filepath.ToSlash(rel)] {
 			if subtree {
 				return fs.SkipDir
 			}
@@ -164,28 +181,33 @@ func copyDataDirectory(
 		return copyVerified(ctx, path, destination, info)
 	})
 	if err != nil {
-		return ErrCopy
+		return snapshotOperationError(ctx, ErrCopy)
 	}
-	if err := validateDatabase(ctx, filepath.Join(target, "runtime.db")); err != nil {
-		return ErrValidation
-	}
-	if kind != dataCopyMove {
-		state, err := runtimepersistence.ValidateOfflineDatabase(
-			ctx, filepath.Join(target, "runtime.db"),
-		)
-		if err != nil {
-			if errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
-				return ErrBackupIncompatible
-			}
-			return ErrBackupInvalid
-		}
-		if kind == dataCopyBackup {
-			if err := writeBackupManifest(ctx, target, createdAt, state); err != nil {
-				return err
-			}
-		} else if err := validateRestoredFiles(ctx, source, target); err != nil {
+	if kind == dataCopyRestore {
+		// Inventory is certified before any destination recovery or cutover.
+		if err = validateRestoredFiles(ctx, source, target); err != nil {
 			return err
 		}
+	}
+	state, roles, err := inspectBackupRoles(ctx, target)
+	if err != nil {
+		return errors.Join(ErrBackupIncompatible, err)
+	}
+	if kind != dataCopyRestore && !reflect.DeepEqual(sourceRoles, roles) {
+		return ErrCopy
+	}
+	if kind == dataCopyRestore && roles.Layout == nil {
+		if _, err = PrepareStorageOwned(ctx, OwnedStorage{Directory: target, Runtime: targetGuard, Host: targetHost}, time.Now().UTC(), nil); err != nil {
+			return err
+		}
+	} else if kind == dataCopyBackup {
+		if err = writeBackupManifest(ctx, target, createdAt, state, roles); err != nil {
+			return err
+		}
+	}
+	after, err := schemaSnapshotFiles(ctx, source, false)
+	if err != nil || !sameBackupFiles(before, after) || !snapshotOwns(guard, source, lockName) || !snapshotOwns(host, source, "server.lock") {
+		return snapshotOperationError(ctx, ErrCopy)
 	}
 	// Flush directory entries before reporting a destination safe to select.
 	if err := filepath.WalkDir(target, func(path string, entry fs.DirEntry, err error) error {
@@ -206,6 +228,10 @@ func copyDataDirectory(
 	}
 	if err := errors.Join(parentDirectory.Sync(), parentDirectory.Close()); err != nil {
 		return ErrCopy
+	}
+	after, err = schemaSnapshotFiles(ctx, source, false)
+	if err != nil || !sameBackupFiles(before, after) || !snapshotOwns(guard, source, lockName) || !snapshotOwns(host, source, "server.lock") {
+		return snapshotOperationError(ctx, ErrCopy)
 	}
 	return nil
 }
@@ -287,31 +313,4 @@ func (r *contextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return r.reader.Read(p)
-}
-
-func validateDatabase(ctx context.Context, path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return ErrValidation
-	}
-	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=rw"}
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	var integrity string
-	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
-		return ErrValidation
-	}
-	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if rows.Next() {
-		return ErrValidation
-	}
-	return rows.Err()
 }

@@ -1842,6 +1842,7 @@ final class RuntimeStatus {
     required this.stopReasonCode,
     this.storageFailure,
     this.recordingFailure,
+    this.recording,
     this.networkAccess,
   });
 
@@ -1889,6 +1890,7 @@ final class RuntimeStatus {
         'stopReasonCode',
         'storageFailure',
         'recordingFailure',
+        'recording',
       },
     );
     final instanceId = requireString(runtime, 'instanceId', 'status.runtime');
@@ -2003,6 +2005,9 @@ final class RuntimeStatus {
       storage: storage,
       storageFailure: storageFailure,
       recordingFailure: recordingFailure,
+      recording: runtime.containsKey('recording')
+          ? RuntimeRecordingStatus.fromJson(runtime['recording'])
+          : null,
       networkAccess: value.containsKey('networkAccess')
           ? HostNetworkAccess.fromJson(
               value['networkAccess'],
@@ -2032,6 +2037,7 @@ final class RuntimeStatus {
   final int schemaRevision;
   final String storage;
   final RuntimePersistenceFailure? storageFailure, recordingFailure;
+  final RuntimeRecordingStatus? recording;
   final String environmentProjection;
   final List<String>? unavailableEnvironments;
   final OfflineHoldSnapshot offlineHold;
@@ -8113,6 +8119,72 @@ final class ActivitySummaryScope {
       Object.hash(captureRunId, manualCaptureId, client, sessionId);
 }
 
+/// Retained authentication observations, separate from retained request counts.
+/// Either timestamp may be unknown in a released archive.
+final class CaptureObservationSummary {
+  const CaptureObservationSummary({
+    required this.captureKind,
+    required this.captureId,
+    required this.archiveEpoch,
+    required this.captureGeneration,
+    required this.credentialRevision,
+    required this.firstObservedAt,
+    required this.lastObservedAt,
+  });
+  factory CaptureObservationSummary.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'captureKind',
+        'captureId',
+        'archiveEpoch',
+        'captureGeneration',
+        'credentialRevision',
+        'firstObservedAt',
+        'lastObservedAt',
+      },
+    );
+    final result = CaptureObservationSummary(
+      captureKind: requireString(value, 'captureKind', path),
+      captureId: requireString(value, 'captureId', path),
+      archiveEpoch: requireInteger(value, 'archiveEpoch', path, minimum: 1),
+      captureGeneration: requireInteger(
+        value,
+        'captureGeneration',
+        path,
+        minimum: 1,
+      ),
+      credentialRevision: requireInteger(value, 'credentialRevision', path),
+      firstObservedAt: optionalTimestamp(value, 'firstObservedAt', path),
+      lastObservedAt: optionalTimestamp(value, 'lastObservedAt', path),
+    );
+    if (!RegExp(r'^[A-Za-z0-9_.:-]{1,128}$').hasMatch(result.captureId) ||
+        !const {'managed_run', 'manual_capture'}.contains(result.captureKind) ||
+        (result.captureKind == 'managed_run'
+            ? result.credentialRevision != 0
+            : result.credentialRevision < 1) ||
+        (result.firstObservedAt != null &&
+            result.lastObservedAt != null &&
+            result.firstObservedAt!.isAfter(result.lastObservedAt!))) {
+      throw ControlContractException(
+        '$path Capture observation is inconsistent',
+      );
+    }
+    return result;
+  }
+  final String captureKind, captureId;
+  final int archiveEpoch, captureGeneration, credentialRevision;
+  final DateTime? firstObservedAt, lastObservedAt;
+  bool matches(ActivitySummaryScope scope) =>
+      scope.client.isEmpty &&
+      scope.sessionId.isEmpty &&
+      (captureKind == 'managed_run'
+          ? scope.captureRunId == captureId && scope.manualCaptureId.isEmpty
+          : scope.manualCaptureId == captureId && scope.captureRunId.isEmpty);
+}
+
 final class ExchangeSummary {
   const ExchangeSummary({
     required this.scope,
@@ -8127,6 +8199,7 @@ final class ExchangeSummary {
     required this.failures,
     required this.otherFailures,
     this.contentBodiesAvailable,
+    this.captureObservation,
   });
 
   factory ExchangeSummary.fromJson(Object? json, String path) {
@@ -8147,7 +8220,7 @@ final class ExchangeSummary {
         'failures',
         'otherFailures',
       },
-      optional: const {'contentBodiesAvailable'},
+      optional: const {'contentBodiesAvailable', 'captureObservation'},
     );
     final failures = <String, int>{};
     final raw = requireList(value['failures'], '$path.failures');
@@ -8184,8 +8257,16 @@ final class ExchangeSummary {
       failures: Map.unmodifiable(failures),
       otherFailures: requireInteger(value, 'otherFailures', path),
       contentBodiesAvailable: bodies as bool?,
+      captureObservation: value.containsKey('captureObservation')
+          ? CaptureObservationSummary.fromJson(
+              value['captureObservation'],
+              '$path.captureObservation',
+            )
+          : null,
     );
-    if (result.requests !=
+    if (result.captureObservation != null &&
+            !result.captureObservation!.matches(result.scope) ||
+        result.requests !=
             result.succeeded +
                 result.failed +
                 result.canceled +
@@ -8209,6 +8290,7 @@ final class ExchangeSummary {
 
   /// Launch scopes may report whether any non-expired full body remains.
   final bool? contentBodiesAvailable;
+  final CaptureObservationSummary? captureObservation;
 }
 
 final class ActivityPage {
@@ -11843,9 +11925,13 @@ final class DeletionHolder {
   final String detail;
 }
 
-/// What a completed delete released.
+/// Verified removals and the remaining cleanup/ownership limits.
 final class DeletionReleased {
   const DeletionReleased({
+    this.cleanupPending = false,
+    this.countsIncomplete = false,
+    this.approvalOwnershipUnknown = false,
+    this.privacyMetadataRetained = false,
     required this.exchanges,
     required this.envelopes,
     required this.activities,
@@ -11871,8 +11957,26 @@ final class DeletionReleased {
         'assignments',
         'captures',
       },
+      optional: const {
+        'cleanupPending',
+        'countsIncomplete',
+        'approvalOwnershipUnknown',
+        'privacyMetadataRetained',
+      },
     );
-    return DeletionReleased(
+    final result = DeletionReleased(
+      cleanupPending: value.containsKey('cleanupPending')
+          ? requireBoolean(value, 'cleanupPending', path)
+          : false,
+      countsIncomplete: value.containsKey('countsIncomplete')
+          ? requireBoolean(value, 'countsIncomplete', path)
+          : false,
+      approvalOwnershipUnknown: value.containsKey('approvalOwnershipUnknown')
+          ? requireBoolean(value, 'approvalOwnershipUnknown', path)
+          : false,
+      privacyMetadataRetained: value.containsKey('privacyMetadataRetained')
+          ? requireBoolean(value, 'privacyMetadataRetained', path)
+          : false,
       exchanges: requireInteger(value, 'exchanges', path),
       envelopes: requireInteger(value, 'envelopes', path),
       activities: requireInteger(value, 'activities', path),
@@ -11882,8 +11986,19 @@ final class DeletionReleased {
       assignments: requireInteger(value, 'assignments', path),
       captures: requireInteger(value, 'captures', path),
     );
+    if ((result.cleanupPending || result.approvalOwnershipUnknown) &&
+        !result.countsIncomplete) {
+      throw ControlContractException(
+        '$path cannot report complete counts while cleanup or ownership is unresolved',
+      );
+    }
+    return result;
   }
 
+  final bool cleanupPending;
+  final bool countsIncomplete;
+  final bool approvalOwnershipUnknown;
+  final bool privacyMetadataRetained;
   final int exchanges;
   final int envelopes;
   final int activities;
@@ -11952,4 +12067,74 @@ final class DeletionOutcome {
   final DeletionReleased? released;
 
   bool get truncated => holderCount > holders.length;
+}
+
+final class RuntimeRecordingStatus {
+  const RuntimeRecordingStatus({
+    required this.state,
+    required this.reservedRecords,
+    required this.reservedBytes,
+    required this.dropped,
+    required this.unconfirmed,
+    required this.cleanupPending,
+  });
+  factory RuntimeRecordingStatus.fromJson(Object? json) {
+    const path = 'status.runtime.recording';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'state',
+        'reservedRecords',
+        'reservedBytes',
+        'dropped',
+        'unconfirmed',
+        'cleanupPending',
+      },
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {
+      'starting',
+      'available',
+      'degraded',
+      'disabled',
+    }.contains(state)) {
+      throw const ControlContractException('unsupported recording state');
+    }
+    return RuntimeRecordingStatus(
+      state: state,
+      reservedRecords: requireInteger(value, 'reservedRecords', path),
+      reservedBytes: requireInteger(value, 'reservedBytes', path),
+      dropped: requireInteger(value, 'dropped', path),
+      unconfirmed: requireInteger(value, 'unconfirmed', path),
+      cleanupPending: requireBoolean(value, 'cleanupPending', path),
+    );
+  }
+  final String state;
+  final int reservedRecords, reservedBytes, dropped, unconfirmed;
+  final bool cleanupPending;
+  bool get incomplete =>
+      state != 'available' ||
+      dropped != 0 ||
+      unconfirmed != 0 ||
+      cleanupPending;
+  @override
+  bool operator ==(Object other) =>
+      other is RuntimeRecordingStatus &&
+      state == other.state &&
+      reservedRecords == other.reservedRecords &&
+      reservedBytes == other.reservedBytes &&
+      dropped == other.dropped &&
+      unconfirmed == other.unconfirmed &&
+      cleanupPending == other.cleanupPending;
+  @override
+  int get hashCode => Object.hash(
+    state,
+    reservedRecords,
+    reservedBytes,
+    dropped,
+    unconfirmed,
+    cleanupPending,
+  );
 }

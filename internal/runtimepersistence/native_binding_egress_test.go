@@ -71,7 +71,7 @@ func TestNativeEffectiveEgressBindRemainsAtomicAcrossRealCommitFaults(t *testing
 			if op.State != wantState {
 				t.Fatalf("atomic state %s want%s", op.State, wantState)
 			}
-			if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
+			if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "native_tool_deliveries") != 0 {
 				t.Fatal("Bind failure consumed/send-audited despite absent Start")
 			}
 		})
@@ -190,7 +190,7 @@ func TestNativeHistoricalV1BindingIsReadableButNeverLiveAuthority(t *testing.T) 
 	if _, err := repo.Start(t.Context(), id, "historical-v1-must-not-send", authority, time.Now().UTC()); err == nil {
 		t.Fatal("historical V1 issued live receipt")
 	}
-	if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
+	if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "native_tool_deliveries") != 0 {
 		t.Fatal("historical read granted send effects")
 	}
 }
@@ -208,7 +208,7 @@ func TestNativeBindingPersistsEffectiveExitAndReconstructsAuditWithoutDefaultLoo
 	}
 	var source, proxy string
 	var defaultRevision, profileRevision uint64
-	if err := store.database.QueryRowContext(t.Context(), `SELECT selection_source,default_revision,proxy_id,proxy_revision FROM runtime_egress_attempts WHERE attempt_id=?`, receipt.AttemptID()).Scan(&source, &defaultRevision, &proxy, &profileRevision); err != nil {
+	if err := store.database.QueryRowContext(t.Context(), `SELECT selection_source,default_revision,proxy_id,proxy_revision FROM native_tool_deliveries WHERE attempt_id=?`, receipt.AttemptID()).Scan(&source, &defaultRevision, &proxy, &profileRevision); err != nil {
 		t.Fatal(err)
 	}
 	decision := struct {
@@ -316,7 +316,7 @@ func TestNativeEffectiveEgressMissingOrCorruptNeverIssuesStart(t *testing.T) {
 			if _, err := repo.Start(t.Context(), id, "corrupt-egress-attempt", authority, time.Now().UTC()); err == nil {
 				t.Fatal("corrupt effective evidence issued real receipt")
 			}
-			if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
+			if countRows(t, store, "native_tool_once") != 0 || countRows(t, store, "native_tool_deliveries") != 0 {
 				t.Fatal("denied corruption consumed once or created audit")
 			}
 		})

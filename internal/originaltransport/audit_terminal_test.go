@@ -3,6 +3,7 @@ package originaltransport
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net/http"
 	"strings"
@@ -25,7 +26,7 @@ func TestOriginalAuditRecordsResponseReadFailure(t *testing.T) {
 	audit := &originalTerminalAuditDouble{}
 	client, err := New(Options{
 		Coordinator: originalAuditCoordinator{},
-		Audit:       audit,
+		Audit:       testrecording.Egress(audit),
 		Transport: originalAuditRoundTripper{response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -90,7 +91,7 @@ func TestOriginalAuditClampsDecreasingWallClock(t *testing.T) {
 	startedAt := time.Now().UTC()
 	audit := &originalTerminalAuditDouble{}
 	client := &Client{
-		audit: audit,
+		audit: testrecording.Egress(audit),
 		clock: func() time.Time { return startedAt.Add(-time.Minute) },
 	}
 	client.completeAudit(
@@ -120,7 +121,7 @@ func TestOriginalAuditReportsTerminalConstructionFailure(t *testing.T) {
 
 	startedAt := time.Now().UTC()
 	audit := &originalTerminalAuditDouble{}
-	client := &Client{audit: audit, clock: func() time.Time { return time.Time{} }}
+	client := &Client{audit: testrecording.Egress(audit), clock: func() time.Time { return time.Time{} }}
 	client.completeAudit(
 		context.Background(),
 		originalTerminalAttempt(t, startedAt),

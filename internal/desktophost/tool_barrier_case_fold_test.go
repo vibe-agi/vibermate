@@ -61,7 +61,7 @@ func TestManagedStrictPolicyRejectsCaseFoldedProviderKeys(t *testing.T) {
 				environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID, func(value *environment.Environment) {
 					value.PolicySet = &environment.PolicySet{ToolMode: environment.ToolPolicyStrict}
 				})
-				runManagedChild(t, paths, environmentID, false,
+				runManagedChild(t, host, paths, environmentID, false,
 					childManagedBody+"="+request,
 					childManagedForbidden+"=toolu_hidden",
 					childManagedStatus+"="+strconv.Itoa(status))

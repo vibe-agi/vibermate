@@ -50,14 +50,18 @@ type DeletionResponse struct {
 
 // DeletionReleasedResponse is the receipt for a delete that removed evidence.
 type DeletionReleasedResponse struct {
-	Exchanges   uint64 `json:"exchanges"`
-	Envelopes   uint64 `json:"envelopes"`
-	Activities  uint64 `json:"activities"`
-	Connections uint64 `json:"connections"`
-	Attempts    uint64 `json:"attempts"`
-	Approvals   uint64 `json:"approvals"`
-	Assignments uint64 `json:"assignments"`
-	Captures    uint64 `json:"captures"`
+	CleanupPending           bool   `json:"cleanupPending"`
+	CountsIncomplete         bool   `json:"countsIncomplete"`
+	ApprovalOwnershipUnknown bool   `json:"approvalOwnershipUnknown"`
+	PrivacyMetadataRetained  bool   `json:"privacyMetadataRetained"`
+	Exchanges                uint64 `json:"exchanges"`
+	Envelopes                uint64 `json:"envelopes"`
+	Activities               uint64 `json:"activities"`
+	Connections              uint64 `json:"connections"`
+	Attempts                 uint64 `json:"attempts"`
+	Approvals                uint64 `json:"approvals"`
+	Assignments              uint64 `json:"assignments"`
+	Captures                 uint64 `json:"captures"`
 }
 
 func deletionResponseOf(
@@ -425,6 +429,7 @@ func manualCaptureHolders(captures []manualcapture.View) []resourcedeletion.Hold
 
 func releasedResponseOf(released resourcedeletion.Released) *DeletionReleasedResponse {
 	return &DeletionReleasedResponse{
+		CleanupPending: released.CleanupPending, CountsIncomplete: released.CountsIncomplete, ApprovalOwnershipUnknown: released.ApprovalOwnershipUnknown, PrivacyMetadataRetained: released.PrivacyMetadataRetained,
 		Exchanges:   released.Exchanges,
 		Envelopes:   released.Envelopes,
 		Activities:  released.Activities,

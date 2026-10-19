@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -59,7 +60,7 @@ func TestProviderAuditPersistsClassifiedTransportFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, err := NewClient(ClientOptions{
-		Coordinator: gate, Authenticator: authenticator, Audit: audit,
+		Coordinator: gate, Authenticator: authenticator, Audit: testrecording.Egress(audit),
 		Transport: &roundTripperStub{err: &net.DNSError{Err: "secret.internal", Name: "secret.internal"}},
 	})
 	if err != nil {
@@ -95,7 +96,7 @@ func TestProviderAuditRecordsResponseReadFailure(t *testing.T) {
 	client, err := NewClient(ClientOptions{
 		Coordinator:   gate,
 		Authenticator: authenticator,
-		Audit:         audit,
+		Audit:         testrecording.Egress(audit),
 		Transport: &roundTripperStub{response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -180,7 +181,7 @@ func TestProviderBodyCanConfirmTerminalAfterCanceledRead(t *testing.T) {
 	client, err := NewClient(ClientOptions{
 		Coordinator:   gate,
 		Authenticator: authenticator,
-		Audit:         audit,
+		Audit:         testrecording.Egress(audit),
 		Transport: &roundTripperStub{response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -230,7 +231,7 @@ func TestProviderAuditClampsDecreasingWallClock(t *testing.T) {
 	startedAt := time.Now().UTC()
 	audit := &providerTerminalAuditDouble{}
 	client := &Client{
-		audit: audit,
+		audit: testrecording.Egress(audit),
 		clock: func() time.Time { return startedAt.Add(-time.Minute) },
 	}
 	client.completeAudit(
@@ -260,7 +261,7 @@ func TestProviderAuditReportsTerminalConstructionFailure(t *testing.T) {
 
 	startedAt := time.Now().UTC()
 	audit := &providerTerminalAuditDouble{}
-	client := &Client{audit: audit, clock: func() time.Time { return time.Time{} }}
+	client := &Client{audit: testrecording.Egress(audit), clock: func() time.Time { return time.Time{} }}
 	client.completeAudit(
 		context.Background(),
 		providerTerminalAttempt(t, startedAt),

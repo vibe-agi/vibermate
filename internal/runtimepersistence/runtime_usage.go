@@ -36,6 +36,9 @@ func scanUsagePolicy(row *sql.Row) (runtimeusage.CollectionPolicy, error) {
 }
 
 func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.CollectionPolicy, now time.Time) (runtimeusage.CollectionPolicy, error) {
+	return store.setUsagePolicy(ctx, policy, now, false)
+}
+func (store *Store) setUsagePolicy(ctx context.Context, policy runtimeusage.CollectionPolicy, now time.Time, controlOnly bool) (runtimeusage.CollectionPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return runtimeusage.CollectionPolicy{}, err
 	}
@@ -47,46 +50,68 @@ func (store *Store) SetUsagePolicy(ctx context.Context, policy runtimeusage.Coll
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	defer finish()
-	tx, err := store.database.BeginTx(operation, nil)
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	defer tx.Rollback()
-	current, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	since := now.Truncate(time.Millisecond)
-	if since.Before(now) {
-		since = since.Add(time.Millisecond)
-	}
-	result, err := tx.ExecContext(operation, `UPDATE runtime_usage_policy SET enabled=?,retention_days=?,revision=revision+1,
+	var updated runtimeusage.CollectionPolicy
+	apply := func(tx *sql.Tx) error {
+		current, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+		if err != nil {
+			return err
+		}
+		since := now.Truncate(time.Millisecond)
+		if since.Before(now) {
+			since = since.Add(time.Millisecond)
+		}
+		result, err := tx.ExecContext(operation, `UPDATE runtime_usage_policy SET enabled=?,retention_days=?,revision=revision+1,
  collecting_since_unix_ms=CASE WHEN enabled=0 AND ?=1 THEN ? ELSE collecting_since_unix_ms END WHERE singleton=1 AND revision=?`,
-		policy.Enabled, policy.RetentionDays, policy.Enabled, since.UnixMilli(), policy.Revision)
-	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	if count, err := result.RowsAffected(); err != nil || count != 1 {
-		return runtimeusage.CollectionPolicy{}, runtimeusage.ErrPolicyConflict
-	}
-	// Shorter retention applies immediately. Lengthening never resurrects or
-	// extends records collected under a shorter consented retention period.
-	if policy.RetentionDays < current.RetentionDays {
-		// The new cap dominates every longer cap over older sequences. One row
-		// per duration bounds pending work even if settings change repeatedly.
-		if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+			policy.Enabled, policy.RetentionDays, policy.Enabled, since.UnixMilli(), policy.Revision)
+		if err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_caps(retention_days,through_sequence)
+		if count, err := result.RowsAffected(); err != nil || count != 1 {
+			return runtimeusage.ErrPolicyConflict
+		}
+		// Shorter retention applies immediately. Lengthening never resurrects or
+		// extends records collected under a shorter consented retention period.
+		if controlOnly && policy.RetentionDays < current.RetentionDays {
+			if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_rules WHERE retention_days>=? AND through_policy_revision<=?`, policy.RetentionDays, current.Revision); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_rules(retention_days,through_policy_revision) VALUES(?,?) ON CONFLICT(retention_days) DO UPDATE SET through_policy_revision=MAX(through_policy_revision,excluded.through_policy_revision)`, policy.RetentionDays, current.Revision); err != nil {
+				return err
+			}
+		}
+		if !controlOnly && policy.RetentionDays < current.RetentionDays {
+			// The new cap dominates every longer cap over older sequences. One row
+			// per duration bounds pending work even if settings change repeatedly.
+			if _, err := tx.ExecContext(operation, `DELETE FROM runtime_usage_retention_caps WHERE retention_days>=?`, policy.RetentionDays); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_retention_caps(retention_days,through_sequence)
  SELECT ?,sequence FROM runtime_usage_observations ORDER BY sequence DESC LIMIT 1`, policy.RetentionDays); err != nil {
-			return runtimeusage.CollectionPolicy{}, err
+				return err
+			}
+		}
+		if controlOnly {
+			if err := requestRecordingCleanup(operation, tx, now); err != nil {
+				return err
+			}
+		}
+		updated, err = scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
+		return err
+	}
+	if controlOnly {
+		err = fullSynchronousTransaction(operation, store.database, apply)
+	} else {
+		var tx *sql.Tx
+		tx, err = store.database.BeginTx(operation, nil)
+		if err == nil {
+			defer tx.Rollback()
+			err = apply(tx)
+			if err == nil {
+				err = tx.Commit()
+			}
 		}
 	}
-	updated, err := scanUsagePolicy(tx.QueryRowContext(operation, `SELECT enabled,retention_days,revision,collecting_since_unix_ms FROM runtime_usage_policy WHERE singleton=1`))
 	if err != nil {
-		return runtimeusage.CollectionPolicy{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return runtimeusage.CollectionPolicy{}, err
 	}
 	return updated, nil
@@ -133,6 +158,10 @@ func applyUsageRetention(ctx context.Context, tx *sql.Tx, limit int) (bool, erro
 }
 
 func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observation) error {
+	return store.putUsage(ctx, value)
+}
+func (store *Store) putUsage(ctx context.Context, value runtimeusage.Observation) error {
+	discard := func() error { return nil }
 	if err := value.Validate(); err != nil {
 		return err
 	}
@@ -151,59 +180,63 @@ func (store *Store) RecordUsage(ctx context.Context, value runtimeusage.Observat
 		return err
 	}
 	if !policy.Enabled || policy.CollectingSince == nil || value.StartedAt.Before(*policy.CollectingSince) {
-		return nil
+		return discard()
 	}
-	value.UserID, value.Source = "", "proxy"
-	value.Attribution = &runtimeusage.Attribution{}
-	if value.CaptureRunID != "" {
-		var user, username sql.NullString
-		var localUser, machineID, gitJSON string
-		err := tx.QueryRowContext(operation, `SELECT runtime_user_id,runtime_username,local_user_label,machine_id,git_json
+	{
+		value.UserID, value.Source = "", "proxy"
+		value.Attribution = &runtimeusage.Attribution{}
+		if value.CaptureRunID != "" {
+			var user, username sql.NullString
+			var localUser, machineID, gitJSON string
+			err := tx.QueryRowContext(operation, `SELECT runtime_user_id,runtime_username,local_user_label,machine_id,git_json
 		 FROM capture_runs WHERE run_id=?`, value.CaptureRunID).Scan(&user, &username, &localUser, &machineID, &gitJSON)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		} // A deleted Capture must not reappear through a late callback.
-		if err != nil {
-			return err
-		}
-		value.UserID, value.Source = runtimeuser.UserID(user.String), "local"
-		if value.UserID != "" {
-			value.Source = "member"
-		}
-		run := capturerun.View{RuntimeUserID: value.UserID, RuntimeUsername: username.String, LocalUserLabel: localUser, MachineID: machineID}
-		if err := json.Unmarshal([]byte(gitJSON), &run.Runtime.GitAtLaunch); err != nil {
-			return err
-		}
-		if run.Runtime.GitAtLaunch != nil {
-			if err := run.Runtime.GitAtLaunch.Validate(); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return discard()
+			} // A deleted Capture must not reappear through a late callback.
+			if err != nil {
 				return err
 			}
+			value.UserID, value.Source = runtimeuser.UserID(user.String), "local"
+			if value.UserID != "" {
+				value.Source = "member"
+			}
+			run := capturerun.View{RuntimeUserID: value.UserID, RuntimeUsername: username.String, LocalUserLabel: localUser, MachineID: machineID}
+			if err := json.Unmarshal([]byte(gitJSON), &run.Runtime.GitAtLaunch); err != nil {
+				return err
+			}
+			if run.Runtime.GitAtLaunch != nil {
+				if err := run.Runtime.GitAtLaunch.Validate(); err != nil {
+					return err
+				}
+			}
+			value.Attribution = runtimeusage.CaptureAttribution(run)
+		} else if value.ManualCaptureID != "" {
+			var exists int
+			if err := tx.QueryRowContext(operation, `SELECT count(*) FROM manual_captures WHERE capture_id=?`, value.ManualCaptureID).Scan(&exists); err != nil {
+				return err
+			}
+			if exists == 0 {
+				return discard()
+			}
+			value.Source = "manual"
 		}
-		value.Attribution = runtimeusage.CaptureAttribution(run)
-	} else if value.ManualCaptureID != "" {
-		var exists int
-		if err := tx.QueryRowContext(operation, `SELECT count(*) FROM manual_captures WHERE capture_id=?`, value.ManualCaptureID).Scan(&exists); err != nil {
+		// Snapshot display labels, not credentials or user notes, so account/profile
+		// renames do not relabel past traffic. IDs remain the grouping key.
+		if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT name FROM environment_revisions WHERE environment_id=? AND revision=?),'')`, value.EnvironmentID, value.EnvironmentRevision).Scan(&value.EnvironmentName); err != nil {
 			return err
 		}
-		if exists == 0 {
-			return nil
+		if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT display_name FROM provider_accounts WHERE account_id=?),'')`, value.AccountID).Scan(&value.AccountName); err != nil {
+			return err
 		}
-		value.Source = "manual"
 	}
-	// Snapshot display labels, not credentials or user notes, so account/profile
-	// renames do not relabel past traffic. IDs remain the grouping key.
-	if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT name FROM environment_revisions WHERE environment_id=? AND revision=?),'')`, value.EnvironmentID, value.EnvironmentRevision).Scan(&value.EnvironmentName); err != nil {
-		return err
-	}
-	if err := tx.QueryRowContext(operation, `SELECT COALESCE((SELECT display_name FROM provider_accounts WHERE account_id=?),'')`, value.AccountID).Scan(&value.AccountName); err != nil {
-		return err
-	}
+	expiry := value.OccurredAt.Add(time.Duration(policy.RetentionDays) * 24 * time.Hour)
+
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(operation, `INSERT INTO runtime_usage_observations(exchange_id,capture_run_id,manual_capture_id,runtime_user_id,occurred_at_unix_ms,expires_at_unix_ms,observation_json) VALUES(?,?,?,?,?,?,?) ON CONFLICT(exchange_id) DO NOTHING`,
-		value.ExchangeID, value.CaptureRunID, value.ManualCaptureID, value.UserID, value.OccurredAt.UnixMilli(), value.OccurredAt.Add(time.Duration(policy.RetentionDays)*24*time.Hour).UnixMilli(), string(data)); err != nil {
+		value.ExchangeID, value.CaptureRunID, value.ManualCaptureID, value.UserID, value.OccurredAt.UnixMilli(), expiry.UnixMilli(), string(data)); err != nil {
 		return err
 	}
 	return tx.Commit()

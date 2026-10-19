@@ -72,7 +72,7 @@ func TestNativeNoIDTerminalDeliveryFailurePreservesKnownOutcome(t *testing.T) {
 					}
 					var outcome, reason string
 					var known bool
-					if err := f.db.QueryRow(`SELECT outcome,error_class,byte_counts_known FROM runtime_egress_attempts WHERE parent_id=?`, call.id).Scan(&outcome, &reason, &known); err != nil || outcome != "failed" || reason != "transport_failed" || known {
+					if err := f.db.QueryRow(`SELECT outcome,error_class,byte_counts_known FROM native_tool_deliveries WHERE operation_id=?`, call.id).Scan(&outcome, &reason, &known); err != nil || outcome != "failed" || reason != "transport_failed" || known {
 						t.Fatalf("physical evidence %s/%s/%v %v", outcome, reason, known, err)
 					}
 					e.mu.Lock()

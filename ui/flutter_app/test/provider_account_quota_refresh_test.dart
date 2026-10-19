@@ -423,9 +423,9 @@ final class _QuotaApi extends Fake implements ControlApi {
   @override
   Future<NativeApprovalPage> nativeApprovals(
     String captureKey, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
-  }) async => NativeApprovalPage(const [], afterSequence);
+  }) async => NativeApprovalPage(const [], '');
   @override
   Future<List<ApprovalRecord>> pendingApprovals() async => const [];
 

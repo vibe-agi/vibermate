@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -28,9 +29,12 @@ const manualCaptureColumns = `
 	last_observed_at_unix_ms`
 
 type manualCaptureRepository struct {
-	database      *sql.DB
-	operations    *operationGate
-	stopCommitter transactionCommitter
+	database        *sql.DB
+	operations      *operationGate
+	stopCommitter   transactionCommitter
+	controlOnly     bool
+	captureObserver recording.CaptureObserver
+	recordingScopes recording.ScopeIssuer
 }
 
 const manualCaptureActivityAt = `MAX(created_at_unix_ms, COALESCE(
@@ -62,7 +66,12 @@ func (repository *manualCaptureRepository) Create(
 	}
 	defer finish()
 	ownerID, _ := record.Owner.ProxyClientBindingID()
-	result, err := repository.database.ExecContext(
+	tx, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(
 		operation,
 		`INSERT INTO manual_captures (
 		     capture_id,
@@ -106,7 +115,13 @@ func (repository *manualCaptureRepository) Create(
 	if affected != 1 {
 		return manualcapture.ErrStateConflict
 	}
-	return nil
+	if _, err := tx.ExecContext(operation, `INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES('manual_capture',?,1,0)`, record.ID.String()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(operation, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1 WHERE singleton=1`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (repository *manualCaptureRepository) Rotate(
@@ -326,28 +341,16 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture expiry result: %w", err)
 	}
-	result, err := transaction.ExecContext(
+	var original recording.Fence
+	record, err := scanManualCapture(captureObservationScan{row: transaction.QueryRowContext(
 		operation,
-		`UPDATE manual_captures
-		 SET observation = 'observed',
-		     last_observed_at_unix_ms = ?,
-		     updated_at_unix_ms = ?
-		 WHERE proxy_credential_hash = ?
-		   AND state = 'active'
-		   AND (lifetime = 'until_revoked' OR expires_at_unix_ms > ?)`,
-		toUnixMillis(now),
-		toUnixMillis(now),
-		digest[:],
-		toUnixMillis(now),
-	)
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("observe ManualCapture authorization: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture authorization result: %w", err)
-	}
-	if affected != 1 {
+		`SELECT `+manualCaptureColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='manual_capture' AND capture_id=manual_captures.capture_id AND deleted=0),0)
+		 FROM manual_captures WHERE proxy_credential_hash = ?
+		 AND state = 'active'
+		 AND (lifetime = 'until_revoked' OR expires_at_unix_ms > ?)`,
+		digest[:], toUnixMillis(now),
+	), fence: &original})
+	if errors.Is(err, sql.ErrNoRows) {
 		if expired > 0 {
 			if err := transaction.Commit(); err != nil {
 				return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture expiry: %w", err)
@@ -355,18 +358,14 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		}
 		return manualcapture.DurableRecord{}, manualcapture.ErrCredentialRejected
 	}
-	record, err := scanManualCapture(transaction.QueryRowContext(
-		operation,
-		`SELECT `+manualCaptureColumns+`
-		 FROM manual_captures WHERE proxy_credential_hash = ?`,
-		digest[:],
-	))
 	if err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("read authorized ManualCapture: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture authorization: %w", err)
 	}
+	record.RecordingScope = recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, Fence: original}
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now, original)
 	return record, nil
 }
 
@@ -401,7 +400,7 @@ func (repository *manualCaptureRepository) Get(
 	var activityAt int64
 	record, err := scanManualCapture(transaction.QueryRowContext(
 		operation,
-		`SELECT `+manualCaptureColumns+`, `+manualCaptureActivityAt+`
+		`SELECT `+manualCaptureColumns+`, `+repository.activityExpression()+`
 		 FROM manual_captures
 		 WHERE capture_id = ? AND owner_kind = ? AND owner_id = ?`,
 		id.String(),
@@ -489,7 +488,7 @@ func (repository *manualCaptureRepository) List(
 		return nil, err
 	}
 	const runningRank = `CASE WHEN state = 'active' THEN 0 ELSE 1 END`
-	query := `SELECT ` + manualCaptureColumns + `, ` + manualCaptureActivityAt + ` AS activity_at_unix_ms
+	query := `SELECT ` + manualCaptureColumns + `, ` + repository.activityExpression() + ` AS activity_at_unix_ms
 		 FROM manual_captures
 		 WHERE owner_kind = ? AND owner_id = ?`
 	arguments := []any{
@@ -716,3 +715,10 @@ func nullableUnixMillis(value time.Time) any {
 }
 
 const sha256Size = 32
+
+func (repository *manualCaptureRepository) activityExpression() string {
+	if repository.controlOnly {
+		return `MAX(created_at_unix_ms,COALESCE(last_observed_at_unix_ms,CASE WHEN state='active' THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
+	}
+	return manualCaptureActivityAt
+}

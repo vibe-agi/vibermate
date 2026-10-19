@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"slices"
 	"sort"
@@ -165,6 +167,7 @@ func (frame Frame) validate(bodyBytes int) error {
 // Context carries only frozen authority references. Raw message content belongs
 // to Payload, and credential header values are removed before a Payload exists.
 type Context struct {
+	ObservationStamp         recording.Stamp `json:"-"`
 	ScopeKind                ScopeKind
 	ScopeID                  string
 	ExchangeID               string
@@ -243,6 +246,9 @@ func (value Context) Validate() error { return value.validate() }
 // Complete reports whether Body covers the entire message body. A false value
 // must carry one stable reason and is never silently upgraded to a full digest.
 type Observation struct {
+	// ContentLength represents the transport-synthesized Header without a producer clone.
+	ContentLength    int64
+	HasContentLength bool
 	Context
 	Layer      Layer
 	ObservedAt time.Time
@@ -433,7 +439,7 @@ func redactedNamesOf(sets ...[]HeaderField) []string {
 	}
 	names := make([]string, 0, len(seen))
 	for name := range seen {
-		names = append(names, name)
+		names = append(names, strings.Clone(name))
 	}
 	sort.Strings(names)
 	return names
@@ -515,6 +521,7 @@ func DecodePayload(encodedMetadata, body []byte) (Payload, error) {
 // The payload is stored in the clear, and credential header values were removed
 // before it existed.
 type StoredEnvelope struct {
+	RecordingFence           recording.Fence
 	EnvelopeID               string
 	WriterID                 string
 	Watermark                uint64
@@ -646,7 +653,19 @@ func MetadataOf(value StoredEnvelope) EnvelopeMetadata {
 	}
 }
 
-func (value StoredEnvelope) Validate() error {
+func (value StoredEnvelope) RecordingScope() recording.Scope {
+	scope := recording.Scope{Fence: value.RecordingFence}
+	if value.ScopeKind != ScopeRuntime {
+		scope.Capture = captureidentity.Reference{Kind: captureidentity.Kind(value.ScopeKind), ID: value.ScopeID}
+	}
+	return scope
+}
+
+// ValidateMetadata checks the immutable descriptor without loading body bytes.
+func (value StoredEnvelope) ValidateMetadata() error {
+	if value.RecordingFence.ArchiveEpoch > maxSQLiteInteger || value.RecordingFence.CaptureGeneration > maxSQLiteInteger || value.RecordingFence != (recording.Fence{}) && value.RecordingScope().Validate() != nil {
+		return recording.ErrObservationDiscarded
+	}
 	if !validIdentity(value.EnvelopeID) || !validIdentity(value.WriterID) ||
 		value.Watermark == 0 || value.Watermark > maxSQLiteInteger ||
 		!value.Layer.Valid() ||
@@ -711,6 +730,23 @@ func (value StoredEnvelope) Validate() error {
 	if value.Canonicalization != httpCanonicalization {
 		return errors.New("stored raw evidence canonicalization is invalid")
 	}
+	if value.DigestScope == DigestUnavailable {
+		if value.BodySHA256 != [sha256.Size]byte{} {
+			return errors.New("unavailable raw digest contains bytes")
+		}
+	} else if value.BodySHA256 == [sha256.Size]byte{} && value.BodyBytes != 0 {
+		return errors.New("raw evidence body digest is empty")
+	}
+	if value.PayloadReason != "" && !validReason(value.PayloadReason) {
+		return errors.New("raw evidence payload reason is invalid")
+	}
+	return nil
+}
+func (value StoredEnvelope) Validate() error {
+	if err := value.ValidateMetadata(); err != nil {
+		return err
+	}
+
 	if value.PayloadState == PayloadCaptured || value.PayloadState == PayloadTruncated {
 		if len(value.PayloadMetadata) == 0 {
 			return errors.New("captured raw evidence has no payload metadata")
@@ -743,16 +779,6 @@ func (value StoredEnvelope) Validate() error {
 		}
 	} else if len(value.PayloadMetadata) != 0 || len(value.Body) != 0 {
 		return errors.New("uncaptured raw evidence carries a payload")
-	}
-	if value.DigestScope == DigestUnavailable {
-		if value.BodySHA256 != [sha256.Size]byte{} {
-			return errors.New("unavailable raw digest contains bytes")
-		}
-	} else if value.BodySHA256 == [sha256.Size]byte{} && value.BodyBytes != 0 {
-		return errors.New("raw evidence body digest is empty")
-	}
-	if value.PayloadReason != "" && !validReason(value.PayloadReason) {
-		return errors.New("raw evidence payload reason is invalid")
 	}
 	return nil
 }
@@ -838,6 +864,8 @@ type Repository interface {
 	// purpose is to keep a redacted digest from matching a corpus assembled
 	// elsewhere.
 	RedactionSalt(context.Context) ([]byte, error)
+	// AppendBatch borrows records until it returns. Return only after actual I/O
+	// has stopped; an error may be an unconfirmed commit and is not retried.
 	AppendBatch(context.Context, []StoredEnvelope, time.Time) error
 	ListExchange(context.Context, string) ([]StoredEnvelope, error)
 	GetEnvelope(context.Context, string) (StoredEnvelope, error)
@@ -859,7 +887,8 @@ type ScopeLease interface {
 
 // TerminalScope is returned only after new request admission for the capture
 // has been closed, all already-admitted requests have completed, and their
-// final raw-evidence watermark is durable. The capture authority must Commit
+// final admitted raw-evidence writer I/O has settled (possibly with loss).
+// The capture authority must Commit
 // after its terminal state is durable, or Abort when that mutation fails.
 type TerminalScope interface {
 	Commit()

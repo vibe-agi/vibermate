@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"mime"
 	"net/http"
@@ -106,9 +107,10 @@ func New(options Options) (*Reader, error) {
 }
 
 type Source struct {
-	ConnectionID string
-	OperationID  string
-	RawQuery     string
+	ObservationStamp recording.Stamp
+	ConnectionID     string
+	OperationID      string
+	RawQuery         string
 }
 type Facts struct {
 	upstreamservice.Facts
@@ -150,7 +152,7 @@ func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.Request
 		return Result{}, ErrUnavailable
 	}
 	defer lease.Release()
-	request, err := providertransport.NewCapturedAccountRead(plan, lease, source.ConnectionID, source.OperationID, read.RawQuery())
+	request, err := providertransport.NewCapturedAccountRead(plan, lease, source.ConnectionID, source.OperationID, read.RawQuery(), source.ObservationStamp)
 	if err != nil {
 		return Result{}, err
 	}

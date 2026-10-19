@@ -15,14 +15,22 @@ import (
 const nativeContentPageLimit = 128 << 10
 
 type nativeContentCursor struct {
-	Capture    string `json:"c"`
-	Operation  string `json:"o"`
-	Part       string `json:"p"`
-	Digest     string `json:"d"`
-	Offset     int    `json:"s"`
-	Generation uint64 `json:"g"`
-	Expires    int64  `json:"e"`
+	Query   string `json:"q"`
+	Offset  int    `json:"s"`
+	Expires int64  `json:"e"`
 }
+
+func nativeContentQuery(op nativetool.InspectionOperation, part string, descriptor *nativetool.InspectionContentDescriptor) string {
+	b, _ := json.Marshal(struct {
+		Version                  string
+		Capture, Operation, Part string
+		Revision                 uint64
+		Reference                string
+	}{nativetool.InspectionVersion(op.Token), op.Operation.Capture.Key(), op.Operation.ID.String(), part, op.Operation.Revision, descriptor.Reference})
+	digest := sha256.Sum256(b)
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
 type NativeContentBlock struct {
 	Kind      string  `json:"kind"`
 	Text      *string `json:"text,omitempty"`
@@ -33,12 +41,13 @@ type NativeContentBlock struct {
 	Complete  bool    `json:"complete"`
 }
 type NativeContentPageDTO struct {
-	OperationID string               `json:"operationId"`
-	CaptureKey  string               `json:"captureKey"`
-	Part        string               `json:"part"`
-	BodyDigest  string               `json:"bodyDigest"`
-	Blocks      []NativeContentBlock `json:"blocks"`
-	NextCursor  string               `json:"nextCursor,omitempty"`
+	InspectionVersion string               `json:"inspectionVersion"`
+	OperationID       string               `json:"operationId"`
+	CaptureKey        string               `json:"captureKey"`
+	Part              string               `json:"part"`
+	BodyDigest        string               `json:"bodyDigest"`
+	Blocks            []NativeContentBlock `json:"blocks"`
+	NextCursor        string               `json:"nextCursor,omitempty"`
 }
 
 func (h *Handler) signNativeCursor(c nativeContentCursor) string {
@@ -96,20 +105,26 @@ func (h *Handler) getNativeContent(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusGone, ReasonCode("native_content_"+descriptor.State))
 		return
 	}
-	cursor := nativeContentCursor{Capture: capture.Key(), Operation: op.ID.String(), Part: part, Digest: descriptor.Digest, Generation: op.Revision, Expires: h.clock.Now().UTC().Unix() + 300}
+	bodyDescriptor := op.Result
+	if part == "tool_arguments" {
+		bodyDescriptor = op.Arguments
+	}
+	binding := nativeContentQuery(op, part, bodyDescriptor)
+	cursor := nativeContentCursor{Query: binding, Expires: h.clock.Now().UTC().Unix() + 300}
 	if raw, has := query["cursor"]; has {
 		cursor, err = h.readNativeCursor(raw[0])
-		if err != nil || cursor.Capture != capture.Key() || cursor.Operation != op.ID.String() || cursor.Part != part || cursor.Digest != descriptor.Digest || cursor.Generation != op.Revision {
+		if err != nil || cursor.Query != binding {
 			nativeProblem(w, nativetool.ErrInvalid)
 			return
 		}
 	}
+
 	// Repository reads are bounded to128KiB, but digest/codec verification may
 	// require the full retained body (at most16MiB). No smaller I/O claim.
 	body := []byte{}
 	defer func() { clear(body) }()
 	for offset := 0; ; {
-		chunk, err := h.nativeTools.ReadContent(r.Context(), capture, op.ID, part, offset, nativeContentPageLimit)
+		chunk, err := h.nativeInspection.ReadContent(r.Context(), nativetool.InspectionContentRequest{Token: op.Token, Capture: capture, OperationID: op.Operation.ID, Part: nativetool.ContentPart(part), Descriptor: *bodyDescriptor, Offset: offset, Limit: nativeContentPageLimit})
 		if err != nil || len(body)+len(chunk) > 16<<20 {
 			clear(chunk)
 			writeProblem(w, 410, "native_content_unavailable")
@@ -138,7 +153,7 @@ func (h *Handler) getNativeContent(w http.ResponseWriter, r *http.Request) {
 			clear(block.ImageBytes)
 		}
 	}()
-	result := NativeContentPageDTO{OperationID: op.ID.String(), CaptureKey: capture.Key(), Part: part, BodyDigest: descriptor.Digest, Blocks: []NativeContentBlock{}}
+	result := NativeContentPageDTO{InspectionVersion: nativetool.InspectionVersion(op.Token), OperationID: op.Operation.ID.String(), CaptureKey: capture.Key(), Part: part, BodyDigest: descriptor.Digest, Blocks: []NativeContentBlock{}}
 	position := 0
 	start := cursor.Offset
 	remaining := false
@@ -222,14 +237,31 @@ func (h *Handler) getNativeContent(w http.ResponseWriter, r *http.Request) {
 	}
 	// Clear/delete, retention expiry and late operation updates cannot publish
 	// a projection after the read started with an older descriptor/revision.
-	current, err := h.nativeOperation(r.Context(), capture, op.ID.String())
+	current, err := h.nativeOperation(r.Context(), capture, op.Operation.ID.String())
 	nowPart := h.nativePart(current, part)
-	if err != nil || current.Revision != op.Revision || nowPart.State != "available" || nowPart.Digest != descriptor.Digest {
+	if err != nil || current.Operation.Revision != op.Operation.Revision || current.Token != op.Token || nowPart.State != "available" || nowPart.Digest != descriptor.Digest {
+		writeProblem(w, 410, "native_content_unavailable")
+		return
+	}
+	currentDescriptor := current.Result
+	if part == "tool_arguments" {
+		currentDescriptor = current.Arguments
+	}
+	if currentDescriptor == nil || nativeContentQuery(current, part, currentDescriptor) != binding {
 		writeProblem(w, 410, "native_content_unavailable")
 		return
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil || len(encoded) > nativeContentPageLimit {
+		writeProblem(w, 410, "native_content_unavailable")
+		return
+	}
+	defer clear(encoded)
+	if err = h.nativeInspection.Check(r.Context(), op.Token); err != nil {
+		writeProblem(w, 410, "native_content_unavailable")
+		return
+	}
+	if !descriptor.ExpiresAt.After(h.clock.Now().UTC()) {
 		writeProblem(w, 410, "native_content_unavailable")
 		return
 	}

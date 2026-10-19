@@ -1,6 +1,7 @@
 package desktopcontrol
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type rawEvidenceEnvelopeView struct {
@@ -125,12 +127,17 @@ func (handler *Handler) revealRawHeader(writer http.ResponseWriter, request *htt
 		writeProblem(writer, http.StatusGone, ReasonRawEvidenceUnavailable)
 		return
 	}
+	check, err := rawInspectionBoundaryCheck(request.Context(), handler.rawEvidence)
+	if err != nil {
+		writeProblem(writer, http.StatusGone, ReasonRawEvidenceUnavailable)
+		return
+	}
 	result, err := revealer.RevealHeader(request.Context(), command, source)
 	if err != nil {
 		writeProblem(writer, http.StatusGone, ReasonRawEvidenceUnavailable)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	writeRawInspectionJSON(writer, result, handler.rawInspectionExpiryCheck(check, result.ExpiresAt))
 }
 
 func (handler *Handler) listRawEvidence(
@@ -138,6 +145,11 @@ func (handler *Handler) listRawEvidence(
 	request *http.Request,
 ) {
 	exchangeID := request.PathValue("exchangeId")
+	check, err := rawInspectionBoundaryCheck(request.Context(), handler.rawEvidence)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
+		return
+	}
 	items, err := handler.rawEvidence.ListExchange(request.Context(), exchangeID)
 	if errors.Is(err, rawevidence.ErrInvalidRead) {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
@@ -148,11 +160,15 @@ func (handler *Handler) listRawEvidence(
 		return
 	}
 	views := make([]rawEvidenceEnvelopeView, len(items))
+	var expires time.Time
 	for index := range items {
 		views[index] = rawEvidenceViewOf(items[index])
+		if expires.IsZero() || items[index].ExpiresAt.Before(expires) {
+			expires = items[index].ExpiresAt
+		}
 	}
 	recovery := handler.rawEvidence.Recovery()
-	writeJSON(writer, http.StatusOK, rawEvidenceListResponse{
+	response := rawEvidenceListResponse{
 		Items: views,
 		Recovery: rawEvidenceRecoveryView{
 			RecoveredUncleanWriters: recovery.RecoveredUncleanWriters,
@@ -160,12 +176,19 @@ func (handler *Handler) listRawEvidence(
 			MaximumPossibleLossMS:   recovery.MaximumPossibleLoss.Milliseconds(),
 		},
 		Writer: rawEvidenceWriterViewOf(handler.rawEvidence),
-	})
+	}
+	writeRawInspectionJSON(writer, response, handler.rawInspectionExpiryCheck(check, expires))
 }
 
 func rawEvidenceWriterViewOf(reader rawevidence.Reader) rawEvidenceWriterView {
+	if health, ok := reader.(interface{ WriterStatisticsAvailable() bool }); ok && !health.WriterStatisticsAvailable() {
+		return rawEvidenceWriterView{State: "unavailable"}
+	}
 	statisticsReader, ok := reader.(rawEvidenceStatisticsReader)
 	if !ok {
+		return rawEvidenceWriterView{State: "unavailable"}
+	}
+	if availability, ok := reader.(interface{ RecordingAvailable() bool }); ok && !availability.RecordingAvailable() {
 		return rawEvidenceWriterView{State: "unavailable"}
 	}
 	statistics := statisticsReader.Statistics()
@@ -223,6 +246,11 @@ func (handler *Handler) revealRawEvidence(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	check, err := rawInspectionBoundaryCheck(request.Context(), handler.rawEvidence)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
+		return
+	}
 	revealed, err := handler.rawEvidence.Reveal(request.Context(), revealRequest)
 	switch {
 	case errors.Is(err, rawevidence.ErrEnvelopeNotFound):
@@ -236,7 +264,7 @@ func (handler *Handler) revealRawEvidence(
 		return
 	}
 	if imageView {
-		writeImagePreview(writer, revealed, query.Get("fingerprint"))
+		writeImagePreview(writer, revealed, query.Get("fingerprint"), handler.rawInspectionExpiryCheck(check, revealed.Metadata.ExpiresAt))
 		return
 	}
 	var decodedBody *rawevidence.DecodedBodyView
@@ -248,14 +276,15 @@ func (handler *Handler) revealRawEvidence(
 			defer clear(decodedBody.Body)
 		}
 	}
-	writeJSON(writer, http.StatusOK, rawRevealResponse{
+	response := rawRevealResponse{
 		Envelope:    rawEvidenceViewOf(revealed.Metadata),
 		Headers:     rawHeaderFields(revealed.Payload.Headers),
 		Trailers:    rawHeaderFields(revealed.Payload.Trailers),
 		BodyBase64:  base64.StdEncoding.EncodeToString(revealed.Payload.Body),
 		Frames:      rawFrames(revealed.Payload.Frames),
 		DecodedBody: decodedBody,
-	})
+	}
+	writeRawInspectionJSON(writer, response, handler.rawInspectionExpiryCheck(check, revealed.Metadata.ExpiresAt))
 }
 
 // Raw evidence collections are required JSON arrays on the public control
@@ -320,4 +349,49 @@ func redactedFieldsView(names []string) []string {
 		return []string{}
 	}
 	return slices.Clone(names)
+}
+
+// New independent readers carry their own outer boundary. Legacy/current-only
+// injected readers retain their pre-existing contract during owner composition.
+func rawInspectionBoundaryCheck(ctx context.Context, reader rawevidence.Reader) (func() error, error) {
+	boundary, ok := reader.(recording.InspectionBoundary)
+	if !ok {
+		return func() error { return nil }, nil
+	}
+	token, err := boundary.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return func() error { return boundary.Check(ctx, token) }, nil
+}
+
+// Encode and finish enrichment before the visibility linearization check;
+// nothing has reached the client when the source/control generation changes.
+func writeRawInspectionJSON(writer http.ResponseWriter, value any, check func() error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
+		return
+	}
+	defer clear(encoded)
+	if err = check(); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRawEvidenceUnavailable)
+		return
+	}
+	writeCached(writer, cachedResponse{status: http.StatusOK, contentType: "application/json", body: encoded})
+}
+
+func (handler *Handler) rawInspectionExpiryCheck(check func() error, expires time.Time) func() error {
+	if _, independent := handler.rawEvidence.(recording.InspectionBoundary); !independent || expires.IsZero() {
+		return check
+	}
+	return func() error {
+		if err := check(); err != nil {
+			return err
+		}
+		if !expires.After(handler.clock.Now().UTC()) {
+			return rawevidence.ErrEnvelopeNotFound
+		}
+		return nil
+	}
 }

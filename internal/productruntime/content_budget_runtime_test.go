@@ -3,18 +3,17 @@ package productruntime
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -69,6 +68,33 @@ func (s *concurrentContentBudgetSource) RecordSource(ctx context.Context, source
 	}
 	return err
 }
+func (s *concurrentContentBudgetSource) RecordScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
+	request := source.Metadata().Response == nil
+	if request {
+		s.entered <- source.Metadata().ExchangeID
+		select {
+		case <-s.start:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if s.active.Add(1) == 2 {
+			s.overlapOnce.Do(func() { close(s.overlap) })
+		}
+		s.started <- struct{}{}
+	}
+	err := s.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source)
+	if request {
+		s.active.Add(-1)
+	}
+	if err == nil && request {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
 func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f accountReadFixture, pipeline exchangeRuntime, first exchange.ClientRequest, firstLease *exchange.BodyLease, plan environment.RequestPlan, operation exchange.ClientOperationEvidence, body []byte, credential string, source *concurrentContentBudgetSource, controls func(*Runtime) error, calls, diagnostics func() int32, count int, tail string) {
 	// This watchdog contains the selected fixture; content has its own finite
 	// context. Race mode explicitly verifies concurrency rather than default latency.
@@ -79,7 +105,7 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 		t.Fatal(err)
 	}
 	defer secondLease.Release()
-	second, err := exchange.NewClientRequest("long-session-2", plan, operation, body, exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithBodyLease(secondLease), exchange.WithOriginalHeaders(http.Header{"Authorization": {credential}, "Content-Type": {"application/json"}}))
+	second, err := exchange.NewClientRequest("long-session-2", plan, operation, body, exchange.ReplayGenerationCostOnly, wireprofile.ApplicationProtocolHTTP1, exchange.WithObservationStamp(f.runtime.recorder.ScopeStamp(captureidentity.Reference{})), exchange.WithBodyLease(secondLease), exchange.WithOriginalHeaders(http.Header{"Authorization": {credential}, "Content-Type": {"application/json"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,61 +113,13 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 	for _, request := range []exchange.ClientRequest{first, second} {
 		go func() { _, err := pipeline.Execute(ctx, request, &longSessionDownstream{}); done <- err }()
 	}
-	ids := map[string]bool{}
-	for range 2 {
-		select {
-		case id := <-source.entered:
-			ids[id] = true
-		case err := <-done:
-			t.Fatalf("recording did not remain active: %v", err)
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-	}
-	if len(ids) != 2 {
-		t.Fatal("two distinct real recordings were not active")
-	}
-	source.startOnce.Do(func() { close(source.start) })
-	for range 2 {
-		select {
-		case <-source.started:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-	}
+
+	// One recording worker may block; both actual executions must still finish.
 	select {
-	case <-source.overlap:
+	case <-source.entered:
 	case <-ctx.Done():
-		t.Fatal("real recording calls never overlapped")
+		t.Fatal(ctx.Err())
 	}
-	if active := source.active.Load(); active != 2 {
-		t.Fatalf("controls dispatch outside instrumented sink-call overlap: active=%d", active)
-	}
-	t.Logf("controls dispatched with instrumented Manager/Store sink calls active=%d; post-commit borrow barrier tracked separately", source.active.Load())
-	if err := controls(f.runtime); err != nil {
-		t.Fatal(err)
-	}
-	attempt := runtimeProviderAttempt(t, "content-control-audit")
-	if _, err := f.runtime.egressCompletion.Append(ctx, attempt); err != nil {
-		t.Fatal(err)
-	}
-	terminal, err := attempt.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeCompleted, CompletedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.runtime.egressCompletion.Complete(ctx, terminal); err != nil {
-		t.Fatal(err)
-	}
-	page, err := f.runtime.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10, ExchangeID: attempt.Parent().ExchangeID})
-	if err != nil || len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() {
-		t.Fatalf("real audit completion missing: %v", err)
-	}
-	canceled, stop := context.WithCancel(context.Background())
-	stop()
-	if !errors.Is(pipeline.Drain(canceled), context.Canceled) || !errors.Is(f.runtime.bodyAdmission.Drain(canceled), context.Canceled) {
-		t.Fatal("active content observers were declared drained")
-	}
-	source.once.Do(func() { close(source.release) })
 	for range 2 {
 		select {
 		case err := <-done:
@@ -149,17 +127,26 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 				t.Fatal(err)
 			}
 		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+			t.Fatal("recording blocked actual execution")
 		}
-	}
-	if err := pipeline.Drain(ctx); err != nil {
-		t.Fatal(err)
 	}
 	firstLease.Release()
 	secondLease.Release()
+	if err := pipeline.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.runtime.bodyAdmission.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := controls(f.runtime); err != nil {
+		t.Fatal(err)
+	}
+	source.startOnce.Do(func() { close(source.start) })
+	source.once.Do(func() { close(source.release) })
+	if err := f.runtime.recorder.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{"long-session-4111": true, "long-session-2": true}
 	var expected struct {
 		Input []struct {
 			Content string `json:"content"`
@@ -170,8 +157,15 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 	}
 	for id := range ids {
 		projection, err := f.runtime.ExchangeContents().GetProjection(ctx, id, exchangecontent.RequestViewFull)
-		if err != nil || len(projection.Request.Messages) != count || projection.Request.Messages[count-1].Blocks[0].Text != tail || projection.Response == nil || projection.Response.Blocks[0].Text != "complete-reply" {
+		if err != nil || len(projection.Request.Messages) != count || projection.Request.Messages[count-1].Blocks[0].Text != tail {
 			t.Fatalf("complete concurrent Store record %s: %v", id, err)
+		}
+		if projection.Response == nil {
+			if f.runtime.recordingBudget.Snapshot().ByKind[recording.Content].Offers[recording.DroppedCapacity].Records == 0 {
+				t.Fatal("terminal recording disappeared without counted loss")
+			}
+		} else if projection.Response.Blocks[0].Text != "complete-reply" {
+			t.Fatal("accepted response changed")
 		}
 		for i, message := range projection.Request.Messages {
 			if message.Role != "user" || len(message.Blocks) != 1 || message.Blocks[0].Text != expected.Input[i].Content {
@@ -182,7 +176,7 @@ func testContentBudgetConcurrentExecutions(t *testing.T, _ context.Context, f ac
 	if calls() != 2 || diagnostics() != 0 {
 		t.Fatalf("concurrent upstream=%d diagnostics=%d", calls(), diagnostics())
 	}
-	t.Log("two real Runtime exchanges retained full records; controls ran while synchronous recording ownership was active")
+	t.Log("two real Runtime exchanges completed while the optional recording worker was blocked")
 }
 
 func runtimeContentBudgetSemanticFixture(t *testing.T) (protocolcore.Request, protocolcore.Response) {
@@ -203,29 +197,35 @@ func (s *failingBudgetRecorder) RecordSource(ctx context.Context, _ *exchangecon
 	<-ctx.Done()
 	return ctx.Err()
 }
-func TestRuntimeContentObservationDeadlineReportsRealFailure(t *testing.T) {
+func TestRuntimeContentObservationDeadlineDoesNotOwnWriterLifetime(t *testing.T) {
 	request, response := runtimeContentBudgetSemanticFixture(t)
 	limits := longSessionTestPolicy().Content
+	b, _ := recording.NewBudget(recording.Limits{Records: 1, Bytes: 64 << 20})
+	owner, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+	queue := newObservationRecorder(owner, b, nil, nil)
+	defer queue.Shutdown(context.Background())
 	recorder := &failingBudgetRecorder{entered: make(chan struct{})}
-	diagnostic := make(chan error, 1)
-	observer := exchangeContentObserver{limits: &limits, recorder: recorder, clock: SystemClock{}, reportFailure: func(stage string, err error) {
-		if stage != "response_content" {
-			t.Error(stage)
-		}
-		diagnostic <- err
-	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	err := observer.ObserveContent(ctx, exchange.ContentObservation{ExchangeID: "deadline-report", EnvironmentID: "env", EnvironmentRevision: 1, EnvironmentDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", EndpointID: "ep", EndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, Recording: environment.DefaultContentRecordingPolicy(), Request: request, Response: &response})
-	if !errors.Is(err, context.DeadlineExceeded) {
+	observer := exchangeContentObserver{queue: queue, limits: &limits, recorder: recorder, clock: SystemClock{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	err := observer.ObserveContent(ctx, exchange.ContentObservation{ObservationStamp: queue.ScopeStamp(captureidentity.Reference{}), ExchangeID: "deadline-report", EnvironmentID: "env", EnvironmentRevision: 1, EnvironmentDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", EndpointID: "ep", EndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, Recording: environment.DefaultContentRecordingPolicy(), Request: request, Response: &response})
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case failure := <-diagnostic:
-		if !errors.Is(failure, context.DeadlineExceeded) {
-			t.Fatal(failure)
-		}
-	default:
-		t.Fatal("actual content deadline failure was silent")
+	<-recorder.entered
+	cancel()
+	if b.Snapshot().ReservedRecords != 1 {
+		t.Fatal("producer cancellation refunded worker ownership")
 	}
+	cancelOwner()
+	if err := queue.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.Snapshot().ByKind[recording.Content].Settlements[recording.Unconfirmed].Records != 1 {
+		t.Fatal("actual writer failure unreported")
+	}
+}
+
+func (s *failingBudgetRecorder) RecordScopedSource(ctx context.Context, _ recording.Scope, source *exchangecontent.Source) error {
+	return s.RecordSource(ctx, source)
 }

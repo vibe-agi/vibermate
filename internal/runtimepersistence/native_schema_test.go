@@ -185,13 +185,19 @@ func TestNativeSchemaBootstrapMatchesMigration(t *testing.T) {
 	if count != 10 {
 		t.Fatalf("native table count %d", count)
 	}
+}
+
+func TestNativeControlSchemaMatchesStandalone(t *testing.T) {
+	current := openSQLiteForTest(t, filepath.Join(t.TempDir(), "control.db"))
+	nativeExec(t, current, controlSchemaSQL)
+	tables := nativeLegacyColumns(t, current)
 	nativeOnly := openSQLiteForTest(t, filepath.Join(t.TempDir(), "native-only.db"))
 	nativeExec(t, nativeOnly, schemaV1SQL)
 	nativeExec(t, nativeOnly, nativeSQL(t, "native_schema.sql"))
 	for table := range tables {
 		if strings.HasPrefix(table, "native_tool_") {
-			if !reflect.DeepEqual(nativeTypedRows(t, fresh, `PRAGMA table_info("`+table+`")`), nativeTypedRows(t, nativeOnly, `PRAGMA table_info("`+table+`")`)) {
-				t.Fatal("standalone native DDL differs")
+			if !reflect.DeepEqual(nativeTypedRows(t, current, `PRAGMA table_info("`+table+`")`), nativeTypedRows(t, nativeOnly, `PRAGMA table_info("`+table+`")`)) {
+				t.Fatal("current native authority DDL differs", table)
 			}
 		}
 	}

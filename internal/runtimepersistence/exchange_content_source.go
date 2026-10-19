@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // These descriptors borrow the Source until the synchronous transaction ends.
@@ -28,7 +29,18 @@ type storedSourceMessage struct {
 
 // PutSource is deliberately concrete until the Manager handoff is activated.
 // A nil constructor policy cannot use it to bypass legacy Record admission.
-func (repository *exchangeContentRepository) PutSource(ctx context.Context, source *exchangecontent.Source) error {
+func (repository *exchangeContentRepository) PutSource(ctx context.Context, source *exchangecontent.Source) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
+	return repository.putScopedSource(ctx, recording.Scope{}, source, false)
+}
+func (repository *exchangeContentRepository) PutScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
+	return repository.putScopedSource(ctx, scope, source, true)
+}
+func (repository *exchangeContentRepository) putScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source, provided bool) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
+	if repository.requireScope && !provided || provided && (!repository.coordinates || !validOriginalRecordingScope(scope)) {
+		return recording.ErrObservationDiscarded
+	}
 	if repository.limits == nil || source == nil || ctx == nil {
 		return exchangecontent.ErrInvalidEvidence
 	}
@@ -54,6 +66,9 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 		return err
 	}
 	meta := source.Metadata()
+	if provided && !recordingScopeMatches(scope, meta.Parent.CaptureRunID, meta.Parent.ManualCaptureID) {
+		return recording.ErrObservationDiscarded
+	}
 	// Match the legacy manifest's empty-slice representation before both
 	// encoding and strict completion comparison. Omitted evidence decodes nil;
 	// Source metadata deliberately exposes owned empty arrays to its callers.
@@ -136,7 +151,7 @@ func (repository *exchangeContentRepository) PutSource(ctx context.Context, sour
 	if transcript.requestCount == 0 || uint64(len(transcript.nodes)) != cost.TranscriptNodes {
 		return exchangecontent.ErrInvalidEvidence
 	}
-	return repository.publishContent(ctx, manifest, encoded, transcript, func(ctx context.Context, tx *sql.Tx, digest string) error {
+	return repository.publishContent(ctx, manifest, encoded, transcript, scope, func(ctx context.Context, tx *sql.Tx, digest string) error {
 		m, ok := messages[digest]
 		if !ok {
 			return exchangecontent.ErrInvalidEvidence

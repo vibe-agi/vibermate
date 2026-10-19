@@ -196,7 +196,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 	}, {
 		required: present["host"] && present["control-principal"],
 		holder:   hostPackageDir,
-		function: "Start",
+		function: "startWithConstructors",
 		target: calledFunction{
 			importPath: controlPrincipalImportPath,
 			name:       "NewAuthority",
@@ -207,7 +207,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 	}, {
 		required: present["host"] && present["capture-grant"],
 		holder:   hostPackageDir,
-		function: "Start",
+		function: "startWithConstructors",
 		target: calledFunction{
 			importPath: captureGrantImportPath,
 			name:       "New",
@@ -218,7 +218,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 	}, {
 		required: present["host"] && present["capture-control"],
 		holder:   hostPackageDir,
-		function: "Start",
+		function: "startWithConstructors",
 		target: calledFunction{
 			importPath: captureControlImportPath,
 			name:       "NewManualHandler",
@@ -229,7 +229,7 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 	}, {
 		required: present["host"] && present["capture-control"],
 		holder:   hostPackageDir,
-		function: "Start",
+		function: "startWithConstructors",
 		target: calledFunction{
 			importPath: captureControlImportPath,
 			name:       "New",

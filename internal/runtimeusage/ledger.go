@@ -3,6 +3,7 @@ package runtimeusage
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"strings"
 	"time"
 	"unicode"
@@ -35,7 +36,7 @@ func (policy CollectionPolicy) Validate() error {
 
 // Observation contains no prompt, response, tool arguments, headers, credentials
 // or URLs. One Exchange, regardless of retries, has one immutable observation.
-// Ownership is resolved by the repository from the admitted Capture, never from
+// Ownership is frozen by the producer from the admitted Capture, never from
 // a client-supplied user label or the identity of the dashboard viewer.
 type Observation struct {
 	ExchangeID          string             `json:"exchangeId"`
@@ -106,9 +107,37 @@ type Recorder interface {
 	RecordUsage(context.Context, Observation) error
 }
 
-type Repository interface {
-	Recorder
+type PolicyRepository interface {
 	UsagePolicy(context.Context) (CollectionPolicy, error)
 	SetUsagePolicy(context.Context, CollectionPolicy, time.Time) (CollectionPolicy, error)
+}
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+}
+
+type Reader interface {
 	ScanUsage(context.Context, AggregationQuery, runtimeuser.UserID, time.Time, func(UsageBucket) error) (AggregationResult, error)
 }
+
+// Repository is the legacy combined adapter during storage cutover. New role
+// composition uses independent PolicyRepository, Reader and CollectedWriter.
+type Repository interface {
+	Recorder
+	PolicyRepository
+	Reader
+}
+
+// CollectedObservation freezes admitted attribution and the successful policy
+// revision at offer time. Stamp grants no execution or read authority.
+type CollectedObservation struct {
+	Value          Observation
+	PolicyRevision int64
+	ExpiresAt      time.Time
+	Stamp          recording.Stamp
+}
+type CollectedWriter interface {
+	PutCollectedUsage(context.Context, CollectedObservation) error
+}
+
+var ErrObservationDiscarded = errors.New("optional usage observation discarded")

@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -1413,7 +1414,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	if composition != nil && composition.connectionRepository != nil {
 		journalRepository = composition.connectionRepository(journalRepository)
 	}
-	connections, err := connectionevent.New(context.Background(), connectionevent.DefaultOptions(journalRepository))
+	connections, err := connectionevent.New(context.Background(), connectionevent.DefaultOptions(testrecording.Connections(journalRepository)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1459,7 +1460,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressDefaults:   defaults,
-		EgressAudit:      store.EgressAttemptRepository(),
+		EgressAudit:      testrecording.Egress(store.EgressAttemptRepository()),
 		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,

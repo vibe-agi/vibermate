@@ -240,7 +240,7 @@ func (r *nativeToolRepository) Start(ctx context.Context, id nativetool.ID, atte
 		if err != nil {
 			return err
 		}
-		if _, err := appendEgressAttempt(ctx, tx, audit); err != nil {
+		if _, err := appendNativeDelivery(ctx, tx, audit); err != nil {
 			return err
 		}
 		source := "policy"
@@ -330,7 +330,7 @@ func (r *nativeToolRepository) VerifyStartReceipt(ctx context.Context, receipt n
 				return nativetool.ErrDenied
 			}
 		}
-		actual, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, attempt))
+		actual, err := scanEgressAttempt(tx.QueryRowContext(ctx, nativeDeliverySelect+` WHERE attempt_id=?`, attempt))
 		if err != nil {
 			return nativetool.ErrDenied
 		}
@@ -368,7 +368,7 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if err := tx.QueryRowContext(ctx, `SELECT attempt_id FROM native_tool_once WHERE operation_id=? AND capture_kind=? AND capture_id=?`, op.ID, op.Capture.Kind, op.Capture.ID).Scan(&attempt); err != nil {
 		return err
 	}
-	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, egressAttemptSelect+` WHERE attempt_id=?`, attempt))
+	record, err := scanEgressAttempt(tx.QueryRowContext(ctx, nativeDeliverySelect+` WHERE attempt_id=?`, attempt))
 	if err != nil {
 		return err
 	}
@@ -385,11 +385,18 @@ func finishNative(ctx context.Context, tx *sql.Tx, op nativetool.Operation, in n
 	if err != nil {
 		return err
 	}
-	if _, err := completeEgressAttempt(ctx, tx, terminal); err != nil {
+	if _, err := completeNativeDelivery(ctx, tx, terminal); err != nil {
 		return err
 	}
 	if err := cancelNativeParentApprovals(ctx, tx, op.Capture, op.ID, in.ObservedAt); err != nil {
 		return err
+	}
+	if unknown {
+		op.BytesIn = nil
+		op.BytesOut = nil
+	} else {
+		op.BytesIn = &in.BytesIn
+		op.BytesOut = &in.BytesOut
 	}
 	if err := nativeTransition(ctx, tx, op, in.Outcome, op.DecisionSource, in.Reason, in.Outcome, in.ObservedAt); err != nil {
 		return err
@@ -428,7 +435,7 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id).Scan(&once); err != nil {
 				return err
 			}
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_kind='client_operation' AND parent_id=?`, id).Scan(&audits); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, id).Scan(&audits); err != nil {
 				return err
 			}
 			if once != 0 || audits != 0 {
@@ -467,6 +474,9 @@ func (r *nativeToolRepository) Finish(ctx context.Context, id nativetool.ID, in 
 			if state == "failed" && op.State == "received" {
 				state = "denied"
 			}
+			zero := int64(0)
+			op.BytesIn = &zero
+			op.BytesOut = &zero
 			if err := nativeTransition(ctx, tx, op, state, op.DecisionSource, in.Reason, state, in.ObservedAt); err != nil {
 				return err
 			}
@@ -546,12 +556,8 @@ func retireNativeWork(ctx context.Context, tx *sql.Tx, c captureidentity.Referen
 			return err
 		}
 		at := now
-		var last int64
-		if err := tx.QueryRowContext(ctx, `SELECT MAX(occurred_at_unix_ms) FROM native_tool_events WHERE operation_id=?`, id).Scan(&last); err != nil {
-			return err
-		}
-		if at.UnixMilli() < last {
-			at = time.UnixMilli(last).UTC()
+		if at.Before(op.MaximumEventAt) {
+			at = op.MaximumEventAt
 		}
 		if op.State == "started" {
 			if err := finishNative(ctx, tx, op, nativetool.TerminalInput{Outcome: "uncertain", Reason: "execution_uncertain", ObservedAt: at}); err != nil {
@@ -673,7 +679,14 @@ func (r *nativeToolRepository) Recover(ctx context.Context, now time.Time) error
 		return errors.Join(nativetool.ErrUnavailable, err)
 	}
 	err = r.transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		return revokeNativeScopesWhere(ctx, tx, "state<>'closed'", now)
+		if err := revokeNativeScopesWhere(ctx, tx, "state<>'closed'", now); err != nil {
+			return err
+		}
+		// Exclusive Runtime ownership excludes the former process. A known
+		// logical terminal does not prove that its socket finished; reconcile
+		// every retained physically open delivery without issuing a receipt.
+		_, err := tx.ExecContext(ctx, `UPDATE native_tool_deliveries SET completed_at_unix_ms=MAX(started_at_unix_ms,?),outcome='failed',error_class='daemon_restarted',bytes_out=0,bytes_in=0,byte_counts_known=0 WHERE completed_at_unix_ms IS NULL`, now.UnixMilli())
+		return err
 	})
 	// Rotate even on unknown commit: old receipts cannot outlive this boundary.
 	r.issuer = issuer

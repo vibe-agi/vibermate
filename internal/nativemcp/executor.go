@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"mime"
 	"net/http"
@@ -36,16 +37,25 @@ type IDSource interface {
 	NewNativeOperationID(context.Context) (nativetool.ID, error)
 	NewOwnerEpoch(context.Context) (uint64, error)
 }
+
+// AuthorityStore contains only required lifecycle and physical delivery authority.
+type AuthorityStore interface {
+	nativetool.LifecycleAuthority
+	nativetool.ExecutionAuthority
+}
+
 type Dependencies struct {
 	EgressDefaults  egressprofile.Resolver
 	OwnerContext    context.Context
 	Transport       originaltransport.Transport
-	Store           nativetool.Repository
+	Store           AuthorityStore
 	ToolDecisions   exchange.ToolDecisionGate
 	Offline         offlinehold.Coordinator
 	Clock           func() time.Time
 	IDs             IDSource
 	ContentProfiles ContentProfiles
+	ContentRecorder ContentRecorder
+	RecordingScopes recording.ScopeIssuer
 }
 type Outcome string
 
@@ -86,7 +96,8 @@ const (
 type ContentObservationReason string
 
 const ContentProfileUnavailable ContentObservationReason = "content_profile_unavailable"
-const ContentAuthorityUnavailable ContentObservationReason = "content_authority_unavailable"
+const ContentRecordingUnavailable ContentObservationReason = "content_recording_unavailable"
+const ContentAuthorityUnavailable = ContentRecordingUnavailable
 
 type Terminal struct {
 	OperationID       nativetool.ID
@@ -453,6 +464,13 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if received.Duplicate {
 		return reject(w, received.OperationID, ReasonExecutionUncertain)
 	}
+	if r.kind == nativetool.RequestToolsCall && len(intents) > 0 && e.dependencies.RecordingScopes != nil && !received.CreatedAt.IsZero() {
+		stamp := recording.StampOriginal(e.dependencies.RecordingScopes, received.RecordingScope)
+		if stamp.Current() && stamp.Fence() == received.RecordingScope.Fence && stamp.MatchesCapture(received.RecordingScope.Capture) {
+			r.retention.stamp = stamp
+			r.retention.identity = nativetool.ContentIdentity{OperationID: received.OperationID, Scope: received.RecordingScope, EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(), EnvironmentDigest: plan.EnvironmentDigest(), Kind: r.kind, ToolName: intents[0].Call.Name, TargetOrigin: plan.Route().TargetOrigin.String(), CredentialOwner: string(plan.Route().CredentialOwner), Recording: plan.ContentRecording(), CreatedAt: received.CreatedAt, ExpiresAt: received.CreatedAt.Add(time.Duration(plan.ContentRecording().RetentionDays) * 24 * time.Hour)}
+		}
+	}
 	if r.kind == nativetool.RequestServerReply {
 		defer e.retireFailedReplyParent(s, string(r.id), c.id)
 	}
@@ -632,19 +650,14 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	contentReason := ContentObservationReason("")
 	if r.kind == nativetool.RequestToolsCall && plan.ContentRecording().Mode == environment.ContentRecordingFull {
-		profile, available := r.retention.profile, r.retention.known
-		if !available {
+		if !r.retention.known {
 			contentReason = ContentProfileUnavailable
 		} else {
 			arguments := r.params["arguments"]
 			if len(arguments) == 0 {
-				arguments = []byte("{}")
+				arguments = emptyToolArguments[:]
 			}
-			if body, permitted := retainedContent(arguments, profile.arguments, e.limits); permitted {
-				if err = e.dependencies.Store.PutContent(call, c.id, "tool_arguments", body, e.dependencies.Clock().UTC()); err != nil {
-					r.retention.unavailable = true
-				}
-			}
+			e.observeContent(r, nativetool.ContentToolArguments, arguments)
 		}
 	}
 	var candidate *catalogCandidate
@@ -657,7 +670,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	}
 	state, storedReason := "completed", "completed"
 	if r.retention.unavailable {
-		contentReason = ContentAuthorityUnavailable
+		contentReason = ContentRecordingUnavailable
 	}
 	if knownRPCFailure {
 		state, storedReason = "failed", "rpc_error"
@@ -834,13 +847,22 @@ func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session, selected en
 		intents = []protocolcore.ToolIntent{{ResponseID: c.id.String(), Ordinal: 0, Call: protocolcore.ToolCall{Key: key, Name: name, Arguments: arguments}}}
 		input.Intents = intents
 		input.CatalogEvidence = s.catalog
-		if r.retention != nil && e.dependencies.ContentProfiles != nil {
+		// Required sensitive binding never depends on the optional retention
+		// holder. Resolve/freeze once, then share that trusted classification
+		// with approval preview and the synchronous recording borrow.
+		var profile ContentProfile
+		knownProfile := false
+		if e.dependencies.ContentProfiles != nil {
 			definition, found := s.catalog.Lookup(name)
 			if found {
-				profile, available := e.dependencies.ContentProfiles.Resolve(s.plan.Route().Contract, definition)
-				if available && profile.valid(s.plan.Route().Contract, definition) {
-					r.retention.known = true
-					r.retention.profile = frozenProfile(profile)
+				candidate, available := e.dependencies.ContentProfiles.Resolve(s.plan.Route().Contract, definition)
+				if available && candidate.valid(s.plan.Route().Contract, definition) {
+					profile = frozenProfile(candidate)
+					knownProfile = true
+					if r.retention != nil {
+						r.retention.known = true
+						r.retention.profile = profile
+					}
 				}
 			}
 		}
@@ -854,44 +876,38 @@ func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session, selected en
 				input.ObservedCallID = []byte(value)
 			}
 		}
-		if e.dependencies.ContentProfiles != nil {
-			definition, found := s.catalog.Lookup(name)
-			if found {
-				profile, available := e.dependencies.ContentProfiles.Resolve(s.plan.Route().Contract, definition)
-				if available && profile.valid(s.plan.Route().Contract, definition) {
-					fields, err := objectField(args, e.limits)
-					if err != nil {
-						return nativetool.Binding{}, nil, nil, err
-					}
-					sensitive := false
-					for _, path := range profile.arguments {
-						if containsPath(fields, path) {
-							sensitive = true
-							break
-						}
-					}
-					if sensitive {
-						paths := make([]string, len(profile.arguments))
-						for index, path := range profile.arguments {
-							paths[index] = "/params/arguments" + path
-						}
-						observation, err := nativetool.NewSensitiveObservation("tools/call", paths)
-						if err != nil {
-							return nativetool.Binding{}, nil, nil, err
-						}
-						if !e.budget.acquire(2048) {
-							return nativetool.Binding{}, nil, nil, errBudget
-						}
-						binding, witness, err := s.hasher.BindToolCall(c.id, input, observation)
-						if err != nil {
-							e.budget.release(2048)
-							return nativetool.Binding{}, nil, nil, err
-						}
-						s.tools[c.id] = &witness
-						s.retained += 2048
-						return binding, intents, nil, nil
-					}
+		if knownProfile {
+			fields, err := objectField(args, e.limits)
+			if err != nil {
+				return nativetool.Binding{}, nil, nil, err
+			}
+			sensitive := false
+			for _, path := range profile.arguments {
+				if containsPath(fields, path) {
+					sensitive = true
+					break
 				}
+			}
+			if sensitive {
+				paths := make([]string, len(profile.arguments))
+				for index, path := range profile.arguments {
+					paths[index] = "/params/arguments" + path
+				}
+				observation, err := nativetool.NewSensitiveObservation("tools/call", paths)
+				if err != nil {
+					return nativetool.Binding{}, nil, nil, err
+				}
+				if !e.budget.acquire(2048) {
+					return nativetool.Binding{}, nil, nil, errBudget
+				}
+				binding, witness, err := s.hasher.BindToolCall(c.id, input, observation)
+				if err != nil {
+					e.budget.release(2048)
+					return nativetool.Binding{}, nil, nil, err
+				}
+				s.tools[c.id] = &witness
+				s.retained += 2048
+				return binding, intents, nil, nil
 			}
 		}
 	}

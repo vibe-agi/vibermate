@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
@@ -86,6 +87,7 @@ func TestServerHostCanServeTheSameRuntimeAndManagementUIOverExplicitHTTP(t *test
 		t.Fatal(err)
 	}
 	defer shutdownServer(t, host)
+	waitServerRecording(t, host.Runtime())
 	status := host.Status()
 	if status.Scheme != "http" || status.TLSFingerprint != "" {
 		t.Fatalf("HTTP status = %+v", status)
@@ -110,6 +112,7 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer shutdownServer(t, host)
+	waitServerRecording(t, host.Runtime())
 	key, err := os.ReadFile(host.Status().RecoveryKeyPath)
 	if err != nil {
 		t.Fatal(err)
@@ -240,6 +243,7 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 	if createErr != nil {
 		t.Fatal(createErr)
 	}
+	waitServerRecording(t, host.Runtime())
 	ownerReadURLs = append(ownerReadURLs, "http://"+host.Status().ListenAddress+"/api/v1/captures/manual_capture:"+nativeCapture.Capture.ID+"/native-tools/approvals")
 	for _, ownerReadURL := range ownerReadURLs {
 		for _, trial := range []struct {
@@ -251,21 +255,11 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 			{"member", memberSession.ReadToken, http.StatusUnauthorized},
 			{"anonymous", "", http.StatusUnauthorized},
 		} {
-			searchRequest, requestErr := http.NewRequest(http.MethodGet, ownerReadURL, nil)
-			if requestErr != nil {
-				t.Fatal(requestErr)
-			}
-			if trial.credential != "" {
-				searchRequest.Header.Set("Authorization", "Bearer "+trial.credential)
-			}
-			searchResponse, requestErr := client.Do(searchRequest)
-			if requestErr != nil {
-				t.Fatal(requestErr)
-			}
-			searchResponse.Body.Close()
+			searchResponse := sendJSON(t, client, http.MethodGet, ownerReadURL, trial.credential, nil)
 			if searchResponse.StatusCode != trial.expected {
 				t.Fatalf("%s owner read %s status=%d, want %d", trial.label, ownerReadURL, searchResponse.StatusCode, trial.expected)
 			}
+			searchResponse.Body.Close()
 		}
 	}
 	wrongScope := postJSON(t, client,
@@ -355,9 +349,11 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 		}
 		return response.StatusCode
 	}
+	waitServerRecording(t, host.Runtime())
 	if status := useProxy(grant.ProxyPassword); status != http.StatusOK {
 		t.Fatalf("issued Web proxy login failed with HTTP %d", status)
 	}
+	waitServerRecordingSettled(t, host.Runtime())
 	connections, err := host.Runtime().ConnectionEvents().List(context.Background(),
 		connectionevent.PageRequest{IngressID: "manual-capture/" + grant.Capture.ID, Limit: 10})
 	if err != nil || len(connections.Items) == 0 {
@@ -538,6 +534,7 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitServerRecording(t, host.Runtime())
 	usageRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
 	usageResponse, err := (&http.Client{Timeout: 10 * time.Second}).Do(usageRequest)
 	if err != nil {
@@ -1253,6 +1250,26 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if _, policyErr := host.Runtime().UsageRepository().SetUsagePolicy(context.Background(), runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 90, Revision: 1}, time.Now().UTC()); policyErr != nil {
 		t.Fatal(policyErr)
 	}
+	// The control commit requests physical cleanup. Join that durable intent
+	// before creating the unchanged short-lived Capture; status alone can
+	// report no pending work before the optional owner notices the request.
+	cleanupContext, stopCleanup := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stopCleanup()
+	for {
+		location, err := host.Runtime().StorageLocation(cleanupContext)
+		if err == nil && !location.CleanupPreview.CleanupPending {
+			break
+		}
+		if err != nil && !errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) {
+			t.Fatal("usage-policy cleanup inspection", err)
+		}
+		select {
+		case <-cleanupContext.Done():
+			t.Fatal("usage-policy cleanup did not complete", cleanupContext.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	waitServerRecording(t, host.Runtime())
 	rules := host.Runtime().ConnectionRules()
 	current := rules.Current()
 	if _, err := rules.Replace(
@@ -1375,6 +1392,7 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 		t.Fatal(err)
 	}
 
+	waitServerRecording(t, host.Runtime())
 	proxyURL, err := url.Parse("http://" + host.Status().ListenAddress)
 	if err != nil {
 		t.Fatal(err)
@@ -1398,13 +1416,21 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	response.Body.Close()
 	if readErr != nil || response.StatusCode != http.StatusOK ||
 		!bytes.Contains(responsePayload, []byte("captured")) {
-		t.Fatalf("proxied response status=%d bodyBytes=%d error=%v", response.StatusCode, len(responsePayload), readErr)
+		t.Fatalf("proxied response status=%d reason=%q bodyBytes=%d error=%v", response.StatusCode, response.Header.Get("X-Vibermate-Reason"), len(responsePayload), readErr)
 	}
-
-	page, err := host.Runtime().Activities().ListExchanges(
-		context.Background(),
-		activity.PageRequest{CaptureRunID: grant.Run.ID, Limit: 10},
-	)
+	// HTTP delivery can precede terminal observations. Join the actual owned
+	// Exchange before a zero recording-slot count proves producer settlement.
+	drainer, ok := host.Runtime().ExchangeExecutor().(interface{ Drain(context.Context) error })
+	if !ok {
+		t.Fatal("actual Runtime Exchange drain unavailable")
+	}
+	drainContext, stopDrain := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stopDrain()
+	if err := drainer.Drain(drainContext); err != nil {
+		t.Fatal("custom Claude producer drain", err)
+	}
+	waitServerRecordingSettled(t, host.Runtime())
+	page, err := host.Runtime().Activities().ListExchanges(context.Background(), activity.PageRequest{CaptureRunID: grant.Run.ID, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1446,6 +1472,7 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitServerRecording(t, host.Runtime())
 	usageRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
 	usageResponse, err := controlClient.Do(usageRequest)
 	if err != nil {
@@ -1549,6 +1576,45 @@ func shutdownServer(t *testing.T, host *serverhost.Host) {
 	if err := host.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A successful inspection validates the complete optional mirror against the
+// current required visibility stamp, including the just-created child Capture.
+func waitServerRecording(t *testing.T, r *productruntime.Runtime) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		token, err := r.Activities().Begin(t.Context())
+		if err == nil {
+			_, err = r.Activities().ListExchanges(t.Context(), activity.PageRequest{Limit: 1})
+		}
+		generationCanceled := false
+		if errors.Is(err, context.Canceled) && t.Context().Err() == nil {
+			changed := r.Activities().Check(t.Context(), token)
+			generationCanceled = errors.Is(changed, recording.ErrInspectionChanged) || errors.Is(changed, recording.ErrInspectionUnavailable)
+		}
+		if err == nil {
+			return
+		}
+		if (!errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) && !generationCanceled) || time.Now().After(deadline) {
+			t.Fatal("optional mirror did not become readable", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Called only after the child and its supervisor have finished offering all
+// observations; zero owned slots therefore proves actual worker settlement.
+func waitServerRecordingSettled(t *testing.T, r *productruntime.Runtime) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for r.Status().Recording.ReservedRecords != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("optional recording did not settle", r.Status().Recording)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitServerRecording(t, r)
 }
 
 func mustServerAddress(t *testing.T, value string) serverconnection.Address {

@@ -18,11 +18,11 @@ func ProductUpdateTestOptions(t *testing.T, gate offlinehold.RuntimeCoordinator)
 
 // Test utility only: cross-package real control tests cannot import desktopcontrol
 // from package productruntime without a Go test import cycle. No production API.
-func StartProductUpdateTestRuntime(ctx context.Context, options Options, transport providertransport.Transport, builder *egressnetwork.Builder, roots *x509.CertPool) (*Runtime, error) {
+func StartProductUpdateTestRuntime(ctx context.Context, options Options, transport providertransport.Transport, builder *egressnetwork.Builder, roots *x509.CertPool, probes ...*EgressOfferProbe) (*Runtime, error) {
 	if transport == nil || builder == nil {
 		return nil, errors.New("contained update test dependencies missing")
 	}
-	return startWithBuilders(ctx, options, runtimeBuildOverrides{
+	overrides := runtimeBuildOverrides{
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
 		},
@@ -44,5 +44,9 @@ func StartProductUpdateTestRuntime(ctx context.Context, options Options, transpo
 			}
 			return providertransport.NewClient(providertransport.ClientOptions{Coordinator: request.coordinator, Authenticators: []providertransport.Authenticator{bearer, anthropic, codex}, Transport: transport, InstanceIDs: request.instanceIDs, Audit: request.audit, RawEvidence: request.rawEvidence, EgressDefaults: request.egressDefaults})
 		},
-	})
+	}
+	if len(probes) > 0 {
+		overrides.egressObserver = probes[0].wrap
+	}
+	return startWithBuilders(ctx, options, overrides)
 }

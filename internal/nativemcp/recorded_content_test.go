@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -53,14 +54,8 @@ func TestRecordedNestedMetadataIsNotRetained(t *testing.T) {
 	if terminal.Outcome != OutcomeCompleted {
 		t.Fatal(terminal)
 	}
-	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if op.Result == nil {
-		t.Fatal("public result suppressed with private metadata")
-	}
-	body, err := f.store.NativeToolRepository().ReadContent(context.Background(), f.capture, call.id, "tool_result", 0, 128<<10)
+
+	body, err := f.readNativeContent(context.Background(), f.capture, call.id, "tool_result", 0, 128<<10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,12 +105,13 @@ func TestRecordedBusinessMetadataFidelityAndExplicitSensitivePaths(t *testing.T)
 				t.Fatal(err)
 			}
 			if sensitive {
+				f.requireNoContent(t, call.id, nativetool.ContentToolArguments, nativetool.ContentToolResult)
 				if op.Arguments != nil || op.Result != nil {
 					t.Fatal("explicit sensitive body/digest retained")
 				}
 			} else {
 				for _, part := range []string{"tool_arguments", "tool_result"} {
-					body, err := f.store.NativeToolRepository().ReadContent(context.Background(), f.capture, call.id, part, 0, 128<<10)
+					body, err := f.readNativeContent(context.Background(), f.capture, call.id, part, 0, 128<<10)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -165,6 +161,7 @@ func TestRecordedSensitiveJSONPointerArraysAndEscapedKeys(t *testing.T) {
 			if op.Arguments != nil || op.Result != nil {
 				t.Error("explicit sensitive JSON pointer body/digest retained")
 			}
+			f.requireNoContent(t, call.id, nativetool.ContentToolArguments, nativetool.ContentToolResult)
 			assertNoSensitiveRows(t, f, []string{"array-private-sentinel"})
 		})
 	}

@@ -3,6 +3,7 @@ package exchangecontent
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -18,9 +19,10 @@ const (
 )
 
 type RequestPreview struct {
-	Kind      string `json:"kind"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated"`
+	InspectionExpiresAt time.Time `json:"-"`
+	Kind                string    `json:"kind"`
+	Text                string    `json:"text"`
+	Truncated           bool      `json:"truncated"`
 }
 
 func (preview RequestPreview) Validate() error {
@@ -93,4 +95,11 @@ func singleLinePreview(value string) string {
 		return character
 	}, value)
 	return strings.Join(strings.Fields(value), " ")
+}
+
+// BodyAvailability carries the request-owned deadline that a plain bool map
+// cannot express. Inspection consumers preserve it until final publication.
+type BodyAvailability struct {
+	Items               map[string]bool
+	InspectionExpiresAt time.Time
 }

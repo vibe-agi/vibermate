@@ -2,26 +2,51 @@ package nativemcp
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) {
-	f := newNativeFixtureWithChoice(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, egressprofile.Inherit())
-	profiles, err := egressprofile.NewManager(f.store.EgressProfileRepository(), effectiveBudgetClock{})
+	sourceRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaults, err := egressprofile.NewDefaultManager(f.store.EgressDefaultRepository(), profiles)
+	owner, err := runtimedata.Acquire(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	host, err := instanceguard.Acquire(filepath.Join(sourceRoot, "server.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Release()
+	layout, err := runtimedata.PrepareStorageOwned(t.Context(), runtimedata.OwnedStorage{Directory: sourceRoot, Runtime: owner, Host: host}, time.Now().UTC(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := runtimepersistence.OpenControl(t.Context(), runtimepersistence.ControlOptions{DatabasePath: filepath.Join(sourceRoot, "runtime.db"), LayoutID: layout.ID, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newNativeFixtureWithStore(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, egressprofile.Inherit(), toolapproval.Config{DecisionTimeout: 3 * time.Second}, nil, control, filepath.Join(sourceRoot, "runtime.db"))
+	profiles, err := egressprofile.NewManager(control.EgressProfileRepository(), effectiveBudgetClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := egressprofile.NewDefaultManager(control.EgressDefaultRepository(), profiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +65,13 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err := f.executor.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	op, err := f.store.NativeToolRepository().Get(t.Context(), terminal.OperationID)
+	op, err := control.NativeToolRepository().Get(t.Context(), terminal.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := f.store.EgressAttemptRepository().List(t.Context(), egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(page.Items) != 4 {
-		t.Fatalf("real audit fixture %+v %v", page, err)
+	page := nativeBackupDeliveries(t, f.db)
+	if len(page) != 4 {
+		t.Fatalf("real delivery fixture %d", len(page))
 	}
 	var bindingDigest, profileJSON, source string
 	var version, revision uint64
@@ -58,12 +83,14 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err := f.db.QueryRow(`PRAGMA database_list`).Scan(&sequence, &databaseName, &databasePath); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.store.Shutdown(t.Context()); err != nil {
+	if err := control.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	host.Release()
+	owner.Release()
 	sourceDir, err := filepath.EvalSymlinks(filepath.Dir(databasePath))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +117,7 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err := runtimedata.Restore(t.Context(), backup, restored); err != nil {
 		t.Fatal(err)
 	}
-	store, err := runtimepersistence.Open(t.Context(), runtimepersistence.Options{DatabasePath: filepath.Join(restored, "runtime.db"), BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout})
+	store, err := runtimepersistence.OpenControl(t.Context(), runtimepersistence.ControlOptions{LayoutID: layout.ID, DatabasePath: filepath.Join(restored, "runtime.db"), BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +130,15 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err != nil || actual.BindingDigest == nil || op.BindingDigest == nil || *actual.BindingDigest != *op.BindingDigest || actual.State != op.State {
 		t.Fatalf("backup changed actual native projection %+v %v", actual, err)
 	}
-	restoredPage, err := store.EgressAttemptRepository().List(t.Context(), egressaudit.PageRequest{Limit: 20})
-	if err != nil || len(restoredPage.Items) != len(page.Items) {
-		t.Fatal("backup lost native audits", err)
+	restoredDB, err := sql.Open("sqlite", "file:"+filepath.Join(restored, "runtime.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i := range page.Items {
-		if restoredPage.Items[i].Attempt != page.Items[i].Attempt {
-			t.Fatal("backup changed physical audit frozen source/bytes/state")
-		}
+	defer restoredDB.Close()
+	if restoredPage := nativeBackupDeliveries(t, restoredDB); !reflect.DeepEqual(restoredPage, page) {
+		t.Fatal("backup changed required native delivery coordinates/outcomes")
 	}
+
 	// Actual Get above re-verifies the restored V2 digest against the profile
 	// row; additionally prove the selection is the exact prior global revision.
 	if bindingDigest == "" || profileJSON == "" || version != 2 || source != "global" || revision != 2 {
@@ -121,4 +148,51 @@ func TestNativeEffectiveBindingAndAuditSurviveActualBackupRestore(t *testing.T) 
 	if err != nil || setting.Revision != 2 {
 		t.Fatal("backup changed authored default setting", err)
 	}
+	// The restored current-control path must count committed deliveries before
+	// operation cascade removes them; replay protection remains after deletion.
+	released, err := store.DeleteCapture(t.Context(), string(f.capture.Kind), f.capture.ID)
+	if err != nil || released.Attempts != uint64(len(page)) || released.Captures != 1 {
+		t.Fatalf("current control deletion receipt: %+v %v", released, err)
+	}
+	if got := nativeBackupDeliveries(t, restoredDB); len(got) != 0 {
+		t.Fatal("deleted delivery rows remain", got)
+	}
+	scope, err := store.NativeToolRepository().GetScope(t.Context(), f.capture)
+	if err != nil || !scope.ReplayBarrier {
+		t.Fatalf("deletion lost replay barrier: %+v %v", scope, err)
+	}
+}
+
+func nativeBackupDeliveries(t *testing.T, db *sql.DB) [][]any {
+	t.Helper()
+	rows, err := db.Query(`SELECT * FROM native_tool_deliveries ORDER BY attempt_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all [][]any
+	for rows.Next() {
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range values {
+			if b, ok := v.([]byte); ok {
+				values[i] = append([]byte(nil), b...)
+			}
+		}
+		all = append(all, values)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return all
 }

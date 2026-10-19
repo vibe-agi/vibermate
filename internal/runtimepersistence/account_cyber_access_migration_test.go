@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,8 +24,9 @@ func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
 		t.Fatalf("upgrade: %+v %v", result, err)
 	}
 	fixture.assertLegacyPreserved(t)
-	store := openTestStore(t, filepath.Join(fixture.source, "runtime.db"))
-	defer closeFrozenV1Store(t, store)
+	db := sql.OpenDB(newSQLiteReadConnector(filepath.Join(fixture.source, "runtime.db"), time.Second))
+	defer db.Close()
+	store := &Store{database: db, providerAccounts: newProviderAccountRepository(db, newOperationGate(), time.Second, sqlTransactionCommitter{})}
 	account, exists, err := store.ProviderAccountRepository().Load(context.Background(), "native-legacy")
 	if err != nil || !exists || account.CyberAccessProgram != cyberaccess.Standard || account.SettingsRevision != 8 || account.Revision != 1 {
 		t.Fatalf("upgrade changed existing consent or revision: %+v %v", account, err)
@@ -33,7 +35,9 @@ func TestCyberAccessMigrationDefaultsExistingAccountsToStandard(t *testing.T) {
 	if err := store.database.QueryRow(`SELECT cyber_access_program FROM provider_accounts WHERE account_id='native-legacy'`).Scan(&preference); err != nil || preference != "standard" {
 		t.Fatalf("legacy preference default: %q %v", preference, err)
 	}
-	if _, err := store.database.Exec(`UPDATE provider_accounts SET cyber_access_program='daybreak_red'`); err != nil {
+	writer := openSQLiteForTest(t, filepath.Join(fixture.source, "runtime.db"))
+	defer writer.Close()
+	if _, err := writer.Exec(`UPDATE provider_accounts SET cyber_access_program='daybreak_red'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := revision2AdditionsStandard(context.Background(), store.database); !errors.Is(err, ErrUnsupportedSchema) {

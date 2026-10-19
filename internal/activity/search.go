@@ -13,6 +13,7 @@ import (
 const MaxSearchTextBytes = 256
 
 type SearchQuery struct {
+	Cursor            string
 	BeforeSequence    int64
 	Limit             int
 	Text              string
@@ -27,7 +28,7 @@ type SearchQuery struct {
 }
 
 func (query SearchQuery) Validate() error {
-	if query.BeforeSequence < 0 || query.Limit <= 0 || query.Limit > MaxPageSize ||
+	if query.BeforeSequence < 0 || len(query.Cursor) > 512 || query.Cursor != "" && query.BeforeSequence != 0 || strings.ContainsAny(query.Cursor, "\r\n\t ") || query.Limit <= 0 || query.Limit > MaxPageSize ||
 		query.OccurredAtOrAfter.IsZero() != query.OccurredBefore.IsZero() ||
 		!validSearchText(query.Text, true) ||
 		!validSearchText(query.Model, true) ||
@@ -160,8 +161,10 @@ func (hit SearchHit) Clone() SearchHit {
 }
 
 type SearchPage struct {
-	Items              []SearchHit `json:"items"`
-	NextBeforeSequence int64       `json:"nextBeforeSequence,omitempty"`
+	NextCursor          string      `json:"nextCursor,omitempty"`
+	InspectionExpiresAt time.Time   `json:"-"`
+	Items               []SearchHit `json:"items"`
+	NextBeforeSequence  int64       `json:"nextBeforeSequence,omitempty"`
 }
 
 func validSearchText(value string, allowEmpty bool) bool {

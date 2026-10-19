@@ -181,6 +181,7 @@ func b4Join(t *testing.T, done <-chan struct{}, name string) {
 }
 
 type b4Fixture struct {
+	observations                 *cleartextOfferLog
 	t                            *testing.T
 	ctx                          context.Context
 	cancel                       context.CancelFunc
@@ -205,7 +206,11 @@ func (f *b4Fixture) bad(format string, args ...any) {
 	defer f.mu.Unlock()
 	f.invalid = append(f.invalid, fmt.Sprintf(format, args...))
 }
-func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
+func newB4Fixture(t *testing.T, port uint16, recorders ...observationRecorderBuilder) *b4Fixture {
+	var recorder observationRecorderBuilder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
@@ -213,8 +218,10 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 	}
 	// Allocate Store paths before cleanup, so TempDir cannot remove live SQL files.
 	options := testOptions(t, hostcontract.Desktop(), gate)
-	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
-	f := &b4Fixture{t: t, ctx: ctx, cancel: cancel, gate: gate, port: port, target: fmt.Sprintf("blind.fixture:%d", port), resolvedTarget: fmt.Sprintf("127.0.0.1:%d", port)}
+	setup, cancelSetup := context.WithTimeout(t.Context(), 30*time.Second)
+	t.Cleanup(cancelSetup)
+	ctx, cancel := setup, cancelSetup
+	f := &b4Fixture{observations: &cleartextOfferLog{attempts: make(map[string]egressaudit.Attempt)}, t: t, ctx: ctx, cancel: cancel, gate: gate, port: port, target: fmt.Sprintf("blind.fixture:%d", port), resolvedTarget: fmt.Sprintf("127.0.0.1:%d", port)}
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		cleanupOnce.Do(func() {
@@ -246,10 +253,12 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 				if err := gate.Drain(cleanupContext); err != nil {
 					t.Errorf("B4 cleanup gate drain: %v", err)
 				}
-				page, err := f.r.EgressAttempts().List(cleanupContext, egressaudit.PageRequest{Limit: 10})
+				// Final producer callbacks follow actual request/copy joins.
+				// Optional SQL durability is not a cleanup prerequisite.
+				page, err := f.observations.List(cleanupContext, egressaudit.PageRequest{Limit: 10})
 				stop()
 				if err != nil {
-					t.Errorf("B4 cleanup audit: %v", err)
+					t.Errorf("B4 cleanup producer observations: %v", err)
 				} else {
 					if f.expectedAttempts > 0 && len(page.Items) != f.expectedAttempts {
 						t.Errorf("B4 cleanup attempts=%d want=%d", len(page.Items), f.expectedAttempts)
@@ -259,7 +268,7 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 						if !a.Terminal() {
 							t.Errorf("B4 cleanup nonterminal outbound=%s", a.ID())
 						}
-						t.Logf("B4 cleanup outbound=%s parent=%s terminal=%t outcome=%s", a.ID(), a.ConnectionID(), a.Terminal(), a.Outcome())
+						t.Logf("B4 cleanup offered outbound=%s parent=%s terminal=%t outcome=%s", a.ID(), a.ConnectionID(), a.Terminal(), a.Outcome())
 					}
 				}
 			}
@@ -402,7 +411,10 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 	}
 	options.BlindTunnels = &blindTunnelDialer{coordinator: gate, dialer: dialer}
 	options.OriginalTransport = &noNetworkOriginalTransport{}
-	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{blindProber: func() (*blindtunnel.ReachabilityProber, error) {
+	f.r, err = startWithBuilders(ctx, options, runtimeBuildOverrides{recorder: recorder, egressObserver: func(delegate *runtimeEgressRepository) egressaudit.Observer {
+		f.observations.egress = delegate
+		return f.observations
+	}, blindProber: func() (*blindtunnel.ReachabilityProber, error) {
 		return blindtunnel.NewReachabilityProberWithBuilder(builder)
 	}})
 	if err != nil {
@@ -430,6 +442,15 @@ func newB4Fixture(t *testing.T, port uint16) *b4Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if recorder == nil {
+		WaitRecordingTestRuntime(t, f.r)
+	}
+	// Required construction/configuration and the positive mirror premise do
+	// not consume the eight-second measured traffic budget. Runtime retains
+	// its own WithoutCancel owner; partial setup still owns cancellation/join.
+	cancelSetup()
+	ctx, cancel = context.WithTimeout(t.Context(), 8*time.Second)
+	f.ctx, f.cancel = ctx, cancel
 	f.auth = "Basic " + base64.StdEncoding.EncodeToString([]byte("capture:"+grant.Credential.Value()))
 	f.server = httptest.NewUnstartedServer(f.r.ProxyHandler())
 	f.server.Config.BaseContext = func(net.Listener) context.Context {
@@ -499,8 +520,8 @@ func (f *b4Fixture) entered(b *b4DialBarrier, jobs ...*b4Job) {
 func (f *b4Fixture) start(count int) egressaudit.Attempt {
 	f.t.Helper()
 	var own egressaudit.Attempt
-	f.observe("durable start", func() bool {
-		page, err := f.r.EgressAttempts().List(f.ctx, egressaudit.PageRequest{Limit: 10})
+	f.observe("producer start", func() bool {
+		page, err := f.observations.List(f.ctx, egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			f.t.Fatal(err)
 		}
@@ -522,6 +543,14 @@ func (f *b4Fixture) start(count int) egressaudit.Attempt {
 func (f *b4Fixture) terminal(start egressaudit.Attempt, want egressaudit.DecisionRef, outcome egressaudit.Outcome, count int) {
 	f.t.Helper()
 	f.expectedAttempts = count
+	// A finished client can precede the server's deferred terminal offer.
+	// The action releases after that offer; then join accepted recording I/O.
+	if err := f.gate.Drain(f.ctx); err != nil {
+		f.t.Fatal("blind terminal producer drain", err)
+	}
+	if err := f.r.recorder.Flush(f.ctx); err != nil {
+		f.t.Fatal("blind terminal recording settlement", err)
+	}
 	var end egressaudit.Attempt
 	f.observe("own durable terminal", func() bool {
 		page, err := f.r.EgressAttempts().List(f.ctx, egressaudit.PageRequest{Limit: 10})
@@ -543,7 +572,7 @@ func (f *b4Fixture) terminal(start egressaudit.Attempt, want egressaudit.Decisio
 	if f.port == 443 {
 		origin = "https://blind.fixture:443"
 	}
-	if start.Terminal() || start.ID() != end.ID() || start.StartedAt() != end.StartedAt() || start.Decision() != want || end.Decision() != want || start.Parent() != end.Parent() || start.ConnectionID() != end.ConnectionID() || start.Purpose() != end.Purpose() || start.PayloadClass() != end.PayloadClass() || start.Caller() != end.Caller() || start.CallerID() != end.CallerID() || start.TargetOrigin() != end.TargetOrigin() || end.TargetOrigin() != origin || end.Purpose() != egressaudit.PurposeBlindTunnel || end.PayloadClass() != egressaudit.PayloadOpaqueTunnel || end.Caller() != egressaudit.CallerCore || end.Parent().Kind != egressaudit.ParentBlindConnection || end.Parent().ID != end.ConnectionID() || end.Parent().ExchangeID != "" || end.Outcome() != outcome || want.AccountID != "" || want.AccountSettingsRevision != 0 {
+	if start.Terminal() || start.ID() != end.ID() || !end.StartedAt().Equal(start.StartedAt().Truncate(time.Millisecond)) || start.Decision() != want || end.Decision() != want || start.Parent() != end.Parent() || start.ConnectionID() != end.ConnectionID() || start.Purpose() != end.Purpose() || start.PayloadClass() != end.PayloadClass() || start.Caller() != end.Caller() || start.CallerID() != end.CallerID() || start.TargetOrigin() != end.TargetOrigin() || end.TargetOrigin() != origin || end.Purpose() != egressaudit.PurposeBlindTunnel || end.PayloadClass() != egressaudit.PayloadOpaqueTunnel || end.Caller() != egressaudit.CallerCore || end.Parent().Kind != egressaudit.ParentBlindConnection || end.Parent().ID != end.ConnectionID() || end.Parent().ExchangeID != "" || end.Outcome() != outcome || want.AccountID != "" || want.AccountSettingsRevision != 0 {
 		f.t.Fatalf("own attempt mutated start=%+v terminal=%+v want=%+v outcome=%s", start, end, want, outcome)
 	}
 	if outcome == egressaudit.OutcomeCompleted && (end.BytesOut() == 0 || end.BytesIn() == 0) {

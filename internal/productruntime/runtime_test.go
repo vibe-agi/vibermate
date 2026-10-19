@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"os"
 	"path/filepath"
 	"sync"
@@ -224,7 +226,12 @@ func TestProductRuntimeEnvironmentRecoveryFailureRollsBackSQLite(t *testing.T) {
 	if !errors.Is(err, startupCause) {
 		t.Fatalf("Environment recovery cause was not preserved: %v", err)
 	}
-	reopened, openErr := runtimepersistence.Open(context.Background(), runtimepersistence.Options{
+	layout, layoutErr := runtimedata.ReadStorageLayout(options.Paths.DataDirectory())
+	if layoutErr != nil {
+		t.Fatal(layoutErr)
+	}
+	reopened, openErr := runtimepersistence.OpenControl(context.Background(), runtimepersistence.ControlOptions{
+		LayoutID:               layout.ID,
 		DatabasePath:           options.Paths.DatabasePath(),
 		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
 		CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
@@ -234,6 +241,13 @@ func TestProductRuntimeEnvironmentRecoveryFailureRollsBackSQLite(t *testing.T) {
 	}
 	if closeErr := reopened.Shutdown(context.Background()); closeErr != nil {
 		t.Fatalf("close reopened SQLite: %v", closeErr)
+	}
+	for _, name := range []string{"runtime-data.lock", "server.lock"} {
+		guard, err := instanceguard.Acquire(filepath.Join(options.Paths.DataDirectory(), name))
+		if err != nil {
+			t.Fatal("failed startup retained guard", err)
+		}
+		guard.Release()
 	}
 }
 

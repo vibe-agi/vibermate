@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
 func TestPublishedRuntimeFormatsPublicBackupAndMove(t *testing.T) {
@@ -25,6 +26,7 @@ func TestPublishedRuntimeFormatsPublicBackupAndMove(t *testing.T) {
 			default:
 				source, _ = backupFixture(t)
 				seedSnapshotAuthority(t, source)
+				freezePublishedBackupFixture(t, source)
 				db, err := sql.Open("sqlite", filepath.Join(source, "runtime.db"))
 				if err != nil {
 					t.Fatal(err)
@@ -49,20 +51,31 @@ func TestPublishedRuntimeFormatsPublicBackupAndMove(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, target := range []string{source, restored, moved} {
-				state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(target, "runtime.db"), time.Second)
+				readRoot := target
+				if target == restored {
+					layout, e := ReadStorageLayout(target)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if len(layout.Archives) != 1 {
+						t.Fatal("missing restored legacy archive")
+					}
+					readRoot = filepath.Join(target, layout.Archives[0].RelativeDirectory)
+				}
+				state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(readRoot, "runtime.db"), time.Second)
 				if err != nil || state.Revision != revision {
 					t.Fatalf("faithful revision %+v %v", state, err)
 				}
-				if fmt.Sprint(before) != fmt.Sprint(snapshotTestRows(t, target)) {
+				if fmt.Sprint(before) != fmt.Sprint(snapshotTestRows(t, readRoot)) {
 					t.Fatal("backup/move changed logical values")
 				}
 				if revision == 3 {
-					store := openBackupStore(t, filepath.Join(target, "runtime.db"))
+					store := openBackupControlReader(t, target)
 					account, exists, err := store.ProviderAccountRepository().Load(context.Background(), "snapshot-account")
 					if err != nil || !exists || account.CyberAccessProgram.WireValue() != format || account.SettingsRevision != 7 || account.NoteRevision != 3 {
 						t.Fatalf("lost selected mode or revisions: %+v %v", account, err)
 					}
-					shutdownBackupStore(t, store)
+					store.Shutdown(context.Background())
 				}
 			}
 		})

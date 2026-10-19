@@ -852,3 +852,49 @@ func TestUICopyMayNotClaimStoredContentIsEncrypted(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopAuthorityCompositionRequiresActualConstructorOwner(t *testing.T) {
+	for _, owner := range []string{"startWithConstructors", "Start", "unused", "missing"} {
+		t.Run(owner, func(t *testing.T) {
+			root := t.TempDir()
+			for _, pkg := range []string{"controlprincipal", "capturegrant", "capturecontrol"} {
+				dir := filepath.Join(root, "internal", pkg)
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "present.go"), []byte("package "+pkg+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := filepath.Join(root, "internal", "desktophost")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			calls := `_,_=controlprincipal.NewAuthority();_,_=capturegrant.New();_,_=capturecontrol.NewManualHandler();_,_=capturecontrol.New()`
+			source := `package desktophost
+import("github.com/vibe-agi/vibermate/internal/controlprincipal";"github.com/vibe-agi/vibermate/internal/capturegrant";"github.com/vibe-agi/vibermate/internal/capturecontrol")
+`
+			if owner != "missing" {
+				source += "func " + owner + "(){" + calls + "}\n"
+			}
+			if owner != "Start" {
+				source += "func Start(){startWithConstructors()}\n"
+			}
+			if owner != "startWithConstructors" {
+				source += "func startWithConstructors(){}\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, "host.go"), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			found := map[string]bool{}
+			for _, v := range CheckProductionCompositionBoundary(root) {
+				found[v.Rule] = true
+			}
+			for _, rule := range []string{"host-does-not-create-control-authority", "host-does-not-create-capture-grant-issuer", "host-does-not-create-manual-capture-handler", "host-does-not-create-capture-control-handler"} {
+				if found[rule] != (owner != "startWithConstructors") {
+					t.Fatalf("owner=%s rule=%s reported=%t", owner, rule, found[rule])
+				}
+			}
+		})
+	}
+}

@@ -105,7 +105,7 @@ func testNativeUnsentSweepFault(t *testing.T, kind, entry, mode string, replaceO
 		if err != nil || renewed.OwnerEpoch == oldScope.OwnerEpoch || renewed.State != "active" {
 			t.Fatal("replacement owner not actually reconciled")
 		}
-		before, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+		before, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 		if err != nil || !before.Attempt.Terminal() {
 			t.Fatal("EnsureScope did not settle original attempt")
 		}
@@ -116,7 +116,7 @@ func testNativeUnsentSweepFault(t *testing.T, kind, entry, mode string, replaceO
 			t.Fatal("late original did not finish")
 		}
 		afterScope, err := h.f.store.NativeToolRepository().GetScope(ctx, h.f.capture)
-		after, physicalErr := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+		after, physicalErr := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 		if err != nil || physicalErr != nil || !reflect.DeepEqual(renewed, afterScope) || before.Attempt != after.Attempt {
 			t.Fatal("late failed old handle revoked replacement owner or rewrote settled audit")
 		}

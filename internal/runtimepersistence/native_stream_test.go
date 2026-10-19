@@ -39,7 +39,7 @@ func TestNativeStreamSeparatesAttemptAndRPCCompletion(t *testing.T) {
 	if op.State != "started" {
 		t.Fatalf("physical disconnect completed logical RPC: state=%s; want started", op.State)
 	}
-	before, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='stream-origin'`))
+	before, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='stream-origin'`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestNativeStreamSeparatesAttemptAndRPCCompletion(t *testing.T) {
 	if err := repo.CompleteStreamRPC(ctx, stream, nativetool.LogicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
 		t.Fatalf("late logical completion: %v", err)
 	}
-	after, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='stream-origin'`))
+	after, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='stream-origin'`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestNativeStreamSuspendedCleanupPreservesPhysicalAudit(t *testing.T) {
 				if err := repo.FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", Counts: counts, ObservedAt: now}); err != nil {
 					t.Fatal(err)
 				}
-				before, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='cleanup-origin'`))
+				before, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='cleanup-origin'`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -191,7 +191,7 @@ func TestNativeStreamSuspendedCleanupPreservesPhysicalAudit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				after, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect + ` WHERE attempt_id='cleanup-origin'`))
+				after, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect + ` WHERE attempt_id='cleanup-origin'`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -260,14 +260,14 @@ func TestNativeStreamRejectsForeignAndAmbiguousAuthority(t *testing.T) {
 				}
 			} else {
 				var original string
-				if err := store.database.QueryRow(`SELECT connection_id FROM runtime_egress_attempts WHERE attempt_id='fault-origin'`).Scan(&original); err != nil {
+				if err := store.database.QueryRow(`SELECT connection_id FROM native_tool_deliveries WHERE attempt_id='fault-origin'`).Scan(&original); err != nil {
 					t.Fatal(err)
 				}
-				_, err = store.database.Exec(`UPDATE runtime_egress_attempts SET connection_id='foreign' WHERE attempt_id='fault-origin'`)
+				_, err = store.database.Exec(`UPDATE native_tool_deliveries SET connection_id='foreign' WHERE attempt_id='fault-origin'`)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer store.database.Exec(`UPDATE runtime_egress_attempts SET connection_id=? WHERE attempt_id='fault-origin'`, original)
+				defer store.database.Exec(`UPDATE native_tool_deliveries SET connection_id=? WHERE attempt_id='fault-origin'`, original)
 			}
 			if repo.CompleteStreamRPC(ctx, a, nativetool.LogicalFinishInput{Outcome: "completed", Reason: "completed", ObservedAt: now}) == nil {
 				t.Fatal("invalid observation authority accepted")

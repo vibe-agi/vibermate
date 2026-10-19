@@ -73,7 +73,7 @@ func TestNativePhysicalDetachCollectsClaimWithLogicalRPCAlive(t *testing.T) {
 	}
 	approval := freshGETRow(t, f, `SELECT * FROM native_tool_approvals WHERE operation_id=?`, call.id)
 	once := freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, call.id)
-	audit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, call.id)
+	audit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, call.id)
 	release()
 	select {
 	case terminal := <-done:
@@ -109,7 +109,7 @@ func TestNativeRecoveryRetirementCollectsOnlyExactHeldChild(t *testing.T) {
 	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"ping","params":{"_meta":{"progressToken":"p"}}}`, "synthetic-session")
 	e.Serve(context.Background(), parent, httptest.NewRecorder())
 	requireNativeClaimAfterDrain(t, e, parent.id, false)
-	parentAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)
+	parentAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)
 	child := f.captured(t, "GET", "", "synthetic-session")
 	child.request.Header.Set("Last-Event-Id", "recovery-proof")
 	done := make(chan Terminal, 1)
@@ -148,7 +148,7 @@ func TestNativeRecoveryRetirementCollectsOnlyExactHeldChild(t *testing.T) {
 	if !provedHeld {
 		t.Fatal("stream retirement did not select exact included child proof while attached")
 	}
-	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)) {
+	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)) {
 		t.Fatal("child retirement rewrote original physical audit")
 	}
 	release()
@@ -236,7 +236,7 @@ func TestNativeSentCallbackFailureDrainsAndReachesRetirement(t *testing.T) {
 func testNativeSentCallbackRetirementOrder(t *testing.T, parentFirst bool) {
 	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 	e := f.executor.(*executor)
-	observer := &callbackRetirementCallObserver{Repository: e.dependencies.Store}
+	observer := &callbackRetirementCallObserver{Repository: e.dependencies.Store.(nativetool.Repository)}
 	e.dependencies.Store = observer
 	f.handshake(t)
 	f.transport.handler = func(r *http.Request, _ []byte) (*http.Response, error) {
@@ -249,7 +249,7 @@ func testNativeSentCallbackRetirementOrder(t *testing.T, parentFirst bool) {
 	if result := e.Serve(context.Background(), parent, httptest.NewRecorder()); result.Outcome != OutcomeCompleted {
 		t.Fatal(result)
 	}
-	parentAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)
+	parentAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)
 	if !parentFirst {
 		observer.parent, observer.parentRead, observer.releaseRead, observer.readReturned = parent.id, make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
 	}
@@ -336,7 +336,7 @@ func testNativeSentCallbackRetirementOrder(t *testing.T, parentFirst bool) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)) {
+	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)) {
 		t.Fatal("failed reply rewrote known parent audit")
 	}
 	requireNativeClaimAfterDrain(t, e, child.id, false)
@@ -353,12 +353,12 @@ func TestNativeCallbackRetirementProofMatchesHeldReplyOnly(t *testing.T) {
 	if result := e.Serve(context.Background(), parent, httptest.NewRecorder()); result.Outcome != OutcomeCompleted {
 		t.Fatal(result)
 	}
-	parentAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)
+	parentAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)
 	child := f.captured(t, "POST", `{"jsonrpc":"2.0","id":17,"result":{}}`, "synthetic-session")
 	verifyEntered, verifyRelease := make(chan struct{}), make(chan struct{})
 	startRelease := make(chan struct{})
 	close(startRelease)
-	held := &heldFreshGETStart{Repository: e.dependencies.Store, target: child.id, started: make(chan nativetool.StartReceipt, 1), release: startRelease, verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
+	held := &heldFreshGETStart{Repository: e.dependencies.Store.(nativetool.Repository), target: child.id, started: make(chan nativetool.StartReceipt, 1), release: startRelease, verified: make(chan error, 1), claimedAtVerify: make(chan bool, 1)}
 	held.claim = func() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.claimed[child.id] != nil }
 	held.beforeVerify = func() { close(verifyEntered); <-verifyRelease }
 	e.dependencies.Store = held
@@ -405,7 +405,7 @@ func TestNativeCallbackRetirementProofMatchesHeldReplyOnly(t *testing.T) {
 	if facts.OperationState != "uncertain" || facts.AuditOutcome != "failed" || facts.AuditKnown != 0 || f.transport.sends() != before {
 		t.Fatal("callback retirement invented known0/send or failed to close actual child")
 	}
-	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)) {
+	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)) {
 		t.Fatal("child retirement changed parent physical history")
 	}
 	e.mu.Lock()

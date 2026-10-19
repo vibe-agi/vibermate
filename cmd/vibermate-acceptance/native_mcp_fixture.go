@@ -71,6 +71,7 @@ type nativeFixtureChecks interface {
 
 type nativeProfileProbe struct {
 	inject, argumentsRetained, resultRetained bool
+	capacityDrop                              bool
 	arguments                                 map[string]any
 	result                                    map[string]any
 	description                               string
@@ -85,9 +86,18 @@ func nativeProfileProbeFor(scenario string) (nativeProfileProbe, bool) {
 	case "profile_full_image":
 		p.image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 		p.result["content"] = []any{map[string]any{"type": "image", "mimeType": "image/png", "data": p.image}}
-	case "profile_full_large":
+	case "profile_full_large", "profile_full_large_public":
 		p.text = strings.Repeat("x", (2<<20)+4096)
 		p.result["content"] = []any{map[string]any{"type": "text", "text": p.text}}
+		if scenario == "profile_full_large" {
+			// Preserve the original metadata-bearing wire as the bounded-loss
+			// control: two conservative encoder peaks exceed the shared64MiB.
+			p.resultRetained = false
+			p.capacityDrop = true
+		} else {
+			// Same exact large public text, without metadata-removal encoding.
+			delete(p.result, "_meta")
+		}
 	case "profile_full_unknown":
 		p.inject = false
 		p.argumentsRetained = false
@@ -505,7 +515,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if modelProbe != nil && modelProbe.ExpireReview {
 		options.Runtime.Approvals.DecisionTimeout = 25 * time.Second
 	}
-	if scenario == "review_allow_once" || knownDeny || sensitiveDeny || probingProfile && profileProbe.inject {
+	if scenario == "review_allow_once" || scenario == "sse_reconnect" && !streamObserve || knownDeny || sensitiveDeny || probingProfile && profileProbe.inject {
 		profiles, available := nativeAcceptanceContentProfiles()
 		if !available {
 			t.Fatal("synthetic_content_profiles_required")
@@ -1044,6 +1054,28 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 	if probingProfile {
 		callArguments = profileProbe.arguments
 	}
+	if probingProfile {
+		// Positive persistence assertions require an initialized observation role
+		// and the real launched Capture mirror before measured client traffic.
+		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
+		if err != nil || len(runs.Items) != 1 {
+			t.Fatal("profile Capture missing before traffic")
+		}
+		profileCapture := captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: runs.Items[0].ID}
+		readyDeadline := time.Now().Add(6 * time.Second)
+		for {
+			_, readyErr := host.Runtime().ConnectionEvents().List(ctx, connectionevent.PageRequest{Limit: 1})
+			selection, selectionErr := host.Runtime().CaptureObservations().ReadCaptureObservation(ctx, profileCapture)
+			if readyErr == nil && selectionErr == nil && selection.Selection.Visible && selection.Selection.Scope.Capture == profileCapture && selection.Selection.Scope.Fence.CaptureGeneration > 0 && host.Runtime().Status().Recording.State == productruntime.RecordingAvailable {
+				break
+			}
+			if time.Now().After(readyDeadline) || ctx.Err() != nil {
+				t.Fatal("positive profile observation role did not become ready before traffic")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	priorRecording := host.Runtime().Status().Recording
 	send(3, "mcpServer/tool/call", map[string]any{"threadId": thread.Thread.ID, "server": "codex_apps", "tool": "synthetic_read", "arguments": callArguments})
 	if scenario == "review_allow_once" {
 		runs, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 10})
@@ -1081,10 +1113,11 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 			default:
 				t.Logf("no buffered client response before missing approval")
 			}
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: pendingCapture, Limit: 100})
+			page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: pendingCapture, Limit: 100})
 			if err == nil {
 				seen := map[nativetool.ID]bool{}
-				for _, op := range page.Items {
+				for _, observed := range page.Items {
+					op := observed.Operation
 					if seen[op.ID] {
 						continue
 					}
@@ -1152,12 +1185,13 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		t.Fatal("launcher did not retain the selected published profile")
 	}
 	if scenario == "off" {
-		page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+		page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: capture, Limit: 100})
 		if err != nil || len(page.Items) != 0 || nativeCount.Load() != 0 || toolResponse["error"] == nil {
 			t.Fatal("OFF did not prevent native registration and call")
 		}
 	} else {
 		var call nativetool.Operation
+		var observedCall nativetool.InspectionOperation
 		wantState := "completed"
 		if scenario == "session404_once" {
 			wantState = "uncertain"
@@ -1165,33 +1199,38 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		if scenario == "strict_external" || scenario == "review_reject" {
 			wantState = "denied"
 		}
-		deadline := time.Now().Add(time.Second)
-		for time.Now().Before(deadline) {
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
-			if err != nil {
-				t.Fatal(err)
+		callID, identityErr := nativeToolCallID(ctx, paths.DataDirectory(), capture)
+		if identityErr != nil {
+			t.Fatal(identityErr)
+		}
+		// Actual client response/terminal has returned. Recheck required authority
+		// independently, then settle only the selected optional inspection record.
+		required, requiredErr := host.Runtime().NativeToolRepository().Get(ctx, callID)
+		if requiredErr != nil || required.State != wantState || required.Capture != capture || required.EnvironmentDigest != assignment.EnvironmentDigest {
+			t.Fatalf("required native terminal/ownership differs: err=%v state=%s want=%s captureMatched=%t environmentMatched=%t", requiredErr, required.State, wantState, required.Capture == capture, required.EnvironmentDigest == assignment.EnvironmentDigest)
+		}
+		settleDeadline := time.Now().Add(6 * time.Second)
+		for {
+			observed, readErr := host.Runtime().NativeInspection().Get(ctx, capture, callID)
+			ready := readErr == nil && observed.Operation.Revision == required.Revision
+			if ready && probingProfile {
+				ready = (observed.Arguments != nil) == profileProbe.argumentsRetained && (observed.Result != nil) == profileProbe.resultRetained
 			}
-			unique := map[nativetool.ID]nativetool.Operation{}
-			for _, operation := range page.Items {
-				if operation.Kind == nativetool.RequestToolsCall {
-					unique[operation.ID] = operation
-				}
-			}
-			if len(unique) > 1 {
-				t.Fatal("actual client tool call replayed")
-			}
-			for _, operation := range unique {
-				call = operation
-			}
-			if call.State == wantState {
+			if ready {
+				observedCall = observed
 				break
+			}
+			if time.Now().After(settleDeadline) || ctx.Err() != nil {
+				t.Logf("optional settlement read=%v requiredRevision=%d observedRevision=%d arguments=%t result=%t recording=%+v", readErr, required.Revision, observed.Operation.Revision, observed.Arguments != nil, observed.Result != nil, host.Runtime().Status().RecordingFailure)
+				t.Fatal("actual native optional inspection did not settle after producer completion")
 			}
 			time.Sleep(time.Millisecond)
 		}
-		if call.State != wantState || call.Capture != capture || call.EnvironmentID != assignment.EnvironmentID || call.EnvironmentRevision != assignment.EnvironmentRevision || call.EnvironmentDigest != assignment.EnvironmentDigest || call.BindingDigest == nil || call.CredentialOwner != "original_client" || !probingProfile && (call.Arguments != nil || call.Result != nil) {
+		call = required
+		if call.State != wantState || call.Capture != capture || call.EnvironmentID != assignment.EnvironmentID || call.EnvironmentRevision != assignment.EnvironmentRevision || call.EnvironmentDigest != assignment.EnvironmentDigest || call.BindingDigest == nil || call.CredentialOwner != "original_client" || !probingProfile && (observedCall.Arguments != nil || observedCall.Result != nil) {
 			t.Fatal("native ownership/terminal/OFF recording differs from actual frozen assignment")
 		}
-		audit, err := host.Runtime().EgressAttempts().List(ctx, egressaudit.PageRequest{ParentKind: egressaudit.ParentClientOperation, ParentID: string(call.ID), Limit: 10})
+		audit, err := nativeDeliveryAuditPage(ctx, paths.DataDirectory(), call.ID)
 		if err != nil {
 			t.Fatal("native policy decision is not authoritative")
 		}
@@ -1207,7 +1246,7 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 			if err != nil || approval.State != "allowed" || approval.ConsumedAt == nil {
 				t.Fatal("ordinary Review Allow not consumed")
 			}
-			reader, err := openExchangeAuditReader(ctx, paths.DataDirectory())
+			reader, err := openControlAuditReader(ctx, paths.DataDirectory())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1265,8 +1304,20 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 				t.Fatal("automatic request cleared persisted uncertainty")
 			}
 		}
+		if probingProfile && len(profileProbe.text) > 2<<20 {
+			if toolResponse["error"] != nil || bytes.Count(toolResponse["result"], []byte(profileProbe.text)) != 1 || len(audit.Items) != 1 || audit.Items[0].Attempt.Outcome() != egressaudit.OutcomeCompleted {
+				t.Fatal("large native client result or single actual delivery changed")
+			}
+			if profileProbe.capacityDrop {
+				status := host.Runtime().Status()
+				t.Logf("large metadata loss droppedBefore=%d droppedAfter=%d state=%s writerFailure=%t", priorRecording.Dropped, status.Recording.Dropped, status.Recording.State, status.RecordingFailure != nil)
+				if status.Recording.Dropped <= priorRecording.Dropped || status.Recording.State != productruntime.RecordingDegraded || status.RecordingFailure != nil || observedCall.Result != nil {
+					t.Fatal("large metadata bounded admission loss is not truthfully reported")
+				}
+			}
+		}
 		if probingProfile {
-			management.verifySyntheticFull(ctx, call, profileProbe)
+			management.verifySyntheticFull(ctx, observedCall, profileProbe)
 			verifySyntheticSQLPrivacy(ctx, t, paths.DataDirectory())
 		} else {
 			management.verifyMetadata(ctx, call)
@@ -1276,12 +1327,13 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 		}
 		if scenario == "sse_reconnect" {
 			verifyNativeStreamSQL(ctx, t, paths.DataDirectory(), capture, !streamObserve)
-			page, err := host.Runtime().NativeToolRepository().Page(ctx, nativetool.PageRequest{Capture: capture, Limit: 100})
+			page, err := host.Runtime().NativeInspection().Page(ctx, nativetool.InspectionPageRequest{Capture: capture, Limit: 100})
 			if err != nil {
 				t.Fatal("stream reply page unavailable")
 			}
 			seen := map[nativetool.ID]bool{}
-			for _, op := range page.Items {
+			for _, observed := range page.Items {
+				op := observed.Operation
 				if op.Kind == nativetool.RequestServerReply && !seen[op.ID] {
 					seen[op.ID] = true
 					management.verifyMetadata(ctx, op)
@@ -1309,7 +1361,12 @@ func runNativeFixtureSliceWithModelProbe(t nativeFixtureChecks, binary string, m
 }
 
 func verifySyntheticSQLPrivacy(ctx context.Context, t nativeFixtureChecks, directory string) {
-	reader, err := openExchangeAuditReader(ctx, directory)
+	for _, open := range []func(context.Context, string) (*exchangeAuditReader, error){openControlAuditReader, openExchangeAuditReader} {
+		verifySyntheticSQLPrivacyRole(ctx, t, directory, open)
+	}
+}
+func verifySyntheticSQLPrivacyRole(ctx context.Context, t nativeFixtureChecks, directory string, open func(context.Context, string) (*exchangeAuditReader, error)) {
+	reader, err := open(ctx, directory)
 	if err != nil {
 		t.Fatal("private SQL audit unavailable")
 	}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ const (
 )
 
 type backupManifest struct {
+	backupRoles
 	Schema      string                         `json:"schema"`
 	CreatedAt   string                         `json:"createdAt"`
 	Database    runtimepersistence.SchemaState `json:"database"`
@@ -89,6 +91,11 @@ func ValidateBackup(ctx context.Context, directory string) error {
 		return ErrBackupInvalid
 	}
 	defer guard.Release()
+	host, err := instanceguard.Acquire(filepath.Join(directory, "server.lock"))
+	if err != nil {
+		return snapshotLockError(err)
+	}
+	defer host.Release()
 	return validateBackupLocked(ctx, directory)
 }
 
@@ -97,6 +104,7 @@ func writeBackupManifest(
 	directory string,
 	createdAt time.Time,
 	state runtimepersistence.SchemaState,
+	roles backupRoles,
 ) error {
 	files, err := backupFiles(ctx, directory)
 	if err != nil || len(files) == 0 || len(files) > maximumManifestFiles {
@@ -106,15 +114,19 @@ func writeBackupManifest(
 		return err
 	}
 	manifest := backupManifest{
-		Schema:    backupManifestSchema,
-		CreatedAt: createdAt.Format(time.RFC3339Nano),
-		Database:  state,
-		Files:     files,
+		backupRoles: roles,
+		Schema:      backupManifestSchema,
+		CreatedAt:   createdAt.Format(time.RFC3339Nano),
+		Database:    state,
+		Files:       files,
 		Recoverable: backupScope{
 			RuntimeDatabase: true, LocalProxyCA: true, RuntimeConfiguration: true,
 			ProviderCredentials: false, HostKeychain: false,
 			ExternalServerTLSFiles: false, DatabaseEncryptedAtRest: false,
 		},
+	}
+	if roles.Layout != nil {
+		manifest.Schema = backupManifestSchemaV2
 	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil || len(encoded) > maximumManifestBytes {
@@ -140,23 +152,21 @@ func writeBackupManifest(
 }
 
 func validateBackupLocked(ctx context.Context, directory string) error {
-	if _, err := os.Lstat(filepath.Join(directory, schemaUpgradeReceiptName)); !errors.Is(err, os.ErrNotExist) {
+	if err := refusePendingExport(directory); err != nil {
 		return ErrBackupInvalid
 	}
 	manifest, err := readBackupManifest(directory)
 	if err != nil {
 		return err
 	}
-	state, err := runtimepersistence.ValidateOfflineDatabase(
-		ctx, filepath.Join(directory, "runtime.db"),
-	)
+	state, roles, err := inspectBackupRoles(ctx, directory)
 	if err != nil {
 		if errors.Is(err, runtimepersistence.ErrUnsupportedSchema) {
 			return ErrBackupIncompatible
 		}
 		return ErrBackupInvalid
 	}
-	if state != manifest.Database {
+	if state != manifest.Database || !reflect.DeepEqual(roles, manifest.backupRoles) {
 		return ErrBackupIncompatible
 	}
 	observed, err := backupFiles(ctx, directory)
@@ -167,8 +177,22 @@ func validateBackupLocked(ctx context.Context, directory string) error {
 }
 
 func readBackupManifest(directory string) (backupManifest, error) {
-	encoded, err := os.ReadFile(filepath.Join(directory, backupManifestName))
-	if err != nil || len(encoded) == 0 || len(encoded) > maximumManifestBytes {
+	name := filepath.Join(directory, backupManifestName)
+	info, err := os.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximumManifestBytes {
+		return backupManifest{}, ErrBackupInvalid
+	}
+	file, err := os.Open(name)
+	if err != nil {
+		return backupManifest{}, ErrBackupInvalid
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		file.Close()
+		return backupManifest{}, ErrBackupInvalid
+	}
+	encoded, readErr := io.ReadAll(io.LimitReader(file, maximumManifestBytes+1))
+	if err = errors.Join(readErr, file.Close()); err != nil || len(encoded) == 0 || len(encoded) > maximumManifestBytes {
 		return backupManifest{}, ErrBackupInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -181,10 +205,34 @@ func readBackupManifest(directory string) (backupManifest, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return backupManifest{}, ErrBackupInvalid
 	}
+	if manifest.Schema == backupManifestSchema {
+		// V1 retains its original closed field set, including rejection of null or
+		// empty V2 extension members that unmarshalling would otherwise erase.
+		var legacy struct {
+			Schema      string                         `json:"schema"`
+			CreatedAt   string                         `json:"createdAt"`
+			Database    runtimepersistence.SchemaState `json:"database"`
+			Files       []backupFile                   `json:"files"`
+			Recoverable backupScope                    `json:"recoverable"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&legacy) != nil {
+			return backupManifest{}, ErrBackupInvalid
+		}
+	} else if manifest.Schema == backupManifestSchemaV2 {
+		canonical, err := json.Marshal(manifest)
+		if err != nil || !bytes.Equal(bytes.TrimSpace(encoded), canonical) {
+			return backupManifest{}, ErrBackupInvalid
+		}
+	}
 	createdAt, err := time.Parse(time.RFC3339Nano, manifest.CreatedAt)
-	if err != nil || createdAt.Location() != time.UTC || manifest.Schema != backupManifestSchema ||
+	if err != nil || createdAt.Location() != time.UTC || (manifest.Schema != backupManifestSchema && manifest.Schema != backupManifestSchemaV2) ||
 		!validBackupScope(manifest.Recoverable) || len(manifest.Files) == 0 ||
 		len(manifest.Files) > maximumManifestFiles {
+		return backupManifest{}, ErrBackupInvalid
+	}
+	if !validBackupRolesVersion(manifest.Schema == backupManifestSchemaV2, manifest.backupRoles) {
 		return backupManifest{}, ErrBackupInvalid
 	}
 	for index := range manifest.Files {
@@ -258,6 +306,7 @@ func manifestSecretPath(name, directory string) bool {
 
 func backupFiles(ctx context.Context, directory string) ([]backupFile, error) {
 	files := make([]backupFile, 0)
+	shm := roleSHMPaths(directory)
 	err := filepath.WalkDir(directory, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -273,7 +322,7 @@ func backupFiles(ctx context.Context, directory string) ([]backupFile, error) {
 			return ErrBackupInvalid
 		}
 		if rel == backupManifestName || rel == lockName || rel == "server.lock" ||
-			rel == "runtime.db-shm" {
+			shm[filepath.ToSlash(rel)] {
 			return nil
 		}
 		info, err := entry.Info()

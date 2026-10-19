@@ -114,9 +114,9 @@ func TestManualCaptureCreateRotateAuthorizeRevokeAndReopen(t *testing.T) {
 		t.Fatalf("authorize first credential evidence=%+v err=%v", firstEvidence, err)
 	}
 	observed, err := manager.Get(context.Background(), owner, firstEvidence.ManualCaptureID)
-	if err != nil || observed.Observation != manualcapture.ObservationObserved ||
-		observed.LastObservedAt == nil {
-		t.Fatalf("observed ManualCapture = %+v err=%v", observed, err)
+	if err != nil || observed.Observation != manualcapture.ObservationWaiting ||
+		observed.LastObservedAt != nil {
+		t.Fatalf("control-only ManualCapture display must remain unknown = %+v err=%v", observed, err)
 	}
 
 	clock.Set(clock.Now().Add(time.Second))

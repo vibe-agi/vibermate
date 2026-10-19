@@ -6,10 +6,11 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
-// Repository is the single durable authority contract. Its SQLite adapter and
-// sealed start receipts are implemented only after the reviewed schema switch.
+// ScopeInput names current control authority. Optional inspection is exposed
+// separately from AuthorityRepository; legacy Repository remains a bridge.
 type ScopeInput struct {
 	Capture                      captureidentity.Reference
 	ExpectedRevision, OwnerEpoch uint64
@@ -45,8 +46,10 @@ type ReceiveInput struct {
 	ObservedAt                         time.Time
 }
 type ReceiveResult struct {
-	OperationID ID
-	Duplicate   bool
+	RecordingScope recording.Scope
+	CreatedAt      time.Time
+	OperationID    ID
+	Duplicate      bool
 }
 type DecisionInput struct {
 	ApprovalID       ID
@@ -77,6 +80,8 @@ type ContentDescriptor struct {
 	ExpiresAt time.Time
 }
 type Operation struct {
+	MaximumEventAt, MetadataExpiresAt       time.Time
+	RecordingScope                          recording.Scope
 	ID                                      ID
 	Capture                                 captureidentity.Reference
 	EnvironmentID                           environment.EnvironmentID
@@ -120,7 +125,7 @@ type Page struct {
 	Items        []Operation
 	NextSequence int64
 }
-type LifecycleRepository interface {
+type LifecycleAuthority interface {
 	GetScope(context.Context, captureidentity.Reference) (Scope, error)
 	EnsureScope(context.Context, ScopeInput) (uint64, error)
 	RegisterSession(context.Context, SessionInput) error
@@ -136,9 +141,13 @@ type LifecycleRepository interface {
 	CloseApproval(context.Context, ID, uint64, ApprovalClosure, time.Time) (Approval, error)
 	Get(context.Context, ID) (Operation, error)
 	GetApproval(context.Context, ID) (Approval, error)
+}
+
+type LifecycleRepository interface {
+	LifecycleAuthority
 	Page(context.Context, PageRequest) (Page, error)
 }
-type ExecutionRepository interface {
+type ExecutionAuthority interface {
 	StreamRepository
 	Start(context.Context, ID, string, uint64, time.Time) (StartReceipt, error)
 	VerifyStartReceipt(context.Context, StartReceipt, time.Time) error
@@ -146,10 +155,36 @@ type ExecutionRepository interface {
 	Revoke(context.Context, captureidentity.Reference, uint64, string, time.Time) error
 	MarkReplayBarrier(context.Context, captureidentity.Reference, uint64, time.Time) error
 	Recover(context.Context, time.Time) error
+}
+
+type ExecutionRepository interface {
+	ExecutionAuthority
 	PutContent(context.Context, ID, string, []byte, time.Time) error
 	ReadContent(context.Context, captureidentity.Reference, ID, string, int, int) ([]byte, error)
 }
 type Repository interface {
 	LifecycleRepository
 	ExecutionRepository
+}
+
+// AuthorityRepository reads only current control facts. Optional inspection is separate.
+type AuthorityRepository interface {
+	LifecycleAuthority
+	ExecutionAuthority
+	ListPendingApprovals(context.Context, PendingApprovalRequest) (PendingApprovalPage, error)
+}
+type PendingApprovalRequest struct {
+	Capture        captureidentity.Reference
+	AfterCreatedAt time.Time
+	AfterID        ID
+	Limit          int
+}
+type PendingApprovalItem struct {
+	Approval  Approval
+	Operation Operation
+}
+type PendingApprovalPage struct {
+	Items         []PendingApprovalItem
+	NextCreatedAt time.Time
+	NextID        ID
 }

@@ -48,7 +48,7 @@ func TestNativeSyntheticRuntimeFullActual160(t *testing.T) {
 	if binary == "" || node == "" {
 		t.Skip("exact160 and Node required; not gate evidence")
 	}
-	for _, name := range []string{"profile_full_text", "profile_full_image", "profile_full_large", "profile_full_unknown", "profile_full_mutated", "profile_full_proof", "profile_full_credential", "profile_full_result_credential", "profile_full_result_structured"} {
+	for _, name := range []string{"profile_full_text", "profile_full_image", "profile_full_large", "profile_full_large_public", "profile_full_unknown", "profile_full_mutated", "profile_full_proof", "profile_full_credential", "profile_full_result_credential", "profile_full_result_structured"} {
 		t.Run(name, func(t *testing.T) {
 			result, err := runNativePolicyCase(context.Background(), t.TempDir(), nativePinnedClient{nativeMCPClientReport: nativeMCPClientReport{Version: "0.160.0"}, invocation: binary}, node, name, t.Logf)
 			if err != nil || result.Outcome != "passed" || result.Reason != "synthetic_full_diagnostic_only" {

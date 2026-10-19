@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -16,6 +18,8 @@ import (
 // A lookup is bounded and resumable. Opening a tool never hydrates the whole
 // conversation or relies on whichever history pages the UI happened to load.
 type toolResultCursor struct {
+	Version  int      `json:"version,omitempty"`
+	Activity string   `json:"activity,omitempty"`
 	Origin   string   `json:"origin"`
 	Call     string   `json:"call"`
 	Before   int64    `json:"before"`
@@ -50,8 +54,18 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 			return
 		}
 	}
+	check, err := inspectionResponseBoundary(request.Context(), handler.activities, handler.contents)
+	if err != nil {
+		writeInspectionProblem(writer, err)
+		return
+	}
+	var expiry time.Time
 	id := request.PathValue("exchangeId")
 	origin, err := handler.activities.GetExchange(request.Context(), id)
+	if err != nil && !errors.Is(err, activity.ErrExchangeNotFound) {
+		writeInspectionProblem(writer, err)
+		return
+	}
 	if err != nil || origin.Conversation == nil {
 		writeProblem(writer, http.StatusNotFound, ReasonExchangeNotFound)
 		return
@@ -70,7 +84,9 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 		decoder := json.NewDecoder(strings.NewReader(string(data)))
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(&cursor) != nil || decoder.Decode(new(any)) != io.EOF ||
-			cursor.Origin != id || cursor.Call != call || cursor.Before < 0 || len(cursor.Pending) > 64 ||
+			cursor.Origin != id || cursor.Call != call || cursor.Before < 0 || len(cursor.Pending) > 64 || len(cursor.Activity) > 512 ||
+			(handler.activityInspection && (cursor.Version != 2 || cursor.Before != 0 || cursor.Activity == "")) ||
+			(!handler.activityInspection && (cursor.Version != 0 || cursor.Activity != "")) ||
 			((cursor.Exchange == "") != (cursor.Content == "" && len(cursor.Pending) == 0)) {
 			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 			return
@@ -83,9 +99,23 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 		}
 	}
 	result := toolResultPage{Schema: "vibermate-tool-results/v1", Origin: id, Call: call, Items: []toolResultEntry{}}
-	save := func(next toolResultCursor) {
-		data, _ := json.Marshal(next)
-		result.Next = base64.RawURLEncoding.EncodeToString(data)
+	save := func(next toolResultCursor) error {
+		if handler.activityInspection {
+			next.Version = 2
+			if next.Activity == "" || next.Before != 0 {
+				return recording.ErrInspectionCursor
+			}
+		}
+		data, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		encoded := base64.RawURLEncoding.EncodeToString(data)
+		if len(encoded) > 128<<10 {
+			return recording.ErrInspectionUnavailable
+		}
+		result.Next = encoded
+		return nil
 	}
 	// Revalidate every resumed Exchange against the origin's exact actor/session.
 	matches := func(candidate activity.Record) bool {
@@ -106,6 +136,7 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 			if e != nil {
 				return e
 			}
+			includeInspectionExpiry(&expiry, page.InspectionExpiresAt)
 			if !contentReferencesMatch(candidate, page.ExchangeID, page.Parent, page.Frozen) {
 				return exchangecontent.ErrInvalidEvidence
 			}
@@ -134,6 +165,7 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 			if e != nil {
 				return e
 			}
+			includeInspectionExpiry(&expiry, projection.ExpiresAt)
 			if !contentReferencesMatch(candidate, projection.ExchangeID, projection.Parent, projection.Frozen) {
 				return exchangecontent.ErrInvalidEvidence
 			}
@@ -146,6 +178,7 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 			if e != nil {
 				return e
 			}
+			includeInspectionExpiry(&expiry, page.InspectionExpiresAt)
 			if !contentReferencesMatch(candidate, page.ExchangeID, page.Parent, page.Frozen) {
 				return exchangecontent.ErrInvalidEvidence
 			}
@@ -173,30 +206,41 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 			return exchangecontent.ErrInvalidEvidence
 		}
 		if state.Content != "" || len(state.Pending) > 0 {
-			state.Origin, state.Call, state.Before, state.Exchange = id, call, candidate.Sequence, candidate.SubjectID
-			save(state)
+			state.Origin, state.Call, state.Exchange = id, call, candidate.SubjectID
+			if handler.activityInspection {
+				if candidate.InspectionCursor != "" {
+					state.Activity = candidate.InspectionCursor
+				}
+			} else {
+				state.Before = candidate.Sequence
+			}
+			return save(state)
 		}
 		return nil
 	}
 	if cursor.Exchange != "" {
 		candidate, e := handler.activities.GetExchange(request.Context(), cursor.Exchange)
+		if e != nil && !errors.Is(e, activity.ErrExchangeNotFound) {
+			writeInspectionProblem(writer, e)
+			return
+		}
 		if e != nil || !matches(candidate) {
 			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 			return
 		}
 		if err := scan(candidate, cursor); err != nil {
-			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			writeInspectionProblem(writer, err)
 			return
 		}
 		if result.Next != "" || len(result.Items) > 0 {
-			writeJSON(writer, http.StatusOK, result)
+			writeInspectionJSON(writer, result, handler.activityExpiryCheck(check, expiry))
 			return
 		}
 		checked[candidate.SubjectID] = true
 	}
-	page, e := handler.activities.List(request.Context(), activity.PageRequest{Limit: 12, BeforeSequence: cursor.Before, ConversationProjectionID: origin.Conversation.ProjectionID})
+	page, e := handler.activities.List(request.Context(), activity.PageRequest{Limit: 12, BeforeSequence: cursor.Before, Cursor: cursor.Activity, ConversationProjectionID: origin.Conversation.ProjectionID})
 	if e != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, e)
 		return
 	}
 	for _, candidate := range page.Items {
@@ -205,15 +249,18 @@ func (handler *Handler) getToolResults(writer http.ResponseWriter, request *http
 		}
 		checked[candidate.SubjectID] = true
 		if err := scan(candidate, toolResultCursor{}); err != nil {
-			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			writeInspectionProblem(writer, err)
 			return
 		}
 		if result.Next != "" || len(result.Items) > 0 {
 			break
 		}
 	}
-	if result.Next == "" && len(result.Items) == 0 && page.NextBeforeSequence > 0 {
-		save(toolResultCursor{Origin: id, Call: call, Before: page.NextBeforeSequence})
+	if result.Next == "" && len(result.Items) == 0 && (page.NextBeforeSequence > 0 || page.NextCursor != "") {
+		if err := save(toolResultCursor{Origin: id, Call: call, Before: page.NextBeforeSequence, Activity: page.NextCursor}); err != nil {
+			writeInspectionProblem(writer, err)
+			return
+		}
 	}
-	writeJSON(writer, http.StatusOK, result)
+	writeInspectionJSON(writer, result, handler.activityExpiryCheck(check, expiry))
 }

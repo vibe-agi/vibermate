@@ -24,7 +24,12 @@ import 'native_tool_approval_test.dart'
         nativeApprovalID;
 
 void main() {
-  for (final action in ['form_reply', 'url_reply', 'verification_reply']) {
+  for (final action in [
+    'form_reply',
+    'url_reply',
+    'verification_reply',
+    'ping_reply',
+  ]) {
     testWidgets(
       'native callback HTTP approval row accepts empty catalog name $action',
       (tester) async {
@@ -46,6 +51,18 @@ void main() {
           () => api.nativeApproval(nativeCapture, nativeApprovalID),
         ))!;
         final copy = AppCopy.forLanguage(AppLanguage.english);
+        if (action == 'ping_reply') {
+          expect(
+            copy('native.action.ping_reply'),
+            'Reply to the server’s connection check',
+          );
+          expect(
+            AppCopy.forLanguage(AppLanguage.simplifiedChinese)(
+              'native.action.ping_reply',
+            ),
+            '回复服务器的连接检查',
+          );
+        }
         await tester.pumpWidget(
           MaterialApp(
             theme: ViberTheme.light().copyWith(
@@ -72,7 +89,11 @@ void main() {
     var reads = 0;
     final api = await nativeApi((request) async {
       reads++;
-      return nativeResponse({'items': [], 'nextSequence': 0});
+      return nativeResponse({
+        'items': [],
+        'inspectionVersion': 'e' * 64,
+        'nextCursor': 'cursor${0}',
+      });
     });
     addTearDown(api.close);
     final controller = nativeController(api);
@@ -116,7 +137,11 @@ void main() {
         ];
         final api = await nativeApi((request) async {
           if (request.url.path.endsWith('/operations')) {
-            return nativeResponse({'items': operations, 'nextSequence': 7});
+            return nativeResponse({
+              'items': operations,
+              'inspectionVersion': 'e' * 64,
+              'nextCursor': 'cursor${7}',
+            });
           }
           final segments = request.url.pathSegments;
           final index = segments.indexOf('operations');
@@ -132,6 +157,7 @@ void main() {
           );
           final end = (offset + (64 << 10)).clamp(0, size);
           return nativeResponse({
+            'inspectionVersion': 'e' * 64,
             'operationId': id,
             'captureKey': nativeCapture,
             'part': 'tool_result',
@@ -187,7 +213,8 @@ void main() {
         if (request.url.path.endsWith('/operations')) {
           return nativeResponse({
             'items': [op],
-            'nextSequence': changed ? 8 : 7,
+            'inspectionVersion': 'e' * 64,
+            'nextCursor': 'cursor${changed ? 8 : 7}',
           });
         }
         if (request.url.path.contains('/content')) {
@@ -242,6 +269,7 @@ void main() {
       expect(find.text('old native result'), findsNothing);
       delayed.complete(
         nativeResponse({
+          'inspectionVersion': 'e' * 64,
           'operationId': nativeOperationID,
           'captureKey': nativeCapture,
           'part': 'tool_result',
@@ -280,7 +308,8 @@ void main() {
       if (request.url.path.endsWith('/operations')) {
         return nativeResponse({
           'items': [nativeOperationFixture()],
-          'nextSequence': 7,
+          'inspectionVersion': 'e' * 64,
+          'nextCursor': 'cursor${7}',
         });
       }
       if (request.url.path.contains('/content')) {
@@ -328,7 +357,8 @@ void main() {
       if (request.url.path.endsWith('/operations')) {
         return nativeResponse({
           'items': [operation],
-          'nextSequence': completed ? 8 : 7,
+          'inspectionVersion': 'e' * 64,
+          'nextCursor': 'cursor${completed ? 8 : 7}',
         });
       }
       if (request.url.path.contains('/content')) {
@@ -433,7 +463,8 @@ void main() {
         if (request.url.path.endsWith('/operations')) {
           return nativeResponse({
             'items': [nativeOperationFixture()],
-            'nextSequence': 7,
+            'inspectionVersion': 'e' * 64,
+            'nextCursor': 'cursor${7}',
           });
         }
         if (!request.url.path.contains('/content')) {
@@ -445,6 +476,7 @@ void main() {
           throw http.ClientException('interrupted page');
         }
         return nativeResponse({
+          'inspectionVersion': 'e' * 64,
           'operationId': nativeOperationID,
           'captureKey': nativeCapture,
           'part': 'tool_result',
@@ -492,7 +524,8 @@ void main() {
           if (request.url.path.endsWith('/operations')) {
             return nativeResponse({
               'items': [nativeOperationFixture()],
-              'nextSequence': 7,
+              'inspectionVersion': 'e' * 64,
+              'nextCursor': 'cursor${7}',
             });
           }
           if (request.url.path.contains('/content')) {
@@ -535,11 +568,13 @@ void main() {
         if (request.url.path.endsWith('/operations')) {
           return nativeResponse({
             'items': [nativeOperationFixture()],
-            'nextSequence': 7,
+            'inspectionVersion': 'e' * 64,
+            'nextCursor': 'cursor${7}',
           });
         }
         if (request.url.path.contains('/content')) {
           return nativeResponse({
+            'inspectionVersion': 'e' * 64,
             'operationId': nativeOperationID,
             'captureKey': nativeCapture,
             'part': 'tool_result',
@@ -610,18 +645,22 @@ void main() {
           '/api/v1/captures/$nativeCapture/native-tools/operations',
         );
         expect(request.url.queryParameters, {
-          'afterSequence': '999999',
+          'cursor': 'cursor999999',
           'limit': '50',
         });
-        return nativeResponse({'items': [], 'nextSequence': 999999});
+        return nativeResponse({
+          'items': [],
+          'inspectionVersion': 'e' * 64,
+          'nextCursor': 'cursor${999999}',
+        });
       });
       addTearDown(api.close);
       final page = await api.nativeToolOperations(
         nativeCapture,
-        afterSequence: 999999,
+        cursor: 'cursor999999',
       );
       expect(page.items, isEmpty);
-      expect(page.nextSequence, 999999);
+      expect(page.nextCursor, 'cursor999999');
     },
   );
   testWidgets('native HTTP Capture reader opens actual result text and PNG', (
@@ -631,11 +670,13 @@ void main() {
       if (request.url.path.endsWith('/operations')) {
         return nativeResponse({
           'items': [nativeOperationFixture()],
-          'nextSequence': 7,
+          'inspectionVersion': 'e' * 64,
+          'nextCursor': 'cursor${7}',
         });
       }
       if (request.url.path.contains('/content')) {
         return nativeResponse({
+          'inspectionVersion': 'e' * 64,
           'operationId': nativeOperationID,
           'captureKey': nativeCapture,
           'part': 'tool_result',
@@ -790,6 +831,7 @@ const nativeOperationID = '00000000000000000000000000000002';
 const nativePNG =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 Map<String, Object?> nativeOperationFixture() => {
+  'inspectionVersion': 'e' * 64,
   'operationId': nativeOperationID,
   'captureKey': nativeCapture,
   'environment': {'id': 'native.synthetic', 'revision': 3, 'digest': 'a' * 64},
@@ -816,6 +858,7 @@ Map<String, Object?> nativeOperationFixture() => {
   },
 };
 http.Response nativeTextResponse(String text) => nativeResponse({
+  'inspectionVersion': 'e' * 64,
   'operationId': nativeOperationID,
   'captureKey': nativeCapture,
   'part': 'tool_result',

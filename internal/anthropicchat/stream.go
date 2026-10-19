@@ -1206,3 +1206,9 @@ func contextError(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (terminal *PendingTerminal) BorrowDecodedResponse() protocolcore.Response {
+	terminal.mu.Lock()
+	defer terminal.mu.Unlock()
+	return terminal.response
+}

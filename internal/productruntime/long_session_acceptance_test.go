@@ -3,6 +3,7 @@ package productruntime
 import (
 	"context"
 	"encoding/json"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"os"
 	"reflect"
 	"runtime"
@@ -118,6 +119,21 @@ func (r *longSessionAcceptanceRecorder) RecordSource(ctx context.Context, source
 	runtime.ReadMemStats(&before)
 	start := time.Now()
 	err := r.sink.RecordSource(ctx, source)
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	remaining := int64(-1)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline).Nanoseconds()
+	}
+	encoded, _ := json.Marshal(map[string]any{"stage": "manager_store_record_source", "response": source.Metadata().Response != nil, "elapsed_ns": elapsed.Nanoseconds(), "total_alloc_bytes": after.TotalAlloc - before.TotalAlloc, "deadline_remaining_ns": remaining, "error": errorText(err)})
+	r.t.Logf("TASK6_STAGE %s", encoded)
+	return err
+}
+func (r *longSessionAcceptanceRecorder) RecordScopedSource(ctx context.Context, scope recording.Scope, source *exchangecontent.Source) error {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	err := r.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, source)
 	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
 	remaining := int64(-1)

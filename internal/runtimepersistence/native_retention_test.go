@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
@@ -16,167 +17,47 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
-// Catches metadata expiry deleting an otherwise unexpired Full body or the
-// frozen binding/session/inbound facts needed to read that body's history.
-func TestNativeLongFullRetentionSurvivesMetadataExpiry(t *testing.T) {
-	for _, days := range []uint16{60, 365} {
-		t.Run(fmt.Sprint(days), func(t *testing.T) {
-			store, id, rev := nativeLifecycleFixtureRecording(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: days})
-			repo := nativeFullRepository(t, store)
-			ctx := context.Background()
-			now := time.Now().UTC().Truncate(time.Millisecond)
-			nativeAllow(t, repo, id, now)
-			receipt, err := repo.Start(ctx, id, "long-full-retention", rev, now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := repo.VerifyStartReceipt(ctx, receipt, now); err != nil {
-				t.Fatal(err)
-			}
-			body := []byte(`{"result":"safe retained tool result"}`)
-			if err := repo.PutContent(ctx, id, "tool_result", body, now); err != nil {
-				t.Fatal(err)
-			}
-			if err := repo.Finish(ctx, id, nativetool.TerminalInput{Outcome: "completed", Reason: "completed", ObservedAt: now}); err != nil {
-				t.Fatal(err)
-			}
-			op, err := repo.Get(ctx, id)
-			if err != nil || op.Result == nil {
-				t.Fatalf("Full descriptor: %+v %v", op, err)
-			}
-			deadline := op.CreatedAt.Add(time.Duration(days) * 24 * time.Hour)
-			if !op.Result.ExpiresAt.Equal(deadline) {
-				t.Fatalf("frozen deadline: %v want %v", op.Result.ExpiresAt, deadline)
-			}
-			if err := repo.MarkReplayBarrier(ctx, op.Capture, rev, now); err != nil {
-				t.Fatal(err)
-			}
-			raw := rawEvidenceRecordForTest("long-native-raw", 1, rawevidence.LayerClientIngress, body, []byte(`{"version":1,"headers":[]}`))
-			raw.ObservedAt = now
-			raw.ExpiresAt = deadline.Add(3 * 24 * time.Hour)
-			if err := store.RawEvidenceRepository().AppendBatch(ctx, []rawevidence.StoredEnvelope{raw}, now); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.MaintainExpired(ctx, op.CreatedAt.Add(31*24*time.Hour)); err != nil {
-				t.Fatal(err)
-			}
-			retained, err := repo.Get(ctx, id)
-			if err != nil || retained.Result == nil || !retained.Result.ExpiresAt.Equal(deadline) {
-				t.Fatalf("day31 lost unexpired Full history: %+v %v", retained, err)
-			}
-			page, err := repo.Page(ctx, nativetool.PageRequest{Capture: op.Capture, Limit: 200})
-			if err != nil {
-				t.Fatal(err)
-			}
-			found := false
-			for _, item := range page.Items {
-				if item.ID == id && item.Result != nil && item.Result.Digest == op.Result.Digest {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatal("day31 Full descriptor missing from Page")
-			}
-			got, err := repo.ReadContent(ctx, op.Capture, id, "tool_result", 0, 128<<10)
-			if err != nil || !bytes.Equal(got, body) {
-				t.Fatalf("day31 Full body: %s %v", got, err)
-			}
-			for _, table := range []string{"native_tool_bindings", "native_tool_inbound"} {
-				var count int
-				if err := store.database.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE operation_id=?`, id).Scan(&count); err != nil || count != 1 {
-					t.Fatalf("day31 lost supporting %s: %d %v", table, count, err)
-				}
-			}
-			if countRows(t, store, "native_tool_sessions") != 1 || countRows(t, store, "native_tool_approvals") != 1 || countRows(t, store, "runtime_egress_attempts") != 1 || countRows(t, store, "runtime_evidence_bodies") != 1 {
-				t.Fatal("day31 supporting history/shared root lost")
-			}
-			loaded, err := store.RawEvidenceRepository().GetEnvelope(ctx, raw.EnvelopeID)
-			if err != nil || !bytes.Equal(loaded.Body, body) {
-				t.Fatalf("day31 shared Raw body: %s %v", loaded.Body, err)
-			}
-			released, err := store.CleanupExpired(ctx, deadline.Add(24*time.Hour))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if released.Approvals != 1 || released.Attempts != 1 {
-				t.Fatalf("expired native metadata counts: %+v", released)
-			}
-			if _, err := repo.Get(ctx, id); !errors.Is(err, nativetool.ErrNotFound) {
-				t.Fatalf("expired Full operation retained: %v", err)
-			}
-			var bindings int
-			if err := store.database.QueryRow(`SELECT COUNT(*) FROM native_tool_bindings WHERE operation_id=?`, id).Scan(&bindings); err != nil || bindings != 0 {
-				t.Fatalf("expired Full binding retained: %d %v", bindings, err)
-			}
-			if countRows(t, store, "native_tool_contents") != 0 || countRows(t, store, "native_tool_approvals") != 0 || countRows(t, store, "runtime_egress_attempts") != 0 {
-				t.Fatal("expired Full dependent history retained")
-			}
-			if countRows(t, store, "runtime_evidence_bodies") != 1 {
-				t.Fatal("native expiry deleted shared Raw root")
-			}
-			loaded, err = store.RawEvidenceRepository().GetEnvelope(ctx, raw.EnvelopeID)
-			if err != nil || !bytes.Equal(loaded.Body, body) {
-				t.Fatalf("shared Raw after native expiry: %s %v", loaded.Body, err)
-			}
-			if err := store.MaintainExpired(ctx, deadline.Add(4*24*time.Hour)); err != nil {
-				t.Fatal(err)
-			}
-			if countRows(t, store, "runtime_evidence_bodies") != 0 || countRows(t, store, "runtime_evidence_chunks") != 0 {
-				t.Fatal("last expired root retained body")
-			}
-			if countRows(t, store, "native_tool_once") != 1 || countRows(t, store, "native_tool_inbound") != 4 {
-				t.Fatal("Full expiry removed replay protection")
-			}
-			var barrier bool
-			if err := store.database.QueryRow(`SELECT replay_barrier FROM native_tool_scopes`).Scan(&barrier); err != nil || !barrier {
-				t.Fatalf("Full expiry barrier: %v %v", barrier, err)
-			}
-		})
-	}
-}
-
-// Catches Full content reads that ignore Capture ownership, byte budget, expiry or verified body integrity.
+// Independent role retirement is covered by storage_role_test.go. The removed
+// TestNativeLongFullRetentionSurvivesMetadataExpiry asserted that optional
+// content retains control rows; Task2 supplies independent body/expiry coverage.
 func TestNativeContentAuthorizedBudgetAndIntegrity(t *testing.T) {
-	store, id, rev := nativeLifecycleFixtureRecording(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})
-	repo := nativeFullRepository(t, store)
+	store, value := nativeRetiredContentFixture(t)
 	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	nativeAllow(t, repo, id, now)
-	if _, err := repo.Start(ctx, id, "content-start", rev, now); err != nil {
-		t.Fatal(err)
-	}
+	id := value.Identity.OperationID
+	capture := value.Identity.Scope.Capture
 	body := bytes.Repeat([]byte(`{"path":"a"}`), 20000)
-	if err := repo.PutContent(ctx, id, "tool_arguments", body, now); err != nil {
+	value.Part = nativetool.ContentToolArguments
+	value.Body = body
+	if err := store.PutNativeContent(ctx, value); err != nil {
 		t.Fatal(err)
 	}
-	op, err := repo.Get(ctx, id)
-	if err != nil || op.Arguments == nil {
-		t.Fatalf("descriptor: %+v %v", op, err)
-	}
-	got, err := repo.ReadContent(ctx, op.Capture, id, "tool_arguments", 5, 128<<10)
+	got, err := store.ReadNativeContent(ctx, capture, id, "tool_arguments", 5, 128<<10)
 	if err != nil || !bytes.Equal(got, body[5:5+(128<<10)]) {
-		t.Fatalf("read: %d %v", len(got), err)
+		t.Fatalf("bounded optional read: %d %v", len(got), err)
 	}
 	for _, request := range []struct {
 		capture       captureidentity.Reference
 		offset, limit int
-	}{{op.Capture, -1, 1}, {op.Capture, 0, 0}, {op.Capture, 0, (128 << 10) + 1}, {op.Capture, len(body) + 1, 1}, {captureidentity.Reference{Kind: op.Capture.Kind, ID: "wrong"}, 0, 1}} {
-		if _, err := repo.ReadContent(ctx, request.capture, id, "tool_arguments", request.offset, request.limit); err == nil {
+	}{{capture, -1, 1}, {capture, 0, 0}, {capture, 0, (128 << 10) + 1}, {capture, len(body) + 1, 1}, {captureidentity.Reference{Kind: capture.Kind, ID: "wrong"}, 0, 1}} {
+		if _, err := store.ReadNativeContent(ctx, request.capture, id, "tool_arguments", request.offset, request.limit); err == nil {
 			t.Fatalf("invalid read: %+v", request)
 		}
 	}
-	if err := repo.PutContent(ctx, id, "elicitation", []byte("secret"), now); err == nil {
+	bad := value
+	bad.Part = "elicitation"
+	if err := store.PutNativeContent(ctx, bad); err == nil {
 		t.Fatal("sensitive content part accepted")
 	}
-	if _, err := store.database.Exec(`UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, op.Arguments.Digest[:]); err != nil {
+	digest := sha256.Sum256(body)
+	if _, err := store.store.database.Exec(`UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, digest[:]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ReadContent(ctx, op.Capture, id, "tool_arguments", 0, 1); err == nil {
+	if _, err := store.ReadNativeContent(ctx, capture, id, "tool_arguments", 0, 1); err == nil {
 		t.Fatal("corrupt body returned")
 	}
-	// Descriptor projections are independent of body validation.
-	if _, err := repo.Get(ctx, id); err != nil {
-		t.Fatal(err)
+	page, err := store.PageNativeInspection(ctx, nativetool.InspectionIndexRequest{Capture: capture, Limit: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatal("body corruption broke bounded discovery", err)
 	}
 }
 

@@ -7,11 +7,42 @@ not copies of an open `runtime.db`, cloud uploads, or credential exports.
 
 ## What is included
 
-- the consistent SQLite Runtime database, including retained evidence;
+- required compact control, every declared present observation/legacy archive database,
+  and their retained WAL files;
 - Runtime configuration stored in the data directory;
 - the local Proxy CA, including its private key;
-- `backup-manifest.json`, with the Runtime schema identity and SHA-256, size,
-  and relative path for every included file.
+- `storage-layout.json` and recording provisioning/privacy/maintenance metadata;
+- `backup-manifest.json`, with schema identities and SHA-256, size, and relative
+  path for every included file. Split layouts use `vibermate-data-backup/v2`,
+  binding the layout document/ID and each role’s path, identity, revision,
+  required flag, status and archive ID. The strict v1 reader remains supported.
+
+Stop the Runtime and attached Server host before creating, validating, moving or
+restoring a backup. Validation uses independent database/WAL copies and leaves
+the input database bytes unchanged. SQLite SHM files are omitted at declared
+role paths; each role’s WAL is retained. Other persistent files keep the normal
+backup policy.
+
+A role marked `verified` passed its exact schema, integrity and foreign-key
+checks; control also passed required-state invariants, and current observations
+passed privacy coverage and known internal stored-format decoders. An existing
+legacy role is `unverified`: its schema, inventory and original/maintained
+provenance passed, but its optional payload semantics were not exhaustively
+reinterpreted. Its bytes are retained. A missing optional role is explicitly
+`absent`. Either status sets `historyComplete` to false. Even true means only
+that all declared roles passed this backup contract; best-effort recording can
+never promise that every activity was captured.
+
+Missing required control, unresolved cleanup intent/claim/receipt or reserved
+cleanup artifacts, lost required denial proof, invalid current internal
+encodings, and mismatched archive provenance refuse completion. Missing
+optional history can be preserved as absent when no required privacy proof
+depends on it. Restore retains its provisioning proof and does not silently
+create replacement history. Required control can reopen independently.
+
+Cleanup’s payload-free denial/unknown-ownership metadata is retained.
+`countsExact=false` in a completed maintenance certificate discloses uncertain
+removal totals; it does not mean unfinished work or an exact byte-erasure claim.
 
 The database and Proxy CA are sensitive and are not encrypted by the backup
 format. Server access/recovery configuration inside the Runtime directory is
@@ -23,7 +54,8 @@ who can replace both the files and the manifest.
 
 ## What is not included
 
-- provider API keys, OAuth tokens, or the Server `server-secrets` store;
+- provider API keys or OAuth tokens in the root `server-secrets` and
+  `development-secrets` stores;
 - macOS Keychain items;
 - certificate/key files passed through `--tls-cert` and `--tls-key`, or files
   managed by an external TLS terminator such as Caddy;
@@ -106,20 +138,28 @@ For container data volumes and rollback, see [Docker deployment](docker.md).
 
 ## Format compatibility and rollback
 
-Version 0.1.30 reads exact published `vibermate-runtime` revisions 1, 2 and 3.
-Backup, verification, move and restore preserve the source revision and values;
-restoring does not modify or upgrade the backup source. Starting the new Runtime
-on the restored destination performs any required owned upgrade: 1→2→3 or 2→3,
-with a separate private snapshot for each transition and no normal writers
-between them. Current revision 3 preserves actual Standard/Blue/Red account preferences.
+Published monolithic `vibermate-runtime` revisions 1, 2 and 3 remain readable,
+including actual Standard/Blue/Red account preferences. Their public exports
+remain v1. Public restore verifies the old copied inventory before performing
+owned storage cutover only in the new destination, with both directory guards.
+The backup source is never upgraded. The restored layout retains the original
+monolith as an archive beside required `vibermate-control/3`; current optional
+recording uses `vibermate-observations/1`.
 
-A revision 3 backup requires ViberMate 0.1.30 or a later compatible reader.
-Older releases refuse revision 3 unchanged; a post-upgrade backup is not an old-reader
-rollback artifact. To return to the old format, stop all owners and use the
-independently verified private snapshot from before that transition, restoring
-into a new directory. A revision1 snapshot remains revision 1; a revision2 snapshot remains revision 2.
-Retain the original source and snapshot until the chosen restored Runtime is
-verified. There is no in-place downgrade.
+Split-layout public exports use v2. Their restore reproduces the declared role
+layout and facts after validation. Current observation bytes are checked as a
+stopped snapshot; a historical maintenance hash is not treated as their current
+hash. Maintained archives must match their latest certificate while retaining
+the unchanged original provenance manifest.
+
+Older releases cannot use split layouts or v2 backups as rollback inputs.
+Retain the independent private snapshot from before the transition. Old private
+`runtime-schema-upgrade/v1` snapshots restore faithfully at their original
+published runtime1/2/3 schema and credentials; a later Runtime admission owns any
+upgrade/cutover. Split private snapshots use the separate strict
+`runtime-schema-upgrade/v2` format and reproduce that recorded layout, without
+implicit cutover. They refuse unresolved split recovery work. Neither private
+format is an incomplete recovery export or an in-place downgrade.
 
 An unresolved schema-upgrade receipt blocks normal startup and public backup or
 move. Keep it with the source and private snapshot for guarded reconciliation;

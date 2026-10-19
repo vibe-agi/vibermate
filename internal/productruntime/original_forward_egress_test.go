@@ -278,6 +278,7 @@ type originalForwardRun struct {
 }
 
 func newOriginalForwardRun(t *testing.T, f *capturedOriginalFixture) *originalForwardRun {
+	f.client.Timeout = inspectionFixtureBudget(3*time.Second, 30*time.Second)
 	run := &originalForwardRun{f: f}
 	t.Cleanup(func() {
 		// Cancel/release/join callers and server producers before draining. This
@@ -343,7 +344,7 @@ func (run *originalForwardRun) allJoined() bool {
 
 func (run *originalForwardRun) start(t *testing.T) *originalForwardFlight {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), inspectionFixtureBudget(3*time.Second, 30*time.Second))
 	flight := &originalForwardFlight{done: make(chan capturedOriginalReply, 1), chunk: make(chan capturedOriginalReply, 1), cancel: cancel}
 	run.flights = append(run.flights, flight)
 	go func() {
@@ -581,11 +582,14 @@ func assertOriginalRequestAuthority(t *testing.T, request providertransport.Requ
 
 func (f *capturedOriginalFixture) assertForwardAudits(t *testing.T, want int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), inspectionFixtureBudget(2*time.Second, 30*time.Second))
 	defer cancel()
 	if want > 0 {
 		if err := f.r.exchanges.Drain(ctx); err != nil {
 			t.Fatal("original audit Runtime consumer drain", err)
+		}
+		if err := f.r.recorder.Flush(ctx); err != nil {
+			t.Fatal("original terminal recording settlement", err)
 		}
 	}
 	page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
@@ -655,7 +659,7 @@ func (f *capturedOriginalFixture) assertForwardAudits(t *testing.T, want int) {
 			if boundRequests != 1 {
 				t.Fatal("original parent has no unique actual Exchange-created Request", boundRequests)
 			}
-			exchange, err := f.r.storage.ActivityRepository().GetExchange(ctx, parent.ExchangeID)
+			exchange, err := f.r.Activities().GetExchange(ctx, parent.ExchangeID)
 			if err != nil || exchange.Kind != activity.KindExchangeCompleted || exchange.SubjectID != parent.ExchangeID || exchange.ConnectionID != a.ConnectionID() || exchange.EnvironmentID != "captured.original.egress" || exchange.EnvironmentRevision != 1 || exchange.EnvironmentDigest != f.assignment.EnvironmentDigest.String() || exchange.RouteID != "" || exchange.RouteRevision != 0 || exchange.AccountID != "" || exchange.AccountRevision != 0 || exchange.CredentialEpoch != 0 || exchange.ManualCaptureID != f.capture.ID {
 				t.Fatalf("original actual persisted Exchange linkage: parent=%+v exchange=%+v err=%v", parent, exchange, err)
 			}

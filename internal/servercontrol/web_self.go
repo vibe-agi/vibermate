@@ -65,5 +65,5 @@ func (handler *WebSelfHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		writeProblem(writer, http.StatusServiceUnavailable, "runtime_usage_unavailable")
 		return
 	}
-	writeServerJSON(writer, http.StatusOK, report)
+	writeUsageReport(writer, request, report, handler.usage)
 }

@@ -2,9 +2,77 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
+import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/i18n/app_copy.dart';
+import 'package:vibermate_app/features/workbench/workbench_controller.dart';
+import 'package:vibermate_app/features/workbench/evidence_search_dialog.dart';
+import 'package:vibermate_app/preview/preview_terminal_command.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
 void main() {
+  for (final status in [409, 422]) {
+    testWidgets(
+      'search source invalidation discards previous hits and cursor $status',
+      (tester) async {
+        final api = _InvalidatedSearchApi(status);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: api.delegate.close,
+        );
+        addTearDown(controller.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.light(),
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showEvidenceSearchDialog(
+                  context,
+                  controller: controller,
+                  copy: AppCopy.forLanguage(AppLanguage.english),
+                ),
+                child: const Text('Search'),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Search'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('evidence-search-query')),
+          'provider_transport_failed',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('evidence-search-submit')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(Key('evidence-search-result-${api.hitID}')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const Key('evidence-search-load-more')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(Key('evidence-search-result-${api.hitID}')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('evidence-search-load-more')),
+          findsNothing,
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('evidence-search-submit')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(Key('evidence-search-result-${api.hitID}')),
+          findsOneWidget,
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
   test('preview search excludes bodies and returns failure metadata', () async {
     final api = PreviewControlApi();
     addTearDown(api.close);
@@ -113,4 +181,35 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+}
+
+final class _InvalidatedSearchApi implements ControlApi {
+  String? hitID;
+  _InvalidatedSearchApi(this.status);
+  final int status;
+  final delegate = PreviewControlApi();
+  @override
+  Future<EvidenceSearchPage> searchEvidence(
+    EvidenceSearchRequest request,
+  ) async {
+    if (request.cursor != null) {
+      throw ControlProblem(
+        status: status,
+        reasonCode: status == 409
+            ? 'inspection_changed'
+            : 'invalid_control_request',
+        messageKey: 'error.inspection_changed',
+      );
+    }
+    final page = await delegate.searchEvidence(request);
+    hitID = page.items.first.activity.id;
+    return EvidenceSearchPage(
+      items: [page.items.first],
+      nextCursor: 'source-bound-search',
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
 }

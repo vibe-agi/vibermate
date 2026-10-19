@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const rawEvidenceColumns = `
@@ -29,8 +30,9 @@ const rawEvidenceColumns = `
   payload_metadata, stored_body_digest`
 
 type rawEvidenceRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	coordinates, requireScope bool
+	database                  *sql.DB
+	operations                *operationGate
 }
 
 var _ rawevidence.Repository = (*rawEvidenceRepository)(nil)
@@ -46,11 +48,15 @@ func (repository *rawEvidenceRepository) AppendBatch(
 	ctx context.Context,
 	records []rawevidence.StoredEnvelope,
 	now time.Time,
-) error {
+) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
 	if len(records) == 0 || now.IsZero() {
 		return errors.New("raw evidence batch is empty")
 	}
 	for _, record := range records {
+		if repository.requireScope && record.RecordingScope().Validate() != nil || !repository.coordinates && record.RecordingFence != (recording.Fence{}) {
+			return recording.ErrObservationDiscarded
+		}
 		if err := record.Validate(); err != nil {
 			return err
 		}
@@ -70,10 +76,15 @@ func (repository *rawEvidenceRepository) AppendBatch(
 			_ = transaction.Rollback()
 		}
 	}()
+	columns, placeholders := rawEvidenceColumns, rawEvidencePlaceholders
+	if repository.coordinates {
+		columns += ",recording_archive_epoch,recording_capture_generation"
+		placeholders += ",?,?"
+	}
 	statement, err := transaction.PrepareContext(
 		operation,
-		`INSERT INTO runtime_raw_evidence_envelopes (`+rawEvidenceColumns+`)
-		 VALUES (`+rawEvidencePlaceholders+`)`,
+		`INSERT INTO runtime_raw_evidence_envelopes (`+columns+`)
+		 VALUES (`+placeholders+`)`,
 	)
 	if err != nil {
 		return fmt.Errorf("prepare raw evidence append: %w", err)
@@ -86,8 +97,12 @@ func (repository *rawEvidenceRepository) AppendBatch(
 		if bodyErr != nil {
 			return bodyErr
 		}
+		args := rawEvidenceArguments(record, storedBodyDigest)
+		if repository.coordinates {
+			args = append(args, record.RecordingFence.ArchiveEpoch, record.RecordingFence.CaptureGeneration)
+		}
 		if _, err := statement.ExecContext(
-			operation, rawEvidenceArguments(record, storedBodyDigest)...,
+			operation, args...,
 		); err != nil {
 			return fmt.Errorf("append raw evidence envelope: %w", err)
 		}
@@ -111,10 +126,10 @@ func (repository *rawEvidenceRepository) GetEnvelope(
 		return rawevidence.StoredEnvelope{}, err
 	}
 	defer finish()
-	record, storedBodyDigest, err := scanRawEvidence(
+	record, storedBodyDigest, err := repository.scan(
 		repository.database.QueryRowContext(
 			operation,
-			`SELECT `+rawEvidenceColumns+`
+			`SELECT `+repository.columns()+`
 			 FROM runtime_raw_evidence_envelopes WHERE envelope_id = ?`,
 			envelopeID,
 		),
@@ -312,7 +327,7 @@ func (repository *rawEvidenceRepository) ListExchange(
 	defer finish()
 	rows, err := repository.database.QueryContext(
 		operation,
-		`SELECT `+rawEvidenceColumns+`
+		`SELECT `+repository.columns()+`
 		 FROM runtime_raw_evidence_envelopes
 		 WHERE exchange_id = ?
 		 ORDER BY observed_at_unix_ms ASC, watermark ASC`,
@@ -327,7 +342,7 @@ func (repository *rawEvidenceRepository) ListExchange(
 	}
 	pending := make([]scanned, 0)
 	for rows.Next() {
-		record, storedBodyDigest, scanErr := scanRawEvidence(rows)
+		record, storedBodyDigest, scanErr := repository.scan(rows)
 		if scanErr != nil {
 			_ = rows.Close()
 			return nil, scanErr
@@ -369,7 +384,7 @@ type rawEvidenceRow interface {
 // forever for a connection that the same call holds. A caller iterating rows
 // must therefore finish and close them before attaching bodies.
 func scanRawEvidence(
-	row rawEvidenceRow,
+	row rawEvidenceRow, extra ...any,
 ) (rawevidence.StoredEnvelope, []byte, error) {
 	var (
 		record                    rawevidence.StoredEnvelope
@@ -381,7 +396,7 @@ func scanRawEvidence(
 		payloadMetadata           []byte
 		storedBodyDigest          []byte
 	)
-	if err := row.Scan(
+	destinations := []any{
 		&record.EnvelopeID, &record.WriterID, &record.Watermark, &layer,
 		&scopeKind, &record.ScopeID, &record.ExchangeID,
 		&record.ConnectionID, &record.AttemptID,
@@ -398,7 +413,8 @@ func scanRawEvidence(
 		&record.BodyBytes, &observedDigest, &digestScope, &payloadState,
 		&record.PayloadReason, &redactedFields, &payloadMetadata,
 		&storedBodyDigest,
-	); err != nil {
+	}
+	if err := row.Scan(append(destinations, extra...)...); err != nil {
 		return rawevidence.StoredEnvelope{}, nil, fmt.Errorf(
 			"scan raw evidence envelope: %w", err,
 		)
@@ -449,4 +465,20 @@ func boolToSQLite(value bool) int64 {
 		return 1
 	}
 	return 0
+}
+
+func (r *rawEvidenceRepository) columns() string {
+	if r.coordinates {
+		return rawEvidenceColumns + ",recording_archive_epoch,recording_capture_generation"
+	}
+	return rawEvidenceColumns
+}
+func (r *rawEvidenceRepository) scan(row rawEvidenceRow) (rawevidence.StoredEnvelope, []byte, error) {
+	if !r.coordinates {
+		return scanRawEvidence(row)
+	}
+	var fence recording.Fence
+	record, digest, err := scanRawEvidence(row, &fence.ArchiveEpoch, &fence.CaptureGeneration)
+	record.RecordingFence = fence
+	return record, digest, err
 }

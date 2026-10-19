@@ -215,6 +215,7 @@ func (e *executor) observeCallback(ctx context.Context, s *session, stream *stre
 		if err != nil {
 			return err
 		}
+		p.kind = string(facts.Kind)
 		p.digest = facts.RequestDigest
 		// The ordinary branch admits only data-free ping; its digest is derived
 		// through the reviewed observer once the exact reply arrives.

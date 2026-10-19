@@ -143,6 +143,7 @@ func (u *runtimeUDP) OpenUDP(ctx context.Context, admission captureadmission.Adm
 	if err != nil {
 		return opened, err
 	}
+	_ = connection.BindObservationScope(connection.OriginalObservationScope(admission.RecordingScope()))
 	outcome := u.policy.Current().Evaluate(connectionpolicy.Request{Host: host, Port: target.Port})
 	if outcome.Decision == connectionpolicy.DecisionAsk {
 		if err = connection.Decide(ctx, connectionevent.DecisionEvidence{Source: source, Decision: connectionevent.DecisionAsk, RuleID: outcome.RuleID, Decryption: connectionevent.DecryptionNone}); err != nil {
@@ -194,14 +195,14 @@ func (u *runtimeUDP) OpenUDP(ctx context.Context, admission captureadmission.Adm
 	}
 	decision.ProxyID, decision.ProxyRevision = resolved.Profile().ID.String(), uint64(resolved.Profile().Revision)
 	authority := net.JoinHostPort(host, strconv.Itoa(int(target.Port)))
-	record, err = egressaudit.New(egressaudit.NewInput{ID: id, ConnectionID: connection.ID(), Purpose: egressaudit.PurposeDatagram, PayloadClass: egressaudit.PayloadOpaqueDatagram, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentDatagramConnection, ID: connection.ID()}, Caller: egressaudit.CallerCore, TargetOrigin: "udp://" + authority, Decision: decision, StartedAt: u.clock.Now()})
+	record, err = egressaudit.New(egressaudit.NewInput{ObservationStamp: connection.ObservationStamp(), ID: id, ConnectionID: connection.ID(), Purpose: egressaudit.PurposeDatagram, PayloadClass: egressaudit.PayloadOpaqueDatagram, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentDatagramConnection, ID: connection.ID()}, Caller: egressaudit.CallerCore, TargetOrigin: "udp://" + authority, Decision: decision, StartedAt: u.clock.Now()})
 	if err != nil {
-		return opened, err
+		u.audit.ReportTerminalFailure(err)
+		err = nil
+	} else {
+		u.audit.ObserveEgress(record.ObservationStamp(), record)
 	}
-	if _, err = u.audit.Append(ctx, record); err != nil {
-		return opened, err
-	}
-	appended = true
+	appended = record.ID() != ""
 	probe := offlinehold.ProbeTarget{Kind: offlinehold.EgressDatagram, Transport: offlinehold.ProbeTransportUDPSetup, TargetRef: authority, NetworkOrigin: authority, EgressPolicy: resolved.Profile().Policy, TargetAccess: egressnetwork.EffectiveTargetAccess(ctx)}
 	lease, err = u.gate.Acquire(ctx, offlinehold.AcquireRequest{RequestID: id, Action: action, Target: probe})
 	if err != nil {
@@ -344,7 +345,7 @@ func (u *runtimeUDP) finishAudit(ctx context.Context, record egressaudit.Attempt
 		u.audit.ReportTerminalFailure(e)
 		return
 	}
-	u.audit.Complete(ctx, terminal)
+	u.audit.ObserveEgress(terminal.ObservationStamp(), terminal)
 }
 func (u *runtimeUDP) finishConnection(ctx context.Context, c *connectionevent.Connection, err error, out, in int64) {
 	_, outcome, class := udpTerminal(err)

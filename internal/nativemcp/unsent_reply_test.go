@@ -78,7 +78,7 @@ func ExerciseUnsentReply(t *testing.T, kind string, approve func(Executor, *runt
 	if result := e.Serve(context.Background(), parent, httptest.NewRecorder()); result.Outcome != OutcomeCompleted {
 		t.Fatal(result)
 	}
-	parentAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)
+	parentAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)
 	var s *session
 	e.mu.Lock()
 	for _, candidate := range e.scopes[f.capture.Key()].sessions {
@@ -129,7 +129,7 @@ func ExerciseUnsentReply(t *testing.T, kind string, approve func(Executor, *runt
 	if result := e.Serve(context.Background(), sibling, httptest.NewRecorder()); result.Outcome != OutcomeCompleted {
 		t.Fatal(result)
 	}
-	siblingAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, siblingID)
+	siblingAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, siblingID)
 	s.mu.Lock()
 	siblingParent, siblingStream := s.parents["18"], s.streams[siblingID]
 	s.mu.Unlock()
@@ -183,10 +183,10 @@ func ExerciseUnsentReply(t *testing.T, kind string, approve func(Executor, *runt
 	} else if terminal.Outcome != OutcomeFailed || facts.OperationState != "failed" || facts.AuditKnown != 1 || !facts.BytesIn.Valid || !facts.BytesOut.Valid || facts.BytesIn.Int64 != 0 || facts.BytesOut.Int64 != 0 || scope.State != "active" || scope.ReplayBarrier {
 		t.Fatal("expired never-sent reply invented unknown effects")
 	}
-	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, parent.id)) || !reflect.DeepEqual(before.Once, facts.Once) || kind != "ping" && !reflect.DeepEqual(approval, freshGETRow(t, f, `SELECT * FROM native_tool_approvals WHERE operation_id=?`, child.id)) {
+	if !reflect.DeepEqual(parentAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, parent.id)) || !reflect.DeepEqual(before.Once, facts.Once) || kind != "ping" && !reflect.DeepEqual(approval, freshGETRow(t, f, `SELECT * FROM native_tool_approvals WHERE operation_id=?`, child.id)) {
 		t.Fatal("failed reply changed parent audit/once/consumed approval")
 	}
-	if !reflect.DeepEqual(siblingAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, siblingID)) {
+	if !reflect.DeepEqual(siblingAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, siblingID)) {
 		t.Fatal("exact cleanup changed independent callback audit")
 	}
 	s.mu.Lock()

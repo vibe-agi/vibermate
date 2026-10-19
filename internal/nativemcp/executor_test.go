@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	recordingbudget "github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -50,8 +51,26 @@ func (a captureActivity) Active(ctx context.Context, c captureidentity.Reference
 	return a.repository.Active(ctx, id, time.Now().UTC())
 }
 
+// The public-backup fixture supplies the real current control owner. Other
+// protocol fixtures retain their private staging adapter.
+type nativeFixtureAuthority interface {
+	nativetool.LifecycleAuthority
+	nativetool.ExecutionAuthority
+}
+type nativeFixturePorts interface {
+	Shutdown(context.Context) error
+	EnvironmentRepository() environment.Repository
+	ManualCaptureRepository() manualcapture.Repository
+	CaptureRunRepository() capturerun.Repository
+	CaptureAssignmentRepository() captureassignment.Repository
+	ToolApprovalRepository() toolapproval.Repository
+}
+
 type nativeFixture struct {
+	content      *fixtureContent
+	contentDB    *sql.DB
 	store        *runtimepersistence.Store
+	authority    nativeFixtureAuthority
 	db           *sql.DB
 	assignments  *captureassignment.Manager
 	admission    captureadmission.Admission
@@ -128,13 +147,27 @@ func newNativeFixtureWithApprovalConfig(t *testing.T, mode environment.ToolPolic
 
 func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, approvalConfig toolapproval.Config, observe func(nativetool.Approval), custom ...Limits) *nativeFixture {
 	t.Helper()
+	return newNativeFixtureWithStore(t, mode, recording, lifetime, choice, approvalConfig, observe, nil, "", custom...)
+}
+
+func newNativeFixtureWithStore(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, approvalConfig toolapproval.Config, observe func(nativetool.Approval), control *runtimepersistence.ControlStore, path string, custom ...Limits) *nativeFixture {
+	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "runtime.db")
-	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout, NativeStreamLifetime: lifetime})
-	if err != nil {
-		t.Fatal(err)
+	var store *runtimepersistence.Store
+	var ports nativeFixturePorts
+	var native nativeFixtureAuthority
+	if control == nil {
+		path = filepath.Join(t.TempDir(), "runtime.db")
+		var err error
+		store, err = runtimepersistence.Open(ctx, runtimepersistence.Options{DatabasePath: path, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout, NativeStreamLifetime: lifetime})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ports, native = store, store.NativeToolRepository()
+	} else {
+		ports, native = control, control.NativeToolRepository()
 	}
-	t.Cleanup(func() { _ = store.Shutdown(ctx) })
+	t.Cleanup(func() { _ = ports.Shutdown(ctx) })
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +188,7 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 	if err != nil {
 		t.Fatal(err)
 	}
-	envs, err := environment.NewManager(ctx, store.EnvironmentRepository(), compiler, environment.NewAtomicProjection(), nil)
+	envs, err := environment.NewManager(ctx, ports.EnvironmentRepository(), compiler, environment.NewAtomicProjection(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +205,7 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 	if _, err = envs.Publish(ctx, preview); err != nil {
 		t.Fatal(err)
 	}
-	manuals, err := manualcapture.NewManager(ctx, manualcapture.DefaultOptions(store.ManualCaptureRepository()))
+	manuals, err := manualcapture.NewManager(ctx, manualcapture.DefaultOptions(ports.ManualCaptureRepository()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +214,7 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(store.CaptureRunRepository()))
+	runs, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(ports.CaptureRunRepository()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +235,7 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignments, err := captureassignment.NewManager(captureassignment.Options{Repository: store.CaptureAssignmentRepository(), Environments: envs, Activity: captureActivity{store.ManualCaptureRepository()}, Clock: manualcapture.SystemClock{}})
+	assignments, err := captureassignment.NewManager(captureassignment.Options{Repository: ports.CaptureAssignmentRepository(), Environments: envs, Activity: captureActivity{ports.ManualCaptureRepository()}, Clock: manualcapture.SystemClock{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,10 +248,10 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 		t.Fatal(err)
 	}
 	t.Cleanup(connection.Close)
-	options := toolapproval.DefaultOptions(store.ToolApprovalRepository())
-	options.NativeRepository = store.NativeToolRepository()
+	options := toolapproval.DefaultOptions(ports.ToolApprovalRepository())
+	options.NativeRepository = native
 	if observe != nil {
-		options.NativeRepository = approvalPublicationObserver{LifecycleRepository: options.NativeRepository, observe: observe}
+		options.NativeRepository = approvalPublicationObserver{LifecycleAuthority: options.NativeRepository, observe: observe}
 	}
 	options.Config = approvalConfig
 	authority, err := toolapproval.New(ctx, options)
@@ -242,12 +275,36 @@ func newNativeFixtureWithApprovalObservation(t *testing.T, mode environment.Tool
 	if len(custom) > 0 {
 		limits = custom[0]
 	}
-	executor, err := New(Dependencies{OwnerContext: ctx, Transport: transport, Store: store.NativeToolRepository(), ToolDecisions: gate, Offline: offline, Clock: time.Now, IDs: ids}, limits)
+	observationsPath := filepath.Join(filepath.Dir(path), "observations.db")
+	if control != nil {
+		observationsPath = filepath.Join(t.TempDir(), "observations.db")
+	}
+	observations, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: observationsPath, LayoutID: "native-fixture", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observations.Shutdown(ctx) })
+	contentDB, err := sql.Open("sqlite", observationsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = contentDB.Close() })
+	epoch, _ := recordingbudget.NewEpoch(1)
+	budget, _ := recordingbudget.NewBudget(recordingbudget.Limits{Records: 2048, Bytes: 64 << 20})
+	content := &fixtureContent{epoch: epoch, budget: budget, store: observations}
+	t.Cleanup(func() {
+		content.mu.Lock()
+		defer content.mu.Unlock()
+		for _, item := range content.items {
+			item.reservation.Release()
+		}
+	})
+	executor, err := New(Dependencies{OwnerContext: ctx, Transport: transport, Store: native, ToolDecisions: gate, Offline: offline, Clock: time.Now, IDs: ids, ContentRecorder: content, RecordingScopes: content}, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = executor.Close(ctx) })
-	return &nativeFixture{store, db, assignments, admission, capture, executor, transport, ids, offline, envs}
+	return &nativeFixture{content: content, contentDB: contentDB, store: store, authority: native, db: db, assignments: assignments, admission: admission, capture: capture, executor: executor, transport: transport, ids: ids, gate: offline, environments: envs}
 }
 func (f *nativeFixture) captured(t *testing.T, method, body, session string) CapturedRequest {
 	t.Helper()
@@ -291,7 +348,7 @@ func (f *nativeFixture) handshake(t *testing.T) {
 		}
 		terminal, w := f.serve(t, body, session)
 		if terminal.Outcome != OutcomeCompleted {
-			op, storeErr := f.store.NativeToolRepository().Get(context.Background(), terminal.OperationID)
+			op, storeErr := f.authority.Get(context.Background(), terminal.OperationID)
 			t.Fatalf("handshake terminal %+v status%d body%s op%+v storeErr%v sends%d", terminal, w.Code, w.Body.String(), op, storeErr, f.transport.sends())
 		}
 	}
@@ -300,20 +357,20 @@ func (f *nativeFixture) approve(t *testing.T, id nativetool.ID) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		op, err := f.store.NativeToolRepository().Get(context.Background(), id)
+		op, err := f.authority.Get(context.Background(), id)
 		if err == nil && op.ApprovalID != nil {
-			approval, err := f.store.NativeToolRepository().GetApproval(context.Background(), *op.ApprovalID)
+			approval, err := f.authority.GetApproval(context.Background(), *op.ApprovalID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = f.store.NativeToolRepository().DecideApproval(context.Background(), nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionAllowOnce, IdempotencyKey: "synthetic-allow-" + id.String(), ObservedAt: time.Now().UTC()}); err != nil {
+			if _, err = f.authority.DecideApproval(context.Background(), nativetool.DecisionInput{ApprovalID: approval.ID, ExpectedRevision: approval.Revision, Decision: nativetool.DecisionAllowOnce, IdempotencyKey: "synthetic-allow-" + id.String(), ObservedAt: time.Now().UTC()}); err != nil {
 				t.Fatal(err)
 			}
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	op, err := f.store.NativeToolRepository().Get(context.Background(), id)
+	op, err := f.authority.Get(context.Background(), id)
 	t.Fatalf("real Review question absent: operation %+v error%v", op, err)
 }
 func TestNativeExecutorApprovedCallHasDedicatedStartReceipt(t *testing.T) {
@@ -329,11 +386,11 @@ func TestNativeExecutorApprovedCallHasDedicatedStartReceipt(t *testing.T) {
 		t.Fatalf("call %+v sends%d", terminal, f.transport.sends())
 	}
 	requireNativeClaimAfterDrain(t, f.executor.(*executor), request.id, false)
-	op, err := f.store.NativeToolRepository().Get(context.Background(), request.id)
+	op, err := f.authority.Get(context.Background(), request.id)
 	if err != nil || op.Capture != f.capture || op.Kind != nativetool.RequestToolsCall || op.ToolName != "read_file" || op.CredentialOwner != "original_client" || op.ApprovalID == nil {
 		t.Fatalf("real native projection %+v %v", op, err)
 	}
-	for _, table := range []string{"native_tool_once", "runtime_egress_attempts"} {
+	for _, table := range []string{"native_tool_once", "native_tool_deliveries"} {
 		var count int
 		query := `SELECT COUNT(*) FROM ` + table
 		if table == "native_tool_once" {

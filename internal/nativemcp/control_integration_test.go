@@ -37,7 +37,7 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 	for _, scenario := range []struct {
 		name string
 		run  func(*testing.T, func(nativemcp.Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval))
-	}{{"callback", nativemcp.ExerciseNativePendingControl}, {"callback_delayed_start", nil}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
+	}{{"ping", nativemcp.ExerciseNativePingControl}, {"callback", nativemcp.ExerciseNativePendingControl}, {"callback_delayed_start", nil}, {"callback_history_child", nil}, {"callback_history_parent", nil}, {"ordinary", nativemcp.ExerciseNativeToolControl}, {"expired", nativemcp.ExerciseNativeExpiredControl}, {"unavailable", nativemcp.ExerciseNativeUnavailableControl}} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var complete func()
 			run := scenario.run
@@ -109,15 +109,10 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 				first := request("GET", collection+"?limit=1", read, "", "", "")
 				check(first, 200)
 				var page desktopcontrol.NativeApprovalPageDTO
-				if err = json.Unmarshal(first.Body.Bytes(), &page); err != nil || len(page.Items) != 0 || page.NextSequence <= 0 {
-					t.Fatalf("filtered page did not advance %+v %v", page, err)
+				if err = json.Unmarshal(first.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].ID != a.ID.String() || page.NextCursor != "" {
+					t.Fatalf("direct pending page %+v %v", page, err)
 				}
-				end := request("GET", collection+"?afterSequence=999999", read, "", "", "")
-				check(end, 200)
-				if err = json.Unmarshal(end.Body.Bytes(), &page); err != nil || len(page.Items) != 0 || page.NextSequence != 999999 {
-					t.Fatalf("terminal page cursor moved backwards %+v %v", page, err)
-				}
-				for _, query := range []string{"?limit=0", "?limit=200", "?limit=1&limit=2", "?afterSequence=0&afterSequence=1", "?unknown=1", "?afterSequence=-1"} {
+				for _, query := range []string{"?limit=0", "?limit=200", "?limit=1&limit=2", "?afterSequence=0", "?afterSequence=999999", "?afterSequence=0&afterSequence=1", "?unknown=1", "?afterSequence=-1", "?cursor=", "?cursor=foreign", "?cursor=a&cursor=b"} {
 					check(request("GET", collection+query, read, "", "", ""), 422)
 				}
 				var dto desktopcontrol.NativeApprovalDTO
@@ -137,7 +132,11 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 					t.Fatalf("missing bound preview %+v", dto)
 				}
 				intent := dto.Preview.Intents[0]
-				if strings.HasPrefix(scenario.name, "callback") {
+				if scenario.name == "ping" {
+					if intent.Action != "ping_reply" || intent.ToolName != "" || len(intent.Arguments) != 0 || intent.Truncated || intent.Target == "" {
+						t.Fatalf("safe registered-ping preview %+v", dto)
+					}
+				} else if strings.HasPrefix(scenario.name, "callback") {
 					if intent.Action != "form_reply" || len(intent.Arguments) != 0 {
 						t.Fatalf("safe registered-parent preview %+v", dto)
 					}

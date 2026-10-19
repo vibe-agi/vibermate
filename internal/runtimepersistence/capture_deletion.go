@@ -86,7 +86,7 @@ func (store *Store) DeleteCapture(
 	deletion.Connections, err = deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_connection_events
-		  WHERE connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
+		  WHERE (recording_scope_kind=? AND recording_scope_id=?) OR (recording_archive_epoch=0 AND connection_id IN (SELECT id FROM capture_purge_connection_ids))`, captureKind, captureID,
 	)
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture connection evidence: %w", err)
@@ -94,7 +94,7 @@ func (store *Store) DeleteCapture(
 	if _, err := deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_exchange_agent_identities
-		  WHERE exchange_id IN (SELECT id FROM capture_purge_exchange_ids)`,
+		  WHERE (recording_scope_kind=? AND recording_scope_id=?) OR (recording_archive_epoch=0 AND exchange_id IN (SELECT id FROM capture_purge_exchange_ids))`, captureKind, captureID,
 	); err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture Agent identities: %w", err)
 	}
@@ -118,9 +118,24 @@ func (store *Store) DeleteCapture(
 		return CaptureDeletion{}, fmt.Errorf("delete Capture raw evidence: %w", err)
 	}
 	deletion.Envelopes = uint64(envelopes)
+	if _, err = transaction.ExecContext(operation, `DELETE FROM runtime_raw_inspection_reveal_audits WHERE recording_scope_kind=? AND recording_scope_id=?`, captureKind, captureID); err != nil {
+		return CaptureDeletion{}, err
+	}
 	if _, err := deleteNativeContents(operation, transaction, `operation_id IN(SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`, captureKind, captureID); err != nil {
 		return CaptureDeletion{}, err
 	}
+	nativeAttempts, err := deleteCounted(
+		operation,
+		transaction,
+		`DELETE FROM native_tool_deliveries
+		  WHERE operation_id IN (SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=?)`,
+		captureKind,
+		captureID,
+	)
+	if err != nil {
+		return CaptureDeletion{}, fmt.Errorf("delete Capture native deliveries: %w", err)
+	}
+	deletion.Attempts += nativeAttempts
 	if _, err := transaction.ExecContext(operation, `DELETE FROM native_tool_operations WHERE capture_kind=? AND capture_id=?`, captureKind, captureID); err != nil {
 		return CaptureDeletion{}, err
 	}
@@ -214,6 +229,8 @@ func selectCaptureEvidence(
 		query string
 		args  []any
 	}{
+		{`INSERT OR IGNORE INTO capture_purge_connection_ids(id) SELECT connection_id FROM runtime_connection_events WHERE recording_scope_kind=? AND recording_scope_id=?`, []any{captureKind, captureID}},
+		{`INSERT OR IGNORE INTO capture_purge_attempt_ids(id) SELECT attempt_id FROM runtime_egress_attempts WHERE purpose<>'client_tool_service' AND recording_scope_kind=? AND recording_scope_id=?`, []any{captureKind, captureID}},
 		{
 			`INSERT OR IGNORE INTO capture_purge_exchange_ids(id)
 			 SELECT exchange_id FROM runtime_exchange_contents
@@ -258,7 +275,7 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE purpose<>'client_tool_service' AND (parent_exchange_id IN (
+			 WHERE purpose<>'client_tool_service' AND recording_archive_epoch=0 AND (parent_exchange_id IN (
 			   SELECT id FROM capture_purge_exchange_ids
 			 ) OR connection_id IN (
 			   SELECT id FROM capture_purge_connection_ids
@@ -275,7 +292,7 @@ func selectCaptureEvidence(
 		{
 			`INSERT OR IGNORE INTO capture_purge_attempt_ids(id)
 			 SELECT attempt_id FROM runtime_egress_attempts
-			 WHERE purpose<>'client_tool_service' AND connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
+			 WHERE purpose<>'client_tool_service' AND recording_archive_epoch=0 AND connection_id IN (SELECT id FROM capture_purge_connection_ids)`,
 			nil,
 		},
 	}
@@ -349,6 +366,7 @@ var evidenceTables = []string{
 	"runtime_egress_attempts",
 	// Reveal audits cascade from here.
 	"runtime_raw_evidence_envelopes",
+	"runtime_raw_inspection_reveal_audits",
 	"runtime_evidence_bodies",
 	"runtime_evidence_chunks",
 	"runtime_exchange_contents",

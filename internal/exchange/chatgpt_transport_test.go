@@ -170,6 +170,9 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 				observed <- copied
 				// A nil entry prevents net/http from synthesizing Content-Type.
 				writer.Header()["Content-Type"] = nil
+				// A finite streamed body makes physical EOF observable with its
+				// last bytes, before semantic completion cancels further reads.
+				writer.Header().Set("Content-Length", strconv.Itoa(len(wire)))
 				writer.WriteHeader(http.StatusOK)
 				for offset := 0; offset < len(wire); offset += 4093 {
 					end := min(offset+4093, len(wire))
@@ -351,7 +354,7 @@ func TestManagedChatGPTHTTPStreamWithoutContentType(t *testing.T) {
 					responseRecorded = true
 					if observation.Headers.Get("Content-Type") != "" || !observation.FullDigestAvailable ||
 						observation.TotalBodyBytes != int64(len(wire)) {
-						t.Fatal("raw response did not observe EOF or invented an upstream Content-Type")
+						t.Fatalf("raw response evidence: Content-Type=%q fullDigest=%t totalBytes=%d wantBytes=%d", observation.Headers.Get("Content-Type"), observation.FullDigestAvailable, observation.TotalBodyBytes, len(wire))
 					}
 					if test.rawLimit == 0 {
 						if !observation.Complete || !bytes.Equal(observation.Body, wire) || observation.IncompleteReason != "" {

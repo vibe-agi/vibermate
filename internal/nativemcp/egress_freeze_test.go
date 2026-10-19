@@ -113,7 +113,7 @@ func TestNativeRelatedChildrenKeepRealParentExitAcrossDefaultEditOrFailure(t *te
 				}
 				var source string
 				var revision uint64
-				if err := f.db.QueryRow(`SELECT selection_source,default_revision FROM runtime_egress_attempts WHERE parent_id=?`, child.id).Scan(&source, &revision); err != nil {
+				if err := f.db.QueryRow(`SELECT selection_source,default_revision FROM native_tool_deliveries WHERE operation_id=?`, child.id).Scan(&source, &revision); err != nil {
 					t.Fatal(err)
 				}
 				if source != "global" || revision != setting.Revision {
@@ -184,7 +184,7 @@ func TestNativeIndependentOperationsFreezeActualDefaultWithoutResolvingIngressLe
 	}
 	var source, proxy string
 	var revision uint64
-	if err := f.db.QueryRow(`SELECT selection_source,default_revision,proxy_id FROM runtime_egress_attempts WHERE parent_id=?`, terminal.OperationID).Scan(&source, &revision, &proxy); err != nil {
+	if err := f.db.QueryRow(`SELECT selection_source,default_revision,proxy_id FROM native_tool_deliveries WHERE operation_id=?`, terminal.OperationID).Scan(&source, &revision, &proxy); err != nil {
 		t.Fatal(err)
 	}
 	if source != "builtin" || revision != setting.Revision || proxy != "profile.direct" || counted.calls.Load() != 4 {

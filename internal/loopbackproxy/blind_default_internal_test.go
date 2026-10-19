@@ -2,6 +2,7 @@ package loopbackproxy
 
 import (
 	"context"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func TestBlindAuditCarriesFrozenDefaultSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			handler := &Handler{egressAudit: &blindTerminalAuditDouble{}, clock: time.Now, ownerContext: context.Background()}
+			handler := &Handler{egressAudit: testrecording.Egress(&blindTerminalAuditDouble{}), clock: time.Now, ownerContext: context.Background()}
 			attempt, err := handler.beginBlindAudit(context.Background(), "blind-default-attempt", "blind-default-connection", "https://target.example:443", resolved)
 			if err != nil {
 				t.Fatal(err)

@@ -71,9 +71,9 @@ func TestNonConnectRequestsAreAuditedBeforeRejection(t *testing.T) {
 			denied = true
 		}
 	}
-	if !attempted || !denied {
+	if attempted || !denied {
 		t.Fatalf(
-			"cleartext rejection left no audit trail: attempted=%v denied=%v page=%+v",
+			"unbound rejection must publish only a terminal: attempted=%v denied=%v page=%+v",
 			attempted,
 			denied,
 			page,

@@ -15,6 +15,8 @@ final class ControlFailure implements Exception {
     if (error is ControlProblem) {
       final key = switch (error.reasonCode) {
         'environment_upstream_stale' => 'error.environment_upstream_stale',
+        'inspection_changed' => 'error.inspection_changed',
+        'inspection_unavailable' => 'error.inspection_unavailable',
         'provider_account_scope_mismatch' => 'error.account_scope_mismatch',
         'provider_account_in_use' => 'error.account_in_use',
         'provider_account_busy' => 'error.account_busy',

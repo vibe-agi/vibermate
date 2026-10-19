@@ -516,11 +516,11 @@ func (ref Ref) Validate() error {
 // stable stream. This prevents a subagent request from appearing briefly in
 // the main chat while it is in flight.
 func Pending(exchangeID string) (Ref, error) {
-	return checked(Ref{
-		ProjectionID: exchangeProjectionID(exchangeID),
-		Kind:         KindPendingExchange,
-		Evidence:     EvidencePending,
-	})
+	facts, err := PendingFacts(exchangeID)
+	if err != nil {
+		return Ref{}, err
+	}
+	return facts.Materialize()
 }
 
 type ProjectionInput struct {
@@ -537,119 +537,11 @@ type ProjectionInput struct {
 // system captures remain Exchange-scoped even if their payload mentions an
 // actor because no AgentSession authority exists for them.
 func Project(input ProjectionInput) (Ref, error) {
-	if !validText(input.ExchangeID, false) ||
-		!validText(input.CaptureRunID, true) ||
-		!validText(input.SourceDisplayName, true) {
-		return Ref{}, errors.New("Agent Conversation projection input is invalid")
+	facts, err := PrepareProjection(input)
+	if err != nil {
+		return Ref{}, err
 	}
-	if input.CaptureRunID == "" {
-		return checked(Ref{
-			ProjectionID: exchangeProjectionID(input.ExchangeID),
-			Kind:         KindIsolatedExchange,
-			Evidence:     EvidenceExchangeBoundary,
-		})
-	}
-	if input.ClientIdentity != nil {
-		if err := input.ClientIdentity.Validate(); err != nil {
-			return Ref{}, err
-		}
-		identity := *input.ClientIdentity
-		scope := identityProjectionScope(identity)
-		if identity.ActorID != "" {
-			displayName := identity.ActorLabel
-			if displayName == "" {
-				displayName = actorLeaf(identity.ActorID)
-			}
-			return checked(Ref{
-				ProjectionID: actorProjectionID(
-					input.CaptureRunID,
-					scope,
-					identity.ActorID,
-				),
-				DisplayName: displayName,
-				Kind:        KindAgent,
-				Evidence:    EvidenceExplicitActor,
-				Actor:       identity.ActorID,
-			})
-		}
-		projectionID, evidence := mainProjectionID(
-			input.CaptureRunID,
-			scope,
-		)
-		return checked(Ref{
-			ProjectionID: projectionID,
-			DisplayName:  input.SourceDisplayName,
-			Kind:         KindMain,
-			Evidence:     evidence,
-		})
-	}
-	if input.Request == nil {
-		return checked(Ref{
-			ProjectionID: exchangeProjectionID(input.ExchangeID),
-			Kind:         KindIsolatedExchange,
-			Evidence:     EvidenceUndecodedExchange,
-		})
-	}
-	scope, _ := protocolProjectionScope(input.Request.ProtocolEvidence)
-	if actor := protocolActor(input.Request.ProtocolEvidence); actor != "" {
-		return checked(Ref{
-			ProjectionID: actorProjectionID(
-				input.CaptureRunID,
-				scope,
-				actor,
-			),
-			DisplayName: actorLeaf(actor),
-			Kind:        KindAgent,
-			Evidence:    EvidenceExplicitActor,
-			Actor:       actor,
-		})
-	}
-	// Native Codex headers identify the requesting session/thread. Authors in
-	// its history or response describe individual messages, not this caller.
-	if scope.client == "codex" && scope.sessionID != "" {
-		projectionID, evidence := mainProjectionID(input.CaptureRunID, scope)
-		return checked(Ref{
-			ProjectionID: projectionID,
-			DisplayName:  input.SourceDisplayName,
-			Kind:         KindMain,
-			Evidence:     evidence,
-		})
-	}
-	actor, ambiguous := explicitCurrentActor(*input.Request, input.Response)
-	if actor != "" && !ambiguous {
-		return checked(Ref{
-			ProjectionID: actorProjectionID(
-				input.CaptureRunID,
-				scope,
-				actor,
-			),
-			DisplayName: actorLeaf(actor),
-			Kind:        KindAgent,
-			Evidence:    EvidenceExplicitActor,
-			Actor:       actor,
-		})
-	}
-	if hasClientAssertedSubagent(*input.Request) {
-		return checked(Ref{
-			ProjectionID: exchangeProjectionID(input.ExchangeID),
-			Kind:         KindIsolatedSubagent,
-			Evidence:     EvidenceClientAssertedSubagent,
-		})
-	}
-	if ambiguous {
-		return checked(Ref{
-			ProjectionID: exchangeProjectionID(input.ExchangeID),
-			Kind:         KindIsolatedExchange,
-			Evidence:     EvidenceAmbiguousActor,
-		})
-	}
-	projectionID, evidence := mainProjectionID(input.CaptureRunID, scope)
-	return checked(Ref{
-		ProjectionID: projectionID,
-		DisplayName:  input.SourceDisplayName,
-		Kind:         KindMain,
-		Evidence:     evidence,
-	})
+	return facts.Materialize()
 }
 
 type projectionScope struct {
@@ -777,44 +669,43 @@ func exchangeProjectionID(exchangeID string) string {
 	return "exchange:" + exchangeID
 }
 
-func explicitCurrentActor(
-	request protocolcore.Request,
-	response *protocolcore.Response,
-) (string, bool) {
+func explicitCurrentActor(request protocolcore.Request, response *protocolcore.Response) (string, bool) {
+	consider := func(candidate *string, ambiguous *bool, actor string) {
+		if actor == "" {
+			return
+		}
+		if *candidate == "" {
+			*candidate = actor
+		} else if *candidate != actor {
+			*ambiguous = true
+		}
+	}
 	if response != nil {
-		actors := make(map[string]struct{})
+		var candidate string
+		var ambiguous bool
 		for _, block := range response.Blocks {
-			if actor := producer(block.Agent); actor != "" {
-				actors[actor] = struct{}{}
-			}
+			consider(&candidate, &ambiguous, producer(block.Agent))
 		}
-		if len(actors) == 1 {
-			for actor := range actors {
-				return actor, false
-			}
-		}
-		if len(actors) > 1 {
+		if ambiguous {
 			return "", true
+		}
+		if candidate != "" {
+			return candidate, false
 		}
 	}
 	for index := len(request.Messages) - 1; index >= 0; index-- {
 		message := request.Messages[index]
-		actors := make(map[string]struct{})
-		if actor := producer(message.Agent); actor != "" {
-			actors[actor] = struct{}{}
-		}
+		var candidate string
+		var ambiguous bool
+		consider(&candidate, &ambiguous, producer(message.Agent))
 		for _, block := range message.Blocks {
-			if actor := producer(block.Agent); actor != "" {
-				actors[actor] = struct{}{}
-			}
+			consider(&candidate, &ambiguous, producer(block.Agent))
 		}
-		if len(actors) == 1 {
-			for actor := range actors {
-				return actor, false
-			}
-		}
-		if len(actors) > 1 {
+		if ambiguous {
 			return "", true
+		}
+		if candidate != "" {
+			return candidate, false
 		}
 	}
 	return "", false

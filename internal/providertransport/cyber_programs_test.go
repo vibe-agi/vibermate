@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/cyberaccess"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 func TestAccountCyberProgramsUseFrozenCredentialAndIsolatedCache(t *testing.T) {
@@ -76,4 +78,32 @@ func TestAccountCyberProgramsRejectUnrelatedOrDisabledScope(t *testing.T) {
 	if transport.callCount() != 0 {
 		t.Fatal("invalid scope reached network")
 	}
+}
+
+func TestAccountCyberProgramsRemainAvailableWhenAuditIsUnavailable(t *testing.T) {
+	for _, mode := range []cyberaccess.Preference{cyberaccess.Blue, cyberaccess.Red} {
+		t.Run(mode.WireValue(), func(t *testing.T) {
+			gate := newStartedGate(t)
+			audit := &runtimeAuditRecorder{}
+			transport := &runtimeTransportStub{audit: audit, response: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"models":[{"slug":"m","available_access_programs":{"cyber":["daybreak_blue","daybreak_red"]}}]}`))}}
+			client := newRuntimeFetchClient(t, gate, transport, audit)
+			offered := 0
+			client.audit = cyberUnavailableAudit(func() { offered++ })
+			plan := testRequestPlanWithOrigin(t, "https://chatgpt.com")
+			request := newTestRequestWithPlan(t, gate, "catalog-without-history", targetFromProviderOrigin(plan.providerOrigin), nil, []byte(`{"model":"m"}`), plan)
+			request.relativePath = "backend-api/codex/responses"
+			request.accountRef.CyberAccessProgram = mode
+			catalog, err := client.AccountCyberPrograms(t.Context(), request)
+			if err != nil || len(catalog["m"]) != 2 || transport.callCount() != 1 || offered != 2 {
+				t.Fatalf("optional audit affected capability read: catalog=%v sends=%d offers=%d err=%v", catalog, transport.callCount(), offered, err)
+			}
+		})
+	}
+}
+
+type cyberUnavailableAudit func()
+
+func (f cyberUnavailableAudit) ObserveEgress(recording.Stamp, egressaudit.Attempt) recording.OfferResult {
+	f()
+	return recording.DroppedUnavailable
 }

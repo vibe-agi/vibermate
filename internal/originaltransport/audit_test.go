@@ -3,6 +3,7 @@ package originaltransport_test
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net/http"
 	"strings"
@@ -88,7 +89,7 @@ func TestOriginalEgressRecordsOneAttemptPerOutbound(t *testing.T) {
 	recorder := &auditRecorder{}
 	client, err := originaltransport.New(originaltransport.Options{
 		Coordinator: &recordingCoordinator{},
-		Audit:       recorder,
+		Audit:       testrecording.Egress(recorder),
 		Transport: &roundTripper{response: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -143,7 +144,7 @@ func TestOriginalEgressRecordsAFailedOutbound(t *testing.T) {
 	recorder := &auditRecorder{}
 	client, err := originaltransport.New(originaltransport.Options{
 		Coordinator: &recordingCoordinator{},
-		Audit:       recorder,
+		Audit:       testrecording.Egress(recorder),
 		Transport:   &failingRoundTripper{},
 	})
 	if err != nil {

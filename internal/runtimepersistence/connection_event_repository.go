@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type connectionEventRepository struct {
@@ -39,11 +40,15 @@ func (repository *connectionEventRepository) Append(
 		return connectionevent.Record{}, err
 	}
 	defer finish()
+	return appendConnectionEvent(operation, repository.database, event)
+}
+
+func appendConnectionEvent(operation context.Context, writer egressAttemptWriter, event connectionevent.Event) (connectionevent.Record, error) {
 	var endedAt any
 	if !event.EndedAt.IsZero() {
 		endedAt = toUnixMillis(event.EndedAt)
 	}
-	result, err := repository.database.ExecContext(
+	result, err := writer.ExecContext(
 		operation,
 		`INSERT INTO runtime_connection_events (
 		     connection_id,
@@ -136,6 +141,9 @@ func (repository *connectionEventRepository) List(
 ) (connectionevent.Page, error) {
 	if err := request.Validate(); err != nil {
 		return connectionevent.Page{}, err
+	}
+	if request.Cursor != "" {
+		return connectionevent.Page{}, connectionevent.ErrInvalidCursor
 	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
@@ -268,6 +276,7 @@ func (repository *connectionEventRepository) Recover(
 	result, err := repository.database.ExecContext(
 		operation,
 		`INSERT INTO runtime_connection_events (
+ recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation,
 		     connection_id,
 		     ingress_id,
 		     source_label,
@@ -302,6 +311,7 @@ func (repository *connectionEventRepository) Recover(
 		     error_class
 		 )
 		 SELECT
+ current.recording_scope_kind,current.recording_scope_id,current.recording_archive_epoch,current.recording_capture_generation,
 		     current.connection_id,
 		     current.ingress_id,
 		     current.source_label,
@@ -465,3 +475,40 @@ func scanConnectionEvent(
 	}
 	return record, nil
 }
+
+func (r *connectionEventRepository) PutConnection(ctx context.Context, scope recording.Scope, event connectionevent.Event) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	operation, finish, err := r.operations.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	tx, err := r.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	existing, err := readRecordingScope(operation, tx, "runtime_connection_events", "connection_id", event.ConnectionID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && existing != scope {
+		return errors.New("connection recording scope conflicts")
+	}
+	record, err := appendConnectionEvent(operation, tx, event)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(operation, `UPDATE runtime_connection_events SET recording_scope_kind=?,recording_scope_id=?,recording_archive_epoch=?,recording_capture_generation=? WHERE sequence=?`, scope.Capture.Kind, scope.Capture.ID, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, record.Sequence); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+var _ connectionevent.ScopedStore = (*connectionEventRepository)(nil)

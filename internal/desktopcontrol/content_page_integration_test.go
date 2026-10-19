@@ -22,11 +22,11 @@ import (
 func TestCompleteBlockDetailsHTTPUsesExistingScopedPageRoute(t *testing.T) {
 	runtime := startRuntime(t)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
-	ctx := context.Background()
 	text, _ := protocolcore.NewTextBlock("question")
 	request := protocolcore.Request{RequestedModel: "model", EffectiveModel: "model", Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{text}}}}
 	response := protocolcore.Response{ID: "details", RequestedModel: "model", EffectiveModel: "model", ReportedModel: "model", StopReason: protocolcore.StopReasonEndTurn, Blocks: []protocolcore.ContentBlock{text}}
-	parent := exchangecontent.ParentRef{CaptureRunID: "details-run"}
+	captureID, scope := createScopedFixtureCapture(t, runtime)
+	parent := exchangecontent.ParentRef{CaptureRunID: captureID}
 	frozen := exchangecontent.FrozenRef{EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1}
 	record, err := exchangecontent.NewRecord("exchange-complete-details", frozen, environment.DefaultContentRecordingPolicy(), time.Now().UTC(), request, &response, exchangecontent.WithParentRef(parent))
 	if err != nil {
@@ -34,17 +34,12 @@ func TestCompleteBlockDetailsHTTPUsesExistingScopedPageRoute(t *testing.T) {
 	}
 	block := exchangecontent.Block{Kind: "reasoning", Availability: exchangecontent.AvailabilityRecorded, Text: "short body", ProviderSource: strings.Repeat("p", (1<<20)+1), ProviderKind: "thinking"}
 	record.Response.Blocks = []exchangecontent.Block{block}
-	if err := runtime.ExchangeContents().(exchangecontent.Recorder).Record(ctx, record); err != nil {
-		t.Fatal(err)
-	}
+	appendScopedFixtureRecord(t, runtime, scope, record)
 	conversation, err := agentconversation.Project(agentconversation.ProjectionInput{CaptureRunID: parent.CaptureRunID, ExchangeID: record.ExchangeID, SourceDisplayName: "Codex", Request: &request})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(ctx, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: record.ExchangeID, Status: activity.StatusSucceeded, EnvironmentID: environment.EnvironmentID(frozen.EnvironmentID), EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "details-connection", Conversation: conversation})
-	if err != nil {
-		t.Fatal(err)
-	}
+	appendScopedFixtureActivity(t, runtime, scope, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: record.ExchangeID, Status: activity.StatusSucceeded, EnvironmentID: environment.EnvironmentID(frozen.EnvironmentID), EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "details-connection", Conversation: conversation})
 	app, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: desktopcontrol.SystemClock{}})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +93,6 @@ func TestCompleteBlockDetailsHTTPUsesExistingScopedPageRoute(t *testing.T) {
 func TestPagedExchangeHTTPKeepsLargeHistoryBelowTheControlReadLimit(t *testing.T) {
 	runtime := startRuntime(t)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
-	ctx := context.Background()
 	text, err := protocolcore.NewTextBlock(strings.Repeat("retained history ", 150))
 	if err != nil {
 		t.Fatal(err)
@@ -113,23 +107,19 @@ func TestPagedExchangeHTTPKeepsLargeHistoryBelowTheControlReadLimit(t *testing.T
 	}
 	response := protocolcore.Response{ID: "response-pages", RequestedModel: "model", EffectiveModel: "model", ReportedModel: "model", StopReason: protocolcore.StopReasonEndTurn, Blocks: []protocolcore.ContentBlock{output}}
 	const id = "exchange-pages"
-	parent := exchangecontent.ParentRef{CaptureRunID: "run-pages"}
+	captureID, scope := createScopedFixtureCapture(t, runtime)
+	parent := exchangecontent.ParentRef{CaptureRunID: captureID}
 	frozen := exchangecontent.FrozenRef{EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1}
 	record, err := exchangecontent.NewRecord(id, frozen, environment.DefaultContentRecordingPolicy(), time.Now().UTC(), request, &response, exchangecontent.WithParentRef(parent))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = runtime.ExchangeContents().(exchangecontent.Recorder).Record(ctx, record); err != nil {
-		t.Fatal(err)
-	}
+	appendScopedFixtureRecord(t, runtime, scope, record)
 	conversation, err := agentconversation.Project(agentconversation.ProjectionInput{CaptureRunID: parent.CaptureRunID, ExchangeID: id, SourceDisplayName: "Codex", Request: &request})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runtime.Activities().Record(ctx, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: environment.EnvironmentID(frozen.EnvironmentID), EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "connection-pages", Conversation: conversation})
-	if err != nil {
-		t.Fatal(err)
-	}
+	appendScopedFixtureActivity(t, runtime, scope, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: environment.EnvironmentID(frozen.EnvironmentID), EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "connection-pages", Conversation: conversation})
 	application, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: desktopcontrol.SystemClock{}})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +170,8 @@ func testToolLookup(t *testing.T, resultText string) {
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	ctx := context.Background()
 	frozen := exchangecontent.FrozenRef{EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1}
-	parent := exchangecontent.ParentRef{CaptureRunID: "run-tools"}
+	captureID, scope := createScopedFixtureCapture(t, runtime)
+	parent := exchangecontent.ParentRef{CaptureRunID: captureID}
 	key, err := protocolcore.NewCallKey("test", "wanted-call")
 	if err != nil {
 		t.Fatal(err)
@@ -218,17 +209,12 @@ func testToolLookup(t *testing.T, resultText string) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if e = runtime.ExchangeContents().(exchangecontent.Recorder).Record(ctx, content); e != nil {
-			t.Fatal(e)
-		}
+		appendScopedFixtureRecord(t, runtime, scope, content)
 		conversation, e := agentconversation.Project(agentconversation.ProjectionInput{CaptureRunID: parent.CaptureRunID, ExchangeID: id, SourceDisplayName: "Codex", Request: &request})
 		if e != nil {
 			t.Fatal(e)
 		}
-		_, e = runtime.Activities().Record(ctx, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "connection-tools", Conversation: conversation})
-		if e != nil {
-			t.Fatal(e)
-		}
+		appendScopedFixtureActivity(t, runtime, scope, activity.Event{Kind: activity.KindExchangeCompleted, SubjectID: id, Status: activity.StatusSucceeded, EnvironmentID: "work", EnvironmentRevision: 1, EnvironmentDigest: frozen.EnvironmentDigest, ClientEndpointID: "client", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex", SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: parent.CaptureRunID, ConnectionID: "connection-tools", Conversation: conversation})
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime, Clock: desktopcontrol.SystemClock{}})
 	if err != nil {

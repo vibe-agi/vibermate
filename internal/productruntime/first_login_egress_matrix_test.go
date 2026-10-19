@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -47,7 +48,13 @@ type firstLoginCounts struct {
 // Every independently named operation is paired with its own observed SQL ID.
 func firstLoginAudit(t *testing.T, f *auxFixture, expected map[string]egressprofile.Resolved, outcome egressaudit.Outcome) {
 	t.Helper()
-	page, err := f.runtime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 100})
+	var page egressaudit.Page
+	var err error
+	if len(expected) == 0 {
+		page, err = f.runtime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 100})
+	} else {
+		page, err = productruntime.SettledEgressTestPage(t, f.runtime, egressaudit.PageRequest{Limit: 100})
+	}
 	if err != nil || len(page.Items) != len(expected) {
 		t.Fatalf("login SQL terminals=%d want=%d err=%v", len(page.Items), len(expected), err)
 	}
@@ -434,7 +441,7 @@ func runFirstLoginAuxCase(t *testing.T, choice, edge string) {
 		want.dialA, want.connectA = 1, 1
 	}
 	assertCounts(want)
-	page, err = f.runtime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 100})
+	page, err = productruntime.SettledEgressTestPage(t, f.runtime, egressaudit.PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != 2 {
 		t.Fatal("next Login audit pairing unavailable", err)
 	}

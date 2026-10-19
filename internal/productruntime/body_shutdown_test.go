@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
 func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testing.T) {
@@ -23,13 +24,23 @@ func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testi
 	options.Resources = &policy
 	options.Lifecycle.ShutdownTimeout = 40 * time.Millisecond
 	runtime := startTestRuntime(t, options)
+	WaitRecordingTestRuntime(t, runtime)
+	content := runtime.recordingStorage.current.Load().content
 	var disposed atomic.Int32
 	runtime.cleanups.entries = append([]cleanupEntry{{name: "test physical completion", run: func(context.Context) error { disposed.Add(1); return nil }}}, runtime.cleanups.entries...)
 	lease, err := runtime.bodyAdmission.Acquire(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Release()
+	defer func() {
+		lease.Release()
+		_ = runtime.Shutdown(context.Background())
+		select {
+		case <-runtime.ShutdownDone():
+		case <-time.After(3 * time.Second):
+			t.Error("body owner cleanup did not actually finish")
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var callers sync.WaitGroup
@@ -45,9 +56,16 @@ func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testi
 			t.Fatalf("shutdown did not honor its original budget: %v", err)
 		}
 	}
-	_, readErr := runtime.ExchangeContents().GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull)
+	if _, err := runtime.storage.SchemaStateReader().ReadSchemaState(context.Background()); err != nil {
+		t.Fatalf("required control closed with a live body owner: %v", err)
+	}
+	_, readErr := content.GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull)
 	if !errors.Is(readErr, exchangecontent.ErrNotFound) {
-		t.Fatalf("dependency closed with a live body owner: %v", readErr)
+		t.Fatalf("actual content owner closed with a live body owner: %v", readErr)
+	}
+	// Public inspection uses the actual complete mirror installed during setup.
+	if _, err := runtime.ExchangeContents().GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull); !errors.Is(err, exchangecontent.ErrNotFound) {
+		t.Fatalf("public inspection dependency closed before real body owner: %v", err)
 	}
 	if disposed.Load() != 0 || runtime.Status().State != RuntimeStateStopFailed {
 		t.Fatal("live owner was reported physically stopped")
@@ -61,9 +79,12 @@ func TestCandidateShutdownDeadlineKeepsDependenciesUntilBodyOwnerDrains(t *testi
 	if disposed.Load() != 1 {
 		t.Fatalf("cleanup executed %d times", disposed.Load())
 	}
-	_, readErr = runtime.ExchangeContents().GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull)
+	_, readErr = content.GetProjection(context.Background(), "missing-owned-source", exchangecontent.RequestViewFull)
 	if !errors.Is(readErr, exchangecontent.ErrRuntimeStopping) {
 		t.Fatalf("dependency leaked after real drain: %v", readErr)
+	}
+	if _, err := runtime.storage.SchemaStateReader().ReadSchemaState(context.Background()); !errors.Is(err, runtimepersistence.ErrStoreClosing) {
+		t.Fatalf("required control leaked after real drain: %v", err)
 	}
 	if err := runtime.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) || disposed.Load() != 1 {
 		t.Fatalf("repeat shutdown lost failure or repeated cleanup: %v", err)

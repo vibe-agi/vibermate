@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type nativeBindingRow struct {
@@ -82,11 +83,12 @@ func loadNativeBinding(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativ
 }
 func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativetool.Operation, error) {
 	var op nativetool.Operation
-	var kind, capture, env, recording, requestKind, connection, method string
-	var er, revision, created, expires, retention int64
+	var kind, capture, env, recordingMode, requestKind, connection, method string
+	var er, revision, created, expires, retention, eventAt, maximumEventAt, archiveEpoch, captureGeneration int64
+	var eventKind string
 	var digest []byte
 	var completed, in, out sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,completed_at_unix_ms,bytes_in,bytes_out,terminal_reason FROM native_tool_operations WHERE operation_id=?`, id).Scan(&kind, &capture, &env, &er, &digest, &connection, &op.TargetOrigin, &method, &requestKind, &revision, &op.State, &op.DecisionSource, &recording, &retention, &created, &expires, &completed, &in, &out, &op.Reason)
+	err := tx.QueryRowContext(ctx, `SELECT capture_kind,capture_id,environment_id,environment_revision,environment_digest,connection_id,target_origin,method,rpc_kind,revision,state,decision_source,recording,retention_days,created_at_unix_ms,metadata_expires_at_unix_ms,completed_at_unix_ms,bytes_in,bytes_out,terminal_reason,last_event_kind,last_event_at_unix_ms,maximum_event_at_unix_ms,recording_archive_epoch,recording_capture_generation FROM native_tool_operations WHERE operation_id=?`, id).Scan(&kind, &capture, &env, &er, &digest, &connection, &op.TargetOrigin, &method, &requestKind, &revision, &op.State, &op.DecisionSource, &recordingMode, &retention, &created, &expires, &completed, &in, &out, &op.Reason, &eventKind, &eventAt, &maximumEventAt, &archiveEpoch, &captureGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return op, nativetool.ErrNotFound
 	}
@@ -99,7 +101,7 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	if retention < 0 || retention > 3650 {
 		return op, nativetool.ErrInvalid
 	}
-	op.Recording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingMode(recording), RetentionDays: uint16(retention)}
+	op.Recording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingMode(recordingMode), RetentionDays: uint16(retention)}
 	op.Kind = nativetool.RequestKind(requestKind)
 	terminal := op.State == "denied" || op.State == "completed" || op.State == "failed" || op.State == "canceled" || op.State == "uncertain"
 	validState := terminal || op.State == "received" || op.State == "validated" || op.State == "awaiting_decision" || op.State == "started"
@@ -116,21 +118,15 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	}
 	op.ID = id
 	op.Capture = c
+	op.RecordingScope = recording.Scope{Capture: c, Fence: recording.Fence{ArchiveEpoch: uint64(archiveEpoch), CaptureGeneration: uint64(captureGeneration)}}
 	op.EnvironmentID = eid
 	op.EnvironmentRevision = environment.Revision(er)
 	copy(op.EnvironmentDigest[:], digest)
 	op.Revision = uint64(revision)
 	op.CreatedAt = time.UnixMilli(created).UTC()
-	var eventRevision int64
-	var eventKind string
-	var eventAt int64
-	if err := tx.QueryRowContext(ctx, `SELECT operation_revision,kind,occurred_at_unix_ms FROM native_tool_events WHERE operation_id=? ORDER BY operation_revision DESC LIMIT 1`, id).Scan(&eventRevision, &eventKind, &eventAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return op, nativetool.ErrInvalid
-		}
-		return op, err
-	}
-	if eventRevision != revision || eventAt < created {
+	op.MaximumEventAt = time.UnixMilli(maximumEventAt).UTC()
+	op.MetadataExpiresAt = time.UnixMilli(expires).UTC()
+	if archiveEpoch <= 0 || captureGeneration <= 0 || eventAt < created || maximumEventAt < eventAt {
 		return op, nativetool.ErrInvalid
 	}
 	validEvent := map[string][]string{"received": {"received"}, "validated": {"validated", "allowed"}, "awaiting_decision": {"awaiting_decision"}, "denied": {"denied"}, "started": {"started", "progress"}, "completed": {"completed"}, "failed": {"failed"}, "canceled": {"canceled", "revoked"}, "uncertain": {"uncertain"}}
@@ -212,35 +208,7 @@ func loadNativeOperation(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nat
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return op, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT part,body_digest,expires_at_unix_ms FROM native_tool_contents WHERE operation_id=? ORDER BY part`, id)
-	if err != nil {
-		return op, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var part string
-		var digest []byte
-		var deadline int64
-		if err := rows.Scan(&part, &digest, &deadline); err != nil {
-			return op, err
-		}
-		if op.Recording.Mode != environment.ContentRecordingFull || op.Kind != nativetool.RequestToolsCall || len(digest) != 32 || deadline <= created {
-			return op, nativetool.ErrInvalid
-		}
-		descriptor := &nativetool.ContentDescriptor{ExpiresAt: time.UnixMilli(deadline).UTC()}
-		copy(descriptor.Digest[:], digest)
-		switch part {
-		case "tool_arguments":
-			op.Arguments = descriptor
-		case "tool_result":
-			op.Result = descriptor
-		default:
-			return op, nativetool.ErrInvalid
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return op, err
-	}
+
 	return op, nil
 }
 func loadNativeApproval(ctx context.Context, tx *sql.Tx, id nativetool.ID) (nativetool.Approval, error) {

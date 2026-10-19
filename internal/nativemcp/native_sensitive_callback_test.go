@@ -3,6 +3,7 @@ package nativemcp
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -141,64 +142,102 @@ func TestNativeSensitiveCallbackPersistsOnlyMACAndNeverReplays(t *testing.T) {
 
 func assertNoSensitiveRows(t *testing.T, f *nativeFixture, sentinels []string) {
 	t.Helper()
-	tables, err := f.db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err := f.content.flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Inspect decoded optional bodies as well as scalar rows; compression must
+	// not hide a retained sensitive sentinel from this privacy assertion.
+	rows, err := f.contentDB.Query(`SELECT operation_id,part FROM native_tool_contents`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for tables.Next() {
-		var name string
-		if err = tables.Scan(&name); err != nil {
+	type contentKey struct {
+		id   nativetool.ID
+		part nativetool.ContentPart
+	}
+	var keys []contentKey
+	for rows.Next() {
+		var key contentKey
+		if err := rows.Scan(&key.id, &key.part); err != nil {
 			t.Fatal(err)
 		}
-		names = append(names, name)
+		keys = append(keys, key)
 	}
-	tables.Close()
-	for _, name := range names {
-		rows, err := f.db.Query(`SELECT * FROM "` + name + `"`)
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	for _, key := range keys {
+		v, err := f.content.store.GetNativeContent(context.Background(), key.id, key.part)
 		if err != nil {
 			t.Fatal(err)
 		}
-		columns, _ := rows.Columns()
-		values := make([]any, len(columns))
-		destinations := make([]any, len(columns))
-		for index := range values {
-			destinations[index] = &values[index]
+		for _, sentinel := range sentinels {
+			if strings.Contains(string(v.Body), sentinel) {
+				t.Fatalf("sensitive sentinel retained in optional %s", key.part)
+			}
 		}
-		for rows.Next() {
-			if err = rows.Scan(destinations...); err != nil {
+	}
+	for _, database := range []*sql.DB{f.db, f.contentDB} {
+		tables, err := database.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for tables.Next() {
+			var name string
+			if err = tables.Scan(&name); err != nil {
 				t.Fatal(err)
 			}
-			for _, value := range values {
-				var bytes []byte
-				switch v := value.(type) {
-				case string:
-					bytes = []byte(v)
-				case []byte:
-					bytes = v
-				default:
-					continue
+			names = append(names, name)
+		}
+		tables.Close()
+		for _, name := range names {
+			rows, err := database.Query(`SELECT * FROM "` + name + `"`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			columns, _ := rows.Columns()
+			values := make([]any, len(columns))
+			destinations := make([]any, len(columns))
+			for index := range values {
+				destinations[index] = &values[index]
+			}
+			for rows.Next() {
+				if err = rows.Scan(destinations...); err != nil {
+					t.Fatal(err)
 				}
-				for _, sentinel := range sentinels {
-					digest := sha256.Sum256([]byte(sentinel))
-					if strings.Contains(string(bytes), sentinel) || string(bytes) == string(digest[:]) || strings.Contains(string(bytes), hex.EncodeToString(digest[:])) {
-						t.Fatalf("sensitive sentinel/digest retained in %s", name)
+				for _, value := range values {
+					var bytes []byte
+					switch v := value.(type) {
+					case string:
+						bytes = []byte(v)
+					case []byte:
+						bytes = v
+					default:
+						continue
+					}
+					for _, sentinel := range sentinels {
+						digest := sha256.Sum256([]byte(sentinel))
+						if strings.Contains(string(bytes), sentinel) || string(bytes) == string(digest[:]) || strings.Contains(string(bytes), hex.EncodeToString(digest[:])) {
+							t.Fatalf("sensitive sentinel/digest retained in %s", name)
+						}
 					}
 				}
 			}
+			if err = rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			rows.Close()
 		}
-		if err = rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		rows.Close()
 	}
-	page, err := f.store.NativeToolRepository().Page(context.Background(), nativetool.PageRequest{Capture: f.capture, Limit: 200})
+	page, err := f.content.store.PageNativeInspection(context.Background(), nativetool.InspectionIndexRequest{Capture: f.capture, Limit: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, op := range page.Items {
-		if op.Kind == nativetool.RequestServerReply && (op.Arguments != nil || op.Result != nil) {
-			t.Fatal("callback content descriptor exposed")
+	for _, entry := range page.Items {
+		if entry.Identity.Kind == nativetool.RequestServerReply {
+			t.Fatal("callback content exposed")
 		}
 	}
 }

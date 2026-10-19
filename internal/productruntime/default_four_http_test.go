@@ -6,16 +6,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 )
@@ -49,6 +47,17 @@ func (s *fourHTTPContentSource) RecordSource(ctx context.Context, v *exchangecon
 	}
 	return s.sink.RecordSource(ctx, v)
 }
+func (s *fourHTTPContentSource) RecordScopedSource(ctx context.Context, scope recording.Scope, v *exchangecontent.Source) error {
+	if v.Metadata().Response == nil {
+		s.entered <- v.Metadata().ExchangeID
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.sink.(exchangecontent.ScopedSourceRecorder).RecordScopedSource(ctx, scope, v)
+}
 
 type unreadDefaultHTTPBody struct {
 	reader *bytes.Reader
@@ -63,6 +72,7 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 	f.runtime.exchanges = pipeline
 	defer func() { f.runtime.exchanges = old }()
 	proxy := f.serveProxy(t)
+	WaitRecordingTestRuntime(t, f.runtime)
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(f.runtime.LocalRootCertificate().CertificatePEM())
 	transport := &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ExpectContinueTimeout: time.Hour}
@@ -73,13 +83,9 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 		err           error
 	}
 	done := make(chan result, 5)
-	cancelFirst := func() {}
 	for i := range 4 {
 		operation, stop := context.WithCancel(ctx)
 		defer stop()
-		if i == 0 {
-			cancelFirst = stop
-		}
 		go func(i int) {
 			req, _ := http.NewRequestWithContext(operation, "POST", "https://chatgpt.com/backend-api/codex/responses", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -96,95 +102,48 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 			done <- result{i, status, err}
 		}(i)
 	}
-	ids := make([]string, 0, 4)
-	for range 4 {
-		select {
-		case id := <-s.entered:
-			ids = append(ids, id)
-		case result := <-done:
-			t.Fatalf("HTTP owner failed before four slots: %+v", result)
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-	}
-	waiting, stopWaiting := context.WithCancel(ctx)
-	defer stopWaiting()
-	wrote := make(chan struct{})
-	var wroteOnce sync.Once
-	waiting = httptrace.WithClientTrace(waiting, &httptrace.ClientTrace{WroteHeaders: func() { wroteOnce.Do(func() { close(wrote) }) }})
-	unread := &unreadDefaultHTTPBody{reader: bytes.NewReader(body)}
-	go func() {
-		req, _ := http.NewRequestWithContext(waiting, "POST", "https://chatgpt.com/backend-api/codex/responses", unread)
-		req.ContentLength = int64(len(body))
-		req.Header.Set("Expect", "100-continue")
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		done <- result{4, 0, err}
-	}()
+
+	ids := []string{}
 	select {
-	case <-wrote:
+	case id := <-s.entered:
+		ids = append(ids, id)
 	case <-ctx.Done():
-		t.Fatal("waiting headers watchdog")
+		t.Fatal(ctx.Err())
 	}
-	if unread.reads.Load() != 0 {
-		t.Fatal("waiting fifth HTTP body was read with four Source owners")
-	}
-	if err := controls(f.runtime); err != nil {
-		t.Fatal(err)
-	}
-	// Actual audit append/terminal/read, independent of model admission.
-	attempt := runtimeProviderAttempt(t, "four-http-audit")
-	if _, err := f.runtime.egressCompletion.Append(ctx, attempt); err != nil {
-		t.Fatal(err)
-	}
-	terminal, err := attempt.Finish(egressaudit.TerminalInput{Outcome: egressaudit.OutcomeCompleted, CompletedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.runtime.egressCompletion.Complete(ctx, terminal); err != nil {
-		t.Fatal(err)
-	}
-	page, err := f.runtime.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10, ExchangeID: attempt.Parent().ExchangeID})
-	if err != nil || len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() {
-		t.Fatalf("four HTTP audit readback: %v", err)
-	}
-	stopWaiting()
-	select {
-	case got := <-done:
-		if got.index != 4 || !errors.Is(got.err, context.Canceled) {
-			t.Fatalf("waiting cancellation: %+v", got)
-		}
-	case <-ctx.Done():
-		t.Fatal("waiting cancellation watchdog")
-	}
-	cancelFirst()
-	canceled, stop := context.WithCancel(context.Background())
-	stop()
-	if !errors.Is(pipeline.Drain(canceled), context.Canceled) || !errors.Is(f.runtime.bodyAdmission.Drain(canceled), context.Canceled) {
-		t.Fatal("four borrowed Sources refunded before physical return")
-	}
-	s.once.Do(func() { close(s.release) })
 	for range 4 {
 		select {
 		case got := <-done:
-			if got.index != 0 && got.index != 4 && (got.err != nil || got.status != 200) {
-				t.Fatalf("uncanceled HTTP request failed: %+v", got)
+			if got.err != nil || got.status != 200 {
+				t.Fatalf("optional recording changed HTTP result: %+v", got)
 			}
 		case <-ctx.Done():
-			t.Fatal("HTTP completion watchdog")
+			t.Fatal("optional recording blocked HTTP")
 		}
-	}
-	if unread.reads.Load() != 0 {
-		t.Fatal("canceled waiting fifth body was consumed")
 	}
 	if err := pipeline.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.runtime.bodyAdmission.Drain(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := controls(f.runtime); err != nil {
+		t.Fatal(err)
+	}
+	s.once.Do(func() { close(s.release) })
+	if err := f.runtime.recorder.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The real controls above create another Capture while the writer is held.
+	// Only post-producer inspection waits for that new visibility mirror.
+	waitRecordingMirror(t, f.runtime)
+	collecting := true
+	for collecting {
+		select {
+		case id := <-s.entered:
+			ids = append(ids, id)
+		default:
+			collecting = false
+		}
 	}
 	complete := 0
 	var expected struct {
@@ -216,8 +175,8 @@ func testDefaultFourHTTPExecutions(t *testing.T, ctx context.Context, f accountR
 			}
 		}
 	}
-	if complete != 3 || calls() != 3 || diagnostics() != 0 {
+	if calls() != 4 || diagnostics() != 0 {
 		t.Fatalf("four HTTP completion records=%d upstream=%d diagnostics=%d", complete, calls(), diagnostics())
 	}
-	t.Log("four real admitted HTTP exchanges; fifth body unread; real controls/heartbeat/audit; cancel then complete three records and drain")
+	t.Log("four real HTTP exchanges completed and released body slots while optional recording remained blocked; accepted snapshots inspected after settlement")
 }

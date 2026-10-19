@@ -3,6 +3,7 @@ package nativemcp
 import (
 	"context"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,13 +50,14 @@ func TestNativeLargeResultTwoMiB(t *testing.T) {
 				if terminal.Outcome != OutcomeCompleted {
 					t.Fatalf("large result %+v", terminal)
 				}
-				op, err := f.store.NativeToolRepository().Get(context.Background(), c.id)
-				if err != nil || op.Result == nil || op.Arguments == nil {
-					t.Fatalf("deferred descriptor %+v %v", op, err)
+				for _, part := range []string{"tool_arguments", "tool_result"} {
+					if _, err := f.readNativeContent(context.Background(), f.capture, c.id, part, 0, 128<<10); err != nil {
+						t.Fatalf("retained %s missing: %v", part, err)
+					}
 				}
 				read := 0
 				for {
-					page, err := f.store.NativeToolRepository().ReadContent(context.Background(), f.capture, c.id, "tool_result", read, 128<<10)
+					page, err := f.readNativeContent(context.Background(), f.capture, c.id, "tool_result", read, 128<<10)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -100,6 +102,7 @@ func TestNativeKnownSensitivePayloadSuppression(t *testing.T) {
 			if err != nil || op.Arguments != nil || op.Result != nil {
 				t.Fatalf("sensitive body descriptor %+v %v", op, err)
 			}
+			f.requireNoContent(t, c.id, nativetool.ContentToolArguments, nativetool.ContentToolResult)
 			params := `{"_meta":{"private":"synthetic-meta-private"},"arguments":{"path":"a","proof":"synthetic-retention-private"},"name":"read_file"}`
 			group := fmt.Sprintf(`[{"Response":%q,"Ordinal":0,"Kind":"function","Source":"native","WireID":%q,"ItemSource":"","ItemID":"","Namespace":"","Name":"read_file","Arguments":{"path":"a","proof":"synthetic-retention-private"},"Input":""}]`, c.id.String(), c.id.String())
 			assertNoSensitiveRows(t, f, []string{"synthetic-retention-private", "synthetic-meta-private", "synthetic-envelope-private", "synthetic-original-login", exactRPC, params, group})
@@ -113,6 +116,53 @@ func TestNativeKnownSensitivePayloadSuppression(t *testing.T) {
 				session.mu.Unlock()
 			}
 			e.mu.Unlock()
+		})
+	}
+}
+
+func TestNativeSensitiveBindingAndPreviewSurviveRecordingLoss(t *testing.T) {
+	for _, mode := range []string{"unavailable", "saturated"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})
+			e := f.executor.(*executor)
+			e.dependencies.ContentProfiles = syntheticProfiles{argumentPaths: []string{"/proof"}}
+			f.handshake(t)
+			if mode == "unavailable" {
+				e.dependencies.ContentRecorder = nil
+			} else {
+				reservation, ok := f.content.budget.TryReserve(recording.Native, 64<<20)
+				if !ok {
+					t.Fatal("cannot saturate")
+				}
+				defer reservation.Release()
+			}
+			f.transport.handler = func(*http.Request, []byte) (*http.Response, error) {
+				return wireResponse(`{"jsonrpc":"2.0","id":3,"result":{"content":[]}}`, false), nil
+			}
+			call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a","proof":"required-sensitive-proof"}}}`, "synthetic-session")
+			done := make(chan Terminal, 1)
+			go func() { done <- e.Serve(context.Background(), call, httptest.NewRecorder()) }()
+			approval := waitNativeQuestion(t, f, call.id)
+			e.mu.Lock()
+			witnessFound := false
+			for _, session := range e.scopes[f.capture.Key()].sessions {
+				session.mu.Lock()
+				witnessFound = witnessFound || session.tools[call.id] != nil
+				session.mu.Unlock()
+			}
+			e.mu.Unlock()
+			if !witnessFound {
+				t.Error("recording loss skipped required sensitive binding")
+			}
+			if _, err := e.PendingPreview(context.Background(), f.capture, call.id, approval.BindingDigest); err == nil {
+				t.Error("recording loss exposed sensitive preview")
+			}
+			f.approve(t, call.id)
+			if terminal := <-done; terminal.Outcome != OutcomeCompleted {
+				t.Fatal(terminal)
+			}
+			f.requireNoContent(t, call.id, nativetool.ContentToolArguments, nativetool.ContentToolResult)
+			assertNoSensitiveRows(t, f, []string{"required-sensitive-proof"})
 		})
 	}
 }

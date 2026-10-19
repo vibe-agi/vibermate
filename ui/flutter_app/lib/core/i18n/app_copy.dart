@@ -68,6 +68,7 @@ final class AppCopy {
     'native.part.available': 'Result available',
     'native.part.expired': 'Content expired',
     'native.part.unavailable': 'Result unavailable',
+    'native.state.unknown': 'Status unknown',
     'native.state.received': 'Received',
     'native.state.validated': 'Validated',
     'native.state.awaiting_decision': 'Awaiting approval',
@@ -87,6 +88,7 @@ final class AppCopy {
     'native.truncated':
         'Parameters are shortened. Approval applies to the complete frozen request.',
     'native.action.tool_call': 'Call tool',
+    'native.action.ping_reply': 'Reply to the server’s connection check',
     'native.action.form_reply': 'Send the client’s form response',
     'native.action.url_reply': 'Send the client’s consent response',
     'native.action.verification_reply':
@@ -264,6 +266,9 @@ final class AppCopy {
         'This account no longer exists. Refresh the page and select another account.',
     'error.upstream_not_found':
         'This upstream service no longer exists. Refresh the page and select another service.',
+    'error.inspection_changed': 'Saved history changed. Refresh this view.',
+    'error.inspection_unavailable':
+        'Saved history is unavailable. Try refreshing this view.',
     'error.configuration_conflict':
         'The configuration changed before this edit was saved. Refresh the page and review your changes again.',
     'error.policy_review_stale':
@@ -309,6 +314,15 @@ final class AppCopy {
     'status.ready': 'Ready',
     'status.proxy_stopped': 'Proxy stopped',
     'status.recording_degraded': 'Recording incomplete',
+    'status.recording.starting': 'starting',
+    'status.recording.available': 'available',
+    'status.recording.degraded': 'incomplete or unavailable',
+    'status.recording.disabled': 'disabled',
+    'status.recording.evidence':
+        'Recording {state}. {dropped} dropped, {unconfirmed} writes unconfirmed in this Runtime session. Agent execution remains independent. Missing records do not mean no traffic.',
+    'capture.summary.authorization_observed':
+        'Recorded Capture authorization: first {first}, latest {last}. This does not establish request or model success.',
+    'capture.summary.unknown_time': 'unknown',
     'status.failure.storage':
         'Proxy stopped: {operation} · {reason} · first seen {at}. Check storage access and disk space, then restart the Runtime. Refreshing this page cannot recover the proxy.',
     'status.failure.recording':
@@ -831,16 +845,24 @@ final class AppCopy {
     'deletion.endpoint.consequence':
         'It stops being available for new routes. Past Exchanges keep naming '
         'where they went.',
+    'deletion.cleanup_pending':
+        'Deleted from view. Physical cleanup is pending.',
+    'deletion.counts_incomplete':
+        'Confirmed removals only; the total is incomplete.',
+    'deletion.approval_ownership_unknown':
+        'Some older approvals have unknown Capture ownership and are retained.',
+    'deletion.privacy_metadata_retained':
+        'Privacy and duplicate-action protection metadata is retained.',
     'deletion.capture.title': 'Delete this Capture?',
     'deletion.capture.consequence':
-        'Every Exchange, Turn, usage observation and Raw HTTP envelope recorded under it is '
-        'removed, and the bytes are released. This cannot be undone.',
+        'This Capture and its recorded data stop appearing. Physical cleanup continues separately. '
+        'Older approvals with unknown ownership may remain. Identifiers needed to prevent deleted '
+        'records from returning or actions from repeating may be retained indefinitely. This cannot be undone.',
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
-        'Every Capture, all usage statistics and recorded evidence are removed. Traffic policies, '
-        'upstream services and accounts are kept. Logical records go and queries stop '
-        'answering; this does not claim erasure from disk snapshots or '
-        'backups.',
+        'All Captures, usage statistics, approval questions and recorded evidence stop appearing. '
+        'Physical cleanup continues separately. Saved rules, traffic policies, upstream services and accounts remain. '
+        'Privacy and duplicate-action identifiers may be retained indefinitely; backups and disk snapshots are unaffected.',
     'common.back': 'Back',
     'common.loading': 'Loading…',
     'common.retry': 'Retry',
@@ -1212,7 +1234,7 @@ final class AppCopy {
     'exchange.raw.loading': 'Loading retained wire evidence…',
     'exchange.raw.empty': 'No raw HTTP evidence was retained.',
     'exchange.raw.writer_degraded':
-        'Raw capture is degraded; {count} records are waiting for durable storage. Restart the local runtime.',
+        'Raw recording is incomplete; {count} records are still owned by the writer. Missing records may have been dropped and cannot be recovered by restarting.',
     'exchange.raw.reveal': 'Reveal',
     'exchange.raw.hide': 'Hide revealed bytes',
     'exchange.raw.redacted_credentials': 'Credential values removed: {fields}',
@@ -1263,7 +1285,7 @@ final class AppCopy {
     'exchange.raw.body.decode.decoder_unavailable':
         'This Runtime did not provide a decoded view. Update the Runtime to read compressed bodies here, or inspect the original bytes in HTTP details.',
     'exchange.raw.recovery':
-        'A previous writer ended uncleanly; at most {ms} ms of the newest raw evidence may be absent.',
+        'A previous writer ended without confirmation. Its configured flush window was {ms} ms; the amount of missing evidence is unknown.',
     'exchange.raw.copy_transform_sample': 'Copy exact Turn to test sample',
     'exchange.raw.diagnostic.preview': 'Review redacted diagnostic',
     'exchange.raw.diagnostic.copy': 'Copy diagnostic',
@@ -2091,11 +2113,11 @@ final class AppCopy {
     'network.approval.confirm.detail':
         'Apply “{action}” to {target} at revision {revision}. The waiting requests resume or end as soon as the runtime accepts it.',
     'network.connections.title': 'Connection evidence',
-    'network.connections.latest': 'Latest state',
+    'network.connections.latest': 'Retained state',
     'network.connections.latest.detail':
-        'One current row per physical connection. Expand for routing evidence. Uninspected forwarding shows destinations and byte counts, not request content—even for cleartext HTTP.',
+        'One retained snapshot per connection. Expand for routing evidence. Uninspected forwarding shows destinations and byte counts, not request content—even for cleartext HTTP.',
     'network.connections.empty':
-        'ViberMate has not recorded a connection here. Direct traffic may not pass through this proxy.',
+        'No retained connection records are available in this view.',
     'network.connections.load_more': 'Load more connections',
     'network.connections.source': 'Source',
     'network.connections.destination': 'Destination',
@@ -2117,7 +2139,7 @@ final class AppCopy {
     'network.egress.detail':
         'Shows outbound attempts routed through ViberMate. A missing record does not prove the device made no direct connection. Transport byte counts include HTTP framing; they are not file sizes or file-path evidence.',
     'network.egress.empty':
-        'ViberMate has not recorded an outbound attempt here. This does not establish that the device made no direct connection.',
+        'No retained outbound attempts are available in this view.',
     'network.egress.load_more': 'Load more egress attempts',
     'network.egress.caller': 'Caller',
     'network.egress.target': 'Target',
@@ -2489,8 +2511,8 @@ final class AppCopy {
         'The selected data directory is unavailable. Reconnect its disk or restore the directory and retry. No empty database has been created.',
     'settings.storage.database': 'SQLite database',
     'settings.storage.refresh': 'Refresh storage snapshot',
-    'settings.storage.database_size': 'Database file',
-    'settings.storage.wal_size': 'Write-ahead log',
+    'settings.storage.database_size': 'Database files',
+    'settings.storage.wal_size': 'Write-ahead logs',
     'settings.storage.evidence_size': 'Evidence pages',
     'settings.storage.reusable_size': 'Reusable in SQLite',
     'settings.storage.unknown': 'Unavailable',
@@ -2503,18 +2525,26 @@ final class AppCopy {
     'settings.storage.capacity_unavailable':
         'The Runtime could not read free space for this volume. Database statistics are still shown.',
     'settings.storage.measurement_scope':
-        'Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
+        'File sizes include all Runtime databases and retained archives. Evidence pages are allocated SQLite pages, not decompressed body bytes. Reusable pages remain inside the database file for later writes; the file may not shrink.',
     'settings.storage.cleanup_empty':
         'No expired evidence is waiting for cleanup.',
     'settings.storage.cleanup_preview':
         '{exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries are past their retention deadlines.',
+    'settings.storage.cleanup_preview_partial':
+        'Known expired copies: {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries. Totals may be incomplete.',
     'settings.storage.cleanup_title': 'Clean expired evidence?',
     'settings.storage.cleanup_consequence':
-        'Only evidence past its own retention deadline is removed. Active and unexpired evidence, traffic policies, services and accounts remain. SQLite can reuse the pages, but the file may not shrink and this does not claim secure SSD erasure.',
+        'Expired records and their dependent audit history are removed. Unrelated unexpired evidence and configuration remain. Physical cleanup may stay pending, and privacy identifiers may be retained indefinitely. Backups and disk snapshots are unaffected.',
     'settings.storage.cleanup_action': 'Clean expired evidence',
     'settings.storage.cleanup_complete': 'Expired evidence was cleaned.',
+    'settings.storage.cleanup_pending':
+        'Cleanup was requested. Physical cleanup is pending.',
+    'settings.storage.cleanup_partial':
+        'Confirmed removals are reported; the total remains incomplete.',
     'settings.storage.archive_preview':
-        'Current snapshot: {captures} Captures, {exchanges} semantic Exchanges and {envelopes} Raw HTTP boundaries.',
+        'Stored copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes.',
+    'settings.storage.archive_preview_partial':
+        'Known copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes. Totals are incomplete.',
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
@@ -3136,6 +3166,7 @@ final class AppCopy {
     'native.part.available': '结果可读取',
     'native.part.expired': '内容已过期',
     'native.part.unavailable': '结果不可用',
+    'native.state.unknown': '状态未知',
     'native.state.received': '已接收',
     'native.state.validated': '已验证',
     'native.state.awaiting_decision': '等待审批',
@@ -3154,6 +3185,7 @@ final class AppCopy {
     'native.unavailable': '详情已不可用，请重新发起审批。',
     'native.truncated': '参数已缩短显示。审批适用于完整的已固定请求。',
     'native.action.tool_call': '调用工具',
+    'native.action.ping_reply': '回复服务器的连接检查',
     'native.action.form_reply': '发送客户端的表单回复',
     'native.action.url_reply': '发送客户端的授权回复',
     'native.action.verification_reply': '发送客户端的验证回复',
@@ -3294,6 +3326,8 @@ final class AppCopy {
     'error.account_credential_unavailable': '账号凭据暂不可用。请在「上游账号」中检查凭据状态后重试。',
     'error.account_not_found': '此账号已不存在。请刷新页面，重新选择账号。',
     'error.upstream_not_found': '此上游服务已不存在。请刷新页面，重新选择服务。',
+    'error.inspection_changed': '保留的历史记录已变化，请刷新此视图。',
+    'error.inspection_unavailable': '暂时无法读取保留的历史记录，请尝试刷新此视图。',
     'error.configuration_conflict': '配置已被其他操作更新，本次修改未保存。请刷新页面后重新检查修改内容。',
     'error.policy_review_stale': '本次策略检查已失效。请重新检查草稿，再发布策略。',
     'error.configuration_invalid': '设置未通过校验。请检查所选服务、账号和必填项后重试。',
@@ -3320,6 +3354,15 @@ final class AppCopy {
     'status.ready': '就绪',
     'status.proxy_stopped': '代理已停止',
     'status.recording_degraded': '记录不完整',
+    'status.recording.starting': '正在启动',
+    'status.recording.available': '可用',
+    'status.recording.degraded': '不完整或不可用',
+    'status.recording.disabled': '已停用',
+    'status.recording.evidence':
+        '记录{state}。本次运行已丢弃 {dropped} 条，{unconfirmed} 次写入未确认。Agent 执行独立进行；缺少记录不代表没有流量。',
+    'capture.summary.authorization_observed':
+        '已记录 Capture 授权：首次 {first}，最近 {last}。这不能证明请求或模型成功。',
+    'capture.summary.unknown_time': '未知',
     'status.failure.storage':
         '代理已停止：{operation} · {reason} · 首次发生于 {at}。请检查存储权限和磁盘空间，处理后重启 Runtime；刷新页面不能恢复代理。',
     'status.failure.recording':
@@ -3755,13 +3798,18 @@ final class AppCopy {
     'deletion.environment.consequence': '它将不再可用于新的运行。已记录的证据仍保留每轮实际使用的修订版本。',
     'deletion.endpoint.title': '删除这个上游服务？',
     'deletion.endpoint.consequence': '它将不再可用于新的路由。历史调用记录仍会保留实际去向。',
+    'deletion.cleanup_pending': '已从记录视图中移除，物理清理尚未完成。',
+    'deletion.counts_incomplete': '数量仅包含已确认移除的记录，总数尚不完整。',
+    'deletion.approval_ownership_unknown': '部分旧审批无法确认所属的运行记录，因此会保留。',
+    'deletion.privacy_metadata_retained': '用于隐私保护和防止重复执行的元数据会保留。',
     'deletion.capture.title': '删除这条运行记录？',
     'deletion.capture.consequence':
-        '其中的所有 Agent 调用、轮次、用量统计和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
+        '这条运行记录及其已记录的数据将不再显示，物理清理会继续进行。归属不明的旧审批可能保留。'
+        '为防止已删记录再次出现或操作重复执行，相关标识可能无限期保留。此操作不可撤销。',
     'deletion.archive.title': '清空证据存档？',
     'deletion.archive.consequence':
-        '所有运行记录、用量统计与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
-        '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
+        '所有运行记录、用量统计、审批请求和已记录证据将不再显示，物理清理会继续进行。'
+        '已保存的规则、流量策略、上游服务和账号会保留。隐私和防重复执行标识可能无限期保留；备份与磁盘快照不受影响。',
     'common.back': '返回',
     'common.loading': '正在加载…',
     'common.retry': '重试',
@@ -4085,7 +4133,8 @@ final class AppCopy {
     'exchange.raw.summary': '{count} 条边界消息',
     'exchange.raw.loading': '正在读取保留的原始证据…',
     'exchange.raw.empty': '没有保留原始 HTTP 证据。',
-    'exchange.raw.writer_degraded': '原始流量写入器已降级；{count} 条记录正在等待持久化。请重启本地运行时。',
+    'exchange.raw.writer_degraded':
+        '原始记录不完整；写入器仍持有 {count} 条记录。缺失记录可能已丢弃，重启无法补回。',
     'exchange.raw.reveal': '显示原文',
     'exchange.raw.hide': '隐藏原文',
     'exchange.raw.redacted_credentials': '已移除凭证值：{fields}',
@@ -4130,7 +4179,7 @@ final class AppCopy {
         '解压结果超过 4 MiB 阅读上限。仍可在 HTTP 技术详情中查看原始压缩字节。',
     'exchange.raw.body.decode.decoder_unavailable':
         '当前 Runtime 未提供解压视图，请更新 Runtime 后在此阅读正文；也可展开 HTTP 技术详情查看原始字节。',
-    'exchange.raw.recovery': '上次写入器未正常结束；最新原始证据最多可能缺失 {ms} 毫秒。',
+    'exchange.raw.recovery': '上次写入器未确认正常结束；配置的刷写窗口为 {ms} 毫秒，实际缺失范围未知。',
     'exchange.raw.copy_transform_sample': '复制本轮原始数据为测试样本',
     'exchange.raw.diagnostic.preview': '预览脱敏诊断',
     'exchange.raw.diagnostic.copy': '复制诊断',
@@ -4803,10 +4852,10 @@ final class AppCopy {
     'network.approval.confirm.detail':
         '在修订 {revision} 对 {target} 执行“{action}”。运行时接受后，等待中的请求会立即继续或终止。',
     'network.connections.title': '连接证据',
-    'network.connections.latest': '最新状态',
+    'network.connections.latest': '保留的状态',
     'network.connections.latest.detail':
-        '每条物理连接只显示当前一行；展开可检查路由证据。未检查内容的转发只能看到目的地和字节数，明文 HTTP 也可能如此。',
-    'network.connections.empty': 'ViberMate 尚未记录到连接；设备的直连流量可能不会经过此代理。',
+        '每个连接显示一条保留的状态记录；展开可检查路由证据。未检查内容的转发只能看到目的地和字节数，明文 HTTP 也可能如此。',
+    'network.connections.empty': '此视图中没有可用的保留连接记录。',
     'network.connections.load_more': '加载更多连接',
     'network.connections.source': '来源',
     'network.connections.destination': '目标',
@@ -4826,7 +4875,7 @@ final class AppCopy {
     'network.egress.title': '出站尝试',
     'network.egress.detail':
         '仅展示经过 ViberMate 的对外尝试。没有记录不代表设备没有直连。传输字节数包含 HTTP 封装，不是文件大小，也无法确定本地路径。',
-    'network.egress.empty': 'ViberMate 尚未记录到出站尝试；这不能证明设备没有其他直连。',
+    'network.egress.empty': '此视图中没有可用的保留出站尝试记录。',
     'network.egress.load_more': '加载更多出站尝试',
     'network.egress.caller': '调用方',
     'network.egress.target': '目标',
@@ -5165,17 +5214,23 @@ final class AppCopy {
         '所连接 Runtime 的可用空间已低于阈值。继续记录前，请释放空间、迁移 App 数据目录或扩容服务端卷。',
     'settings.storage.capacity_unavailable': 'Runtime 无法读取该卷的剩余空间；数据库统计仍可查看。',
     'settings.storage.measurement_scope':
-        '“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
+        '文件大小包含所有 Runtime 数据库及保留的归档。“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',
     'settings.storage.cleanup_empty': '目前没有超过保留期、等待清理的证据。',
     'settings.storage.cleanup_preview':
         '已有 {exchanges} 条语义调用和 {envelopes} 条 Raw HTTP 边界超过保留期。',
+    'settings.storage.cleanup_preview_partial':
+        '已知过期副本：{exchanges} 条语义 Exchange 和 {envelopes} 条 Raw HTTP 边界记录。总数可能不完整。',
     'settings.storage.cleanup_title': '清理过期证据？',
     'settings.storage.cleanup_consequence':
-        '只移除已经超过各自保留期的证据。运行中和未过期的证据、流量策略、服务与账号都会保留。SQLite 可复用释放的页面，但文件未必缩小；此操作不声称对 SSD 安全擦除。',
+        '过期记录及其关联的审计历史会被移除；无关的未过期证据和配置会保留。物理清理可能尚未完成，隐私保护标识可能无限期保留。备份和磁盘快照不受影响。',
     'settings.storage.cleanup_action': '清理过期证据',
     'settings.storage.cleanup_complete': '过期证据已清理。',
+    'settings.storage.cleanup_pending': '已请求清理，物理清理尚未完成。',
+    'settings.storage.cleanup_partial': '已报告确认移除的记录，总数仍不完整。',
     'settings.storage.archive_preview':
-        '当前快照：{captures} 条运行记录、{exchanges} 条语义调用、{envelopes} 条 Raw HTTP 边界。',
+        '已存储的副本：{captures} 条运行记录、{exchanges} 条语义记录、{envelopes} 个 Raw HTTP 信封。',
+    'settings.storage.archive_preview_partial':
+        '已知副本：{captures} 条运行记录、{exchanges} 条语义记录、{envelopes} 个 Raw HTTP 信封，总数尚不完整。',
     'settings.storage.location_failed': '无法读取存储位置。请检查 Runtime 连接后重试。',
     'settings.storage.move_hint':
         '请先停止运行中的 Capture，再使用这里的可验证操作进行迁移、备份或恢复。不要单独复制正在使用的 runtime.db；备份会有意排除服务商凭据、钥匙串项目和外部 TLS 文件。',

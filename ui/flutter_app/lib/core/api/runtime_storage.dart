@@ -15,6 +15,7 @@ final class RuntimeStorageLocation {
     required this.lowSpaceThresholdBytes,
     required this.capacityState,
     required this.cleanupPreview,
+    this.lastCleanup,
   });
 
   factory RuntimeStorageLocation.fromJson(Object? json) {
@@ -38,6 +39,7 @@ final class RuntimeStorageLocation {
         'capacityState',
         'cleanupPreview',
       },
+      optional: const {'lastCleanup'},
     );
     final directory = requireString(value, 'dataDirectory', path);
     final database = requireString(value, 'databasePath', path);
@@ -78,6 +80,9 @@ final class RuntimeStorageLocation {
       filesystemAvailableBytes: available,
       lowSpaceThresholdBytes: threshold,
       capacityState: capacityState,
+      lastCleanup: value.containsKey('lastCleanup')
+          ? DeletionReleased.fromJson(value['lastCleanup'], '$path.lastCleanup')
+          : null,
       cleanupPreview: DeletionReleased.fromJson(
         value['cleanupPreview'],
         '$path.cleanupPreview',
@@ -97,6 +102,7 @@ final class RuntimeStorageLocation {
   final int lowSpaceThresholdBytes;
   final String capacityState;
   final DeletionReleased cleanupPreview;
+  final DeletionReleased? lastCleanup;
 
   int get fileBytes => databaseBytes + walBytes + sharedMemoryBytes;
 }

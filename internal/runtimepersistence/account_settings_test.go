@@ -18,7 +18,14 @@ import (
 func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "runtime.db")
-	store := openTestStore(t, path)
+	open := func() *Store {
+		control, err := OpenControl(ctx, ControlOptions{DatabasePath: path, LayoutID: "account-settings", BusyTimeout: DefaultBusyTimeout, CommitReconcileTimeout: DefaultCommitReconcileTimeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return control.store
+	}
+	store := open()
 	ref, _ := secretstore.ParseReference("secret://provider-account/settings")
 	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
 	now := time.Unix(1786200000, 0).UTC()
@@ -48,7 +55,7 @@ func TestAccountSettingsPersistExplicitConsentInOneRecord(t *testing.T) {
 		if err := store.Shutdown(ctx); err != nil {
 			t.Fatal(err)
 		}
-		store = openTestStore(t, path)
+		store = open()
 		loaded, exists, err = store.ProviderAccountRepository().Load(ctx, account.ID)
 		if err != nil || !exists || loaded != account {
 			t.Fatalf("restart changed %s settings: %+v %v", preference.WireValue(), loaded, err)

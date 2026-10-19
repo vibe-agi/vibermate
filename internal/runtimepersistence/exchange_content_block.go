@@ -633,7 +633,7 @@ func purgeUnreferencedContentBlocks(
 // rebuilt and re-canonicalized against the digest it was stored under.
 func loadStoredMessagesByDigest(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digests []string,
 ) (map[string]exchangecontent.Message, error) {
 	if len(digests) == 0 {
@@ -725,7 +725,7 @@ func loadStoredMessagesByDigest(
 
 func loadStoredBlocksByDigest(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digests []string,
 ) (map[string]exchangecontent.Block, error) {
 	blocks := make(map[string]exchangecontent.Block, len(digests))

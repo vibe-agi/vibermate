@@ -133,7 +133,7 @@ An Account's independently revisioned egress, automatic-refresh, and cyber acces
 _Avoid_: Account Link, credential epoch, Capture override
 
 **Account Cyber Access Mode**:
-The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account. Standard is the default. The selected Account determines the request mode independently of the client's login or preference. Blue and Red require explicit upstream permission for the request model; unknown or incompatible permissions prevent the request rather than selecting another mode. Native Codex Guardian reviewer/classifier requests derive Blue from either Daybreak mode, with the same account and exact model permission check.
+The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account, with Standard as the default; the selected Account determines the request preference independently of the client's login or preference. For the final exact model, Blue or Red is used when explicitly advertised, otherwise Standard is used only when that same model explicitly advertises it; unknown or incompatible capabilities and failed discovery reject the request, while native Codex Guardian reviewer/classifier requests derive a Blue preference from either Daybreak mode under the same Account and exact-model rule.
 _Avoid_: Cyber account flag, entitlement grant, security level slider
 
 **Account Automatic Refresh**:
@@ -265,6 +265,14 @@ _Avoid_: Conversation, request
 **Exchange**:
 One captured client request and its terminal downstream outcome, together with routing and evidence. An Exchange is the evidence boundary from which a Turn is presented.
 _Avoid_: Conversation, Session
+
+**Execution State**:
+The facts required to authorize and correctly continue an Agent's work: configuration, Capture authority, one-use execution claims, and protocol delivery or replay state. Missing observation records neither grant nor withdraw execution authority.
+_Avoid_: Request log, retained payload copy, usage report
+
+**Observation Record**:
+A best-effort retained copy of authorized Agent activity, such as connection history, request or response evidence, conversation display, and usage. It may be incomplete or absent without changing the Agent's authorized execution or delivered result. An observation record is never execution authority or the actual bytes being delivered.
+_Avoid_: Send permission, execution receipt, delivery buffer
 
 **Native Tool Operation**:
 One native tool-protocol request with its own frozen Capture, Environment, original-client authority, decision and outcome. It is not a model Exchange; receiving its result after reconnection does not create a second execution.

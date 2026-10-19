@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -453,6 +454,7 @@ func (evidence ClientOperationEvidence) validate() error {
 
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
+	observationStamp   recording.Stamp
 	bodyLease          *BodyLease
 	admitted           *protocolcore.Request
 	admittedReport     protocolcore.TranslationReport
@@ -485,20 +487,22 @@ const (
 	clientRequestOptionOriginalHeaders  clientRequestOptionKind = 5
 	clientRequestOptionProtocolEvidence clientRequestOptionKind = 6
 	clientRequestOptionBodyLease        clientRequestOptionKind = 7
+	clientRequestOptionObservationStamp clientRequestOptionKind = 8
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
 // ingress adapter cannot create an unvalidated option shape.
 type ClientRequestOption struct {
-	bodyLease       *BodyLease
-	kind            clientRequestOptionKind
-	clientHello     transportprofile.Observation
-	admission       captureadmission.Admission
-	connectionRef   string
-	anthropicBeta   string
-	clientUserAgent string
-	clientEvidence  []protocolcore.ProtocolEvidenceValue
-	originalHeaders http.Header
+	observationStamp recording.Stamp
+	bodyLease        *BodyLease
+	kind             clientRequestOptionKind
+	clientHello      transportprofile.Observation
+	admission        captureadmission.Admission
+	connectionRef    string
+	anthropicBeta    string
+	clientUserAgent  string
+	clientEvidence   []protocolcore.ProtocolEvidenceValue
+	originalHeaders  http.Header
 }
 
 func WithBodyLease(lease *BodyLease) ClientRequestOption {
@@ -630,6 +634,8 @@ func NewClientRequest(
 	}
 	for _, option := range options {
 		switch option.kind {
+		case clientRequestOptionObservationStamp:
+			request.observationStamp = option.observationStamp
 		case clientRequestOptionBodyLease:
 		case clientRequestOptionClientHello:
 			if request.hasClientHello {
@@ -1145,6 +1151,9 @@ type AccountLeaseAuthority interface {
 }
 
 type AttemptObservation struct {
+	EnvironmentName        string
+	AccountName            string
+	ObservationStamp       recording.Stamp
 	ProviderErrorCode      string
 	StartedAt              time.Time
 	OccurredAt             time.Time
@@ -1175,12 +1184,13 @@ type AttemptObservation struct {
 	ClientPath             string
 	Presentation           providertransport.WirePresentationEvidence
 	Transport              transportprofile.Evidence
-	Conversation           agentconversation.Ref
+	Conversation           agentconversation.ProjectionFacts
 	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 	ProviderResponseID     string
 }
 
 type StartObservation struct {
+	ObservationStamp       recording.Stamp
 	ExchangeID             string
 	EnvironmentID          environment.EnvironmentID
 	EnvironmentRevision    environment.Revision
@@ -1194,7 +1204,7 @@ type StartObservation struct {
 	Admission              captureadmission.Admission
 	HasAdmission           bool
 	ConnectionID           string
-	Conversation           agentconversation.Ref
+	Conversation           agentconversation.ProjectionFacts
 	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 }
 
@@ -1207,6 +1217,7 @@ type ExchangeObserver interface {
 // Exchange. It is independent from AttemptObservation so body-free audit
 // consumers cannot accidentally gain access to messages or tool arguments.
 type ContentObservation struct {
+	ObservationStamp     recording.Stamp
 	ExchangeID           string
 	CaptureRunID         string
 	ManualCaptureID      string
@@ -1261,6 +1272,7 @@ func (decision ToolDecision) validate() error {
 // ToolDecisionRequest is an immutable complete decision group. Parallel tool
 // calls from one provider terminal are never split into independent decisions.
 type ToolDecisionRequest struct {
+	originalScope       recording.Scope
 	nativeOperation     nativetool.ID
 	nativeBinding       *nativetool.Binding
 	nativeContext       ToolDecisionContext
@@ -1407,6 +1419,17 @@ func NewToolDecisionRequest(
 		intents: cloneToolIntents(intents),
 	}, nil
 }
+
+// WithOriginalScope carries already-frozen required admission facts. It does
+// not inspect optional recording availability, reservations, or token liveness.
+func (request ToolDecisionRequest) WithOriginalScope(scope recording.Scope) (ToolDecisionRequest, error) {
+	if request.nativeOperation != "" || request.exchangeID == "" || scope.Validate() != nil {
+		return ToolDecisionRequest{}, errors.New("invalid original tool approval scope")
+	}
+	request.originalScope = scope
+	return request, nil
+}
+func (request ToolDecisionRequest) OriginalScope() recording.Scope { return request.originalScope }
 
 func (request ToolDecisionRequest) ExchangeID() string {
 	return request.exchangeID
@@ -1601,6 +1624,7 @@ const (
 // Result is evidence for one logical Exchange and its provider attempts. It
 // does not expose the Environment plan handle or provider response body.
 type Result struct {
+	AccountName          string
 	ExchangeID           string
 	EnvironmentID        string
 	EnvironmentRevision  environment.Revision
@@ -1651,4 +1675,8 @@ func validateIdentity(label, value string) error {
 
 func cloneStrings(values []string) []string {
 	return slices.Clone(values)
+}
+
+func WithObservationStamp(s recording.Stamp) ClientRequestOption {
+	return ClientRequestOption{kind: clientRequestOptionObservationStamp, observationStamp: s}
 }

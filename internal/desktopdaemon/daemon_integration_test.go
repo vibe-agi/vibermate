@@ -149,8 +149,23 @@ func TestDaemonPublishesBootstrapThenParentEOFReleasesGeneration(t *testing.T) {
 		t.Fatalf("bootstrap progress = %+v: %v", progress, err)
 	}
 	var descriptor desktopbootstrap.Descriptor
-	if err := decoder.Decode(&descriptor); err != nil {
-		t.Fatal(err)
+	for {
+		var frame json.RawMessage
+		if err := decoder.Decode(&frame); err != nil {
+			t.Fatal(err)
+		}
+		var candidate desktopbootstrap.Descriptor
+		if err := json.Unmarshal(frame, &candidate); err == nil && candidate.Schema == desktopbootstrap.DescriptorSchema {
+			descriptor = candidate
+			break
+		}
+		var preparation desktopbootstrap.Progress
+		if err := json.Unmarshal(frame, &preparation); err != nil {
+			t.Fatal(err)
+		}
+		if err := preparation.Validate(); err != nil {
+			t.Fatalf("unexpected bootstrap frame = %s: %v", frame, err)
+		}
 	}
 	if descriptor.Schema != desktopbootstrap.DescriptorSchema ||
 		descriptor.BaseURL == "" ||

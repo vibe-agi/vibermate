@@ -427,6 +427,11 @@ CREATE TABLE proxy_client_bindings(
   CHECK(updated_at_unix_ms >= created_at_unix_ms)
 ) STRICT;
 CREATE TABLE "runtime_activities"(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
+ workspace_id TEXT NOT NULL DEFAULT '',
+ workspace_label TEXT NOT NULL DEFAULT '',
+ capture_label TEXT NOT NULL DEFAULT '',
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   activity_id TEXT NOT NULL UNIQUE
   CHECK(length(CAST(activity_id AS BLOB)) BETWEEN 1 AND 512),
@@ -544,6 +549,10 @@ CREATE TABLE "runtime_activities"(
 ) STRICT;
 CREATE TABLE "runtime_connection_events"(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('', 'managed_run', 'manual_capture')),
+  recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB)) <= 128),
+  recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch >= 0),
+  recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation >= 0),
   connection_id TEXT NOT NULL
   CHECK(length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 512),
   ingress_id TEXT NOT NULL DEFAULT ''
@@ -612,6 +621,10 @@ CREATE TABLE "runtime_connection_events"(
   , inspection_purpose TEXT NOT NULL DEFAULT '' CHECK(inspection_purpose IN('', 'client_tools'))) STRICT;
 CREATE TABLE runtime_egress_attempts(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('', 'managed_run', 'manual_capture')),
+  recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB)) <= 128),
+  recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch >= 0),
+  recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation >= 0),
   attempt_id TEXT NOT NULL UNIQUE
   CHECK(length(CAST(attempt_id AS BLOB)) BETWEEN 1 AND 512),
   connection_id TEXT NOT NULL DEFAULT ''
@@ -751,6 +764,10 @@ AFTER UPDATE OF chunk_manifest ON runtime_evidence_bodies BEGIN
   ) WHERE true ON CONFLICT DO NOTHING;
 END;
 CREATE TABLE "runtime_exchange_agent_identities"(
+ recording_scope_kind TEXT NOT NULL DEFAULT '' CHECK(recording_scope_kind IN('','managed_run','manual_capture')),
+ recording_scope_id TEXT NOT NULL DEFAULT '' CHECK(length(CAST(recording_scope_id AS BLOB))<=128),
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   client_kind TEXT NOT NULL CHECK(client_kind IN('claude', 'codex')),
@@ -836,6 +853,8 @@ CREATE TABLE runtime_exchange_content_transcripts(
   depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 100001)
 ) STRICT;
 CREATE TABLE runtime_exchange_contents(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
   scope_kind TEXT NOT NULL DEFAULT ''
@@ -875,6 +894,8 @@ CREATE TABLE runtime_exchange_contents(
   (base_transcript_digest IS NOT NULL AND inherited_message_count > 0))
 ) STRICT;
 CREATE TABLE runtime_raw_evidence_envelopes(
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 0 CHECK(recording_archive_epoch>=0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   envelope_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
   writer_id TEXT NOT NULL
@@ -1319,6 +1340,11 @@ CREATE TABLE runtime_usage_retention_caps(
   after_sequence INTEGER NOT NULL DEFAULT 0 CHECK(after_sequence>=0 AND after_sequence<through_sequence)
 ) STRICT;
 CREATE TABLE runtime_usage_observations(
+ policy_revision INTEGER NOT NULL DEFAULT 1 CHECK(policy_revision>0),
+ recording_scope_kind TEXT NOT NULL DEFAULT '',
+ recording_scope_id TEXT NOT NULL DEFAULT '',
+ recording_archive_epoch INTEGER NOT NULL DEFAULT 1 CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL DEFAULT 0 CHECK(recording_capture_generation>=0),
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   exchange_id TEXT NOT NULL UNIQUE,
   capture_run_id TEXT NOT NULL, manual_capture_id TEXT NOT NULL,
@@ -1450,6 +1476,11 @@ CREATE TABLE native_tool_operations(
   recording TEXT NOT NULL  CHECK(recording IN('off','metadata_only','full')),
   retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
   created_at_unix_ms INTEGER NOT NULL,
+  recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+  recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>0),
+  last_event_kind TEXT NOT NULL,
+  last_event_at_unix_ms INTEGER NOT NULL CHECK(last_event_at_unix_ms >= created_at_unix_ms),
+  maximum_event_at_unix_ms INTEGER NOT NULL CHECK(maximum_event_at_unix_ms >= last_event_at_unix_ms),
   metadata_expires_at_unix_ms INTEGER NOT NULL CHECK(metadata_expires_at_unix_ms > created_at_unix_ms),
   completed_at_unix_ms INTEGER,
   bytes_in INTEGER CHECK(bytes_in IS NULL OR bytes_in >= 0),
@@ -1575,7 +1606,7 @@ ON native_tool_approvals(idempotency_key) WHERE idempotency_key <> '';
 CREATE INDEX native_tool_sessions_scope_state ON native_tool_sessions(capture_kind,capture_id,state);
 CREATE INDEX native_tool_operations_scope_created ON native_tool_operations(capture_kind,capture_id,created_at_unix_ms,operation_id);
 CREATE INDEX native_tool_operations_expiry ON native_tool_operations(metadata_expires_at_unix_ms);
-CREATE INDEX native_tool_approvals_state_created ON native_tool_approvals(state,created_at_unix_ms);
+CREATE INDEX native_tool_approvals_state_created ON native_tool_approvals(state,created_at_unix_ms,approval_id);
 CREATE INDEX native_tool_events_operation_sequence ON native_tool_events(operation_id,sequence);
 CREATE INDEX native_tool_contents_expiry ON native_tool_contents(expires_at_unix_ms);
 CREATE INDEX native_tool_contents_body ON native_tool_contents(body_digest);
@@ -1630,3 +1661,91 @@ CREATE TABLE runtime_egress_default(
          AND egress_revision IS NOT NULL AND egress_revision BETWEEN 1 AND 9223372036854775807))
 ) STRICT;
 INSERT INTO runtime_egress_default(singleton,revision) VALUES(1,1);
+
+CREATE INDEX runtime_connections_recording_scope ON runtime_connection_events(recording_scope_kind, recording_scope_id);
+CREATE INDEX runtime_egress_recording_scope ON runtime_egress_attempts(recording_scope_kind, recording_scope_id);
+
+CREATE TABLE native_tool_deliveries(
+ attempt_id TEXT NOT NULL PRIMARY KEY CHECK(length(CAST(attempt_id AS BLOB)) BETWEEN 1 AND 512),
+ operation_id TEXT NOT NULL UNIQUE REFERENCES native_tool_operations(operation_id) ON DELETE CASCADE,
+ connection_id TEXT NOT NULL CHECK(length(CAST(connection_id AS BLOB)) BETWEEN 1 AND 512),
+ payload_class TEXT NOT NULL CHECK(payload_class IN('none','client_data')),
+ target_origin TEXT NOT NULL CHECK(length(CAST(target_origin AS BLOB)) BETWEEN 1 AND 1024),
+ policy_id TEXT NOT NULL CHECK(length(CAST(policy_id AS BLOB)) BETWEEN 1 AND 128),
+ policy_revision INTEGER NOT NULL CHECK(policy_revision>0),
+ rule_id TEXT NOT NULL CHECK(length(CAST(rule_id AS BLOB)) BETWEEN 1 AND 512),
+ proxy_id TEXT NOT NULL CHECK(length(CAST(proxy_id AS BLOB)) BETWEEN 1 AND 512),
+ proxy_revision INTEGER NOT NULL CHECK(proxy_revision>0),
+ selection_source TEXT NOT NULL CHECK(selection_source IN('flow','global','builtin')),
+ default_revision INTEGER NOT NULL CHECK((selection_source='flow' AND default_revision=0) OR (selection_source IN('global','builtin') AND default_revision>0)),
+ started_at_unix_ms INTEGER NOT NULL CHECK(started_at_unix_ms>0),
+ completed_at_unix_ms INTEGER CHECK(completed_at_unix_ms>=started_at_unix_ms),
+ outcome TEXT NOT NULL DEFAULT '' CHECK(outcome IN('','completed','failed','canceled')),
+ error_class TEXT NOT NULL DEFAULT '' CHECK(length(CAST(error_class AS BLOB))<=512),
+ bytes_out INTEGER NOT NULL DEFAULT 0 CHECK(bytes_out>=0),
+ bytes_in INTEGER NOT NULL DEFAULT 0 CHECK(bytes_in>=0),
+ byte_counts_known INTEGER NOT NULL DEFAULT 1 CHECK(byte_counts_known IN(0,1)),
+ CHECK((completed_at_unix_ms IS NULL)=(outcome='')),
+ CHECK(completed_at_unix_ms IS NOT NULL OR (error_class='' AND bytes_out=0 AND bytes_in=0 AND byte_counts_known=1))
+) STRICT;
+
+CREATE TABLE runtime_storage_state(
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ visibility_revision INTEGER NOT NULL CHECK(visibility_revision>0)
+) STRICT;
+CREATE TABLE recording_capture_fences(
+ capture_kind TEXT NOT NULL CHECK(capture_kind IN('managed_run','manual_capture')),
+ capture_id TEXT NOT NULL CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+ generation INTEGER NOT NULL CHECK(generation>0),
+ deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
+ PRIMARY KEY(capture_kind,capture_id)
+) STRICT;
+INSERT INTO runtime_storage_state VALUES(1,'transitional-monolith',1,1);
+
+CREATE TABLE acp_registrations(
+ run_id TEXT PRIMARY KEY REFERENCES capture_runs(run_id) ON DELETE CASCADE,
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0)
+) STRICT;
+
+CREATE TABLE acp_snapshots(
+ run_id TEXT NOT NULL CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch>0),
+ capture_generation INTEGER NOT NULL CHECK(capture_generation>0),
+ recording TEXT NOT NULL CHECK(recording IN('off','metadata_only','full')),
+ retention_days INTEGER NOT NULL CHECK(retention_days BETWEEN 0 AND 3650),
+ expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms>0),
+ snapshot BLOB NOT NULL CHECK(length(snapshot)<=786432),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ final INTEGER NOT NULL CHECK(final IN(0,1)),
+ PRIMARY KEY(run_id,archive_epoch,capture_generation)
+) STRICT;
+
+-- Source-qualified explicit reveal audits have no FK to a local envelope:
+-- their original envelope may exist only in a retained read-only archive.
+CREATE TABLE runtime_raw_inspection_reveal_audits(
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+ layout_id TEXT NOT NULL CHECK(length(CAST(layout_id AS BLOB)) BETWEEN 1 AND 128),
+ source_set TEXT NOT NULL CHECK(length(source_set)=64 AND source_set NOT GLOB '*[^0-9a-f]*'),
+ source_generation INTEGER NOT NULL CHECK(source_generation>0),
+ source_id TEXT NOT NULL CHECK(length(CAST(source_id AS BLOB)) BETWEEN 1 AND 128),
+ recording_scope_kind TEXT NOT NULL CHECK(recording_scope_kind IN('','managed_run','manual_capture')),
+ recording_scope_id TEXT NOT NULL CHECK(length(CAST(recording_scope_id AS BLOB))<=128),
+ recording_archive_epoch INTEGER NOT NULL CHECK(recording_archive_epoch>0),
+ recording_capture_generation INTEGER NOT NULL CHECK(recording_capture_generation>=0),
+ visibility_revision INTEGER NOT NULL CHECK(visibility_revision>0),
+ usage_policy_revision INTEGER NOT NULL CHECK(usage_policy_revision>0),
+ envelope_id TEXT NOT NULL CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
+ exchange_id TEXT NOT NULL CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+ actor_id TEXT NOT NULL CHECK(length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 512),
+ outcome TEXT NOT NULL CHECK(outcome IN('succeeded','unavailable')),
+ occurred_at_unix_ms INTEGER NOT NULL CHECK(occurred_at_unix_ms>0),
+ CHECK((recording_scope_kind='' AND recording_scope_id='' AND recording_capture_generation=0) OR (recording_scope_kind<>'' AND recording_scope_id<>'' AND recording_capture_generation>0))
+) STRICT;
+CREATE INDEX runtime_raw_inspection_audits_scope ON runtime_raw_inspection_reveal_audits(recording_scope_kind,recording_scope_id,sequence);
+CREATE INDEX runtime_raw_inspection_audits_source ON runtime_raw_inspection_reveal_audits(source_id,source_generation,sequence);

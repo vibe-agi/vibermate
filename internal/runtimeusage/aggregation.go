@@ -126,6 +126,8 @@ type UsageBucket struct {
 }
 
 type AggregationResult struct {
+	// Earliest effective expiry of this owner/period snapshot, zero when empty.
+	ExpiresAt  time.Time
 	Collection CollectionPolicy
 	Snapshot   string
 	Groups     []GroupUsage

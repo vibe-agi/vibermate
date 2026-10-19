@@ -161,8 +161,10 @@ func TestRevision2MigrationPreservesAllInstalledValues(t *testing.T) {
 			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
-			store := openTestStore(t, filepath.Join(f.source, "runtime.db"))
-			closeFrozenV1Store(t, store)
+			state, err := InspectSchema(t.Context(), filepath.Join(f.source, "runtime.db"), time.Second)
+			if err != nil || state.Revision != 3 {
+				t.Fatalf("published3 inspection %+v %v", state, err)
+			}
 		})
 	}
 }
@@ -202,8 +204,9 @@ func TestRevision2MigrationCertifiesStandardOnlyBeforeAdmission(t *testing.T) {
 	db := openSQLiteForTest(t, path)
 	nativeExec(t, db, `UPDATE provider_accounts SET credential_origin='https://chatgpt.com',realm_id='openai.chatgpt',driver_ref='static_header',cyber_access_program='daybreak_red'`)
 	db.Close()
-	store := openTestStore(t, path)
-	defer closeFrozenV1Store(t, store)
+	reader := sql.OpenDB(newSQLiteReadConnector(path, time.Second))
+	defer reader.Close()
+	store := &Store{database: reader, providerAccounts: newProviderAccountRepository(reader, newOperationGate(), time.Second, sqlTransactionCommitter{})}
 	a, exists, err := store.ProviderAccountRepository().Load(context.Background(), "native-legacy")
 	if err != nil || !exists || a.CyberAccessProgram.WireValue() != "daybreak_red" {
 		t.Fatalf("normal3 rejected real mode %+v %v", a, err)

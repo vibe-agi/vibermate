@@ -101,6 +101,16 @@ final class WorkbenchShell extends StatelessWidget {
               'at': failure.at.toUtc().toIso8601String(),
             }),
           ),
+        if (controller.runtimeStatus?.recording case final recording?)
+          if (recording.incomplete)
+            InlineNotice(
+              key: const Key('runtime-recording-state'),
+              message: copy.format('status.recording.evidence', {
+                'state': copy('status.recording.${recording.state}'),
+                'dropped': '${recording.dropped}',
+                'unconfirmed': '${recording.unconfirmed}',
+              }),
+            ),
         if (controller.runtimeStatus?.recordingFailure case final failure?)
           InlineNotice(
             key: const Key('runtime-recording-failure'),
@@ -254,7 +264,9 @@ final class _TitleBar extends StatelessWidget {
           // the compact controls retain their tooltip and semantic labels.
           final compact = constraints.maxWidth < 1120;
           final narrow = constraints.maxWidth < 520;
-          final recordingDegraded = status?.recordingFailure != null;
+          final recordingDegraded =
+              status?.recordingFailure != null ||
+              status?.recording?.incomplete == true;
           final statusLabel = status?.storageFailure != null
               ? copy('status.proxy_stopped')
               : recordingDegraded && status?.healthy == true

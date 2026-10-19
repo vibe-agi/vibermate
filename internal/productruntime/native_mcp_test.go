@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,8 @@ func TestNativeRuntimeContentProfileComposition(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer shutdownRuntime(t, runtime)
+			waitRecording(t, runtime)
+			observations := runtime.recordingStorage.current.Load().store
 			origin, _ := originidentity.ParseProviderOrigin("https://native.example")
 			env := environment.Environment{ID: "native.profile", Name: "Native profile", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyObserve}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.profile.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}}
 			draft, err := runtime.Environments().SaveDraft(ctx, environment.DraftCommand{Candidate: env})
@@ -150,11 +154,21 @@ func TestNativeRuntimeContentProfileComposition(t *testing.T) {
 					if err != nil || op.Arguments != nil || op.Result != nil {
 						t.Fatal("unknown composition retained content")
 					}
+					for _, part := range []nativetool.ContentPart{nativetool.ContentToolArguments, nativetool.ContentToolResult} {
+						if _, err := observations.GetNativeContent(ctx, id, part); !errors.Is(err, nativetool.ErrNotFound) {
+							t.Fatalf("unknown profile retained optional body: %v", err)
+						}
+					}
 				}
 			}
-			if (probe.calls > 0) != inject {
+			if (probe.calls > 0) != inject || (inject && probe.calls != 1) {
 				t.Fatalf("Runtime resolver calls=%d injected=%t", probe.calls, inject)
 			}
+			if !inject {
+				connection.Close()
+				assertRuntimeNativeInterruptedRestart(t, runtime, options)
+			}
+
 		})
 	}
 }
@@ -314,5 +328,55 @@ func TestNativeRuntimeRecoversSameStoreAndClosesBeforeAssignmentDrain(t *testing
 	shutdownRuntime(t, runtime)
 	if !recovered {
 		t.Fatal("runtime recovery proof missing")
+	}
+}
+
+func assertRuntimeNativeInterruptedRestart(t *testing.T, first *Runtime, options Options) {
+	t.Helper()
+	id, _ := nativetool.NewID("00000000000000000000000000000004")
+	before, err := first.NativeToolRepository().Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdownRuntime(t, first)
+	// Model the persisted crash boundary: logical RPC completion is durable,
+	// while the physical socket terminal never committed. Once/provenance stay.
+	db, err := sql.Open("sqlite", options.Paths.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	result, err := db.Exec(`UPDATE native_tool_deliveries SET completed_at_unix_ms=NULL,outcome='',error_class='',bytes_out=0,bytes_in=0,byte_counts_known=1 WHERE operation_id=?`, id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		t.Fatal("actual native delivery missing")
+	}
+	if err = os.WriteFile(filepath.Join(options.Paths.DataDirectory(), "observations.db"), []byte("synthetic optional corruption"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	options.OfflineHold, err = offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := startTestRuntime(t, options)
+	defer shutdownRuntime(t, second)
+	after, err := second.NativeToolRepository().Get(context.Background(), id)
+	if err != nil || after.State != before.State || after.Reason != before.Reason {
+		t.Fatalf("known logical result rewritten: %+v %v", after, err)
+	}
+	var completed int64
+	var outcome, reason string
+	var known bool
+	if err = db.QueryRow(`SELECT completed_at_unix_ms,outcome,error_class,byte_counts_known FROM native_tool_deliveries WHERE operation_id=?`, id.String()).Scan(&completed, &outcome, &reason, &known); err != nil || completed <= 0 || outcome != "failed" || reason != "daemon_restarted" || known {
+		t.Fatalf("actual Runtime physical recovery failed: %d %s %s %t %v", completed, outcome, reason, known, err)
+	}
+	var once int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, id.String()).Scan(&once); err != nil || once != 1 {
+		t.Fatal("once barrier lost", err)
+	}
+	if second.Status().State != RuntimeStateInitialized {
+		t.Fatal("optional corruption disabled recovered authority")
 	}
 }

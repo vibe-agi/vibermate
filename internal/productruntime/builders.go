@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
-	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
@@ -36,12 +35,12 @@ import (
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
-	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -60,32 +59,39 @@ type storageBuildRequest struct {
 	now                  time.Time
 	upgradeTimeout       time.Duration
 	progress             func(runtimedata.SchemaUpgradePhase) error
-	contentLimits        *exchangecontent.SourceLimits
+	recorder             *observationRecorder
 }
 
 type storageBuildResult struct {
-	store *runtimepersistence.Store
-	state runtimepersistence.SchemaState
+	store  *runtimepersistence.ControlStore
+	state  runtimepersistence.SchemaState
+	layout runtimedata.StorageLayout
 }
 
 func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
-	if _, err := runtimedata.UpgradeSchemaToCurrentOwned(ctx, request.directory, "", request.dataGuard, request.hostGuard, request.now, request.upgradeTimeout, request.progress); err != nil {
+	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
+		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
+	}
+	timeout := request.upgradeTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
+	upgrade, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	layout, err := runtimedata.PrepareStorageOwned(upgrade, runtimedata.OwnedStorage{Directory: request.directory, Runtime: request.dataGuard, Host: request.hostGuard}, request.now, request.progress)
+	if err != nil {
 		return storageBuildResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return storageBuildResult{}, err
 	}
-	if request.dataGuard == nil || !request.dataGuard.OwnsDirectory(request.directory) || request.hostGuard == nil || !request.hostGuard.OwnsDirectory(request.directory) {
-		return storageBuildResult{}, runtimedata.ErrSchemaUpgradeIncomplete
-	}
-	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
-		ContentLimits:          request.contentLimits,
-		DatabasePath:           request.databasePath,
-		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
-		CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
+	store, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{
+		DatabasePath: request.databasePath, LayoutID: layout.ID,
+		BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
+		NativeHistory: request.recorder, CaptureObserver: request.recorder, RecordingScopes: request.recorder,
 	})
 	if err != nil {
 		return storageBuildResult{}, err
@@ -98,7 +104,7 @@ func buildStorage(
 			wrapOptionalError("close storage after build failure", closeErr),
 		)
 	}
-	return storageBuildResult{store: store, state: state}, nil
+	return storageBuildResult{store: store, state: state, layout: layout}, nil
 }
 
 type environmentBuildRequest struct {
@@ -360,7 +366,9 @@ func buildExchangeContent(
 }
 
 type connectionEventBuildRequest struct {
-	repository connectionevent.Repository
+	observer   connectionevent.Observer
+	scopes     recording.ScopeIssuer
+	repository connectionevent.Reader
 	clock      connectionevent.Clock
 	random     io.Reader
 }
@@ -374,9 +382,9 @@ func buildConnectionEvent(
 	request connectionEventBuildRequest,
 ) (connectionEventRuntime, error) {
 	return connectionevent.New(ctx, connectionevent.Options{
-		Repository: request.repository,
-		Clock:      request.clock,
-		Random:     request.random,
+		Reader: request.repository, Observer: request.observer, Scopes: request.scopes,
+		Clock:  request.clock,
+		Random: request.random,
 	})
 }
 
@@ -387,7 +395,7 @@ type approvalBuildRequest struct {
 	random           io.Reader
 	config           toolapproval.Config
 	remembered       toolapproval.RememberedListener
-	nativeRepository nativetool.LifecycleRepository
+	nativeRepository nativetool.LifecycleAuthority
 }
 
 type approvalRuntime interface {
@@ -436,7 +444,7 @@ type providerBuildRequest struct {
 	coordinator    offlinehold.Coordinator
 	secrets        secretstore.Reader
 	instanceIDs    InstanceIDSource
-	audit          egressaudit.Writer
+	audit          egressaudit.Observer
 	rawEvidence    rawevidence.Observer
 }
 
@@ -497,6 +505,7 @@ func buildProvider(
 }
 
 type rawEvidenceBuildRequest struct {
+	budget     *recording.Budget
 	ctx        context.Context
 	repository rawevidence.Repository
 	random     io.Reader
@@ -514,6 +523,7 @@ type rawEvidenceRuntime interface {
 }
 
 type captureEvidenceBarrier struct {
+	recorder *observationRecorder
 	raw      rawEvidenceRuntime
 	reporter interface{ ReportRawEvidenceFailure(error) }
 }
@@ -522,6 +532,14 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 	ctx context.Context,
 	id string,
 ) (capturerun.TerminalEvidence, error) {
+	if barrier.recorder != nil {
+		if sealer, ok := barrier.raw.(interface {
+			SealTerminalScope(context.Context, rawevidence.ScopeKind, string) (rawevidence.TerminalScope, error)
+		}); ok {
+			return sealer.SealTerminalScope(ctx, rawevidence.ScopeManagedRun, id)
+		}
+		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManagedRun, id, barrier.reporter)
+	}
 	terminal, err := barrier.raw.PrepareTerminalScope(
 		ctx, rawevidence.ScopeManagedRun, id,
 	)
@@ -531,7 +549,7 @@ func (barrier captureEvidenceBarrier) PrepareManagedRun(
 				"flush managed run %q Raw evidence: %w", id, err,
 			))
 		}
-		return nil, nil
+		return nil, err
 	}
 	return terminal, nil
 }
@@ -540,6 +558,14 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 	ctx context.Context,
 	id string,
 ) (manualcapture.TerminalEvidence, error) {
+	if barrier.recorder != nil {
+		if sealer, ok := barrier.raw.(interface {
+			SealTerminalScope(context.Context, rawevidence.ScopeKind, string) (rawevidence.TerminalScope, error)
+		}); ok {
+			return sealer.SealTerminalScope(ctx, rawevidence.ScopeManualCapture, id)
+		}
+		return barrier.recorder.prepareScope(ctx, barrier.raw, rawevidence.ScopeManualCapture, id, barrier.reporter)
+	}
 	terminal, err := barrier.raw.PrepareTerminalScope(
 		ctx, rawevidence.ScopeManualCapture, id,
 	)
@@ -549,7 +575,7 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 				"flush manual capture %q Raw evidence: %w", id, err,
 			))
 		}
-		return nil, nil
+		return nil, err
 	}
 	return terminal, nil
 }
@@ -557,15 +583,21 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 func buildRawEvidence(
 	request rawEvidenceBuildRequest,
 ) (rawEvidenceRuntime, error) {
-	return rawevidence.Open(request.ctx, rawevidence.Options{
+	manager, err := rawevidence.Open(request.ctx, rawevidence.Options{
 		Repository: request.repository,
+		Budget:     request.budget,
 		Random:     request.random,
 		Clock:      request.clock,
 		Config:     request.config,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
 }
 
 type exchangeBuildRequest struct {
+	recorder                 *observationRecorder
 	bodyAdmission            *exchange.BodyAdmission
 	ownerContext             context.Context
 	actions                  offlinehold.ActionAdmission
@@ -575,13 +607,12 @@ type exchangeBuildRequest struct {
 	activities               activity.Recorder
 	identities               activity.ConversationIdentityRepository
 	contents                 exchangecontent.Recorder
-	usage                    runtimeusage.Recorder
+	usage                    runtimeusage.CollectedWriter
 	clock                    Clock
 	hold                     exchange.HoldPolicy
 	annotations              *clientannotation.Signer
 	rawEvidence              rawevidence.Observer
 	reportRawEvidenceFailure func(error)
-	reportObservationFailure func(string, error)
 }
 
 type exchangeRuntime interface {
@@ -593,268 +624,56 @@ type exchangeRuntime interface {
 }
 
 type activityAttemptObserver struct {
-	recorder      activity.Recorder
-	identities    activity.ConversationIdentityRepository
-	usage         runtimeusage.Recorder
-	reportFailure func(string, error)
+	queue      *observationRecorder
+	recorder   activity.Recorder
+	identities activity.ConversationIdentityRepository
+	usage      runtimeusage.CollectedWriter
 }
 
 type exchangeContentObserver struct {
-	limits        *exchangecontent.SourceLimits
-	recorder      exchangecontent.Recorder
-	clock         Clock
-	reportFailure func(string, error)
+	queue    *observationRecorder
+	limits   *exchangecontent.SourceLimits
+	recorder exchangecontent.Recorder
+	clock    Clock
 }
 
-func (observer exchangeContentObserver) ObserveContent(
-	ctx context.Context,
-	observation exchange.ContentObservation,
-) (err error) {
-	defer func() {
-		if err != nil && observer.reportFailure != nil {
-			observer.reportFailure("response_content", err)
-		}
-	}()
-	if observer.recorder == nil || observer.clock == nil {
-		return errors.New("Exchange content recorder is nil")
+func (observer exchangeContentObserver) ObserveContent(ctx context.Context, observation exchange.ContentObservation) error {
+	if observer.queue == nil || observer.recorder == nil || observer.clock == nil {
+		return nil
 	}
-	frozen := exchangecontent.FrozenRef{
-		EnvironmentID: observation.EnvironmentID.String(), EnvironmentRevision: uint64(observation.EnvironmentRevision), EnvironmentDigest: observation.EnvironmentDigest,
-		ClientEndpointID: observation.EndpointID.String(), ClientEndpointRevision: uint64(observation.EndpointRevision), ProtocolPlanID: observation.ProtocolPlanID.String(), ProtocolPlanRevision: uint64(observation.ProtocolPlanRevision), RouteID: observation.RouteID.String(), RouteRevision: uint64(observation.RouteRevision),
-	}
-	if observer.limits != nil {
-		source, err := exchangecontent.NewSourceWithin(*observer.limits, observation.ExchangeID, frozen, observation.Recording, observer.clock.Now(), observation.Request, observation.Response, exchangecontent.WithParentRef(exchangecontent.ParentRef{CaptureRunID: observation.CaptureRunID, ManualCaptureID: observation.ManualCaptureID}))
+	frozen := exchangecontent.FrozenRef{EnvironmentID: observation.EnvironmentID.String(), EnvironmentRevision: uint64(observation.EnvironmentRevision), EnvironmentDigest: observation.EnvironmentDigest, ClientEndpointID: observation.EndpointID.String(), ClientEndpointRevision: uint64(observation.EndpointRevision), ProtocolPlanID: observation.ProtocolPlanID.String(), ProtocolPlanRevision: uint64(observation.ProtocolPlanRevision), RouteID: observation.RouteID.String(), RouteRevision: uint64(observation.RouteRevision)}
+	limits := observer.limits
+	if limits == nil {
+		value, err := exchangecontent.DefaultSourceLimits()
 		if err != nil {
-			return err
+			return nil
 		}
-		sink, ok := observer.recorder.(exchangecontent.SourceRecorder)
-		if !ok {
-			return errors.New("candidate content recorder lacks synchronous Source support")
-		}
-		return sink.RecordSource(ctx, source)
+		limits = &value
 	}
-	record, err := exchangecontent.NewRecord(
-		observation.ExchangeID,
-		exchangecontent.FrozenRef{
-			EnvironmentID:          observation.EnvironmentID.String(),
-			EnvironmentRevision:    uint64(observation.EnvironmentRevision),
-			EnvironmentDigest:      observation.EnvironmentDigest,
-			ClientEndpointID:       observation.EndpointID.String(),
-			ClientEndpointRevision: uint64(observation.EndpointRevision),
-			ProtocolPlanID:         observation.ProtocolPlanID.String(),
-			ProtocolPlanRevision:   uint64(observation.ProtocolPlanRevision),
-			RouteID:                observation.RouteID.String(),
-			RouteRevision:          uint64(observation.RouteRevision),
-		},
-		observation.Recording,
-		observer.clock.Now(),
-		observation.Request,
-		observation.Response,
-		exchangecontent.WithParentRef(exchangecontent.ParentRef{
-			CaptureRunID:    observation.CaptureRunID,
-			ManualCaptureID: observation.ManualCaptureID,
-		}),
-	)
-	if err != nil {
-		return err
-	}
-	return observer.recorder.Record(ctx, record)
+	sink, _ := observer.recorder.(exchangecontent.SourceRecorder)
+	observer.queue.offerContent(ctx, observation.ObservationStamp, exchangecontent.OwnInput{ExchangeID: observation.ExchangeID, Frozen: frozen, Policy: observation.Recording, RecordedAt: observer.clock.Now(), Parent: exchangecontent.ParentRef{CaptureRunID: observation.CaptureRunID, ManualCaptureID: observation.ManualCaptureID}, Request: observation.Request, Response: observation.Response}, *limits, sink)
+	return nil
 }
-
-func (observer activityAttemptObserver) ObserveStart(
-	ctx context.Context,
-	observation exchange.StartObservation,
-) (err error) {
-	stage := "activity_start"
-	defer func() {
-		if err != nil && observer.reportFailure != nil {
-			observer.reportFailure(stage, err)
-		}
-	}()
-	if observer.recorder == nil {
-		return errors.New("Exchange Activity recorder is nil")
-	}
-	source, err := exchangeActivitySource(
-		observation.Admission,
-		observation.HasAdmission,
-	)
-	if err != nil {
-		return err
-	}
-	record, err := observer.recorder.Record(ctx, activity.Event{
-		Kind:                   activity.KindExchangeStarted,
-		EnvironmentID:          observation.EnvironmentID,
-		EnvironmentRevision:    observation.EnvironmentRevision,
-		EnvironmentDigest:      observation.EnvironmentDigest,
-		ClientEndpointID:       observation.EndpointID,
-		ClientEndpointRevision: observation.EndpointRevision,
-		ProtocolPlanID:         observation.ProtocolPlanID,
-		ProtocolPlanRevision:   observation.ProtocolPlanRevision,
-		RouteID:                observation.RouteID,
-		RouteRevision:          observation.RouteRevision,
-		SubjectID:              observation.ExchangeID,
-		Status:                 activity.StatusPending,
-		SourceKind:             source.kind,
-		SourceDisplayName:      source.displayName,
-		SourceRecognition:      source.recognition,
-		CaptureRunID:           source.captureRunID,
-		ManualCaptureID:        source.manualCaptureID,
-		ConnectionID:           observation.ConnectionID,
-		Conversation:           observation.Conversation,
-	})
-	if err != nil {
-		return err
-	}
-	stage = "conversation_identity"
-	return observer.persistProtocolIdentity(
-		ctx,
-		observation.ExchangeID,
-		observation.ClientProtocolEvidence,
-		"",
-		record.OccurredAt,
-	)
-}
-
-func (observer activityAttemptObserver) ObserveTerminal(
-	ctx context.Context,
-	observation exchange.AttemptObservation,
-) (err error) {
-	stage := "activity_terminal"
-	var firstFailure error
-	defer func() {
-		if err != nil && observer.reportFailure != nil {
-			if firstFailure == nil {
-				firstFailure = err
-			}
-			observer.reportFailure(stage, firstFailure)
-		}
-	}()
-	if observer.recorder == nil {
-		return errors.New("Exchange Activity recorder is nil")
-	}
-	status := activity.StatusFailed
-	switch observation.Outcome {
-	case exchange.AttemptSucceeded:
-		status = activity.StatusSucceeded
-	case exchange.AttemptCanceled:
-		status = activity.StatusCanceled
-	case exchange.AttemptFailed, exchange.AttemptAborted:
-	default:
-		return errors.New("Exchange observation outcome is invalid")
-	}
-	source, err := exchangeActivitySource(
-		observation.Admission,
-		observation.HasAdmission,
-	)
-	if err != nil {
-		return err
-	}
-	// Usage collection is independent of Activity retention and conversation
-	// indexing. Freeze its observation time before either display projection can
-	// fail or consume the terminal write budget.
-	var usageErr error
-	if observer.usage != nil {
-		value := runtimeusage.Observation{
-			ExchangeID: observation.ExchangeID, StartedAt: observation.StartedAt,
-			OccurredAt: observation.OccurredAt, CaptureRunID: source.captureRunID, ManualCaptureID: source.manualCaptureID,
-			Status: status, EnvironmentID: string(observation.EnvironmentID), EnvironmentRevision: uint64(observation.EnvironmentRevision),
-			AccountID: observation.AccountID, RequestedModel: observation.RequestedModel,
-			UpstreamModel: observation.UpstreamModel, Usage: observation.Usage,
-		}
-		if identity, ok := agentconversation.ClientIdentityFromProtocolEvidence(observation.ClientProtocolEvidence, observation.ProviderResponseID, observation.OccurredAt); ok {
-			value.Client, value.SessionID = identity.Client, identity.SessionID
-		}
-		usageErr = observer.usage.RecordUsage(ctx, value)
-		if usageErr != nil {
-			stage, firstFailure = "usage", usageErr
-		}
-	}
-	// The reason stays one stable code. The evidence beside it travels as its
-	// own typed fields: a reason with facts glued onto its end cannot be
-	// mapped to copy, matched by a rule, or told apart from a reason that
-	// happens to contain the same words.
-	record, err := observer.recorder.Record(ctx, activity.Event{
-		Kind:                   activity.KindExchangeCompleted,
-		EnvironmentID:          observation.EnvironmentID,
-		EnvironmentRevision:    observation.EnvironmentRevision,
-		EnvironmentDigest:      observation.EnvironmentDigest,
-		ClientEndpointID:       observation.EndpointID,
-		ClientEndpointRevision: observation.EndpointRevision,
-		ProtocolPlanID:         observation.ProtocolPlanID,
-		ProtocolPlanRevision:   observation.ProtocolPlanRevision,
-		RouteID:                observation.RouteID,
-		RouteRevision:          observation.RouteRevision,
-		AccountID:              observation.AccountID,
-		AccountRevision:        observation.AccountRevision,
-		CredentialEpoch:        observation.CredentialEpoch,
-		SubjectID:              observation.ExchangeID,
-		Status:                 status,
-		ReasonCode:             string(observation.ReasonCode),
-		SourceKind:             source.kind,
-		SourceDisplayName:      source.displayName,
-		SourceRecognition:      source.recognition,
-		CaptureRunID:           source.captureRunID,
-		ManualCaptureID:        source.manualCaptureID,
-		ConnectionID:           observation.ConnectionID,
-		Conversation:           observation.Conversation,
-		Diagnosis: activity.Diagnosis{
-			ProviderErrorCode: observation.ProviderErrorCode,
-			ProviderStatus:    observation.ProviderStatus,
-			ProviderField:     string(observation.ProviderField),
-			ClientField:       string(observation.ClientField),
-			ClientPath:        observation.ClientPath,
-		},
-		Transport: activityTransportEvidence(
-			observation.Presentation,
-			observation.Transport,
-		),
-	})
-	if err != nil {
-		return errors.Join(usageErr, err)
-	}
-	identityErr := observer.persistProtocolIdentity(
-		ctx,
-		observation.ExchangeID,
-		observation.ClientProtocolEvidence,
-		observation.ProviderResponseID,
-		record.OccurredAt,
-	)
-	if identityErr != nil && firstFailure == nil {
-		stage, firstFailure = "conversation_identity", identityErr
-	}
-	return errors.Join(identityErr, usageErr)
-}
-
-func (observer activityAttemptObserver) persistProtocolIdentity(
-	ctx context.Context,
-	exchangeID string,
-	evidence []protocolcore.ProtocolEvidenceValue,
-	providerResponseID string,
-	observedAt time.Time,
-) error {
-	if len(evidence) == 0 {
+func (observer activityAttemptObserver) ObserveStart(ctx context.Context, observation exchange.StartObservation) error {
+	if observer.queue == nil {
 		return nil
 	}
-	if observer.identities == nil {
-		return errors.New("Exchange Agent identity repository is nil")
-	}
-	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
-		evidence,
-		providerResponseID,
-		observedAt,
-	)
-	if !found {
+	return observer.offerObserveStart(ctx, observation)
+}
+func (observer activityAttemptObserver) ObserveTerminal(ctx context.Context, observation exchange.AttemptObservation) error {
+	if observer.queue == nil {
 		return nil
 	}
-	return observer.identities.PutConversationIdentity(ctx, exchangeID, identity)
+	return observer.offerObserveTerminal(ctx, observation)
 }
 
 type exchangeActivitySourceEvidence struct {
-	kind            activity.SourceKind
-	displayName     string
-	recognition     activity.SourceRecognition
-	captureRunID    string
-	manualCaptureID string
+	kind                                      activity.SourceKind
+	displayName                               string
+	recognition                               activity.SourceRecognition
+	captureRunID                              string
+	manualCaptureID                           string
+	workspaceID, workspaceLabel, captureLabel string
 }
 
 func exchangeActivitySource(
@@ -875,6 +694,10 @@ func exchangeActivitySource(
 		)
 	}
 	evidence.displayName = admission.SourceLabel()
+	evidence.captureLabel = admission.SourceLabel()
+	if scope, ok := admission.WorkspaceScope(); ok {
+		evidence.workspaceID, evidence.workspaceLabel = scope.WorkspaceID().String(), scope.WorkspaceLabel()
+	}
 	switch admission.AttributionConfidence() {
 	case captureadmission.AttributionVerified:
 		evidence.recognition = activity.SourceRecognitionVerified
@@ -1025,15 +848,15 @@ func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error
 		ToolDecisions: request.toolDecisions,
 		RetryWaiter:   exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
+			queue:    request.recorder,
 			usage:    request.usage,
 			recorder: request.activities, identities: request.identities,
-			reportFailure: request.reportObservationFailure,
 		},
 		ContentObserver: exchangeContentObserver{
-			limits:        contentLimits,
-			recorder:      request.contents,
-			clock:         request.clock,
-			reportFailure: request.reportObservationFailure,
+			queue:    request.recorder,
+			limits:   contentLimits,
+			recorder: request.contents,
+			clock:    request.clock,
 		},
 		ObservationTimeout:        2 * time.Second,
 		ContentObservationTimeout: contentObservationCompletionBudget,
@@ -1048,7 +871,7 @@ func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error
 
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
-	audit       egressaudit.Writer
+	audit       egressaudit.Observer
 	transport   originaltransport.Transport
 }
 
@@ -1168,7 +991,7 @@ type proxyBuildRequest struct {
 	approvals      loopbackproxy.NetworkApprovals
 	blindTunnels   loopbackproxy.BlindTunnelDialer
 	egressDefaults egressprofile.Resolver
-	egressAudit    egressaudit.Writer
+	egressAudit    egressaudit.Observer
 	rawEvidence    rawevidence.RequestRecorder
 	random         io.Reader
 	bodyAdmission  *exchange.BodyAdmission

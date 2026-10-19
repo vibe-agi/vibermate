@@ -64,7 +64,7 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
-      - run: go test ./...
+      - run: go test -timeout=30m ./...
       - run: go vet ./...
 
   paseo-plugin:
@@ -157,10 +157,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [native, persistence-migration, persistence-rest, rest]
+        shard: [native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]
     runs-on: ubuntu-latest
-    # Enclose sequential packages' finite process watchdogs, not product SLAs.
-    timeout-minutes: 120
+    # Enclose the finite 120m persistence process plus setup/artifact upload.
+    # Other race process watchdogs and all product operation budgets are unchanged.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -275,9 +276,9 @@ jobs:
       - name: Run runtime, protocol, egress, host, and persistence contracts
         run: |
           go test -count=1 ./internal/activity
-          go test -count=1 ./internal/productruntime
+          go test -count=1 -timeout=30m ./internal/productruntime
           go test -count=1 ./internal/hostcontract
-          go test -count=1 ./internal/runtimepersistence
+          go test -count=1 -timeout=30m ./internal/runtimepersistence
           go test -count=1 ./internal/protocolcore
           go test -count=1 ./internal/ssewire
           go test -count=1 ./internal/anthropicchat

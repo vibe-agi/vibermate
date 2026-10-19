@@ -199,50 +199,55 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 	}
 }
 
-// Launching a child proves only that a child was launched. A run reports as
-// observed only once authenticated traffic actually arrives through it, so a
-// program that ignores proxy variables or dials directly is reported honestly
-// rather than as captured.
+// Required authorization never invents optional display evidence. The real
+// blind connection still leaves a positive retained traffic observation.
 func TestCaptureRunIsObservedOnlyAfterRealTraffic(t *testing.T) {
 	t.Parallel()
-
 	fixture := newProxyFixture(t)
 	defer fixture.Close(t)
 	authority, stop := echoTarget(t)
 	defer stop()
-
-	first, err := fixture.runs.AuthorizeProxy(
-		context.Background(),
-		mustProxyCapability(t, fixture.grant.ProxyCapability.Value()),
-	)
-	if err != nil {
+	for i := 0; i < 2; i++ {
+		admission, err := fixture.runs.AuthorizeProxy(context.Background(), mustProxyCapability(t, fixture.grant.ProxyCapability.Value()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if admission.Observed || !admission.FirstObservedAt.IsZero() {
+			t.Fatal("required authorization fabricated optional observation", admission)
+		}
+	}
+	before, err := fixture.connections.List(context.Background(), connectionevent.PageRequest{Limit: 20})
+	if err != nil || len(before.Items) != 0 {
+		t.Fatalf("authorization recorded real traffic: %+v %v", before, err)
+	}
+	connection, response := fixture.Connect(t, fixture.grant.ProxyCapability.Value(), authority)
+	if response.StatusCode != 200 {
+		t.Fatal(response.Status)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("proof")); err != nil {
 		t.Fatal(err)
 	}
-	if !first.Observed || first.FirstObservedAt.IsZero() {
-		t.Fatalf("authenticated traffic did not mark observation: %+v", first)
+	reply := make([]byte, len("echo:proof"))
+	if _, err := io.ReadFull(connection, reply); err != nil || string(reply) != "echo:proof" {
+		t.Fatalf("real tunnel: %q %v", reply, err)
 	}
-
-	// A later connection must not move the first-observed time.
-	connection, _ := fixture.Connect(
-		t,
-		fixture.grant.ProxyCapability.Value(),
-		authority,
-	)
-	_ = connection.Close()
-
-	second, err := fixture.runs.AuthorizeProxy(
-		context.Background(),
-		mustProxyCapability(t, fixture.grant.ProxyCapability.Value()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !second.FirstObservedAt.Equal(first.FirstObservedAt) {
-		t.Fatalf(
-			"a later connection moved the observation from %v to %v",
-			first.FirstObservedAt,
-			second.FirstObservedAt,
-		)
+	connection.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		page, err := fixture.connections.List(context.Background(), connectionevent.PageRequest{Limit: 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range page.Items {
+			if row.Phase != connectionevent.PhaseAttempted && row.IngressID == "capture-run/"+fixture.grant.Run.ID && row.Decryption == connectionevent.DecryptionBlind {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("authenticated traffic left no retained observation: %+v", page.Items)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

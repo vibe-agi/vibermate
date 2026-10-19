@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
-	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -14,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -216,7 +216,7 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 	type state struct {
 		approval            nativetool.Approval
 		operation           nativetool.Operation
-		audit               egressaudit.Page
+		audit               []any
 		key                 string
 		once, events, sends int
 	}
@@ -233,10 +233,16 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 		if err != nil {
 			t.Fatal(err)
 		}
-		out.audit, err = f.store.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{ParentKind: egressaudit.ParentClientOperation, ParentID: child.id.String(), Limit: 10})
-		if err != nil {
+		var deliveries int
+		if err := f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?`, child.id).Scan(&deliveries); err != nil {
 			t.Fatal(err)
 		}
+		if deliveries == 1 {
+			out.audit = freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, child.id)
+		} else if deliveries != 0 {
+			t.Fatal("multiple physical native deliveries")
+		}
+
 		err = f.db.QueryRow(`SELECT idempotency_key,(SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_events WHERE operation_id=?) FROM native_tool_approvals WHERE approval_id=?`, child.id, child.id, a.ID).Scan(&out.key, &out.once, &out.events)
 		if err != nil {
 			t.Fatal(err)
@@ -293,7 +299,7 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 		}
 		completed = true
 		beforeHistory = snapshot()
-		if beforeHistory.once != 1 || len(beforeHistory.audit.Items) != 1 || beforeHistory.sends != 5 {
+		if beforeHistory.once != 1 || len(beforeHistory.audit) == 0 || beforeHistory.sends != 5 {
 			t.Fatal("callback did not produce exactly one once/audit/send")
 		}
 	}
@@ -326,6 +332,14 @@ func exerciseNativeHistoricalControl(t *testing.T, parentCompleted, delayed bool
 // Test-only bridge lets the external control integration use the same native
 // fixture without an import cycle or any test hook in production code.
 func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
+	exerciseNativePendingControl(t, false, check)
+}
+
+func ExerciseNativePingControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
+	exerciseNativePendingControl(t, true, check)
+}
+
+func exerciseNativePendingControl(t *testing.T, ping bool, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {
 	t.Helper()
 	f := newNativeControlFixture(t)
 	f.handshake(t)
@@ -335,10 +349,15 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 	}
 	defer manuals.Shutdown(context.Background())
 	replied := make(chan struct{}, 1)
-	const callback = `{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"callback-private-sentinel","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}}`
-	const reply = `{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"form-proof-private-sentinel"}}}`
+	callback := `{"jsonrpc":"2.0","id":17,"method":"elicitation/create","params":{"message":"callback-private-sentinel","requestedSchema":{"type":"object","properties":{"answer":{"type":"string"}}}}}`
+	reply := `{"jsonrpc":"2.0","id":17,"result":{"action":"accept","content":{"answer":"form-proof-private-sentinel"}}}`
+	if ping {
+		callback = `{"jsonrpc":"2.0","id":17,"method":"ping"}`
+		reply = `{"jsonrpc":"2.0","id":17,"result":{}}`
+	}
+	replyCount := 0
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
-		if strings.Contains(string(body), `"method":"tools/call"`) {
+		if r.Method == "GET" || strings.Contains(string(body), `"method":"tools/call"`) {
 			reader, writer := io.Pipe()
 			go func() {
 				defer writer.Close()
@@ -348,24 +367,41 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 				case <-r.Context().Done():
 					return
 				}
-				io.WriteString(writer, "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[]}}\n\n")
+				if !ping {
+					io.WriteString(writer, "data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[]}}\n\n")
+				}
 			}()
 			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: reader}, nil
 		}
+		if string(body) != reply {
+			t.Error("registered reply wire changed")
+		}
+		replyCount++
 		replied <- struct{}{}
 		return &http.Response{StatusCode: 202, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	}
-	parent := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	var parent CapturedRequest
+	if ping {
+		parent = f.captured(t, "GET", "", "synthetic-session")
+	} else {
+		parent = f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, "synthetic-session")
+	}
 	parents := startNativeControl(t, f, parent)
-	f.approve(t, parent.id)
+	if !ping {
+		f.approve(t, parent.id)
+	}
 	deadline := time.Now().Add(time.Second)
 	found := false
+	var registeredSession *session
 	for time.Now().Before(deadline) {
 		e := f.executor.(*executor)
 		e.mu.Lock()
 		for _, s := range e.scopes[f.capture.Key()].sessions {
 			s.mu.Lock()
 			found = s.parents["17"] != nil
+			if found {
+				registeredSession = s
+			}
 			s.mu.Unlock()
 			if found {
 				break
@@ -383,12 +419,47 @@ func ExerciseNativePendingControl(t *testing.T, check func(Executor, *runtimeper
 	child := f.captured(t, "POST", reply, "synthetic-session")
 	children := startNativeControl(t, f, child)
 	approval := waitNativeQuestion(t, f, child.id)
+	if ping {
+		e := f.executor.(*executor)
+		r, err := parseRequest([]byte(reply), e.limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, _, witness, err := e.bindRequest(child, r, registeredSession, registeredSession.parents["17"].binding.Plan())
+		if err != nil || witness == nil || witness.Verify(child.id, binding) != nil {
+			t.Fatal("real ping child witness unavailable")
+		}
+		for _, missing := range []string{"observer", "classification", "live"} {
+			registeredSession.mu.Lock()
+			p := registeredSession.parents["17"]
+			saved := *p
+			switch missing {
+			case "observer":
+				p.observer = nil
+			case "classification":
+				p.kind = ""
+			case "live":
+				p.consumed = true
+			}
+			registeredSession.mu.Unlock()
+			preview, err := e.previewIntents(binding, nil, r, registeredSession)
+			registeredSession.mu.Lock()
+			*p = saved
+			registeredSession.mu.Unlock()
+			if err != nil || len(preview) != 0 {
+				t.Fatalf("counterfeit ping preview accepted missing %s", missing)
+			}
+		}
+	}
 	check(f.executor, f.store, manuals, f.capture, approval)
 	if result := children(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("child %+v", result)
 	}
 	if result := parents(); result.Outcome != OutcomeCompleted {
 		t.Fatalf("parent %+v", result)
+	}
+	if replyCount != 1 {
+		t.Fatalf("registered reply sends %d", replyCount)
 	}
 	before := f.transport.sends()
 	if before != 5 {
@@ -468,42 +539,131 @@ func ExerciseNativeExpiredControl(t *testing.T, check func(Executor, *runtimeper
 	exerciseNativeRejectedControl(t, true, check)
 }
 
-// Real executor -> native repository bridge, intentionally test-only.
-func ExerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
-	exerciseNativeRecordedControl(t, recording, result, true, check, mutate...)
+// Separate-role reader/HTTP fixture, not production Runtime composition.
+// The actual completed operation is input to the optional writer; expected
+// HTTP output is never borrowed from the authority repository.
+type NativeRecordedCheck func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation, nativetool.InspectionReader, func(bool))
+type NativeRecordedMutation func(*sql.DB, nativetool.InspectionOperation)
+
+func ExerciseNativeRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
+	exerciseNativeRecordedControl(t, policy, result, true, true, check, mutate...)
 }
-func ExerciseNativeUnknownRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
-	exerciseNativeRecordedControl(t, recording, result, false, check, mutate...)
+func ExerciseNativeUnknownRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
+	exerciseNativeRecordedControl(t, policy, result, false, true, check, mutate...)
 }
-func exerciseNativeRecordedControl(t *testing.T, recording environment.ContentRecordingPolicy, result string, known bool, check func(*runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Operation), mutate ...func(*sql.DB, nativetool.Operation)) {
+func ExerciseNativeContentOnlyControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, check NativeRecordedCheck) {
+	exerciseNativeRecordedControl(t, policy, result, true, false, check)
+}
+func exerciseNativeRecordedControl(t *testing.T, policy environment.ContentRecordingPolicy, result string, known, history bool, check NativeRecordedCheck, mutate ...NativeRecordedMutation) {
 	t.Helper()
-	f := newNativeFixtureMode(t, environment.ToolPolicyObserve, recording)
+	ctx := context.Background()
+	f := newNativeFixtureMode(t, environment.ToolPolicyObserve, policy)
 	if known {
 		f.executor.(*executor).dependencies.ContentProfiles = syntheticProfiles{}
 	}
 	f.handshake(t)
-	manuals, err := manualcapture.NewManager(context.Background(), manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
+	manuals, err := manualcapture.NewManager(ctx, manualcapture.DefaultOptions(f.store.ManualCaptureRepository()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manuals.Shutdown(context.Background())
+	defer manuals.Shutdown(ctx)
 	f.transport.handler = func(r *http.Request, body []byte) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":3,"result":` + result + `}`))}, nil
 	}
 	call := f.captured(t, "POST", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"frozen.txt"},"_meta":{"private":"metadata-sentinel"}}}`, "synthetic-session")
-	terminal := f.executor.Serve(context.Background(), call, httptest.NewRecorder())
+	terminal := f.executor.Serve(ctx, call, httptest.NewRecorder())
 	if terminal.Outcome != OutcomeCompleted {
 		t.Fatalf("recorded terminal %+v", terminal)
 	}
-	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
+	op, err := f.store.NativeToolRepository().Get(ctx, call.id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range mutate {
-		change(f.db, op)
+	if err = f.content.flush(); err != nil {
+		t.Fatal(err)
 	}
-	check(f.store, manuals, f.capture, op)
+	if history {
+		var kind string
+		var at int64
+		if err = f.db.QueryRow(`SELECT last_event_kind,last_event_at_unix_ms FROM native_tool_operations WHERE operation_id=?`, op.ID).Scan(&kind, &at); err != nil {
+			t.Fatal(err)
+		}
+		if err = f.content.store.PutNativeHistory(ctx, nativetool.RecordedHistory{Scope: op.RecordingScope, Observation: nativetool.HistoryObservation{Operation: op, EventKind: kind, EventAt: time.UnixMilli(at).UTC(), MaximumEventAt: op.MaximumEventAt, MetadataExpiresAt: op.MetadataExpiresAt}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var observationPath string
+	if err = f.contentDB.QueryRow(`SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&observationPath); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(filepath.Dir(observationPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPath := filepath.Join(root, "inspection-control.db")
+	control, err := runtimepersistence.OpenControl(ctx, runtimepersistence.ControlOptions{DatabasePath: controlPath, LayoutID: "native-fixture", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Shutdown(ctx)
+	controlDB, err := sql.Open("sqlite", controlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlDB.Close()
+	if _, err = controlDB.Exec(`UPDATE runtime_storage_state SET archive_epoch=?`, op.RecordingScope.Fence.ArchiveEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = controlDB.Exec(`INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES(?,?,?,0)`, op.Capture.Kind, op.Capture.ID, op.RecordingScope.Fence.CaptureGeneration); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := runtimepersistence.NewInspectionCatalog(runtimepersistence.InspectionCatalogOptions{Root: root, LayoutID: "native-fixture", Generation: 1, Sources: []runtimepersistence.InspectionSource{{ID: "archive", RelativePath: "observations.db", Database: runtimepersistence.SchemaState{Identity: "vibermate-observations", Revision: 1}, Current: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close(ctx)
+	reader := runtimepersistence.NewNativeInspectionReader(catalog, control)
+	inspected, err := reader.Get(ctx, op.Capture, op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertNoSensitiveRows(t, f, []string{"metadata-sentinel", "synthetic-original-login"})
+	for _, change := range mutate {
+		change(f.contentDB, inspected)
+	}
+	invalidate := func(all bool) {
+		tx, err := controlDB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if all {
+			_, err = tx.Exec(`UPDATE runtime_storage_state SET archive_epoch=archive_epoch+1,visibility_revision=visibility_revision+1`)
+		} else {
+			_, err = tx.Exec(`UPDATE recording_capture_fences SET generation=generation+1,deleted=1 WHERE capture_kind=? AND capture_id=?`, op.Capture.Kind, op.Capture.ID)
+			if err == nil {
+				_, err = tx.Exec(`UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1`)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if all {
+			_, err = f.store.ClearEvidence(ctx)
+		} else {
+			_, err = f.store.DeleteCapture(ctx, string(op.Capture.Kind), op.Capture.ID)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(f.store, manuals, f.capture, op, reader, invalidate)
+	if len(mutate) == 0 {
+		assertNoSensitiveRows(t, f, []string{"metadata-sentinel", "synthetic-original-login"})
+	}
 }
 
 func ExerciseNativeUnavailableControl(t *testing.T, check func(Executor, *runtimepersistence.Store, manualcapture.Controller, captureidentity.Reference, nativetool.Approval)) {

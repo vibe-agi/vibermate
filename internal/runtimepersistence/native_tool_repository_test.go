@@ -52,7 +52,7 @@ func TestNativeLifecycleAdapterCompleteWithoutExecution(t *testing.T) {
 	if err != nil || len(page.Items) == 0 || page.NextSequence == 0 {
 		t.Fatalf("page %+v %v", page, err)
 	}
-	for _, table := range []string{"native_tool_once", "native_tool_contents", "runtime_egress_attempts", "tool_approvals", "runtime_activities", "runtime_raw_evidence_envelopes"} {
+	for _, table := range []string{"native_tool_once", "native_tool_contents", "native_tool_deliveries", "tool_approvals", "runtime_activities", "runtime_raw_evidence_envelopes"} {
 		var count int
 		err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
 		if err != nil || count != 0 {
@@ -149,55 +149,7 @@ func TestNativeCatalogEvidenceScopeCASAndProjection(t *testing.T) {
 }
 
 func TestNativePageRealDescriptorsNeverLoadBody(t *testing.T) {
-	store, id, _ := nativeLifecycleFixtureRecording(t, environment.ToolPolicyObserve, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1})
-	repo := store.NativeLifecycleRepository()
-	ctx := context.Background()
-	op, err := repo.Get(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// HISTORICAL SYNTHETIC CONTENT: Task 3 owns production content insertion.
-	tx, err := store.database.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := storeEvidenceBody(ctx, tx, []byte(`{"synthetic":"body"}`))
-	if err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	deadline := op.CreatedAt.Add(time.Hour)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO native_tool_contents(operation_id,part,body_digest,expires_at_unix_ms) VALUES(?,'tool_arguments',?,?)`, id, digest[:], deadline.UnixMilli()); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	// A corrupt body manifest must not affect body-free descriptor projection.
-	if _, err := store.database.ExecContext(ctx, `UPDATE runtime_evidence_bodies SET plain_bytes=999 WHERE digest=?`, digest[:]); err != nil {
-		t.Fatal(err)
-	}
-	projected, err := repo.Get(ctx, id)
-	if err != nil || projected.Arguments == nil || projected.Arguments.Digest != nativetool.Digest(digest) || !projected.Arguments.ExpiresAt.Equal(deadline) || projected.Result != nil || projected.Recording.Mode != environment.ContentRecordingFull {
-		t.Fatalf("descriptor %+v %v", projected, err)
-	}
-	page, err := repo.Page(ctx, nativetool.PageRequest{Capture: op.Capture, Limit: 200})
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, item := range page.Items {
-		if item.ID == id {
-			found = true
-			if item.Arguments == nil || item.Arguments.Digest != projected.Arguments.Digest {
-				t.Fatal("Page/Get descriptor disagreement")
-			}
-		}
-	}
-	if !found {
-		t.Fatal("missing page operation")
-	}
+	testNativeInspectionDescriptorsNeverLoadMalformedBodies(t)
 }
 
 func TestNativeProjectionRejectsForgedApprovalDigest(t *testing.T) {
@@ -435,7 +387,7 @@ func TestNativeLifecycleFrozenPolicyAndLiveOff(t *testing.T) {
 	}
 }
 
-func TestNativeProjectionRejectsUnsafeNameAndMissingEvent(t *testing.T) {
+func TestNativeCurrentProjectionRejectsUnsafeNameAndCorruptEventTuple(t *testing.T) {
 	for _, corrupt := range []string{"name", "event"} {
 		t.Run(corrupt, func(t *testing.T) {
 			store, id, _ := nativeLifecycleFixture(t, environment.ToolPolicyObserve)
@@ -447,8 +399,8 @@ func TestNativeProjectionRejectsUnsafeNameAndMissingEvent(t *testing.T) {
 			}
 			// CORRUPT SYNTHETIC DATA: no production write API creates these rows.
 			if corrupt == "event" {
-				defer store.database.ExecContext(ctx, `INSERT INTO native_tool_events(operation_id,operation_revision,kind,occurred_at_unix_ms) VALUES(?,?,?,?)`, id, op.Revision, "validated", time.Now().UnixMilli())
-				if _, err := store.database.ExecContext(ctx, `DELETE FROM native_tool_events WHERE operation_id=? AND operation_revision=?`, id, op.Revision); err != nil {
+				defer store.database.ExecContext(ctx, `UPDATE native_tool_operations SET last_event_kind='validated' WHERE operation_id=?`, id)
+				if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_operations SET last_event_kind='completed' WHERE operation_id=?`, id); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -460,7 +412,7 @@ func TestNativeProjectionRejectsUnsafeNameAndMissingEvent(t *testing.T) {
 				if _, err := store.database.ExecContext(ctx, `INSERT INTO native_tool_bindings SELECT ?,session_id,session_revision,catalog_generation,catalog_digest,route_id,route_revision,owner_epoch,assignment_revision,request_digest,params_digest,group_digest,binding_digest,replay_key,parent_operation_id,server_request_digest,'unsafe name',NULL FROM native_tool_bindings WHERE operation_id=?`, newID, id); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_operations SET state='validated',revision=2 WHERE operation_id=?`, newID); err != nil {
+				if _, err := store.database.ExecContext(ctx, `UPDATE native_tool_operations SET state='validated',revision=2,last_event_kind='validated' WHERE operation_id=?`, newID); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.database.ExecContext(ctx, `INSERT INTO native_tool_events(operation_id,operation_revision,kind,occurred_at_unix_ms) VALUES(?,2,'validated',?)`, newID, time.Now().UnixMilli()); err != nil {
@@ -563,7 +515,7 @@ func TestNativeLifecycleReplyFreezesParentCatalog(t *testing.T) {
 			}
 		})
 	}
-	for _, table := range []string{"runtime_egress_attempts", "native_tool_once"} {
+	for _, table := range []string{"native_tool_deliveries", "native_tool_once"} {
 		var count int
 		if err := store.database.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil || count != 2 {
 			t.Fatalf("real parent/list execution %s %d %v", table, count, err)

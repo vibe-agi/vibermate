@@ -391,7 +391,9 @@ final class WorkbenchController extends ChangeNotifier
   bool nativeOperationsLoading = false, nativeOperationsComplete = false;
   String? nativeOperationsError;
   bool _nativeReaderVisible = false;
-  int _nativeReaderEpoch = 0, _nativeOperationSequence = 0;
+  int _nativeReaderEpoch = 0;
+  String _nativeOperationCursor = '';
+  String? _nativeInspectionVersion;
   final _nativeOperationGenerations = <String, int>{};
   final _nativeContentLoads = <String, Future<List<NativeRecordedBlock>>>{};
   final _nativeContentCache = <String, List<NativeRecordedBlock>>{};
@@ -422,7 +424,8 @@ final class WorkbenchController extends ChangeNotifier
         )
         .firstOrNull;
     final descriptor = current?.part(part);
-    return current?.revision == operation.revision &&
+    return current?.inspectionVersion == operation.inspectionVersion &&
+        current?.revision == operation.revision &&
         descriptor?.state == 'available' &&
         descriptor?.digest == operation.part(part).digest &&
         descriptor?.expiresAt?.isAfter(DateTime.now().toUtc()) == true;
@@ -442,7 +445,8 @@ final class WorkbenchController extends ChangeNotifier
 
   void _discardNativeReader() {
     _nativeReaderEpoch++;
-    _nativeOperationSequence = 0;
+    _nativeOperationCursor = '';
+    _nativeInspectionVersion = null;
     nativeOperations = const [];
     nativeOperationsLoading = false;
     nativeOperationsComplete = false;
@@ -491,9 +495,16 @@ final class WorkbenchController extends ChangeNotifier
       final previousComplete = nativeOperationsComplete;
       final page = await _api.nativeToolOperations(
         capture,
-        afterSequence: _nativeOperationSequence,
+        cursor: _nativeOperationCursor,
       );
       if (!current()) {
+        return;
+      }
+      if (_nativeInspectionVersion != null &&
+          _nativeInspectionVersion != page.inspectionVersion) {
+        _discardNativeReader();
+        notifyListeners();
+        unawaited(refreshNativeTools());
         return;
       }
       final operations = {
@@ -504,6 +515,7 @@ final class WorkbenchController extends ChangeNotifier
       for (final op in page.items) {
         final old = operations[op.operationId];
         if (old == null ||
+            old.inspectionVersion != op.inspectionVersion ||
             old.revision != op.revision ||
             old.arguments.digest != op.arguments.digest ||
             old.result.digest != op.result.digest ||
@@ -522,8 +534,15 @@ final class WorkbenchController extends ChangeNotifier
           if (!current()) {
             return;
           }
+          if (op.inspectionVersion != page.inspectionVersion) {
+            _discardNativeReader();
+            notifyListeners();
+            unawaited(refreshNativeTools());
+            return;
+          }
           final old = operations[id]!;
-          if (old.revision != op.revision ||
+          if (old.inspectionVersion != op.inspectionVersion ||
+              old.revision != op.revision ||
               old.arguments.digest != op.arguments.digest ||
               old.result.digest != op.result.digest ||
               old.arguments.state != op.arguments.state ||
@@ -549,8 +568,9 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       nativeOperationsComplete =
-          readError == null && page.nextSequence == _nativeOperationSequence;
-      _nativeOperationSequence = page.nextSequence;
+          readError == null && page.nextCursor == _nativeOperationCursor;
+      _nativeOperationCursor = page.nextCursor;
+      _nativeInspectionVersion = page.inspectionVersion;
       nativeOperations = List.unmodifiable(
         operations.values.toList()
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
@@ -566,6 +586,11 @@ final class WorkbenchController extends ChangeNotifier
       }
     } on Object catch (error) {
       if (current()) {
+        if (error is ControlProblem &&
+            (error.status == 409 || error.status == 422) &&
+            _nativeOperationCursor.isNotEmpty) {
+          _discardNativeReader();
+        }
         nativeOperationsError = _describeError(error);
         notifyListeners();
       }
@@ -593,7 +618,7 @@ final class WorkbenchController extends ChangeNotifier
     final epoch = _nativeReaderEpoch,
         generation = _nativeOperationGenerations[op.operationId] ?? 0;
     final key =
-        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation';
+        '$epoch/${op.captureKey}/${op.operationId}/$part/${descriptor.digest}/$generation/${op.inspectionVersion}';
     final cached = _nativeContentCache.remove(key);
     if (cached != null) {
       _nativeContentCache[key] = cached;
@@ -623,7 +648,9 @@ final class WorkbenchController extends ChangeNotifier
           part,
           cursor: cursor,
         );
-        if (!current() || page.bodyDigest != descriptor.digest) {
+        if (!current() ||
+            page.inspectionVersion != op.inspectionVersion ||
+            page.bodyDigest != descriptor.digest) {
           throw const ControlContractException('Native content changed');
         }
         for (final block in page.blocks) {
@@ -701,7 +728,7 @@ final class WorkbenchController extends ChangeNotifier
   String? nativeApprovalError;
   bool _nativeApprovalVisible = false;
   int _nativeApprovalEpoch = 0;
-  int _nativeApprovalSequence = 0;
+  String _nativeApprovalCursor = '';
   int _nativeDecisions = 0;
   Set<String> _nativePendingIDs = {};
   bool get nativeApprovalAttention => _nativePendingIDs.isNotEmpty;
@@ -721,7 +748,7 @@ final class WorkbenchController extends ChangeNotifier
 
   void _discardNativeApprovals() {
     _nativeApprovalEpoch++;
-    _nativeApprovalSequence = 0;
+    _nativeApprovalCursor = '';
     nativeApprovals = const [];
     nativeApprovalScanComplete = false;
     nativeApprovalsLoading = false;
@@ -749,8 +776,8 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = <String, NativeApproval>{};
       final pendingIDs = <String>{};
-      // Event pages alone cannot remove a pending question when a terminal
-      // event has fallen outside this page. Revalidate every visible ID.
+      // Revalidate known pending questions directly. The discovery cursor
+      // traverses the current set and restarts after every exhausted scan.
       for (final id in _nativePendingIDs) {
         try {
           final approval = await _api.nativeApproval(capture, id);
@@ -773,7 +800,7 @@ final class WorkbenchController extends ChangeNotifier
       }
       final page = await _api.nativeApprovals(
         capture,
-        afterSequence: _nativeApprovalSequence,
+        cursor: _nativeApprovalCursor,
       );
       if (!current()) return;
       for (final approval in page.items) {
@@ -782,8 +809,8 @@ final class WorkbenchController extends ChangeNotifier
           if (_nativeApprovalVisible) updated[approval.id] = approval;
         }
       }
-      nativeApprovalScanComplete = page.nextSequence == _nativeApprovalSequence;
-      _nativeApprovalSequence = page.nextSequence;
+      nativeApprovalScanComplete = page.nextCursor.isEmpty;
+      _nativeApprovalCursor = page.nextCursor;
       _nativePendingIDs = pendingIDs;
       nativeApprovals = _nativeApprovalVisible
           ? List.unmodifiable(updated.values)
@@ -793,7 +820,7 @@ final class WorkbenchController extends ChangeNotifier
       if (!current()) return;
       nativeApprovals = const [];
       nativeApprovalScanComplete = false;
-      _nativeApprovalSequence = 0;
+      _nativeApprovalCursor = '';
       _nativePendingIDs = {};
       nativeApprovalError = _describeError(error);
     } finally {
@@ -875,6 +902,9 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStorageLocation? storageLocation;
   RuntimeStorageLocation? previousStorageLocation;
   bool storageLocationLoading = false;
+  int _storageLocationGeneration = 0;
+  bool _storageLocationRefreshRequested = false;
+  Future<void>? _storageLocationRefresh;
   bool storageLocationFailed = false;
   bool storageCleanupRunning = false;
   bool storageArchivePreviewLoading = false;
@@ -987,6 +1017,7 @@ final class WorkbenchController extends ChangeNotifier
   final Map<String, int> _exchangeLoadGenerations = {};
   final Map<String, String> _exchangeErrors = {};
   int _exchangeLoadGeneration = 0;
+  int _activityInspectionGeneration = 0;
   final LinkedHashMap<String, RawEvidencePage> _rawEvidencePages =
       LinkedHashMap<String, RawEvidencePage>();
   final Set<String> _loadingRawEvidence = {};
@@ -1151,7 +1182,7 @@ final class WorkbenchController extends ChangeNotifier
       _api.dryRunEnvironment(input);
 
   Future<EvidenceSearchPage> searchEvidence(EvidenceSearchRequest request) =>
-      _api.searchEvidence(request);
+      _inspectionRead(() => _api.searchEvidence(request));
 
   Future<EnvironmentDraft> environmentDraft(String environmentId) =>
       _api.environmentDraft(environmentId);
@@ -1351,8 +1382,27 @@ final class WorkbenchController extends ChangeNotifier
         : ActivitySummaryScope(captureRunId: capture.captureRunId!);
   }
 
-  Future<ExchangeSummary> loadActivitySummary(ActivitySummaryScope scope) =>
-      _api.activitySummary(scope);
+  Future<ExchangeSummary> loadActivitySummary(
+    ActivitySummaryScope scope,
+  ) async {
+    final capture = selectedCapture;
+    final revision = capture?.manualCapture?.credentialRevision;
+    final bound =
+        capture != null &&
+        capture.isManual &&
+        scope.manualCaptureId == capture.id;
+    final summary = await _inspectionRead(() => _api.activitySummary(scope));
+    if (bound &&
+        (selectedCaptureKey != capture.key ||
+            selectedCapture?.manualCapture?.credentialRevision != revision ||
+            summary.captureObservation != null &&
+                summary.captureObservation!.credentialRevision != revision)) {
+      throw const ControlContractException(
+        'Capture authorization summary is no longer current',
+      );
+    }
+    return summary;
+  }
 
   Future<RuntimeUsageReport> loadCaptureUsage(
     ActivitySummaryScope scope,
@@ -1468,7 +1518,7 @@ final class WorkbenchController extends ChangeNotifier
       WidgetsFlutterBinding.ensureInitialized().addObserver(this);
       _observingLifecycle = true;
     }
-    await refresh();
+    await _refreshDashboard(awaitDetail: false);
     if (_disposed) return;
     if (terminalManagement) await _maintainTerminalCommand();
     if (_disposed) return;
@@ -1660,9 +1710,13 @@ final class WorkbenchController extends ChangeNotifier
     await _refreshDashboard(selectDefaults: selectDefaults);
   }
 
-  Future<bool> refreshCodexReauthorizationAccount() => _refreshDashboard();
+  Future<bool> refreshCodexReauthorizationAccount() =>
+      _refreshDashboard(awaitDetail: false);
 
-  Future<bool> _refreshDashboard({bool selectDefaults = false}) async {
+  Future<bool> _refreshDashboard({
+    bool selectDefaults = false,
+    bool awaitDetail = true,
+  }) async {
     if (_disposed || inventoryMutating || environmentMutating) return false;
     final generation = ++_dashboardGeneration;
     captureOverviewRefresh += 1;
@@ -1678,11 +1732,21 @@ final class WorkbenchController extends ChangeNotifier
       loading = false;
       _startProviderAccountQuotaPolling();
       notifyListeners();
-      if (selectedCapture != null) await _loadCaptureDetail(selectedCapture!);
+      final refreshes = <Future<void>>[refreshPendingApprovals()];
+      if (selectedCapture != null) {
+        // Explicit refresh awaits visible evidence; initialization and account
+        // readiness remain independent of this optional read. Approval
+        // discovery starts concurrently in both cases.
+        final detail = _loadCaptureDetail(selectedCapture!);
+        if (awaitDetail) {
+          refreshes.add(detail);
+        } else {
+          unawaited(detail);
+        }
+      }
+      await Future.wait(refreshes);
       if (section == WorkbenchSection.network) {
-        await _refreshNetwork();
-      } else {
-        await refreshPendingApprovals();
+        unawaited(_refreshNetwork());
       }
       if (section == WorkbenchSection.settings ||
           section == WorkbenchSection.usage) {
@@ -2043,24 +2107,59 @@ final class WorkbenchController extends ChangeNotifier
   }
 
   Future<void> refreshStorageLocation() async {
-    if (_disposed || storageLocationLoading) return;
-    storageLocationLoading = true;
-    storageLocationFailed = false;
-    notifyListeners();
+    if (_disposed) return;
+    final running = _storageLocationRefresh;
+    if (running != null) {
+      _storageLocationRefreshRequested = true;
+      await running;
+      return;
+    }
+    final completion = Completer<void>();
+    final refresh = completion.future;
+    _storageLocationRefresh = refresh;
     try {
-      final location = await _api.storageLocation();
-      if (_disposed) return;
-      previousStorageLocation = storageLocation;
-      storageLocation = location;
-    } catch (_) {
-      if (_disposed) return;
-      storageLocationFailed = true;
+      await _refreshStorageLocationLoop();
     } finally {
+      if (identical(_storageLocationRefresh, refresh)) {
+        _storageLocationRefresh = null;
+      }
+      completion.complete();
       if (!_disposed) {
         storageLocationLoading = false;
         notifyListeners();
       }
     }
+  }
+
+  Future<void> _refreshStorageLocationLoop() async {
+    storageLocationLoading = true;
+    do {
+      _storageLocationRefreshRequested = false;
+      final generation = _storageLocationGeneration;
+      storageLocationFailed = false;
+      notifyListeners();
+      try {
+        final location = await _api.storageLocation();
+        if (_disposed) return;
+        // Cleanup acceptance invalidates both the statistics and certificate
+        // from earlier reads. The owner drains the queued fresh read below.
+        if (generation != _storageLocationGeneration) continue;
+        previousStorageLocation = storageLocation;
+        storageLocation = location;
+        if (storageCleanupNotice == 'settings.storage.cleanup_pending' &&
+            !location.cleanupPreview.cleanupPending &&
+            location.lastCleanup != null) {
+          storageCleanupNotice = location.lastCleanup!.countsIncomplete
+              ? 'settings.storage.cleanup_partial'
+              : 'settings.storage.cleanup_complete';
+        }
+      } catch (_) {
+        if (_disposed) return;
+        if (generation == _storageLocationGeneration) {
+          storageLocationFailed = true;
+        }
+      }
+    } while (_storageLocationRefreshRequested && !_disposed);
   }
 
   Future<DeletionOutcome> cleanupExpiredEvidence() async {
@@ -2076,11 +2175,16 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed) {
         throw const ControlContractException('storage cleanup is unavailable');
       }
-      storageCleanupNotice = 'settings.storage.cleanup_complete';
       if (outcome.deleted) {
-        _discardNativeReader();
+        ++_storageLocationGeneration;
+        storageCleanupNotice = outcome.released?.cleanupPending == true
+            ? 'settings.storage.cleanup_pending'
+            : outcome.released?.countsIncomplete == true
+            ? 'settings.storage.cleanup_partial'
+            : 'settings.storage.cleanup_complete';
+        _invalidateEvidenceCaches();
       }
-      await refreshStorageLocation();
+      unawaited(refreshStorageLocation());
       return outcome;
     } catch (error) {
       if (!_disposed) storageCleanupError = _describeError(error);
@@ -2696,6 +2800,7 @@ final class WorkbenchController extends ChangeNotifier
       exchangeId,
       contentView: contentView,
       generation: generation,
+      inspectionGeneration: _activityInspectionGeneration,
     );
     _exchangeLoads[key] = load;
     notifyListeners();
@@ -2707,22 +2812,28 @@ final class WorkbenchController extends ChangeNotifier
   Future<ExchangeContentPage> loadExchangeContentPage(
     String exchangeId,
     String cursor,
-  ) => _api.exchangeContentPage(exchangeId, cursor);
+  ) => _inspectionRead(() => _api.exchangeContentPage(exchangeId, cursor));
 
   Future<ToolResultPage> loadToolResults(
     String exchangeId,
     String callId, {
     String? cursor,
-  }) => _api.toolResults(exchangeId, callId, cursor: cursor);
+  }) => _inspectionRead(
+    () => _api.toolResults(exchangeId, callId, cursor: cursor),
+  );
 
   Future<ExchangeDetail?> _fetchExchangeDetail(
     String key,
     String exchangeId, {
     required String contentView,
     required int generation,
+    required int inspectionGeneration,
   }) async {
     try {
       final detail = await _api.exchange(exchangeId, contentView: contentView);
+      if (_disposed || inspectionGeneration != _activityInspectionGeneration) {
+        return null;
+      }
       if (_disposed || _exchangeLoadGenerations[key] != generation) {
         return detail;
       }
@@ -2734,6 +2845,7 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed || _exchangeLoadGenerations[key] != generation) {
         return null;
       }
+      _invalidateActivityInspection(error);
       _exchangeErrors[key] = _describeError(error);
       return null;
     } finally {
@@ -3006,6 +3118,21 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  void _invalidateNetworkContinuation(Object error) {
+    if (error is! ControlProblem ||
+        (error.status != 409 && error.status != 422)) {
+      return;
+    }
+    final current = networkData;
+    if (current == null) return;
+    networkData = NetworkData(
+      approvals: current.approvals,
+      rules: current.rules,
+      connections: const ConnectionPage(items: [], nextCursor: null),
+      egressAttempts: const EgressAttemptPage(items: [], nextCursor: null),
+    );
+  }
+
   Future<void> loadMoreConnections() async {
     final current = networkData;
     final cursor = current?.connections.nextCursor;
@@ -3030,6 +3157,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
+      _invalidateNetworkContinuation(error);
       _setNetworkError(error);
       notifyListeners();
     }
@@ -3059,6 +3187,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed) return;
       networkLoading = false;
+      _invalidateNetworkContinuation(error);
       _setNetworkError(error);
       notifyListeners();
     }
@@ -3069,7 +3198,7 @@ final class WorkbenchController extends ChangeNotifier
     ApprovalChoice choice,
   ) async {
     final current = networkData;
-    if (current == null || networkMutating) return false;
+    if (networkMutating) return false;
     networkMutating = true;
     _clearNetworkError();
     networkNotice = null;
@@ -3080,14 +3209,16 @@ final class WorkbenchController extends ChangeNotifier
         choice: choice,
       );
       if (_disposed) return false;
-      networkData = NetworkData(
-        approvals: current.approvals
-            .where((candidate) => candidate.id != resolved.id)
-            .toList(growable: false),
-        connections: current.connections,
-        egressAttempts: current.egressAttempts,
-        rules: current.rules,
-      );
+      if (current != null) {
+        networkData = NetworkData(
+          approvals: current.approvals
+              .where((candidate) => candidate.id != resolved.id)
+              .toList(growable: false),
+          connections: current.connections,
+          egressAttempts: current.egressAttempts,
+          rules: current.rules,
+        );
+      }
       pendingApprovals = pendingApprovals
           ?.where((candidate) => candidate.id != resolved.id)
           .toList(growable: false);
@@ -3379,7 +3510,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<void> finishCodexReauthorization(ProviderAccount account) async {
     invalidateProviderAccountQuota(account);
-    await refresh();
+    await _refreshDashboard(awaitDetail: false);
     if (_disposed) return;
     inventoryNotice = 'account_reauthorized';
     notifyListeners();
@@ -3726,7 +3857,58 @@ final class WorkbenchController extends ChangeNotifier
     captureActivitiesLoading = false;
   }
 
+  Future<T> _inspectionRead<T>(Future<T> Function() read) async {
+    final generation = _activityInspectionGeneration;
+    try {
+      final result = await read();
+      if (_disposed || generation != _activityInspectionGeneration) {
+        throw const ControlProblem(
+          status: 409,
+          reasonCode: 'inspection_changed',
+          messageKey: 'error.inspection_changed',
+        );
+      }
+      return result;
+    } catch (error) {
+      _invalidateActivityInspection(error);
+      rethrow;
+    }
+  }
+
+  void _invalidateActivityInspection(Object error) {
+    if (_disposed) return;
+    if (error is! ControlProblem ||
+        (error.status != 409 && error.status != 422)) {
+      return;
+    }
+    _clearActivityInspection();
+    errorMessage = _describeError(error);
+    notifyListeners();
+  }
+
+  void _clearActivityInspection() {
+    _activityInspectionGeneration++;
+    // These are optional projections of one source/visibility view. Required
+    // Capture selection, assignments, and approvals retain their own owners.
+    _selectionGeneration++;
+    _exchangeLoadGeneration++;
+    _exchangeDetails.clear();
+    _exchangeLoads.clear();
+    _exchangeLoadGenerations.clear();
+    _exchangeErrors.clear();
+    _captureConversationPages.clear();
+    selectedCapturePage = const ActivityPage(items: [], nextCursor: null);
+    selectedCaptureConversations = const ConversationPage(
+      items: [],
+      nextCursor: null,
+    );
+    _summaryBodiesAbsent = false;
+    captureActivitiesLoading = false;
+    detailLoading = false;
+  }
+
   void _invalidateEvidenceCaches() {
+    _clearActivityInspection();
     _discardNativeReader();
     _discardNativeApprovals();
     _exchangeLoadGeneration += 1;
@@ -3803,6 +3985,13 @@ final class WorkbenchController extends ChangeNotifier
     if (selectedCaptureKey == captureKey &&
         selectedAssignment != null &&
         captureDetailError == null) {
+      // Assignment can finish before optional detail during initialization.
+      // Explicit selection still promises complete visible evidence, while
+      // retaining independently loaded approval state for this same Capture.
+      final capture = selectedCapture;
+      if (_captureDetailLoads != 0 && capture != null) {
+        await _loadCaptureDetail(capture);
+      }
       return;
     }
     selectedCaptureKey = captureKey;
@@ -4227,7 +4416,9 @@ final class WorkbenchController extends ChangeNotifier
         // must not turn a confirmed assignment into an unassigned run.
         if (!_disposed &&
             generation == _selectionGeneration &&
-            selectedCaptureKey == capture.key) {
+            selectedCaptureKey == capture.key &&
+            selectedCapture?.manualCapture?.credentialRevision ==
+                capture.manualCapture?.credentialRevision) {
           selectedAssignment = assignment;
           selectedCaptureLaunchIncomplete = assignment == null;
         }
@@ -4248,7 +4439,9 @@ final class WorkbenchController extends ChangeNotifier
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       final assignment = values[0] as CaptureAssignment?;
@@ -4283,7 +4476,9 @@ final class WorkbenchController extends ChangeNotifier
       );
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       selectedCaptureConversations = conversationPage;
@@ -4332,7 +4527,9 @@ final class WorkbenchController extends ChangeNotifier
             );
       if (_disposed ||
           generation != _selectionGeneration ||
-          selectedCaptureKey != capture.key) {
+          selectedCaptureKey != capture.key ||
+          selectedCapture?.manualCapture?.credentialRevision !=
+              capture.manualCapture?.credentialRevision) {
         return;
       }
       final retained =
@@ -4375,6 +4572,7 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
       detailLoading = false;
+      _invalidateActivityInspection(error);
       captureDetailError = _describeError(error);
       errorMessage = captureDetailError;
       notifyListeners();
@@ -4389,14 +4587,14 @@ final class WorkbenchController extends ChangeNotifier
     try {
       return await _api.captureAssignment(capture.key);
     } on ControlProblem catch (error) {
-      // A failed pre-launch assignment in older runtimes left a finished run
-      // with no child or traffic. Other missing assignments remain errors.
+      // Older pre-launch failures can leave a finished run without a child
+      // record or assignment. Recording placeholders are not traffic proof.
       if (error.status == 404 &&
           error.reasonCode == 'capture_assignment_not_found' &&
           !capture.isManual &&
+          capture.observation == 'waiting_for_traffic' &&
           !capture.running &&
-          capture.managedRun?.processId == null &&
-          capture.observation == 'waiting_for_traffic') {
+          capture.managedRun?.processId == null) {
         return null;
       }
       rethrow;
@@ -4489,6 +4687,7 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
+      _invalidateActivityInspection(error);
       errorMessage = _describeError(error);
       notifyListeners();
     }
@@ -4548,6 +4747,7 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       captureActivitiesLoading = false;
+      _invalidateActivityInspection(error);
       errorMessage = _describeError(error);
       notifyListeners();
     }
@@ -4858,6 +5058,7 @@ final class WorkbenchController extends ChangeNotifier
         left.storage == right.storage &&
         left.storageFailure == right.storageFailure &&
         left.recordingFailure == right.recordingFailure &&
+        left.recording == right.recording &&
         left.environmentProjection == right.environmentProjection &&
         listEquals(
           left.unavailableEnvironments,

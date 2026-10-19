@@ -67,6 +67,7 @@ func TestNativeFullInflightRefreshUsesFrozenProfileAndKnownCompletion(t *testing
 	if err != nil || scope.ReplayBarrier {
 		t.Fatalf("known effect marked uncertain %+v %v", scope, err)
 	}
+	f.requireNoContent(t, c.id, nativetool.ContentToolResult)
 	assertNoSensitiveRows(t, f, []string{"frozen-sensitive-result"})
 }
 

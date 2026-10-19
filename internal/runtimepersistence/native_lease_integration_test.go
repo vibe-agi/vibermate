@@ -42,9 +42,14 @@ type nativeLeaseFixture struct {
 }
 
 func newNativeLeaseFixture(t *testing.T, enabled, shared bool, nativeMode ...environment.ToolPolicyMode) nativeLeaseFixture {
+	return newNativeLeaseFixtureOnStore(t, nil, enabled, shared, nativeMode...)
+}
+func newNativeLeaseFixtureOnStore(t *testing.T, store *Store, enabled, shared bool, nativeMode ...environment.ToolPolicyMode) nativeLeaseFixture {
 	t.Helper()
 	ctx := context.Background()
-	store := openTestStore(t, t.TempDir()+"/runtime.db")
+	if store == nil {
+		store = openTestStore(t, t.TempDir()+"/runtime.db")
+	}
 	t.Cleanup(func() { shutdownTestStore(t, store) })
 	environments := newEnvironmentManager(t, store)
 	candidate := environmentFixture(t, "native.lease", 1)

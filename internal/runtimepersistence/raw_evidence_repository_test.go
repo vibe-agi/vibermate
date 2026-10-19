@@ -125,6 +125,9 @@ func TestRawEvidenceManagerDurableFencesPreserveSQLiteReadsAndTerminalDeletion(t
 	if _, err := manager.Observe(ctx, observation); err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.Flush(ctx, rawevidence.Watermark{}); err != nil {
+		t.Fatal(err)
+	}
 	metadata, err := manager.ListExchange(ctx, observation.ExchangeID)
 	if err != nil || len(metadata) != 1 {
 		t.Fatalf("first SQLite read=%+v err=%v", metadata, err)
@@ -496,4 +499,50 @@ func rawEvidenceRecordForTest(
 		RedactedCredentialFields: []string{"Authorization"},
 		PayloadMetadata:          payloadMetadata,
 	}
+}
+
+// An abandoned sequence is a recording gap, never a permanent writer failure.
+func TestRawManagerPersistsExactLaterBytesAfterAbandonedBatch(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repo := &failFirstRawBatch{Repository: store.RawEvidenceRepository()}
+	manager, err := rawevidence.Open(context.Background(), rawevidence.Options{Repository: repo, Random: bytes.NewReader(bytes.Repeat([]byte{0x31}, 64)), Clock: rawevidence.SystemClock{}, Config: rawevidence.Config{MaximumQueueRecords: 4, MaximumQueueBytes: 1 << 20, MaximumBatchRecords: 4, MaximumBatchBytes: 1 << 20, FlushInterval: time.Hour}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Shutdown(context.Background())
+	observation := rawevidence.Observation{Context: rawevidence.Context{ScopeKind: rawevidence.ScopeRuntime, ExchangeID: "exchange-gap", Recording: rawevidence.RecordingFull, RetentionDays: 1}, Layer: rawevidence.LayerProviderResponse, Complete: true, Representation: "http_message", Body: []byte("lost")}
+	mark, _ := manager.Observe(context.Background(), observation)
+	if manager.Flush(context.Background(), mark) == nil {
+		t.Fatal("synthetic failed batch succeeded")
+	}
+	observation.Body = []byte("later exact bytes\x00\xff")
+	mark, _ = manager.Observe(context.Background(), observation)
+	if mark.Sequence != 2 {
+		t.Fatalf("later offer: %+v", mark)
+	}
+	if err := manager.Flush(context.Background(), mark); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.RawEvidenceRepository().ListExchange(context.Background(), "exchange-gap")
+	if err != nil || len(records) != 1 || !bytes.Equal(records[0].Body, observation.Body) || records[0].Watermark != 2 {
+		t.Fatalf("recovery lost bytes: %+v %v", records, err)
+	}
+	stats := manager.Statistics()
+	if stats.DurableWatermark != 0 || stats.HighestPersistedSequence != 2 || stats.PersistedRecords != 1 || stats.SettledSequence != 2 {
+		t.Fatalf("gap claimed durable: %+v", stats)
+	}
+}
+
+type failFirstRawBatch struct {
+	rawevidence.Repository
+	attempted bool
+}
+
+func (r *failFirstRawBatch) AppendBatch(ctx context.Context, records []rawevidence.StoredEnvelope, now time.Time) error {
+	if !r.attempted {
+		r.attempted = true
+		return errors.New("synthetic failed batch")
+	}
+	return r.Repository.AppendBatch(ctx, records, now)
 }

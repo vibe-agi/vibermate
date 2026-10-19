@@ -53,7 +53,7 @@ func TestManagedRouteAppliesToolPolicyToUnmodelledBlocks(t *testing.T) {
 					value.PolicySet = &environment.PolicySet{ToolMode: mode}
 				})
 				if mode == environment.ToolPolicyObserve {
-					runManagedChild(t, paths, environmentID, false,
+					runManagedChild(t, host, paths, environmentID, false,
 						childManagedBody+"="+request, childManagedResponse+"="+response, childManagedStatus+"=200")
 					return
 				}
@@ -61,7 +61,7 @@ func TestManagedRouteAppliesToolPolicyToUnmodelledBlocks(t *testing.T) {
 				if stream {
 					status = http.StatusOK
 				}
-				runManagedChild(t, paths, environmentID, false,
+				runManagedChild(t, host, paths, environmentID, false,
 					childManagedBody+"="+request, childManagedForbidden+"=bau_hidden", childManagedStatus+"="+strconv.Itoa(status))
 			})
 		}

@@ -58,7 +58,9 @@ func TestNativeDecisionRegisteredParentWitness(t *testing.T) {
 			t.Fatal("unclassified/sensitive server request admitted")
 		}
 	}
-	if _, err := observer.ObserveReply(replyID, request, []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`)); err == nil {
-		t.Fatal("typed ID mismatch admitted")
+	for _, invalid := range []string{`{"jsonrpc":"2.0","id":1,"result":{}}`, `{"jsonrpc":"2.0","id":"server-1","result":{"data":"sentinel"}}`, `{"jsonrpc":"2.0","id":"server-1","result":{},"_meta":{}}`} {
+		if _, err := observer.ObserveReply(replyID, request, []byte(invalid)); err == nil {
+			t.Fatal("nonclosed ping response admitted")
+		}
 	}
 }

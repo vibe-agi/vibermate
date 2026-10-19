@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"log"
 	"net"
@@ -169,7 +170,7 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		Coordinator:   gate,
 		Authenticator: authenticator,
 		Transport:     transport,
-		Audit:         audit, EgressDefaults: defaults,
+		Audit:         testrecording.Egress(audit), EgressDefaults: defaults,
 	})
 	if err != nil {
 		t.Fatal(err)

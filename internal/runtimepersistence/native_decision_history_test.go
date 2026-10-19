@@ -32,12 +32,12 @@ func snapshotDecisionHistory(t *testing.T, f callbackSQLFixture, id nativetool.I
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = f.store.database.QueryRowContext(ctx, `SELECT idempotency_key,(SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?),(SELECT COUNT(*) FROM native_tool_events WHERE operation_id=?) FROM native_tool_approvals WHERE approval_id=?`, f.child, f.child, f.child, id).Scan(&s.Key, &s.Once, &s.Audits, &s.Events)
+	err = f.store.database.QueryRowContext(ctx, `SELECT idempotency_key,(SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_events WHERE operation_id=?) FROM native_tool_approvals WHERE approval_id=?`, f.child, f.child, f.child, id).Scan(&s.Key, &s.Once, &s.Audits, &s.Events)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Audits > 0 {
-		s.Audit, err = scanEgressAttempt(f.store.database.QueryRowContext(ctx, egressAttemptSelect+` WHERE parent_id=?`, f.child))
+		s.Audit, err = scanEgressAttempt(f.store.database.QueryRowContext(ctx, nativeDeliverySelect+` WHERE operation_id=?`, f.child))
 		if err != nil {
 			t.Fatal(err)
 		}

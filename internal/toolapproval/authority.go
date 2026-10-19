@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/semaphore"
 	"hash"
 	"io"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -86,7 +88,7 @@ func DefaultConfig() Config {
 }
 
 type Options struct {
-	NativeRepository nativetool.LifecycleRepository
+	NativeRepository nativetool.LifecycleAuthority
 	Repository       Repository
 	Clock            Clock
 	Random           io.Reader
@@ -116,7 +118,8 @@ type waiter struct {
 }
 
 type Authority struct {
-	nativeRepository nativetool.LifecycleRepository
+	publication      *semaphore.Weighted
+	nativeRepository nativetool.LifecycleAuthority
 	repository       Repository
 	clock            Clock
 	random           io.Reader
@@ -149,6 +152,7 @@ func New(ctx context.Context, options Options) (*Authority, error) {
 		return nil, fmt.Errorf("recover tool approvals: %w", err)
 	}
 	return &Authority{
+		publication:            semaphore.NewWeighted(math.MaxInt64),
 		nativeRepository:       options.NativeRepository,
 		repository:             options.Repository,
 		clock:                  options.Clock,
@@ -227,6 +231,13 @@ func (authority *Authority) Decide(
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(authority.config.DecisionTimeout),
 	}
+	if original := request.OriginalScope(); original.Validate() == nil {
+		record.OwnerScope = original
+		record.OwnerKind = OwnershipGlobal
+		if original.Capture.Kind != "" {
+			record.OwnerKind = OwnershipCapture
+		}
+	}
 	if err := record.Validate(); err != nil {
 		return exchange.ToolDecision{}, err
 	}
@@ -236,6 +247,11 @@ func (authority *Authority) Decide(
 		return exchange.ToolDecision{}, ErrRuntimeStopping
 	}
 	authority.mu.Unlock()
+	publication, err := authority.acquirePublication(operation)
+	if err != nil {
+		return exchange.ToolDecision{}, err
+	}
+	defer publication()
 	// An identical pending question joins the existing entry, so a repeat of
 	// the same group is one prompt answered once rather than a second prompt.
 	pending, entry, joined := authority.waiters.join(record.AggregateKey, record.ID)
@@ -280,6 +296,7 @@ func (authority *Authority) Decide(
 	authority.mu.Lock()
 	authority.notifyLocked()
 	authority.mu.Unlock()
+	publication()
 	var resolved Record
 	select {
 	case resolved = <-pending.result:
@@ -363,6 +380,11 @@ func (authority *Authority) DecideApproval(
 		return View{}, err
 	}
 	defer finish()
+	publication, err := authority.acquirePublication(operation)
+	if err != nil {
+		return View{}, err
+	}
+	defer publication()
 	record, err := authority.repository.Decide(
 		operation,
 		command,

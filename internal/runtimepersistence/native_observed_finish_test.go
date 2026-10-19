@@ -95,7 +95,7 @@ func TestNativeObservedFinishRequiresExactReceiptAndAtomicFacts(t *testing.T) {
 				if op.State != "completed" {
 					t.Fatalf("logical state=%s", op.State)
 				}
-				audit, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+				audit, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 				if err != nil || audit.Attempt.Outcome() != "failed" {
 					t.Fatalf("physical outcome %v %v", audit, err)
 				}
@@ -155,7 +155,7 @@ func TestNativeAmbiguousPhysicalFinishCleansKnownTerminal(t *testing.T) {
 			if err != nil || scope.ReplayBarrier {
 				t.Fatal("known result gained uncertainty barrier")
 			}
-			audit, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+			audit, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 			if err != nil || !audit.Attempt.Terminal() || audit.Attempt.Outcome() != "failed" || audit.Attempt.ByteCountsKnown() {
 				t.Fatalf("physical cleanup stranded: terminal=%v err=%v", audit.Attempt.Terminal(), err)
 			}

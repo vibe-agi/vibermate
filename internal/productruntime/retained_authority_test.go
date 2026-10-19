@@ -7,22 +7,29 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -485,112 +492,249 @@ func TestRetainedAuthorityLogoutPreservesOtherSessionAndLocalCapture(t *testing.
 	f.observe("remaining tunnel release", func() bool { return f.gate.Snapshot().ActiveActions == 0 })
 }
 
-func TestRetainedRevocationJoinsConnectionTerminal(t *testing.T) {
-	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
-	defer block.unblock()
-	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
-		block.Repository = request.repository
-		request.repository = block
-		return buildConnectionEvent(ctx, request)
-	}})
+// The optional sink and real provider Body.Close are held independently.
+// Revocation/Finish must join the inner HTTP owner, never optional SQL.
+func TestRetainedRevocationJoinsConnectionTerminal(t *testing.T) { runRetainedBodyJoin(t, false) }
+func TestRetainedFinishJoinsPreviouslyExpiredConnectionTerminal(t *testing.T) {
+	runRetainedBodyJoin(t, true)
+}
+
+func runRetainedBodyJoin(t *testing.T, expired bool) {
+	t.Helper()
+	sink := &blockedObservationStore{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(sink.release)
+	body := &cleartextCloseBarrier{entered: make(chan struct{}), release: make(chan struct{})}
+	body.block.Store(true)
+	var revocation *nativeRevocation
+	var bodyCtx context.Context
+	var once sync.Once
+	release := func() { once.Do(func() { close(body.release) }) }
+	defer release()
+	cfg := capturedOriginalConfig{family: "semantic", choice: "builtin", environment: func(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
+		var ok bool
+		revocation, ok = request.nativeRevocation.(*nativeRevocation)
+		if !ok {
+			t.Fatal("actual Runtime native revocation adapter unavailable")
+		}
+		return buildEnvironment(ctx, request)
+	}, bodyWrap: func(ctx context.Context, b io.ReadCloser) io.ReadCloser {
+		bodyCtx = ctx
+		body.ReadCloser = b
+		return body
+	}, recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
+		if expired {
+			return primeBlockedRecordingQueue(t, ctx, b, sink)
+		}
+		return newObservationRecorder(ctx, b, sink, sink)
+	}}
+	openFailed := make(chan struct{})
+	if expired {
+		var refused sync.Once
+		cfg.openObservations = func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error) {
+			refused.Do(func() { close(openFailed) })
+			return nil, errors.New("synthetic optional-open refusal isolates retained owner join")
+		}
+	}
+	f := newCapturedOriginalFixture(t, cfg)
 	f.transport.DisableKeepAlives = false
-	if reply := f.send(t.Context(), "POST", semanticOriginalPath, semanticOriginalBody); reply.Err != nil || reply.Status != 200 {
-		t.Fatalf("baseline=%+v", reply)
+	if expired {
+		// The independent queue worker was actually primed before availability
+		// installation. The optional owner now confirms open refusal before
+		// traffic; no Raw scope lease can mask the retired-subscription join.
+		select {
+		case <-openFailed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("optional-open refusal not entered")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for f.r.Status().Recording.State != RecordingDegraded {
+			if time.Now().After(deadline) {
+				t.Fatal("optional owner did not acknowledge open refusal")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if f.r.recordingStorage.current.Load() != nil {
+			t.Fatal("Raw owner unexpectedly exists in retained-only join case")
+		}
+	} else {
+		waitRecording(t, f.r)
+		// Ordinary revocation retains the available Raw-owner join coverage.
+		event := connectionevent.Event{ConnectionID: "retained-prime", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+		if f.r.recorder.ObserveConnection(f.r.recorder.ScopeStamp(captureidentity.Reference{}), event) != recording.Accepted {
+			t.Fatal("prime refused")
+		}
+		<-sink.entered
 	}
-	id, _ := manualcapture.ParseID(f.capture.ID)
-	revoked := make(chan error, 1)
-	go func() {
-		_, err := f.r.ManualCaptures().Revoke(t.Context(), manualcapture.RevokeCommand{Owner: manualcapture.NewLocalOwnerScope(), ID: id, ExpectedCredentialRevision: 1})
-		revoked <- err
+	requestCtx := t.Context()
+	var releaseWitness func()
+	defer func() {
+		if releaseWitness != nil {
+			releaseWitness()
+		}
 	}()
-	select {
-	case <-block.entered:
-	case <-time.After(time.Second):
-		t.Fatal("terminal write was not entered")
-	}
-	select {
-	case err := <-revoked:
+	var retirement <-chan time.Time
+	var expiry time.Time
+	var expiredID string
+	var expiredCapability capturerun.ProxyCapability
+	var finish func() error
+	if expired {
+		dir := t.TempDir()
+		grant, err := f.r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", Lifetime: 5 * time.Second, CatalogRevision: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Error("revocation returned while its connection terminal was still held")
-	case <-time.After(30 * time.Millisecond):
-	}
-	block.unblock()
-	// A nonblocking read avoids consuming the result twice on the RED path.
-	if !t.Failed() {
-		select {
-		case err := <-revoked:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("revocation did not join released terminal")
+		capture, _ := captureidentity.New(captureidentity.KindManagedRun, grant.Run.ID)
+		if _, err = f.r.CaptureAssignments().Create(t.Context(), captureassignment.CreateCommand{Capture: capture, EnvironmentID: f.aggregate.ID, Source: captureassignment.SourceLaunch}); err != nil {
+			t.Fatal(err)
+		}
+		proxy, _ := url.Parse(f.listener.URL)
+		proxy.User = url.UserPassword("capture", grant.ProxyCapability.Value())
+		f.transport.Proxy = http.ProxyURL(proxy)
+		// The client timer is not the expiry source. This one held-owner case
+		// gives actual setup/deadline retirement a separate bounded caller budget.
+		bounded, cancelRequest := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancelRequest()
+		requestCtx = bounded
+		f.client.Timeout = 0
+		expiry = time.UnixMilli(grant.Run.ExpiresAt.UnixMilli()).UTC()
+		expiredID = grant.Run.ID
+		expiredCapability = grant.ProxyCapability
+		revocation.mu.RLock()
+		retained := revocation.retained
+		revocation.mu.RUnlock()
+		if retained == nil {
+			t.Fatal("actual Runtime retained authority unavailable")
+		}
+		credential, err := captureadmission.NewProxyCredential(grant.ProxyCapability.Value())
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, err := retained.Authorize(requestCtx, credential)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, err := admission.CaptureReference()
+		if err != nil || ref != capture || admission.AdmissionRef() != "capture-run/"+grant.Run.ID || admission.CredentialRevision() != 1 {
+			t.Fatal("expiry witness does not identify the same authenticated Capture generation")
+		}
+		retired := make(chan time.Time, 1)
+		// This sealed admission comes from the same actual authorizer used by
+		// the HTTP owner. Retain keys it by the same admission/revision and
+		// requires the same issuer. Its callback runs only after the deadline
+		// worker removes the shared entry and withdraws all its subscriptions.
+		releaseWitness, err = retained.Retain(requestCtx, admission, func() { retired <- f.r.clock.Now().UTC() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		retirement = retired
+		finish = func() error { return f.r.captureRuns.Finish(requestCtx, grant.Run.ID, grant.ControlCapability) }
+	} else {
+		id, _ := manualcapture.ParseID(f.capture.ID)
+		finish = func() error {
+			_, err := f.r.ManualCaptures().Revoke(t.Context(), manualcapture.RevokeCommand{Owner: manualcapture.NewLocalOwnerScope(), ID: id, ExpectedCredentialRevision: 1})
+			return err
 		}
 	}
-	page, err := f.r.ConnectionEvents().List(t.Context(), connectionevent.PageRequest{Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	terminal := false
-	for _, record := range page.Items {
-		terminal = terminal || record.Phase == connectionevent.PhaseClosed || record.Phase == connectionevent.PhaseFailed
-	}
-	if !terminal {
-		t.Fatal("revocation did not persist connection terminal")
-	}
-}
-
-func TestRetainedFinishJoinsPreviouslyExpiredConnectionTerminal(t *testing.T) {
-	block := &blockedUDPTerminals{entered: make(chan udpTerminalWrite, 4), release: make(chan struct{})}
-	defer block.unblock()
-	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
-		block.Repository = request.repository
-		request.repository = block
-		return buildConnectionEvent(ctx, request)
-	}})
-	f.transport.DisableKeepAlives = false
-	dir := t.TempDir()
-	grant, err := f.r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", Lifetime: time.Second, CatalogRevision: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	capture, _ := captureidentity.New(captureidentity.KindManagedRun, grant.Run.ID)
-	if _, err = f.r.CaptureAssignments().Create(t.Context(), captureassignment.CreateCommand{Capture: capture, EnvironmentID: f.aggregate.ID, Source: captureassignment.SourceLaunch}); err != nil {
-		t.Fatal(err)
-	}
-	proxy, _ := url.Parse(f.listener.URL)
-	proxy.User = url.UserPassword("capture", grant.ProxyCapability.Value())
-	f.transport.Proxy = http.ProxyURL(proxy)
-	if reply := f.send(t.Context(), "POST", semanticOriginalPath, semanticOriginalBody); reply.Err != nil || reply.Status != 200 {
-		t.Fatalf("baseline=%+v", reply)
-	}
+	requestDone := make(chan capturedOriginalReply, 1)
+	go func() { requestDone <- f.send(requestCtx, "POST", semanticOriginalPath, semanticOriginalBody) }()
 	select {
-	case <-block.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expiry did not enter connection terminal")
+	case <-body.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("actual provider body Close not entered")
+	}
+	if expired {
+		if !f.r.clock.Now().Before(expiry) {
+			t.Fatal("actual HTTP body owner was not established before expiry")
+		}
+		validity := f.r.captureRuns.(interface {
+			ProxyValidity(context.Context, capturerun.ProxyCapability) (captureauthority.Validity, error)
+		})
+		live, err := validity.ProxyValidity(requestCtx, expiredCapability)
+		if err != nil || !live.ExpiresAt.Equal(expiry) {
+			t.Fatal("Capture was not live while its actual body owner was held", err)
+		}
+		var retiredAt time.Time
+		select {
+		case retiredAt = <-retirement:
+		case <-requestCtx.Done():
+			t.Fatal("actual retained expiry/withdrawal was not acknowledged", requestCtx.Err())
+		}
+		if retiredAt.Before(expiry) {
+			t.Fatal("retained witness canceled before the actual expiry deadline")
+		}
+		if _, err = validity.ProxyValidity(requestCtx, expiredCapability); !errors.Is(err, capturerun.ErrCapabilityRejected) {
+			t.Fatal("retirement did not correspond to actual expired authority", err)
+		}
+		select {
+		case <-body.release:
+			t.Fatal("real body released before expiry proof")
+		default:
+		}
+		select {
+		case <-sink.release:
+			t.Fatal("optional writer released before expiry proof")
+		default:
+		}
+		// Remove the no-I/O witness before Finish: it must not be the owner
+		// making Finish block. Only the real HTTP/body subscription remains.
+		releaseWitness()
+		releaseWitness = nil
+		t.Logf("actual expiry retired shared Capture entry before Finish: expires=%s retired=%s witness_released=true body_held=true optional_held=true", expiry.Format(time.RFC3339Nano), retiredAt.Format(time.RFC3339Nano))
 	}
 	finished := make(chan error, 1)
-	go func() { finished <- f.r.captureRuns.Finish(t.Context(), grant.Run.ID, grant.ControlCapability) }()
-	returned := false
-	select {
-	case err := <-finished:
-		returned = true
-		if err != nil {
-			t.Error(err)
-		}
-		t.Error("Finish missed previously expired connection's held terminal")
-	case <-time.After(30 * time.Millisecond):
-	}
-	block.unblock()
-	if !returned {
-		select {
-		case err := <-finished:
+	go func() { finished <- finish() }()
+	if expired {
+		// A committed required state proves that the later wait is not slow
+		// control SQL or the optional writer; the retired HTTP owner still holds it.
+		for {
+			run, err := f.r.CaptureRunReader().GetRun(requestCtx, expiredID)
 			if err != nil {
 				t.Fatal(err)
 			}
-		case <-time.After(time.Second):
-			t.Fatal("Finish did not join released expired connection")
+			if run.State == capturerun.StateFinished {
+				break
+			}
+			select {
+			case <-requestCtx.Done():
+				t.Fatal("Finish did not reach required commit", requestCtx.Err())
+			case <-time.After(5 * time.Millisecond):
+			}
 		}
+	}
+	select {
+	case <-bodyCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("withdrawal did not cancel real I/O")
+	}
+	select {
+	case err := <-finished:
+		t.Fatalf("authority returned before actual Body.Close: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("authority did not join released body")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("actual inner HTTP handler did not return")
+	}
+	if f.gate.Snapshot().ActiveActions != 0 || f.gate.Snapshot().ActiveEgress != 0 {
+		t.Fatal("actual I/O ownership remains", f.gate.Snapshot())
+	}
+	// Optional sink is still held when execution ownership has joined.
+	select {
+	case <-sink.release:
+		t.Fatal("optional sink released early")
+	default:
+	}
+	if f.httpCalls.Load() != 1 || f.bad.Load() != 0 || f.network.denied.Load() != 0 {
+		t.Fatal("withdrawal changed frozen routing/credentials or replayed send")
 	}
 }

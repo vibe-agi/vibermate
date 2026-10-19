@@ -231,12 +231,9 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 			code, key := execute([]string{command}, []string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr)
 			output := stdout.String()
 			expectedCode := wantCode
-			if command == "doctor" {
-				expectedCode = 1
-			}
 			if code != expectedCode || key != "" || stderr.Len() != 0 ||
 				!strings.Contains(output, "WARN") || !strings.Contains(output, "usage / write_failed") ||
-				strings.Contains(output, "PASS") || strings.Contains(output, "vibermate run -- codex") {
+				stopped && (strings.Contains(output, "PASS") || strings.Contains(output, "vibermate run -- codex")) {
 				t.Fatalf("%s stopped=%t: code=%d key=%q output=%s stderr=%s", command, stopped, code, key, output, stderr.String())
 			}
 			if stopped && (!strings.Contains(output, "egress_complete / timeout") || !strings.Contains(output, now.Format(time.RFC3339))) {

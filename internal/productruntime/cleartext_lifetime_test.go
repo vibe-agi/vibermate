@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // A canceled real HTTP request must release the raw blind forwarding action,
@@ -48,7 +49,7 @@ func TestRuntimeCleartextCaptureRevokeJoinsUpstream(t *testing.T) {
 
 func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool, revokeCapture ...bool) {
 	t.Helper()
-	r, gate, credential := newCleartextLifetimeRuntime(t)
+	r, gate, credential, observations := newCleartextLifetimeRuntime(t)
 
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -165,7 +166,7 @@ func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool,
 		if s := gate.Snapshot(); s.ActiveActions != 1 || s.ActiveEgress != 1 {
 			t.Fatalf("unjoined body Close released action/egress: %+v", s)
 		}
-		page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+		page, err := observations.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,14 +213,14 @@ func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool,
 	if s := gate.Snapshot(); s.ActiveActions != 0 || s.ActiveEgress != 0 {
 		t.Fatalf("drained cleartext action/egress = %d/%d", s.ActiveActions, s.ActiveEgress)
 	}
-	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err := observations.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() || page.Items[0].Attempt.Outcome() != egressaudit.OutcomeCanceled {
 		t.Fatalf("cleartext terminal audit = %+v", page.Items)
 	}
-	timeline, err := r.ConnectionEvents().Timeline(t.Context(), page.Items[0].Attempt.ConnectionID())
+	timeline, err := observations.Timeline(t.Context(), page.Items[0].Attempt.ConnectionID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func runRuntimeCleartextCancellation(t *testing.T, responseBody, holdClose bool,
 	}
 }
 
-func newCleartextLifetimeRuntime(t *testing.T, configure ...func(*Options)) (*Runtime, *offlinehold.Gate, string) {
+func newCleartextLifetimeRuntime(t *testing.T, configure ...func(*Options)) (*Runtime, *offlinehold.Gate, string, *cleartextOfferLog) {
 	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
@@ -238,7 +239,18 @@ func newCleartextLifetimeRuntime(t *testing.T, configure ...func(*Options)) (*Ru
 	for _, apply := range configure {
 		apply(&options)
 	}
-	r := startTestRuntime(t, options)
+	observations := &cleartextOfferLog{attempts: make(map[string]egressaudit.Attempt), connections: make(map[string][]connectionevent.Record)}
+	r, err := startWithBuilders(t.Context(), options, runtimeBuildOverrides{egressObserver: func(delegate *runtimeEgressRepository) egressaudit.Observer {
+		observations.egress = delegate
+		return observations
+	}, connectionEvent: func(ctx context.Context, request connectionEventBuildRequest) (connectionEventRuntime, error) {
+		observations.connection = request.observer
+		request.observer = observations
+		return buildConnectionEvent(ctx, request)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { shutdownRuntime(t, r) })
 	grant, err := r.ManualCaptures().Create(t.Context(), manualcapture.CreateCommand{
 		Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Cleartext lifetime fixture",
@@ -257,7 +269,7 @@ func newCleartextLifetimeRuntime(t *testing.T, configure ...func(*Options)) (*Ru
 		t.Fatal(err)
 	}
 
-	return r, gate, grant.Credential.Value()
+	return r, gate, grant.Credential.Value(), observations
 }
 
 // A raw upstream socket alone cannot interrupt Request.Write while it is
@@ -270,7 +282,7 @@ func TestRuntimeCleartextShutdownOwnsUpload(t *testing.T) {
 func runRuntimeCleartextUploadShutdown(t *testing.T, blockedWrite bool) {
 	t.Helper()
 	writes := make(chan (<-chan struct{}), 1024)
-	r, gate, credential := newCleartextLifetimeRuntime(t, func(options *Options) {
+	r, gate, credential, observations := newCleartextLifetimeRuntime(t, func(options *Options) {
 		if blockedWrite {
 			options.NetworkOptions.BaseDialer = cleartextWriteObserver{writes: writes}
 		}
@@ -370,16 +382,17 @@ func runRuntimeCleartextUploadShutdown(t *testing.T, blockedWrite bool) {
 			}
 		}
 	}
-	// Read the durable terminal after owner drainage and before Store disposal.
+	// Observe the terminal offer after actual transport/body drainage. Optional
+	// persistence is deliberately not a shutdown prerequisite.
 	checkTerminal := func(ctx context.Context) error {
-		page, err := r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10})
+		page, err := observations.List(ctx, egressaudit.PageRequest{Limit: 10})
 		if err != nil {
 			return err
 		}
 		if len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() || page.Items[0].Attempt.Outcome() != egressaudit.OutcomeCanceled {
 			return fmt.Errorf("cleartext shutdown terminal = %+v", page.Items)
 		}
-		timeline, err := r.storage.ConnectionEventRepository().Timeline(ctx, page.Items[0].Attempt.ConnectionID())
+		timeline, err := observations.Timeline(ctx, page.Items[0].Attempt.ConnectionID())
 		if err != nil {
 			return err
 		}
@@ -474,7 +487,7 @@ func (c *cleartextObservedConnection) Write(p []byte) (int, error) {
 }
 
 func TestRuntimeCleartextHealthyKeepAlive(t *testing.T) {
-	r, _, credential := newCleartextLifetimeRuntime(t)
+	r, _, credential, _ := newCleartextLifetimeRuntime(t)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		_, _ = io.WriteString(w, "healthy")
 	}))
@@ -515,7 +528,7 @@ func TestRuntimeCleartextHealthyKeepAlive(t *testing.T) {
 // can still drain a small incomplete body, so cancellation must remain armed
 // until that synchronous Close returns.
 func TestRuntimeCleartextShutdownInterruptsFailedDialBodyClose(t *testing.T) {
-	r, gate, credential := newCleartextLifetimeRuntime(t)
+	r, gate, credential, observations := newCleartextLifetimeRuntime(t)
 	refused, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -555,7 +568,7 @@ func TestRuntimeCleartextShutdownInterruptsFailedDialBodyClose(t *testing.T) {
 	if s := gate.Snapshot(); s.ActiveActions != 1 || s.ActiveEgress != 0 {
 		t.Fatalf("failed dial upload Close action/egress = %d/%d", s.ActiveActions, s.ActiveEgress)
 	}
-	page, err := r.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 10})
+	page, err := observations.List(t.Context(), egressaudit.PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,14 +581,14 @@ func TestRuntimeCleartextShutdownInterruptsFailedDialBodyClose(t *testing.T) {
 			closeStore := r.cleanups.entries[i].run
 			r.cleanups.entries[i].run = func(ctx context.Context) (result error) {
 				defer func() { result = errors.Join(result, closeStore(ctx)) }()
-				page, err := r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10})
+				page, err := observations.List(ctx, egressaudit.PageRequest{Limit: 10})
 				if err != nil {
 					return err
 				}
 				if len(page.Items) != 1 || !page.Items[0].Attempt.Terminal() || page.Items[0].Attempt.Outcome() != egressaudit.OutcomeFailed || page.Items[0].Attempt.ErrorClass() != "tunnel_failed" {
 					return fmt.Errorf("cleanup cancellation replaced failed dial terminal: %+v", page.Items)
 				}
-				timeline, err := r.storage.ConnectionEventRepository().Timeline(ctx, page.Items[0].Attempt.ConnectionID())
+				timeline, err := observations.Timeline(ctx, page.Items[0].Attempt.ConnectionID())
 				if err != nil {
 					return err
 				}
@@ -622,4 +635,41 @@ func (b *cleartextCloseObserver) Close() error {
 	err := b.ReadCloser.Close()
 	b.returnedOnce.Do(func() { close(b.returned) })
 	return err
+}
+
+// Test-only producer evidence. These values never authorize a send and are
+// never represented as persisted rows; real transport/lease joins stay above.
+type cleartextOfferLog struct {
+	mu          sync.Mutex
+	egress      egressaudit.Observer
+	connection  connectionevent.Observer
+	attempts    map[string]egressaudit.Attempt
+	connections map[string][]connectionevent.Record
+}
+
+func (l *cleartextOfferLog) ObserveEgress(stamp recording.Stamp, a egressaudit.Attempt) recording.OfferResult {
+	l.mu.Lock()
+	l.attempts[a.ID()] = a
+	l.mu.Unlock()
+	return l.egress.ObserveEgress(stamp, a)
+}
+func (l *cleartextOfferLog) ObserveConnection(stamp recording.Stamp, e connectionevent.Event) recording.OfferResult {
+	l.mu.Lock()
+	l.connections[e.ConnectionID] = append(l.connections[e.ConnectionID], connectionevent.Record{Event: e})
+	l.mu.Unlock()
+	return l.connection.ObserveConnection(stamp, e)
+}
+func (l *cleartextOfferLog) List(context.Context, egressaudit.PageRequest) (egressaudit.Page, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	page := egressaudit.Page{}
+	for _, a := range l.attempts {
+		page.Items = append(page.Items, egressaudit.Record{Attempt: a})
+	}
+	return page, nil
+}
+func (l *cleartextOfferLog) Timeline(_ context.Context, id string) (connectionevent.Timeline, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return connectionevent.Timeline{ConnectionID: id, Events: append([]connectionevent.Record(nil), l.connections[id]...)}, nil
 }

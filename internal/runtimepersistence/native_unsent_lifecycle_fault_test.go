@@ -38,7 +38,7 @@ func (f *unsentLifecycleCommitFault) Commit(tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	audit, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.target))
+	audit, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.target))
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
@@ -87,8 +87,10 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						faultMode = "persistent"
 					}
 					fault := &unsentLifecycleCommitFault{target: id, phase: phase, mode: faultMode, recovery: kind == "recovery"}
+					h.f.store.nativeTools.issuerMu.Lock()
 					originalCommitter := h.f.store.nativeTools.committer
 					h.f.store.nativeTools.committer = fault
+					h.f.store.nativeTools.issuerMu.Unlock()
 					var releaseOnce sync.Once
 					release := func() { releaseOnce.Do(func() { close(h.held.release) }) }
 					callCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
@@ -106,7 +108,9 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						if err := h.module.Close(ctx); err != nil {
 							t.Error(err)
 						}
+						h.f.store.nativeTools.issuerMu.Lock()
 						h.f.store.nativeTools.committer = originalCommitter
+						h.f.store.nativeTools.issuerMu.Unlock()
 					}()
 					go func() { terminal = h.module.Serve(callCtx, request, httptest.NewRecorder()); close(done) }()
 					if kind == "form" || kind == "url" {
@@ -136,7 +140,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					var original egressaudit.Attempt
 					var parentAuthority nativetool.StreamAuthority
 					if h.parent != "" {
-						row, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+						row, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -165,7 +169,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					audit, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					audit, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -196,14 +200,56 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						}
 					}
 					if mode == "persistent_recover" {
+						// Module.Close joins executor work, but persistent cleanup
+						// also owns repository retry timers. Stop/remove their
+						// volatile registrations under the same lock as callbacks:
+						// an entered callback has finished; a pending one sees no
+						// stream and cannot reopen SQL. Do not reconcile any rows.
+						h.f.store.nativeTools.issuerMu.Lock()
+						for authority := range h.f.store.nativeTools.streams {
+							h.f.store.nativeTools.dropNativeStream(authority)
+						}
+						clear(h.f.store.nativeTools.recovery)
+						clear(h.f.store.nativeTools.streamOpened)
+						h.f.store.nativeTools.issuerMu.Unlock()
+						// Relinquish physical connections without Shutdown's
+						// reconciliation; fresh Recover owns the durable obligation.
+						h.f.store.operations.mu.Lock()
+						active := h.f.store.operations.active
+						h.f.store.operations.mu.Unlock()
+						if active != 0 {
+							t.Fatalf("former owner still has %d active operations", active)
+						}
+						h.f.store.database.SetMaxIdleConns(0)
+						h.f.store.reads.SetMaxIdleConns(0)
+						defer h.f.store.database.SetMaxIdleConns(1)
+						defer h.f.store.reads.SetMaxIdleConns(2)
+						for name, pool := range map[string]*sql.DB{"writer": h.f.store.database, "reads": h.f.store.reads} {
+							if stats := pool.Stats(); stats.OpenConnections != 0 || stats.InUse != 0 {
+								t.Fatalf("former %s pool still owns connections before fresh recovery: %+v", name, stats)
+							}
+						}
 						reopened := openTestStore(t, h.f.store.databasePath)
 						defer shutdownTestStore(t, reopened)
+						before, err := reopened.NativeToolRepository().Get(ctx, id)
+						beforeAudit, auditErr := scanEgressAttempt(reopened.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
+						if err != nil || auditErr != nil || !reflect.DeepEqual(before, op) || beforeAudit.Attempt != audit.Attempt {
+							t.Fatalf("fresh owner did not inherit exact durable obligation: op=%+v err=%v audit=%+v err=%v", before, err, beforeAudit, auditErr)
+						}
 						if err := reopened.NativeToolRepository().Recover(ctx, h.now()); err != nil {
 							t.Fatal(err)
 						}
 						if reopened.NativeToolRepository().VerifyStartReceipt(ctx, started.receipt, h.now()) == nil {
 							t.Fatal("fresh Store revived receipt")
 						}
+						recovered, err := reopened.NativeToolRepository().Get(ctx, id)
+						recoveredAudit, auditErr := scanEgressAttempt(reopened.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
+						if err != nil || auditErr != nil || !recoveredAudit.Attempt.Terminal() || known && recoveredAudit.Attempt != audit.Attempt || !known && (recovered.State != "uncertain" || recovered.BytesIn != nil || recovered.BytesOut != nil || recoveredAudit.Attempt.ByteCountsKnown()) {
+							t.Fatalf("Recover did not settle/preserve obligation before Shutdown: op=%+v err=%v audit=%+v err=%v", recovered, err, recoveredAudit, auditErr)
+						}
+						// End the fresh owner's database work before the old fixture
+						// resumes its strict readback and stale-authority checks.
+						shutdownTestStore(t, reopened)
 						unknownState = "uncertain"
 					}
 					fault.armed.Store(false)
@@ -221,7 +267,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					finalAudit, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					finalAudit, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -229,7 +275,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						t.Fatal("later Close failed to reconcile/preserve terminal")
 					}
 					if h.parent != "" {
-						after, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, h.parent))
+						after, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, h.parent))
 						if err != nil || after.Attempt != original {
 							t.Fatal("child cleanup changed original physical audit")
 						}
@@ -241,7 +287,7 @@ func TestNativeUnsentLifecycleCleanupFaults(t *testing.T) {
 						}
 					}
 					var once, audits int
-					if err := h.f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
+					if err := h.f.store.database.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, id, id).Scan(&once, &audits); err != nil || once != 1 || audits != 1 {
 						t.Fatal("cleanup changed exactly-once provenance")
 					}
 					if h.f.store.NativeToolRepository().VerifyStartReceipt(ctx, started.receipt, h.now()) == nil || h.transport.calls.Load() != sends {

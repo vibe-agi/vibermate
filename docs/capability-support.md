@@ -3,12 +3,12 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Published-status snapshot at candidate preparation: **2026-10-19** (Asia/Singapore).
+Published-status snapshot at candidate preparation: **2026-10-19 19:26:20 UTC+08:00**.
 
-Source package version: **0.1.31**. Latest published release: **v0.1.30**.
+Source package version: **0.1.32**. Latest published release: **v0.1.30**.
 
 At that snapshot, [v0.1.30](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.30)
-was the latest published release; v0.1.31 is an unpublished source candidate.
+was the latest published release; v0.1.32 is an unpublished source candidate.
 The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
 and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
 schema-revision-1 data compatibility. Current source upgrades and private rollback
@@ -63,7 +63,8 @@ the historical boundary does not establish candidate downgrade compatibility.
 | `body-free-usage` | Released | Runtime-wide statistics are independent of body recording, with permission-scoped caller/model breakdowns and reference API-equivalent USD costs, not provider bills. Inline request details and explicitly bounded loaded-request totals reuse collected usage; missing data is not zero, and reasoning subsets are not counted twice. New databases enable collection with 365-day retention; existing choices are preserved. Git project and branch attribution is a launch-time snapshot for new managed runs; missing history is not invented or backfilled. |
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
-| `runtime3-upgrade` | Released | The current source uses monolithic vibermate-runtime revision 3. Guarded startup upgrades published revisions 1→2→3 or 2→3 with independently verified private snapshots. New readers support exact revisions 1/2/3; older readers refuse revision 3. Rollback restores the preserved old-format snapshot into a new directory. See the [operator boundary](backup-and-restore.md#format-compatibility-and-rollback). |
+| `runtime3-upgrade` | Released | v0.1.30 shipped monolithic vibermate-runtime revision 3, guarded 1→2→3 or 2→3 upgrades and private rollback snapshots. These published revisions remain supported inputs to the current source; the new role cutover is described below and in the [operator boundary](backup-and-restore.md#format-compatibility-and-rollback). |
+| `recording-storage-isolation` | Available | Required compact `vibermate-control/3` is separate from optional `vibermate-observations/1` and retained legacy archives. Bounded recording queues may drop history without failing authorized live Agent traffic; known loss and unconfirmed completion remain distinct. Account/configuration, permissions, native once/delivery and privacy intent remain required state. Guarded cutover preserves a private snapshot; split public backups use v2 and disclose absent or unverified history. Old releases require faithful old-format private restore into a new directory. |
 | `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
 | `release-check` | Released | Settings compares App, Runtime, and terminal-command builds and checks the official GitHub Release only after an explicit user action. |
 | `automatic-updates` | Unsupported | Releases, checksums, Homebrew, and the website are published explicitly; the product does not silently self-update. |
@@ -71,9 +72,14 @@ the historical boundary does not establish candidate downgrade compatibility.
 | `postgresql-runtime-store` | Unsupported | The current runtime store is SQLite. A PostgreSQL backend and verified migration are later-stage work. |
 | `team-knowledge-base` | Unsupported | Captured evidence is not yet an approved, independently retained team knowledge-document system. |
 
-The 0.1.31 candidate retains the existing monolithic recording architecture.
-Optional recording may still contend with control work; this release does not
-complete the separate storage-isolation work or deploy a remote Runtime.
+The 0.1.32 candidate separates required control and native execution/replay from
+best-effort recording. Optional history may be missing or dropped under bounded
+capacity; recording or inspection unavailability does not become execution
+authority or a reason to fail authorized live traffic. Privacy denial and cleanup
+intent remain required, while background cleanup reports its own completion.
+Legacy archives remain subject to the configured retention and cleanup policy.
+Exact tagged artifact qualification and publication remain separate gates;
+software publication does not deploy a remote Runtime.
 
 ## Evidence rules
 

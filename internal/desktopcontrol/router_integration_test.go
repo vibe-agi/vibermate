@@ -613,6 +613,7 @@ func startRuntimeAtPaths(t *testing.T, paths productruntime.RuntimePaths, secret
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitRecording(t, runtime)
 	return runtime
 }
 

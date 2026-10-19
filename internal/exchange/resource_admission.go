@@ -54,16 +54,6 @@ func (p ResourcePolicy) Validate() error {
 	if p.RequestBytes == 0 || p.ResponseBytes == 0 || p.SlotBytes > math.MaxInt64 || p.ActiveBytes > math.MaxInt64 || p.RequestBytes > p.SlotBytes || p.ResponseBytes > p.SlotBytes-p.RequestBytes || p.ActiveBytes < p.SlotBytes {
 		return errors.New("invalid finite execution resource policy")
 	}
-	reserve, scratch, err := RequiredResponseReservation(p.Content.Semantic)
-	if err != nil {
-		return err
-	}
-	if reserve.MaxPhysicalSlots > 16384 {
-		return errors.New("response reservation cannot prove manifest slot feasibility")
-	}
-	if p.Content.RetainedBytes <= reserve.RetainedBytes || p.Content.CanonicalBytes <= reserve.CanonicalBytes || p.Content.StructureBytes <= reserve.StructureBytes || p.Content.Scratch.PayloadBytes < scratch.PayloadBytes || p.Content.Scratch.StructureBytes < scratch.StructureBytes {
-		return errors.New("content policy lacks independent response reservation")
-	}
 	request, response, err := RequiredExecutionEnvelope(p.Content)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -327,7 +328,7 @@ func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recordi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ca.Shutdown(ctx) })
-	connections, err := connectionevent.New(ctx, connectionevent.DefaultOptions(store.ConnectionEventRepository()))
+	connections, err := connectionevent.New(ctx, connectionevent.DefaultOptions(testrecording.Connections(store.ConnectionEventRepository())))
 	if err != nil {
 		t.Fatal(err)
 	}

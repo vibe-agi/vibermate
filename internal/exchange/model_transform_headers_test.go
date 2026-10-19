@@ -112,7 +112,7 @@ func runNativeModelHeaderResponse(t *testing.T, streaming, originalAccount bool,
 	provider := &providerDouble{results: []providerResult{{response: response}}}
 	content := &contentObserverDouble{}
 	pipeline := newTestPipelineWithContentObserver(t, newAccountAuthority(t, account), provider, approvedDecisions(), &attemptObserverDouble{}, content)
-	raw := &rawObserverDouble{}
+	raw := newRawCaptureObserverForTest(t)
 	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
 	body, err := json.Marshal(map[string]any{"model": "codex-client-alias", "stream": streaming, "input": "hello"})

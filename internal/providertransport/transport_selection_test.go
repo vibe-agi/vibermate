@@ -3,6 +3,7 @@ package providertransport
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"net/http"
 	"strings"
 	"testing"
@@ -48,7 +49,7 @@ func TestTransportSelectionRuntimeConsumersRefuseBeforeAdmission(t *testing.T) {
 			audit := &runtimeAuditRecorder{}
 			ids := &sequentialInstanceIDs{}
 			transport := &runtimeTransportStub{audit: audit, err: errors.New("unexpected outbound")}
-			client, err := NewClient(ClientOptions{Coordinator: gate, Authenticator: auth, Transport: transport, Audit: audit, InstanceIDs: ids})
+			client, err := NewClient(ClientOptions{Coordinator: gate, Authenticator: auth, Transport: transport, Audit: testrecording.Egress(audit), InstanceIDs: ids})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"slices"
 	"strings"
 	"time"
@@ -230,10 +231,23 @@ func (target Target) validate() error {
 	return nil
 }
 
+// OwnershipUnknown is reserved for retained legacy/standalone records; it
+// never means global. New required ToolIntent rows require explicit ownership.
+type OwnershipKind string
+
+const (
+	OwnershipUnknown OwnershipKind = ""
+	OwnershipCapture OwnershipKind = "capture"
+	OwnershipGlobal  OwnershipKind = "global"
+	OwnershipShared  OwnershipKind = "shared"
+)
+
 type Record struct {
-	ID       string
-	Revision uint64
-	Kind     Kind
+	OwnerKind  OwnershipKind
+	OwnerScope recording.Scope
+	ID         string
+	Revision   uint64
+	Kind       Kind
 	// AggregateKey merges identical pending questions into one entry, so a
 	// burst is one prompt rather than one per event.
 	AggregateKey string
@@ -266,6 +280,26 @@ type Record struct {
 }
 
 func (record Record) Validate() error {
+	switch record.OwnerKind {
+	case OwnershipUnknown:
+		if record.OwnerScope != (recording.Scope{}) {
+			return ErrInvalidApproval
+		}
+	case OwnershipShared:
+		if record.Kind == KindToolIntent || record.OwnerScope != (recording.Scope{}) {
+			return ErrInvalidApproval
+		}
+	case OwnershipGlobal:
+		if record.Kind != KindToolIntent || record.OwnerScope.Validate() != nil || record.OwnerScope.Capture.Kind != "" {
+			return ErrInvalidApproval
+		}
+	case OwnershipCapture:
+		if record.Kind != KindToolIntent || record.OwnerScope.Validate() != nil || record.OwnerScope.Capture.Kind == "" {
+			return ErrInvalidApproval
+		}
+	default:
+		return ErrInvalidApproval
+	}
 	if err := validateIdentity("approval ID", record.ID, false); err != nil {
 		return err
 	}

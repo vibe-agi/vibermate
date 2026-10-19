@@ -312,7 +312,7 @@ void main() {
       scrollable: _safetyScrollable(),
     );
     expect(find.text('192.0 MiB'), findsOneWidget);
-    expect(find.bySemanticsLabel('Database file: 192.0 MiB'), findsOneWidget);
+    expect(find.bySemanticsLabel('Database files: 192.0 MiB'), findsOneWidget);
     expect(find.text('8.0 MiB'), findsOneWidget);
     expect(find.text('128.0 MiB'), findsOneWidget);
     expect(find.text('16.0 MiB'), findsOneWidget);
@@ -344,8 +344,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(clear);
     await tester.pumpAndSettle();
-    expect(find.textContaining('20 Captures'), findsOneWidget);
-    expect(find.textContaining('3055 Raw HTTP boundaries'), findsOneWidget);
+    expect(find.textContaining('20 Capture records'), findsOneWidget);
+    expect(find.textContaining('3055 Raw HTTP envelopes'), findsOneWidget);
   });
 
   testWidgets('390px Chinese storage capacity and cleanup stay operable', (

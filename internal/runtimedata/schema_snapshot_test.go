@@ -36,6 +36,7 @@ import (
 func TestSchemaUpgradeSnapshotUsesHeldOwnershipAndPreservesPrivateFiles(t *testing.T) {
 	source, body := backupFixture(t)
 	account, candidate := seedSnapshotAuthority(t, source)
+	freezePublishedBackupFixture(t, source)
 	canonical, err := environment.CanonicalJSON(candidate)
 	if err != nil {
 		t.Fatal(err)
@@ -114,10 +115,9 @@ func TestSchemaUpgradeSnapshotUsesHeldOwnershipAndPreservesPrivateFiles(t *testi
 			t.Fatal(err)
 		}
 	}
-	store := openBackupStore(t, filepath.Join(restored, "runtime.db"))
-	defer shutdownBackupStore(t, store)
-	record, err := store.RawEvidenceRepository().GetEnvelope(ctx, "backup-envelope")
-	if err != nil || !bytes.Equal(record.Body, body) {
+	store := openBackupControlReader(t, restored)
+	recordBody := readBackupRawBody(t, restored, "backup-envelope")
+	if !bytes.Equal(recordBody, body) {
 		t.Fatal("restored evidence changed")
 	}
 	rules, err := store.ConnectionRuleRepository().Load(ctx)
@@ -344,6 +344,7 @@ func snapshotTestRowsWithColumns(t *testing.T, directory string, selectedColumns
 
 func TestSchemaUpgradeSnapshotHoldsDestinationHostOwnership(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	owner, err := Acquire(source)
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +370,7 @@ func TestSchemaUpgradeSnapshotHoldsDestinationHostOwnership(t *testing.T) {
 
 func TestSchemaUpgradeSnapshotRejectsUnrepresentablePersistentPath(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	if err := os.WriteFile(filepath.Join(source, "unsafe:name"), []byte("synthetic"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -388,6 +390,7 @@ func TestSchemaUpgradeSnapshotRejectsUnrepresentablePersistentPath(t *testing.T)
 
 func TestSchemaUpgradeSnapshotCommittedUncheckpointedWAL(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	u := url.URL{Scheme: "file", Path: filepath.Join(source, "runtime.db"), RawQuery: "mode=rw"}
 	database, err := sql.Open("sqlite", u.String())
 	if err != nil {
@@ -432,8 +435,7 @@ func TestSchemaUpgradeSnapshotCommittedUncheckpointedWAL(t *testing.T) {
 	if !slices.Equal(rowsBefore, snapshotTestRows(t, restored)) {
 		t.Fatal("committed WAL rows lost")
 	}
-	store := openBackupStore(t, filepath.Join(restored, "runtime.db"))
-	defer shutdownBackupStore(t, store)
+	store := openBackupControlReader(t, restored)
 	rules, err := store.ConnectionRuleRepository().Load(context.Background())
 	if err != nil || string(rules.Mode) != "deny_unknown" {
 		t.Fatal("committed WAL configuration lost")
@@ -444,6 +446,7 @@ func TestSchemaUpgradeSnapshotOwnershipAndInvalidTargets(t *testing.T) {
 	for _, scenario := range []string{"wrong_source_guard", "released_source_guard", "wrong_host_guard", "released_host_guard", "missing_host_guard_live_server", "correct_held_host_guard", "existing", "nested", "ancestor", "relative", "unclean", "alias_parent", "alias_source", "canceled_before_creation", "non_utc", "nil_context"} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := backupFixture(t)
+			freezePublishedBackupFixture(t, source)
 			actualSource := source
 			root := filepath.Dir(source)
 			target := filepath.Join(root, "snapshot")
@@ -550,6 +553,7 @@ func TestSchemaUpgradeSnapshotValidationRejectsTampering(t *testing.T) {
 	for _, scenario := range []string{"private_tampered", "private_missing", "extra_file", "symlink", "manifest_symlink", "traversal", "backslash", "duplicate_entry", "duplicate_json_member", "unknown_json_member", "wrong_format", "revision2", "revision99", "foreign_schema", "malformed_known_schema", "manifest_revision", "busy_runtime", "busy_host", "ordinary_backup"} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := backupFixture(t)
+			freezePublishedBackupFixture(t, source)
 			target := filepath.Join(filepath.Dir(source), "snapshot")
 			ctx := context.Background()
 			if scenario == "ordinary_backup" {
@@ -740,6 +744,7 @@ func TestSchemaUpgradeSnapshotFailureHasNoCompletionManifest(t *testing.T) {
 	for _, scenario := range []string{"copy", "source_mutation_during_copy", "cancel_during_copy", "manifest_create", "write", "manifest_sync", "file_sync", "directory_sync", "final_directory_sync", "parent_sync", "cancel_final_sync", "destination_mutation_final_sync", "release_source_guard", "release_host_guard", "source_foreign", "source_revision2", "source_revision99", "source_symlink"} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := backupFixture(t)
+			freezePublishedBackupFixture(t, source)
 			owner, err := Acquire(source)
 			if err != nil {
 				t.Fatal(err)
@@ -871,6 +876,7 @@ func TestSchemaUpgradeSnapshotFailureHasNoCompletionManifest(t *testing.T) {
 
 func TestSchemaUpgradeSnapshotWaitsForFinalDurabilityBarrier(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	owner, err := Acquire(source)
 	if err != nil {
 		t.Fatal(err)
@@ -916,6 +922,7 @@ func TestSchemaUpgradeSnapshotRestoreFailuresPreserveAuthority(t *testing.T) {
 	for _, scenario := range []string{"copy_failure", "sync_failure", "cancel_during_copy", "destination_mutation_final_sync", "snapshot_mutation_final_sync"} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := backupFixture(t)
+			freezePublishedBackupFixture(t, source)
 			snapshot := filepath.Join(filepath.Dir(source), "snapshot")
 			owner, err := Acquire(source)
 			if err != nil {
@@ -986,6 +993,7 @@ func TestSchemaUpgradeSnapshotRestoreFailuresPreserveAuthority(t *testing.T) {
 
 func TestSchemaUpgradeSnapshotCompositeCleanupFailureRequiresDurabilityRecertification(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	owner, err := Acquire(source)
 	if err != nil {
 		t.Fatal(err)

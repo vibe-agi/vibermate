@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/account_facts_models.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/api/runtime_storage.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
@@ -13,10 +14,526 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
+import 'package:vibermate_app/features/workbench/settings_view.dart';
+import 'package:vibermate_app/features/workbench/runtime_connection_guide.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  test(
+    'storage refresh owns reentrant notification demand until fresh read',
+    () async {
+      final fixture = PreviewControlApi();
+      final location = await fixture.storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      Future<void>? coalesced;
+      var requested = false;
+      var completed = false;
+      controller.addListener(() {
+        if (controller.storageLocationLoading && !requested) {
+          requested = true;
+          coalesced = controller.refreshStorageLocation().then((_) {
+            completed = true;
+          });
+        }
+      });
+      final first = controller.refreshStorageLocation();
+      expect(api.reads, hasLength(1));
+      api.reads.first.complete(location);
+      await Future<void>.delayed(Duration.zero);
+      expect(api.reads, hasLength(2));
+      expect(completed, isFalse);
+      api.reads.last.complete(location);
+      await first;
+      await coalesced;
+      expect(completed, isTrue);
+      expect(controller.storageLocationLoading, isFalse);
+    },
+  );
+  testWidgets('incomplete zero-count storage preview keeps cleanup available', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _CompletedCleanupApi(fixture)..completed = true;
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    controller.storageLocation = await api.storageLocation();
+    controller.settingsTab = controller.settingsDestinations.indexOf(
+      SettingsDestination.safety,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: SettingsView(
+            controller: controller,
+            copy: AppCopy.forLanguage(AppLanguage.english),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final cleanup = find.byKey(const Key('storage-cleanup-expired'));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('storage-cleanup-preview')),
+      240,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const Key('settings-safety-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(cleanup, findsOneWidget);
+    expect(
+      find.text('No expired evidence is waiting for cleanup.'),
+      findsNothing,
+    );
+  });
+  testWidgets(
+    'pre-acceptance cleanup certificate cannot complete a newer cleanup',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final snapshots = _CompletedCleanupApi(fixture);
+      final pendingLocation = await snapshots.storageLocation();
+      snapshots.completed = true;
+      final oldCompletedLocation = await snapshots.storageLocation();
+      final freshCompletedLocation = await snapshots.storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.storageLocation = pendingLocation;
+      final refresh = controller.refreshStorageLocation();
+      expect(api.reads, hasLength(1));
+
+      final outcome = await controller.cleanupExpiredEvidence();
+      expect(outcome.deleted, isTrue);
+      expect(controller.storageCleanupRunning, isFalse);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      // Concurrent demand must coalesce with the acceptance refresh.
+      unawaited(controller.refreshStorageLocation());
+      unawaited(controller.refreshStorageLocation());
+      api.reads.first.complete(oldCompletedLocation);
+      await tester.pump();
+
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(controller.previousStorageLocation, isNull);
+      expect(controller.storageLocation!.cleanupPreview.cleanupPending, isTrue);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(api.reads, hasLength(2));
+      api.reads.last.complete(freshCompletedLocation);
+      await refresh;
+
+      expect(controller.storageLocation, same(freshCompletedLocation));
+      expect(controller.previousStorageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_partial',
+      );
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocationFailed, isFalse);
+      expect(api.reads, hasLength(2));
+    },
+  );
+  testWidgets(
+    'obsolete storage error drains a fresh read and preserves failure recovery',
+    (tester) async {
+      final fixture = PreviewControlApi();
+      final pendingLocation = await _CompletedCleanupApi(
+        fixture,
+      ).storageLocation();
+      final api = _QueuedCleanupStatisticsApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.storageLocation = pendingLocation;
+      final refresh = controller.refreshStorageLocation();
+      await controller.cleanupExpiredEvidence();
+      api.reads.first.completeError(StateError('obsolete statistics failed'));
+      await tester.pump();
+
+      expect(controller.storageLocationFailed, isFalse);
+      expect(controller.storageLocationLoading, isTrue);
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      expect(api.reads, hasLength(2));
+      api.reads.last.completeError(StateError('fresh statistics failed'));
+      await refresh;
+      expect(controller.storageLocationFailed, isTrue);
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocation, same(pendingLocation));
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+
+      final retry = controller.refreshStorageLocation();
+      expect(controller.storageLocationLoading, isTrue);
+      expect(controller.storageLocationFailed, isFalse);
+      api.reads.last.complete(pendingLocation);
+      await retry;
+      expect(controller.storageLocationLoading, isFalse);
+      expect(controller.storageLocationFailed, isFalse);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+    },
+  );
+  for (final disposeDuringFreshRead in [false, true]) {
+    testWidgets(
+      'disposed storage refresh does not deliver or drain further reads '
+      'fresh=$disposeDuringFreshRead',
+      (tester) async {
+        final fixture = PreviewControlApi();
+        final snapshots = _CompletedCleanupApi(fixture);
+        final pendingLocation = await snapshots.storageLocation();
+        snapshots.completed = true;
+        final completedLocation = await snapshots.storageLocation();
+        final api = _QueuedCleanupStatisticsApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        controller.storageLocation = pendingLocation;
+        final refresh = controller.refreshStorageLocation();
+        await controller.cleanupExpiredEvidence();
+        if (disposeDuringFreshRead) {
+          api.reads.first.complete(completedLocation);
+          await tester.pump();
+          expect(api.reads, hasLength(2));
+          unawaited(controller.refreshStorageLocation());
+        }
+        controller.dispose();
+        api.reads.last.completeError(
+          StateError('statistics returned after disposal'),
+        );
+        await refresh;
+        await controller.refreshStorageLocation();
+
+        expect(api.reads, hasLength(disposeDuringFreshRead ? 2 : 1));
+        expect(controller.storageLocation, same(pendingLocation));
+        expect(controller.previousStorageLocation, isNull);
+        expect(controller.storageLocationFailed, isFalse);
+        expect(
+          controller.storageCleanupNotice,
+          'settings.storage.cleanup_pending',
+        );
+      },
+    );
+  }
+  test('cleanup acceptance does not await held optional statistics', () async {
+    final fixture = PreviewControlApi();
+    final api = _HeldCleanupStatisticsApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    final pending = controller.cleanupExpiredEvidence();
+    await api.entered.future;
+    try {
+      final outcome = await pending.timeout(const Duration(milliseconds: 100));
+      expect(outcome.deleted, isTrue);
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+    } finally {
+      api.returned.complete(await fixture.storageLocation());
+      await pending;
+    }
+  });
+  test(
+    'completed managed cleanup replaces pending notice only with certificate',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _CompletedCleanupApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      controller.data = await fixture.loadDashboard();
+      await controller.cleanupExpiredEvidence();
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_pending',
+      );
+      api.completed = true;
+      await controller.refreshStorageLocation();
+      expect(
+        controller.storageCleanupNotice,
+        'settings.storage.cleanup_partial',
+      );
+      expect(controller.storageLocationFailed, isFalse);
+    },
+  );
+  test('pending cleanup never reports physical completion', () async {
+    final fixture = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: _PendingCleanupApi(fixture),
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    controller.data = await fixture.loadDashboard();
+    final outcome = await controller.cleanupExpiredEvidence();
+    expect(outcome.deleted, isTrue);
+    expect(controller.storageCleanupNotice, 'settings.storage.cleanup_pending');
+    expect(controller.storageCleanupError, isNull);
+  });
+  for (final clear in [false, true]) {
+    test(
+      'explicit deletion invalidates late nested inspection $clear',
+      () async {
+        final fixture = PreviewControlApi();
+        final api = _DeletionInspectionApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        final target = controller.data!.captures.firstWhere((c) => !c.running);
+        await controller.selectCapture(target.key);
+        final id = controller.selectedCapturePage!.items.first.id;
+        final pending = controller.loadToolResults(id, 'call', cursor: 'old');
+        final expected = expectLater(pending, throwsA(isA<ControlProblem>()));
+        final outcome = clear
+            ? await controller.clearEvidence()
+            : await controller.deleteCapture(target.key);
+        expect(outcome?.deleted, isTrue);
+        api.tools.complete(
+          const ToolResultPage(items: [], nextCursor: 'stale'),
+        );
+        await expected;
+      },
+    );
+  }
+
+  test(
+    'initial dashboard and pending approvals complete while optional detail waits',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _HeldInitialDetailApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      final initialized = controller.initialize();
+      await api.entered.future;
+      var completed = false;
+      initialized.then((_) {
+        completed = true;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(controller.data, isNotNull);
+      expect(controller.loading, isFalse);
+      expect(api.approvalReads, greaterThan(0));
+      expect(completed, isTrue);
+      final pending = controller.pendingApprovals!.first;
+      expect(
+        await controller.decideApproval(pending, pending.choices.first),
+        isTrue,
+      );
+      expect(api.decisions, 1);
+      api.release.complete();
+      await initialized;
+    },
+  );
+
+  test(
+    'Activity inspection invalidation rejects a late detail response',
+    () async {
+      final delegate = PreviewControlApi();
+      final api = _ActivityInspectionApi(delegate, 409);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: delegate.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-2');
+      final id = controller.selectedCapturePage!.items.first.id;
+      api.exchangeGate = Completer<ExchangeDetail>();
+      final load = controller.loadExchangeDetail(id);
+      await expectLater(
+        controller.loadToolResults(id, 'call', cursor: 'old'),
+        throwsA(isA<ControlProblem>()),
+      );
+      api.exchangeGate!.complete(await delegate.exchange(id));
+      expect(await load, isNull);
+      expect(controller.exchangeDetail(id), isNull);
+    },
+  );
+
+  for (final status in [409, 422]) {
+    for (final domain in ['activities', 'content', 'tool']) {
+      test(
+        'Activity inspection clears stale pages and nested caches $domain $status',
+        () async {
+          final delegate = PreviewControlApi();
+          final api = _ActivityInspectionApi(delegate, status);
+          final controller = WorkbenchController(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: true,
+            closeRuntime: delegate.close,
+          );
+          addTearDown(controller.dispose);
+          await controller.initialize();
+          await controller.selectCapture('managed_run:run-2');
+          final current = controller.selectedCapturePage!;
+          expect(current.items, isNotEmpty);
+          final id = current.items.first.id;
+          await controller.loadExchangeDetail(id);
+          expect(controller.exchangeDetail(id), isNotNull);
+          final capture = controller.selectedCapture;
+          final assignment = controller.selectedAssignment;
+          final approvals = controller.pendingApprovals;
+          if (domain == 'activities') {
+            await controller.loadMoreSelectedCapture();
+          } else if (domain == 'content') {
+            await expectLater(
+              controller.loadExchangeContentPage(id, 'old-source-content'),
+              throwsA(isA<ControlProblem>()),
+            );
+          } else {
+            await expectLater(
+              controller.loadToolResults(id, 'call', cursor: 'old-source-tool'),
+              throwsA(isA<ControlProblem>()),
+            );
+          }
+          expect(controller.selectedCapturePage?.items, isEmpty);
+          expect(controller.selectedCapturePage?.nextCursor, isNull);
+          expect(controller.selectedCaptureConversations?.items, isEmpty);
+          expect(controller.exchangeDetail(id), isNull);
+          expect(controller.selectedCapture, same(capture));
+          expect(controller.selectedAssignment, same(assignment));
+          expect(controller.pendingApprovals, same(approvals));
+        },
+      );
+    }
+  }
+
+  for (final domain in ['connections', 'egress']) {
+    for (final status in [409, 422]) {
+      test(
+        'network continuation resets retained audit pages $domain $status',
+        () async {
+          final delegate = PreviewControlApi();
+          final api = _NetworkInspectionApi(delegate, failureStatus: status);
+          final controller = WorkbenchController(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: true,
+            closeRuntime: delegate.close,
+          );
+          addTearDown(controller.dispose);
+          await controller.initialize();
+          await controller.refreshNetwork();
+          final original = controller.networkData!;
+          expect(original.connections.items, isNotEmpty);
+          expect(original.egressAttempts.items, isNotEmpty);
+          if (domain == 'connections') {
+            await controller.loadMoreConnections();
+          } else {
+            await controller.loadMoreEgressAttempts();
+          }
+          final retained = controller.networkData!;
+          expect(retained.connections.items, isEmpty);
+          expect(retained.connections.nextCursor, isNull);
+          expect(retained.egressAttempts.items, isEmpty);
+          expect(retained.egressAttempts.nextCursor, isNull);
+          expect(retained.approvals, same(original.approvals));
+          expect(retained.rules, same(original.rules));
+          expect(controller.networkError, isNotNull);
+          await controller.refreshNetwork();
+          expect(controller.networkData!.connections.items, isNotEmpty);
+          expect(
+            controller.networkData!.connections.nextCursor,
+            'connections-2',
+          );
+        },
+      );
+    }
+  }
+  test('network continuation preserves empty advancing pages', () async {
+    final delegate = PreviewControlApi();
+    final api = _NetworkInspectionApi(delegate);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: delegate.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.refreshNetwork();
+    final original = controller.networkData!;
+    await controller.loadMoreConnections();
+    await controller.loadMoreEgressAttempts();
+    expect(
+      controller.networkData!.connections.items.length,
+      original.connections.items.length,
+    );
+    expect(
+      controller.networkData!.egressAttempts.items.length,
+      original.egressAttempts.items.length,
+    );
+    expect(controller.networkData!.connections.nextCursor, 'connections-tail');
+    expect(controller.networkData!.egressAttempts.nextCursor, 'egress-tail');
+  });
   for (final width in [640.0, 1440.0]) {
     testWidgets('Runtime first cause survives failed inventory at $width', (
       tester,
@@ -540,8 +1057,9 @@ void main() {
     );
     await controller.initialize();
     expect(controller.data!.accounts, isNotEmpty);
-    // Initial quota reads intentionally complete independently of initialize.
-    // Settle them before measuring unchanged inventory poll notifications.
+    // Initial detail and quota reads complete independently of initialize.
+    // Settle their public completion boundaries before counting poll changes.
+    await controller.selectCapture(controller.selectedCaptureKey!);
     await controller.ensureProviderAccountQuotas(controller.data!.accounts);
     var notifications = 0;
     controller.addListener(() => notifications++);
@@ -2447,4 +2965,253 @@ final class _DeletionTrackingApi implements ControlApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _NetworkInspectionApi extends _UsageTrackingApi {
+  _NetworkInspectionApi(super.delegate, {this.failureStatus});
+
+  final int? failureStatus;
+  int networkLoads = 0;
+
+  @override
+  Future<NetworkData> loadNetwork() async {
+    networkLoads++;
+    final original = await delegate.loadNetwork();
+    return NetworkData(
+      approvals: original.approvals,
+      rules: original.rules,
+      connections: ConnectionPage(
+        items: original.connections.items,
+        nextCursor: 'connections-$networkLoads',
+      ),
+      egressAttempts: EgressAttemptPage(
+        items: original.egressAttempts.items,
+        nextCursor: 'egress-$networkLoads',
+      ),
+    );
+  }
+
+  void check() {
+    if (failureStatus case final status?) {
+      throw ControlProblem(
+        status: status,
+        reasonCode: status == 409
+            ? 'inspection_changed'
+            : 'invalid_control_request',
+        messageKey: 'error.inspection_changed',
+      );
+    }
+  }
+
+  @override
+  Future<ConnectionPage> connections({String? cursor, int limit = 50}) async {
+    check();
+    return const ConnectionPage(items: [], nextCursor: 'connections-tail');
+  }
+
+  @override
+  Future<EgressAttemptPage> egressAttempts({
+    String? cursor,
+    int limit = 50,
+  }) async {
+    check();
+    return const EgressAttemptPage(items: [], nextCursor: 'egress-tail');
+  }
+}
+
+final class _ActivityInspectionApi extends _UsageTrackingApi {
+  Completer<ExchangeDetail>? exchangeGate;
+  _ActivityInspectionApi(super.delegate, this.status);
+  final int status;
+  Never fail() => throw ControlProblem(
+    status: status,
+    reasonCode: status == 409
+        ? 'inspection_changed'
+        : 'invalid_control_request',
+    messageKey: 'error.inspection_changed',
+  );
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    if (cursor != null) fail();
+    final page = await super.activities(
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    return ActivityPage(items: page.items, nextCursor: 'source-bound-next');
+  }
+
+  @override
+  Future<ExchangeDetail> exchange(
+    String id, {
+    String contentView = 'incremental',
+  }) => exchangeGate?.future ?? delegate.exchange(id, contentView: contentView);
+  @override
+  Future<ExchangeContentPage> exchangeContentPage(
+    String id,
+    String cursor,
+  ) async => fail();
+  @override
+  Future<ToolResultPage> toolResults(
+    String id,
+    String callId, {
+    String? cursor,
+  }) async => fail();
+}
+
+final class _HeldInitialDetailApi extends _UsageTrackingApi {
+  _HeldInitialDetailApi(super.delegate);
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  int approvalReads = 0;
+  int decisions = 0;
+  @override
+  Future<ApprovalRecord> decideApproval({
+    required ApprovalRecord approval,
+    required ApprovalChoice choice,
+  }) {
+    decisions += 1;
+    return delegate.decideApproval(approval: approval, choice: choice);
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return super.conversations(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+    );
+  }
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() {
+    approvalReads += 1;
+    return super.pendingApprovals();
+  }
+}
+
+final class _DeletionInspectionApi extends _UsageTrackingApi {
+  _DeletionInspectionApi(super.delegate);
+  final tools = Completer<ToolResultPage>();
+  @override
+  Future<DeletionOutcome> deleteCapture(String key) =>
+      delegate.deleteCapture(key);
+  @override
+  Future<DeletionOutcome> clearEvidence() async => const DeletionOutcome(
+    deleted: true,
+    holderCount: 0,
+    holders: [],
+    released: null,
+  );
+  @override
+  Future<ToolResultPage> toolResults(
+    String id,
+    String callId, {
+    String? cursor,
+  }) => tools.future;
+}
+
+final class _PendingCleanupApi extends _UsageTrackingApi {
+  _PendingCleanupApi(super.delegate);
+  @override
+  Future<RuntimeStorageLocation> storageLocation() =>
+      delegate.storageLocation();
+  @override
+  Future<DeletionOutcome> cleanupExpiredEvidence() async =>
+      const DeletionOutcome(
+        deleted: true,
+        holderCount: 0,
+        holders: [],
+        released: DeletionReleased(
+          exchanges: 0,
+          envelopes: 0,
+          activities: 0,
+          connections: 0,
+          attempts: 0,
+          approvals: 0,
+          assignments: 0,
+          captures: 0,
+          cleanupPending: true,
+          countsIncomplete: true,
+          privacyMetadataRetained: true,
+        ),
+      );
+}
+
+final class _CompletedCleanupApi extends _PendingCleanupApi {
+  _CompletedCleanupApi(super.delegate);
+  bool completed = false;
+  @override
+  Future<RuntimeStorageLocation> storageLocation() async {
+    final value = await delegate.storageLocation();
+    final counts = <String, Object>{
+      'exchanges': 0,
+      'envelopes': 0,
+      'activities': 0,
+      'connections': 0,
+      'attempts': 0,
+      'approvals': 0,
+      'assignments': 0,
+      'captures': 0,
+      'cleanupPending': !completed,
+      'countsIncomplete': true,
+      'privacyMetadataRetained': true,
+    };
+    return RuntimeStorageLocation.fromJson({
+      'backend': 'sqlite',
+      'dataDirectory': value.dataDirectory,
+      'databasePath': value.databasePath,
+      'collectedAt': value.collectedAt.toIso8601String(),
+      'databaseBytes': value.databaseBytes,
+      'walBytes': value.walBytes,
+      'sharedMemoryBytes': value.sharedMemoryBytes,
+      'evidenceBytes': value.evidenceBytes,
+      'reusableBytes': value.reusableBytes,
+      'filesystemAvailableBytes': value.filesystemAvailableBytes,
+      'lowSpaceThresholdBytes': value.lowSpaceThresholdBytes,
+      'capacityState': value.capacityState,
+      'cleanupPreview': counts,
+      if (completed) 'lastCleanup': {...counts, 'cleanupPending': false},
+    });
+  }
+}
+
+final class _HeldCleanupStatisticsApi extends _PendingCleanupApi {
+  _HeldCleanupStatisticsApi(super.delegate);
+  final entered = Completer<void>();
+  final returned = Completer<RuntimeStorageLocation>();
+  @override
+  Future<RuntimeStorageLocation> storageLocation() {
+    entered.complete();
+    return returned.future;
+  }
+}
+
+final class _QueuedCleanupStatisticsApi extends _PendingCleanupApi {
+  _QueuedCleanupStatisticsApi(super.delegate);
+  final reads = <Completer<RuntimeStorageLocation>>[];
+
+  @override
+  Future<RuntimeStorageLocation> storageLocation() {
+    final read = Completer<RuntimeStorageLocation>();
+    reads.add(read);
+    return read.future;
+  }
 }

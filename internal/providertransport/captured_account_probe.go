@@ -20,7 +20,7 @@ func capturedAccountProbeTarget(spec runtimeFetchSpec) (offlinehold.ProbeTarget,
 		return offlinehold.ProbeTarget{}, invalid
 	}
 	c := spec.captured
-	request, err := NewCapturedAccountRead(c.plan, spec.credential, c.connectionID, c.operationID, spec.rawQuery)
+	request, err := NewCapturedAccountRead(c.plan, spec.credential, c.connectionID, c.operationID, spec.rawQuery, c.observationStamp)
 	if err != nil || request.read.Origin() != spec.target.Origin() ||
 		request.read.Path() != spec.relativePath || request.targetRef != spec.targetRef ||
 		request.read.RawQuery() != spec.rawQuery || request.read.IsModelDirectory() != spec.modelCatalog {

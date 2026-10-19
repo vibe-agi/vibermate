@@ -62,7 +62,7 @@ func TestNativeStreamDetachedRecoveryUsesOnePOST(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?`, call.id).Scan(&once); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.db.QueryRow(`SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id IN(?,?)`, call.id, resume.id).Scan(&audits); err != nil {
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id IN(?,?)`, call.id, resume.id).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
 	if once != 1 || audits != 2 {
@@ -174,7 +174,7 @@ func TestNativeStreamDetachedCancellationAndExpiryFenceRecovery(t *testing.T) {
 					t.Fatalf("expiry setup lost exact started operation: %+v err=%v setupAge=%s", op, err, time.Since(setupStarted))
 				}
 				var startedMillis int64
-				if err := f.db.QueryRow(`SELECT started_at_unix_ms FROM runtime_egress_attempts WHERE attempt_id=? AND parent_id=?`, receipt.AttemptID(), call.id).Scan(&startedMillis); err != nil || !originalExpiry.Equal(time.UnixMilli(startedMillis).Add(2*time.Second)) || !time.Now().Before(originalExpiry) {
+				if err := f.db.QueryRow(`SELECT started_at_unix_ms FROM native_tool_deliveries WHERE attempt_id=? AND operation_id=?`, receipt.AttemptID(), call.id).Scan(&startedMillis); err != nil || !originalExpiry.Equal(time.UnixMilli(startedMillis).Add(2*time.Second)) || !time.Now().Before(originalExpiry) {
 					t.Fatalf("expiry setup changed original receipt deadline: operation=%s attempt=%s expiry=%s startedMillis=%d err=%v setupAge=%s", call.id, receipt.AttemptID(), originalExpiry, startedMillis, err, time.Since(setupStarted))
 				}
 				t.Logf("observed detached c1 operation=%s attempt=%s state=started expiry=%s setupAge=%s remaining=%s", call.id, receipt.AttemptID(), originalExpiry.Format(time.RFC3339Nano), time.Since(setupStarted), time.Until(originalExpiry))
@@ -468,13 +468,17 @@ func TestNativeRecoveredResultIsRetainedUnderOriginalID(t *testing.T) {
 		t.Fatal(got)
 	}
 	op, err := f.store.NativeToolRepository().Get(context.Background(), call.id)
-	if err != nil || op.State != "completed" || op.Result == nil {
+	if err != nil || op.State != "completed" {
 		t.Fatalf("original retention %+v %v", op, err)
 	}
 	child, err := f.store.NativeToolRepository().Get(context.Background(), get.id)
 	if err != nil || child.Result != nil {
 		t.Fatalf("GET stole result %+v %v", child, err)
 	}
+	if _, err := f.readNativeContent(context.Background(), f.capture, call.id, "tool_result", 0, 128<<10); err != nil {
+		t.Fatalf("original retained result absent: %v", err)
+	}
+	f.requireNoContent(t, get.id, nativetool.ContentToolResult)
 }
 
 func TestNativeStreamExecutorReusesDeliveredTerminalCapacity(t *testing.T) {

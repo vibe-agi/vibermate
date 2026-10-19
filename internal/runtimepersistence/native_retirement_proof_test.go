@@ -46,13 +46,13 @@ func TestNativeRetirementReturnsOnlyCommittedPhysicalReceipts(t *testing.T) {
 					want[f.child] = childReceipt
 				}
 				for id := range want {
-					audit, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					audit, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil || !audit.Attempt.Terminal() {
 						t.Fatal("actual retirement transaction did not close expected physical audit", err)
 					}
 				}
 				if kind == "callback" {
-					parent, err := scanEgressAttempt(f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.parent))
+					parent, err := scanEgressAttempt(f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.parent))
 					if err != nil || parent.Attempt.Terminal() {
 						t.Fatal("child retirement closed original parent physical attempt")
 					}

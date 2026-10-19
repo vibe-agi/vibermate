@@ -106,7 +106,9 @@ func TestACPControlAuthorityAndFrozenRecordingCannotBeUpgraded(t *testing.T) {
 	post(path+"observe-acp", "", grant.RunCapability, final, http.StatusNoContent, nil)
 	post(path+"observe-acp", "", grant.RunCapability, final, http.StatusNoContent, nil)
 	final.Revision++
-	post(path+"observe-acp", "", grant.RunCapability, final, http.StatusConflict, nil)
+	// Snapshot publication is best effort; the asynchronous writer discards
+	// conflicting final revisions without converting them into authority errors.
+	post(path+"observe-acp", "", grant.RunCapability, final, http.StatusNoContent, nil)
 	app := host.AppSession()
 	for _, token := range []string{"", grant.RunCapability, other.RunCapability} {
 		response := controlRequest(t, app.BaseURL, http.MethodGet, "/api/v1/captures/managed_run:"+grant.Run.ID+"/acp", token, "vibermate://desktop")

@@ -2,6 +2,7 @@ package captureadmission
 
 import (
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -12,6 +13,7 @@ import (
 // capability is authorized. Constructing the value does not authenticate a
 // request; only an Authorizer may place an Admission on a proxy connection.
 type ManagedRunEvidence struct {
+	RuntimeUserID   runtimeuser.UserID
 	CaptureRunID    string
 	SourceLabel     string
 	WorkspaceRoot   string
@@ -43,6 +45,7 @@ func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 		adapter:            cloneAdapter(evidence.Adapter),
 		runtime:            evidence.Runtime,
 		runtimeUsername:    evidence.RuntimeUsername,
+		runtimeUserID:      evidence.RuntimeUserID,
 	}
 	if evidence.Workspace != (admission.workspace) {
 		if err := evidence.Workspace.Validate(); err != nil {

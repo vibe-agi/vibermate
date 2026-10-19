@@ -38,7 +38,7 @@ var (
 		`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]{8,}`,
 	)
 	headerSecretPattern = regexp.MustCompile(
-		`(?i)\b(authorization|proxy-authorization|cookie|set-cookie)[ \t]*[:=][ \t]*[^\s,;]+`,
+		`(?i)\b(authorization|proxy-authorization|cookie|set-cookie)[ \t]*[:=][ \t]*[^\r\n]+`,
 	)
 	providerSecretPattern = regexp.MustCompile(
 		`\b(?:sk-ant-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{16,})\b`,

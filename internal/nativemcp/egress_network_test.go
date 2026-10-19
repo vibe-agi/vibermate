@@ -275,7 +275,7 @@ func TestNativeInheritedExitUsesActualSOCKSTLSAndDefaultEditChangesNextOperation
 	}
 	var childProxy string
 	var childRevision uint64
-	if err := f.db.QueryRow(`SELECT proxy_id,default_revision FROM runtime_egress_attempts WHERE parent_id=?`, child.id).Scan(&childProxy, &childRevision); err != nil {
+	if err := f.db.QueryRow(`SELECT proxy_id,default_revision FROM native_tool_deliveries WHERE operation_id=?`, child.id).Scan(&childProxy, &childRevision); err != nil {
 		t.Fatal(err)
 	}
 	if childProxy != one.ID.String() || childRevision != 2 {
@@ -283,7 +283,7 @@ func TestNativeInheritedExitUsesActualSOCKSTLSAndDefaultEditChangesNextOperation
 	}
 	var recoveryProxy string
 	var recoveryRevision uint64
-	if err := f.db.QueryRow(`SELECT proxy_id,default_revision FROM runtime_egress_attempts WHERE parent_id=?`, recovery.id).Scan(&recoveryProxy, &recoveryRevision); err != nil {
+	if err := f.db.QueryRow(`SELECT proxy_id,default_revision FROM native_tool_deliveries WHERE operation_id=?`, recovery.id).Scan(&recoveryProxy, &recoveryRevision); err != nil {
 		t.Fatal(err)
 	}
 	if recoveryProxy != one.ID.String() || recoveryRevision != 2 {
@@ -316,7 +316,7 @@ func TestNativeInheritedExitUsesActualSOCKSTLSAndDefaultEditChangesNextOperation
 	}
 	var proxy, source string
 	var revision uint64
-	if err := f.db.QueryRow(`SELECT proxy_id,selection_source,default_revision FROM runtime_egress_attempts WHERE parent_id=?`, terminal.OperationID).Scan(&proxy, &source, &revision); err != nil {
+	if err := f.db.QueryRow(`SELECT proxy_id,selection_source,default_revision FROM native_tool_deliveries WHERE operation_id=?`, terminal.OperationID).Scan(&proxy, &source, &revision); err != nil {
 		t.Fatal(err)
 	}
 	if proxy != two.ID.String() || source != "global" || revision != 3 {

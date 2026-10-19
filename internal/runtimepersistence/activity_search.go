@@ -23,12 +23,15 @@ const searchActivityColumns = `
 	 candidate.conversation_kind, candidate.conversation_evidence,
 	 candidate.conversation_actor, candidate.provider_status,
 	 candidate.provider_field, candidate.provider_error_code, candidate.client_field, candidate.client_path,
-	 candidate.transport_evidence_json`
+	 candidate.transport_evidence_json, candidate.workspace_id, candidate.workspace_label, candidate.capture_label`
 
 func (repository *activityRepository) SearchExchanges(
 	ctx context.Context,
 	request activity.SearchRequest,
 ) (activity.SearchPage, error) {
+	if request.Query.Cursor != "" {
+		return activity.SearchPage{}, activity.ErrInvalidEvent
+	}
 	if err := request.Validate(); err != nil {
 		return activity.SearchPage{}, err
 	}
@@ -38,16 +41,11 @@ func (repository *activityRepository) SearchExchanges(
 	}
 	defer finish()
 	query := `SELECT ` + searchActivityColumns + `,
-		COALESCE(runs.workspace_id, ''),
-		COALESCE(runs.workspace_label, ''),
-		COALESCE(manuals.display_name, runs.executable_label,
-		         candidate.source_display_name),
+		candidate.workspace_id,
+		candidate.workspace_label,
+		COALESCE(NULLIF(candidate.capture_label, ''), candidate.source_display_name),
 		contents.manifest_json
 	 FROM runtime_activities AS candidate
-	 LEFT JOIN capture_runs AS runs
-	   ON runs.run_id = candidate.capture_run_id
-	 LEFT JOIN manual_captures AS manuals
-	   ON manuals.capture_id = candidate.manual_capture_id
 	 LEFT JOIN runtime_exchange_contents AS contents
 	   ON contents.exchange_id = candidate.subject_id
 	  AND contents.expires_at_unix_ms > ?
@@ -104,8 +102,8 @@ func (repository *activityRepository) SearchExchanges(
 			"candidate.status", "candidate.reason_code", "candidate.source_display_name",
 			"candidate.capture_run_id", "candidate.manual_capture_id",
 			"candidate.conversation_projection_id", "candidate.conversation_display_name",
-			"COALESCE(runs.workspace_id, '')", "COALESCE(runs.workspace_label, '')",
-			"COALESCE(manuals.display_name, runs.executable_label, '')",
+			"candidate.workspace_id", "candidate.workspace_label",
+			"candidate.capture_label",
 		}
 		parts := make([]string, 0, len(conditions)+2)
 		for _, column := range conditions {

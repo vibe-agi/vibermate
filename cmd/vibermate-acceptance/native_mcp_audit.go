@@ -6,6 +6,9 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -20,13 +23,13 @@ import (
 // Body-free bounded evidence, not a completion inference: an open audit may
 // carry a default known flag while the operation still has no byte projection.
 func logNativePhaseSQL(ctx context.Context, t nativeFixtureChecks, directory string, capture captureidentity.Reference) {
-	reader, err := openExchangeAuditReader(ctx, directory)
+	reader, err := openControlAuditReader(ctx, directory)
 	if err != nil {
 		t.Error("native phase audit unavailable")
 		return
 	}
 	defer reader.Close()
-	rows, err := reader.connection.QueryContext(ctx, `SELECT o.rpc_kind,o.state,o.terminal_reason,COALESCE(b.session_revision,0),COALESCE(b.catalog_generation,0),COALESCE(s.revision,0),COALESCE(s.catalog_generation,0),COALESCE(n.claimed_at_unix_ms,0),COALESCE(a.completed_at_unix_ms,0),COALESCE(a.outcome,''),COALESCE(a.error_class,''),COALESCE(a.byte_counts_known,-1),COALESCE(a.bytes_in,0),COALESCE(a.bytes_out,0),o.bytes_in,o.bytes_out,c.state,c.replay_barrier FROM native_tool_operations o LEFT JOIN native_tool_bindings b USING(operation_id) LEFT JOIN native_tool_sessions s USING(session_id) LEFT JOIN native_tool_once n USING(operation_id) LEFT JOIN runtime_egress_attempts a USING(attempt_id) JOIN native_tool_scopes c ON c.capture_kind=o.capture_kind AND c.capture_id=o.capture_id WHERE o.capture_kind=? AND o.capture_id=? ORDER BY o.created_at_unix_ms,o.operation_id LIMIT 129`, capture.Kind, capture.ID)
+	rows, err := reader.connection.QueryContext(ctx, `SELECT o.rpc_kind,o.state,o.terminal_reason,COALESCE(b.session_revision,0),COALESCE(b.catalog_generation,0),COALESCE(s.revision,0),COALESCE(s.catalog_generation,0),COALESCE(n.claimed_at_unix_ms,0),COALESCE(a.completed_at_unix_ms,0),COALESCE(a.outcome,''),COALESCE(a.error_class,''),COALESCE(a.byte_counts_known,-1),COALESCE(a.bytes_in,0),COALESCE(a.bytes_out,0),o.bytes_in,o.bytes_out,c.state,c.replay_barrier FROM native_tool_operations o LEFT JOIN native_tool_bindings b USING(operation_id) LEFT JOIN native_tool_sessions s USING(session_id) LEFT JOIN native_tool_once n USING(operation_id) LEFT JOIN native_tool_deliveries a ON a.operation_id=o.operation_id JOIN native_tool_scopes c ON c.capture_kind=o.capture_kind AND c.capture_id=o.capture_id WHERE o.capture_kind=? AND o.capture_id=? ORDER BY o.created_at_unix_ms,o.operation_id LIMIT 129`, capture.Kind, capture.ID)
 	if err != nil {
 		t.Error("native phase SQL unavailable")
 		return
@@ -54,7 +57,7 @@ func logNativePhaseSQL(ctx context.Context, t nativeFixtureChecks, directory str
 }
 
 func verifyNativeStreamSQL(ctx context.Context, t nativeFixtureChecks, directory string, capture captureidentity.Reference, reviewed bool) {
-	reader, err := openExchangeAuditReader(ctx, directory)
+	reader, err := openControlAuditReader(ctx, directory)
 	if err != nil {
 		t.Fatal("private stream read-only audit unavailable")
 	}
@@ -67,10 +70,9 @@ func verifyNativeStreamSQL(ctx context.Context, t nativeFixtureChecks, directory
 		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind IN('tools_call','server_reply')`, 4},
 		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_operations p ON p.operation_id=b.parent_operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='server_reply' AND o.state='completed' AND p.rpc_kind='get_stream'`, 1},
 		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_bindings b USING(operation_id) JOIN native_tool_operations p ON p.operation_id=b.parent_operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='server_reply' AND o.state='completed' AND p.rpc_kind='tools_call'`, 2},
-		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND a.outcome='failed' AND a.error_class='transport_failed' AND a.purpose='client_tool_service' AND a.account_id='' AND a.parent_kind='client_operation'`, 1},
-		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND CASE WHEN a.byte_counts_known=1 THEN o.bytes_in IS NOT a.bytes_in OR o.bytes_out IS NOT a.bytes_out ELSE o.bytes_in IS NOT NULL OR o.bytes_out IS NOT NULL END`, 0},
-		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN runtime_egress_attempts a USING(attempt_id) WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='get_stream' AND o.state='completed' AND a.outcome='completed'`, 1},
-		{`SELECT COUNT(*) FROM native_tool_contents c JOIN native_tool_operations o USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=?`, 0},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN native_tool_deliveries a ON a.operation_id=o.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND a.outcome='failed' AND a.error_class='transport_failed'`, 1},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN native_tool_deliveries a ON a.operation_id=o.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='tools_call' AND CASE WHEN a.byte_counts_known=1 THEN o.bytes_in IS NOT a.bytes_in OR o.bytes_out IS NOT a.bytes_out ELSE o.bytes_in IS NOT NULL OR o.bytes_out IS NOT NULL END`, 0},
+		{`SELECT COUNT(*) FROM native_tool_operations o JOIN native_tool_once n USING(operation_id) JOIN native_tool_deliveries a ON a.operation_id=o.operation_id WHERE o.capture_kind=? AND o.capture_id=? AND o.rpc_kind='get_stream' AND o.state='completed' AND a.outcome='completed'`, 1},
 	} {
 		var got int
 		if err := reader.connection.QueryRowContext(ctx, check.query, capture.Kind, capture.ID).Scan(&got); err != nil || got != check.want {
@@ -84,6 +86,18 @@ func verifyNativeStreamSQL(ctx context.Context, t nativeFixtureChecks, directory
 	var consumed int
 	if err := reader.connection.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_approvals a JOIN native_tool_operations o USING(operation_id) WHERE o.capture_kind=? AND o.capture_id=? AND a.state='allowed' AND a.consumed_at_unix_ms IS NOT NULL`, capture.Kind, capture.ID).Scan(&consumed); err != nil || consumed != want {
 		t.Fatal("stream approval consumption differs from actual policy")
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	observations, err := openExchangeAuditReader(ctx, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observations.Close()
+	var retained int
+	if err = observations.connection.QueryRowContext(ctx, `SELECT COUNT(*) FROM native_tool_contents WHERE capture_kind=? AND capture_id=?`, capture.Kind, capture.ID).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("OFF retained optional native bodies: %d %v", retained, err)
 	}
 	t.Logf("stream SQL: one original call/once/audit, freshGET parent1 originalPOST parents2, completed recoveryGET1, consumedApprovals=%d", consumed)
 }
@@ -173,4 +187,72 @@ func (transport *nativeFixtureTransport) RoundTrip(request *http.Request, policy
 		return nil, errors.New("fixture redirect denied")
 	}
 	return response, nil
+}
+
+// Required native delivery proof uses the same closed purpose/parent/authority
+// constants as the repository. Optional audit rows never authorize a send.
+func nativeDeliveryAuditPage(ctx context.Context, directory string, id nativetool.ID) (egressaudit.Page, error) {
+	reader, err := openControlAuditReader(ctx, directory)
+	if err != nil {
+		return egressaudit.Page{}, err
+	}
+	defer reader.Close()
+	var attempt, connection, target, policy, rule, proxy, payload, selection, outcome, class, onceAttempt string
+	var policyRevision, proxyRevision, defaultRevision uint64
+	var started, in, out int64
+	var completed sql.NullInt64
+	var known bool
+	err = reader.connection.QueryRowContext(ctx, `SELECT d.attempt_id,d.connection_id,d.payload_class,d.target_origin,d.policy_id,d.policy_revision,d.rule_id,d.proxy_id,d.proxy_revision,d.selection_source,d.default_revision,d.started_at_unix_ms,d.completed_at_unix_ms,d.outcome,d.error_class,d.bytes_in,d.bytes_out,d.byte_counts_known,COALESCE(n.attempt_id,'') FROM native_tool_deliveries d LEFT JOIN native_tool_once n USING(operation_id) WHERE d.operation_id=?`, id.String()).Scan(&attempt, &connection, &payload, &target, &policy, &policyRevision, &rule, &proxy, &proxyRevision, &selection, &defaultRevision, &started, &completed, &outcome, &class, &in, &out, &known, &onceAttempt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return egressaudit.Page{}, nil
+	}
+	if err != nil {
+		return egressaudit.Page{}, err
+	}
+	if onceAttempt != attempt {
+		return egressaudit.Page{}, errors.New("native delivery lacks matching required once claim")
+	}
+	value, err := egressaudit.New(egressaudit.NewInput{ID: attempt, ConnectionID: connection, Purpose: egressaudit.PurposeClientToolService, PayloadClass: egressaudit.PayloadClass(payload), Parent: egressaudit.ParentRef{Kind: egressaudit.ParentClientOperation, ID: id.String()}, Caller: egressaudit.CallerCore, TargetOrigin: target, Decision: egressaudit.DecisionRef{PolicyID: policy, PolicyRevision: policyRevision, Authority: egressaudit.AuthorityEnvironment, RuleID: rule, ProxyID: proxy, ProxyRevision: proxyRevision, SelectionSource: egressprofile.SelectionSource(selection), DefaultRevision: defaultRevision}, StartedAt: time.UnixMilli(started).UTC()})
+	if err == nil && completed.Valid {
+		value, err = value.Finish(egressaudit.TerminalInput{Outcome: egressaudit.Outcome(outcome), ErrorClass: class, BytesIn: in, BytesOut: out, UnobservedByteCounts: !known, CompletedAt: time.UnixMilli(completed.Int64).UTC()})
+	}
+	if err != nil {
+		return egressaudit.Page{}, err
+	}
+	if err = reader.validateIdentity(); err != nil {
+		return egressaudit.Page{}, err
+	}
+	return egressaudit.Page{Items: []egressaudit.Record{{Attempt: value}}}, nil
+}
+
+// Required control identity is discovered independently of optional snapshots.
+func nativeToolCallID(ctx context.Context, directory string, capture captureidentity.Reference) (nativetool.ID, error) {
+	reader, err := openControlAuditReader(ctx, directory)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	rows, err := reader.connection.QueryContext(ctx, `SELECT operation_id FROM native_tool_operations WHERE capture_kind=? AND capture_id=? AND rpc_kind='tools_call' LIMIT 2`, capture.Kind, capture.ID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var id nativetool.ID
+	count := 0
+	for rows.Next() {
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		count++
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	if count != 1 {
+		return "", errors.New("required native tools call identity is not unique")
+	}
+	if err = reader.validateIdentity(); err != nil {
+		return "", err
+	}
+	return id, nil
 }

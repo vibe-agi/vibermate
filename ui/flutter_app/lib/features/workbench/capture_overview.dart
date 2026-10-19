@@ -41,6 +41,7 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
   bool _usageFailed = false;
   int _generation = 0;
   int _refreshRevision = 0;
+  int? _credentialRevision;
 
   @override
   void initState() {
@@ -68,7 +69,13 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
   @override
   void didUpdateWidget(covariant CaptureRequestOverview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_scope != widget.controller.captureSummaryScope ||
+    if (_credentialRevision !=
+            widget
+                .controller
+                .selectedCapture
+                ?.manualCapture
+                ?.credentialRevision ||
+        _scope != widget.controller.captureSummaryScope ||
         _refreshRevision != widget.controller.captureOverviewRefresh) {
       _refreshRevision = widget.controller.captureOverviewRefresh;
       unawaited(_load(forceUsage: true));
@@ -84,9 +91,18 @@ final class _CaptureRequestOverviewState extends State<CaptureRequestOverview>
 
   Future<void> _load({bool forceUsage = false}) async {
     final scope = widget.controller.captureSummaryScope;
-    if (scope == null || (_loading && scope == _scope)) return;
+    final credentialRevision =
+        widget.controller.selectedCapture?.manualCapture?.credentialRevision;
+    if (scope == null ||
+        (_loading &&
+            scope == _scope &&
+            credentialRevision == _credentialRevision)) {
+      return;
+    }
     final generation = ++_generation;
-    final scopeChanged = scope != _scope;
+    final scopeChanged =
+        scope != _scope || credentialRevision != _credentialRevision;
+    _credentialRevision = credentialRevision;
     setState(() {
       if (scopeChanged) {
         _requests = null;
@@ -384,6 +400,18 @@ final class _RequestStatus extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
+        if (summary.captureObservation case final observation?)
+          Text(
+            copy.format('capture.summary.authorization_observed', {
+              'first': observation.firstObservedAt == null
+                  ? copy('capture.summary.unknown_time')
+                  : _time(observation.firstObservedAt!),
+              'last': observation.lastObservedAt == null
+                  ? copy('capture.summary.unknown_time')
+                  : _time(observation.lastObservedAt!),
+            }),
+            key: const Key('capture-authorization-observation'),
+          ),
         if (summary.firstObservedAt case final first?)
           Text(
             copy.format('capture.summary.observed_range', {

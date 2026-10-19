@@ -395,7 +395,7 @@ func TestInstalledCodexSameSessionContinuation(t *testing.T) {
 		t.Fatal("native response incomplete")
 	}
 	task7CheckPages(t, ctx, f.runtime.ExchangeContents(), complete)
-	if f.diagnostics.Load() != 0 {
+	if recordingFailureCount(f.runtime) != 0 {
 		t.Fatal("native recording diagnostics")
 	}
 	f.close()

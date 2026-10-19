@@ -86,6 +86,7 @@
   "cli.doctor.reason.environment_catalog": "原因 environment_catalog：请与所有者检查目录访问权限及 Runtime Server 可用性。",
   "cli.doctor.reason.environment_unavailable": "原因 environment_unavailable：选择 Runtime User 策略允许的有效 Environment；检查 vibermate profiles --server <同一服务端> --json。",
   "cli.status.storage_failure": "FAIL 核心审计失败，代理已停止：{{operation}} / {{reason}}，首次发生于 {{at}}。请检查存储权限和磁盘空间，处理后重启 Runtime；刷新页面不能恢复代理。",
+  "cli.status.recording_state": "WARN 记录状态：{{state}}；本次运行丢弃={{dropped}}，写入未确认={{unconfirmed}}，清理待完成={{pending}}。缺少证据不代表没有流量；Agent 控制独立运行。",
   "cli.status.recording_failure": "WARN 记录不完整：{{operation}} / {{reason}}，首次发生于 {{at}}。此警告不会停止代理；请求历史、用量或保留正文可能有缺失，重启不能补回缺失记录。",
   "cli.doctor.unhealthy": "FAIL Runtime 诊断：runtime_diagnostics_failed。请检查运行时、存储、记录诊断并处理已报告的故障，再启动新的 Agent。",
   "cli.transport.http": "未加密 HTTP（仅限可信私网）",

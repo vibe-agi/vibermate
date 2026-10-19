@@ -56,6 +56,27 @@ class _DeletionConfirmationState extends State<DeletionConfirmation> {
       final outcome = await widget.onConfirm();
       if (!mounted) return;
       if (outcome.deleted) {
+        final released = outcome.released;
+        final notices = <String>[
+          if (released?.cleanupPending ?? false)
+            widget.copy('deletion.cleanup_pending'),
+          if (released?.countsIncomplete ?? false)
+            widget.copy('deletion.counts_incomplete'),
+          if (released?.approvalOwnershipUnknown ?? false)
+            widget.copy('deletion.approval_ownership_unknown'),
+          if (released?.privacyMetadataRetained ?? false)
+            widget.copy('deletion.privacy_metadata_retained'),
+        ];
+        if (notices.isNotEmpty) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(
+              content: Text(
+                notices.join(' '),
+                key: const Key('deletion-cleanup-notice'),
+              ),
+            ),
+          );
+        }
         Navigator.of(context).pop(outcome);
         return;
       }

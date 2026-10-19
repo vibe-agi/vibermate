@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -135,6 +136,7 @@ type auxFixture struct {
 	liveTLS                      atomic.Int64
 	profileA, profileB           egressprofile.ProfileRevision
 	startsMu                     sync.Mutex
+	offers                       *productruntime.EgressOfferProbe
 	starts                       map[string]egressaudit.DecisionRef
 	parents                      map[string]egressaudit.ParentRef
 	serverLog                    auxServerLog
@@ -172,7 +174,7 @@ func (f *auxFixture) assertServerDiagnostics(t *testing.T, rejections int) {
 
 func newAuxFixture(t *testing.T, handler http.Handler) *auxFixture {
 	t.Helper()
-	f := &auxFixture{starts: map[string]egressaudit.DecisionRef{}, parents: map[string]egressaudit.ParentRef{}}
+	f := &auxFixture{offers: &productruntime.EgressOfferProbe{}, starts: map[string]egressaudit.DecisionRef{}, parents: map[string]egressaudit.ParentRef{}}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -212,14 +214,15 @@ func newAuxFixture(t *testing.T, handler http.Handler) *auxFixture {
 		t.Fatal(err)
 	}
 	options := productruntime.ProductUpdateTestOptions(t, f.gate)
-	f.databasePath = options.Paths.DatabasePath()
+	f.databasePath = filepath.Join(options.Paths.DataDirectory(), "observations.db")
 	f.secrets = &auxSecrets{Store: options.Secrets}
 	options.Secrets = f.secrets
-	f.runtime, err = productruntime.StartProductUpdateTestRuntime(t.Context(), options, f.wire, builder, roots)
+	f.runtime, err = productruntime.StartProductUpdateTestRuntime(t.Context(), options, f.wire, builder, roots, f.offers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.shutdown(t) })
+	productruntime.WaitRecordingTestRuntime(t, f.runtime)
 	for _, p := range []struct {
 		id       egressprofile.ID
 		listener net.Listener
@@ -235,7 +238,7 @@ func newAuxFixture(t *testing.T, handler http.Handler) *auxFixture {
 		}
 	}
 	f.wire.before = func() {
-		page, err := f.runtime.EgressAttempts().List(context.Background(), egressaudit.PageRequest{Limit: 100})
+		page, err := f.offers.List(context.Background(), egressaudit.PageRequest{Limit: 100})
 		if err != nil {
 			t.Error(err)
 			return
@@ -374,7 +377,7 @@ func auxSetChoice(t *testing.T, f *auxFixture, account provideraccount.View, cho
 
 func auxAssertAudit(t *testing.T, f *auxFixture, purpose egressaudit.EgressPurpose, origin string, expectedResolved egressprofile.Resolved, accountID string, settings uint64, outcome egressaudit.Outcome) {
 	t.Helper()
-	page, err := f.runtime.EgressAttempts().List(context.Background(), egressaudit.PageRequest{Limit: 100})
+	page, err := productruntime.SettledEgressTestPage(t, f.runtime, egressaudit.PageRequest{Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}

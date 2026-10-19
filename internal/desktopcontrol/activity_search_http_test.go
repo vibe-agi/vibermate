@@ -1,7 +1,6 @@
 package desktopcontrol_test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -16,7 +15,8 @@ import (
 func TestEvidenceSearchHTTPReturnsOnlyRetainedMetadata(t *testing.T) {
 	t.Parallel()
 	fixture := newAuditFixture(t)
-	_, err := fixture.runtime.Activities().Record(context.Background(), activity.Event{
+	captureID, scope := createScopedFixtureCapture(t, fixture.runtime)
+	appendScopedFixtureActivity(t, fixture.runtime, scope, activity.Event{
 		Kind:          activity.KindExchangeCompleted,
 		EnvironmentID: "search-environment", EnvironmentRevision: 1,
 		EnvironmentDigest: strings.Repeat("a", 64),
@@ -28,17 +28,14 @@ func TestEvidenceSearchHTTPReturnsOnlyRetainedMetadata(t *testing.T) {
 		ReasonCode: "provider_transport_failed",
 		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
 		SourceRecognition: activity.SourceRecognitionVerified,
-		CaptureRunID:      "run-search", ConnectionID: "connection-search",
+		CaptureRunID:      captureID, ConnectionID: "connection-search",
 		Conversation: agentconversation.Ref{
-			ProjectionID: "capture_run:run-search:main",
+			ProjectionID: "capture_run:" + captureID + ":main",
 			DisplayName:  "Search fixture",
 			Kind:         agentconversation.KindMain,
 			Evidence:     agentconversation.EvidenceCaptureRun,
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	response := doRequest(
 		t, fixture.router, fixture.authority, http.MethodGet,
 		"/api/v1/evidence/search?q=provider_transport_failed&status=failed&limit=10",

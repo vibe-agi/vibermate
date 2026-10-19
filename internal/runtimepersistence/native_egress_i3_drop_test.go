@@ -64,7 +64,7 @@ func TestNativeRecoveryUnavailableBoundariesPreserveOriginalPhysicalCleanup(t *t
 				if _, err := repo.RetireObservedStream(t.Context(), authority, now); err != nil {
 					t.Fatal(err)
 				}
-				actual, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, receipt.AttemptID()))
+				actual, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, receipt.AttemptID()))
 				if err != nil || !actual.Attempt.Terminal() {
 					t.Fatalf("BindRecoveryGET error dropped exact original cleanup: terminal=%v err=%v", actual.Attempt.Terminal(), err)
 				}
@@ -96,7 +96,7 @@ func TestNativeExpiredLogicalTerminalOpenPreservesPhysicalCleanupObligation(t *t
 	if _, err := repo.RetireObservedStream(t.Context(), authority, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	actual, err := scanEgressAttempt(store.database.QueryRow(egressAttemptSelect+` WHERE attempt_id=?`, receipt.AttemptID()))
+	actual, err := scanEgressAttempt(store.database.QueryRow(nativeDeliverySelect+` WHERE attempt_id=?`, receipt.AttemptID()))
 	if err != nil || !actual.Attempt.Terminal() {
 		t.Fatalf("expiry pruning discarded exact physical cleanup: terminal=%v err=%v", actual.Attempt.Terminal(), err)
 	}

@@ -98,7 +98,7 @@ func executeLocalStatus(
 	if doctor && healthy && runtime.GOOS == "darwin" {
 		trustErr = runlauncher.CheckLocalRootTrust(ctx, discovery, runlauncher.DoctorTimeout)
 	}
-	if doctor && healthy && inspection.RecordingFailure == nil && trustErr == nil {
+	if doctor && healthy && trustErr == nil {
 		key = "cli.doctor.local"
 	}
 	if err := renderCLIMessage(environment, stdout, key, map[string]string{
@@ -116,7 +116,7 @@ func executeLocalStatus(
 	if trustErr != nil {
 		return 1, "cli.error.localRootUntrusted"
 	}
-	if doctor && healthy && inspection.RecordingFailure == nil {
+	if doctor && healthy {
 		trustKey := "cli.doctor.root.skip"
 		if runtime.GOOS == "darwin" {
 			trustKey = "cli.doctor.root.pass"
@@ -141,7 +141,12 @@ func executeLocalStatus(
 			return 1, reasonRenderFailed
 		}
 	}
-	if !healthy || (doctor && (inspection.RecordingFailure != nil || inspection.StorageFailure != nil)) {
+	if state := inspection.Recording; state.State != "" && (state.State != productruntime.RecordingAvailable || state.Dropped > 0 || state.Unconfirmed > 0 || state.CleanupPending) {
+		if err := renderCLIMessage(environment, stdout, "cli.status.recording_state", map[string]string{"state": string(state.State), "dropped": fmt.Sprint(state.Dropped), "unconfirmed": fmt.Sprint(state.Unconfirmed), "pending": fmt.Sprint(state.CleanupPending)}); err != nil {
+			return 1, reasonRenderFailed
+		}
+	}
+	if !healthy || (doctor && inspection.StorageFailure != nil) {
 		if doctor {
 			if err := renderCLIMessage(environment, stdout, "cli.doctor.unhealthy", nil); err != nil {
 				return 1, reasonRenderFailed

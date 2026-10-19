@@ -5,12 +5,10 @@ package main
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/acpobservation"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	_ "modernc.org/sqlite"
 )
@@ -47,9 +47,28 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err = exercisePackagedDesktopLaunch(ctx, app, layout, home, func(ctx context.Context, _ <-chan error) error {
+		discovery, err := localdiscovery.NewFile(layout.CLIControlRecord, wallClock{})
+		if err != nil {
+			return err
+		}
+		generation, err := discovery.Load()
+		if err != nil {
+			return err
+		}
+		pinned := packagedACPDiscovery{source: discovery, expected: generation}
+		if err := waitPackagedACPRecording(ctx, pinned); err != nil {
+			return fmt.Errorf("before ACP peers: %w", err)
+		}
 		for _, content := range []bool{false, true} {
-			if err := exercisePackagedACPPeer(ctx, filepath.Join(app, "Contents", "MacOS", "vibermate"), home, content); err != nil {
+			if err := exercisePackagedACPPeer(ctx, filepath.Join(app, "Contents", "MacOS", "vibermate"), home, content, func(stderr string) { t.Logf("owned ACP peer content=%t stderr=%q", content, stderr) }); err != nil {
 				return err
+			}
+			// CLI return joins final publication/Finish, but accepted recording
+			// is independent. Join its real owned slots before stopping the App.
+			if err := waitPackagedACPRecording(ctx, pinned, func(state productruntime.RecordingStatus) {
+				t.Logf("after ACP peer content=%t recording=%+v; strict final evidence still required", content, state)
+			}); err != nil {
+				return fmt.Errorf("after ACP peer content=%t: %w", content, err)
 			}
 		}
 		return nil
@@ -57,36 +76,20 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Read only this test's database, after the App has shut down. No management
-	// token is extracted from the native App and no personal data is inspected.
-	path := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID, "runtime.db")
-	databaseURL := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
-	database, err := sql.Open("sqlite", databaseURL.String())
+	// Read only private copies of this test's declared roles after App shutdown.
+	// No management token or personal data is inspected.
+	root := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID)
+	evidence, err := readPackagedACPEvidence(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
-	rows, err := database.QueryContext(ctx, `SELECT a.policy,a.snapshot,r.state FROM acp_observations a JOIN capture_runs r USING(run_id)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
 	modes := map[string]bool{}
-	for rows.Next() {
-		var policyJSON, snapshotJSON []byte
-		var state string
-		if err := rows.Scan(&policyJSON, &snapshotJSON, &state); err != nil {
-			t.Fatal(err)
-		}
-		var policy struct{ Mode string }
-		var snapshot acpobservation.Snapshot
-		if json.Unmarshal(policyJSON, &policy) != nil || json.Unmarshal(snapshotJSON, &snapshot) != nil {
-			t.Fatal("ACP evidence could not be decoded")
-		}
-		if modes[policy.Mode] || state != "finished" || !snapshot.Final || snapshot.Incomplete || len(snapshot.Sessions) != 1 || len(snapshot.Prompts) != 1 || snapshot.Prompts[0].State != "completed" {
+	for _, record := range evidence {
+		policy, snapshot, state := record.Policy, record.Snapshot, record.State
+		if modes[string(policy.Mode)] || state != "finished" || !snapshot.Final || snapshot.Incomplete || len(snapshot.Sessions) != 1 || len(snapshot.Prompts) != 1 || snapshot.Prompts[0].State != "completed" {
 			t.Fatal("native App did not retain one completed ACP session and prompt")
 		}
-		modes[policy.Mode] = true
+		modes[string(policy.Mode)] = true
 		prompt := snapshot.Prompts[0]
 		if policy.Mode == "full" {
 			if prompt.UserText != "fixture question" || prompt.AgentText != "fixture answer" {
@@ -96,12 +99,19 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 			t.Fatal("metadata-only run retained text")
 		}
 	}
-	if rows.Err() != nil || len(modes) != 2 || !modes["full"] || !modes["metadata_only"] {
+	if len(modes) != 2 || !modes["full"] || !modes["metadata_only"] {
 		t.Fatal("native App did not retain both recording modes")
 	}
 }
 
-func exercisePackagedACPPeer(ctx context.Context, cli, home string, content bool) error {
+func exercisePackagedACPPeer(ctx context.Context, cli, home string, content bool, observeStderr func(string)) error {
+	stderr := newBoundedBuffer(64 << 10)
+	defer func() {
+		if observeStderr != nil {
+			data, overflow := stderr.snapshot()
+			observeStderr(fmt.Sprintf("overflow=%t output=%s", overflow, data))
+		}
+	}()
 	const peer = `
 test "$ACP_FIXTURE_SETTING" = editor-owned || exit 70
 test -z "$HTTP_PROXY" || exit 71
@@ -122,7 +132,7 @@ cat >/dev/null
 	command := exec.CommandContext(ctx, cli, args...)
 	command.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "ACP_FIXTURE_SETTING=editor-owned"}
 	command.Dir = home
-	command.Stderr = io.Discard
+	command.Stderr = stderr
 	command.WaitDelay = 3 * time.Second
 	input, err := command.StdinPipe()
 	if err != nil {
@@ -143,6 +153,16 @@ cat >/dev/null
 			_ = command.Wait()
 		}
 	}()
+	// The real CLI has started but the editor has not sent initialization or
+	// a prompt. Witness its original registration in the complete live mirror.
+	mode := environment.ContentRecordingMetadataOnly
+	if content {
+		mode = environment.ContentRecordingFull
+	}
+	root := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID)
+	if err := waitPackagedACPScope(ctx, root, mode); err != nil {
+		return err
+	}
 	deadline, _ := ctx.Deadline()
 	if file, ok := output.(*os.File); ok {
 		_ = file.SetReadDeadline(deadline)

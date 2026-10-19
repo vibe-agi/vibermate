@@ -174,7 +174,7 @@ func (snapshot EnvironmentSnapshot) ResolveClientToolRequest(binding ConnectionB
 	if native.Validate() != nil {
 		return RequestPlan{}, ErrInvalidEnvironment
 	}
-	return RequestPlan{environmentID: native.environmentID, environmentRevision: native.environmentRevision, environmentDigest: native.environmentDigest, contentRecording: native.contentRecording, policySet: native.policySet, clientTool: &native}, nil
+	return RequestPlan{environmentDigestText: snapshot.digestText, environmentName: snapshot.Name(), environmentID: native.environmentID, environmentRevision: native.environmentRevision, environmentDigest: native.environmentDigest, contentRecording: native.contentRecording, policySet: native.policySet, clientTool: &native}, nil
 }
 
 func validateClientToolTransition(old, new Environment) error {

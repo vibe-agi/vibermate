@@ -86,6 +86,10 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	}
 	control.call(http.MethodPatch, "/api/v1/policies/connections", control.write, rules.Revision, desktopcontrol.ConnectionRuleSetInput{Rules: inputs, Mode: "deny_unknown"}, 200, &rules)
 	grant, tag := control.grant("owned-real-SOCKS")
+	// A newly committed Capture is required authority, not proof that its
+	// original fence has reached the optional recording mirror yet.
+	deliveryWait(t, func() bool { return host.Runtime().RawEvidenceStatistics().WriterID != "" })
+	waitServerRecording(t, host.Runtime())
 	var status struct {
 		NetworkAccess struct {
 			SOCKSAddress   string `json:"socksAddress"`
@@ -140,6 +144,9 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	if fixture.udpBytes.Load() != total {
 		t.Fatal("control EOF sent another target datagram")
 	}
+	// The association's actual producer is drained above. Now join its
+	// accepted optional writes before asserting persisted terminal bytes.
+	deliveryWait(t, func() bool { return host.Runtime().Status().Recording.ReservedRecords == 0 })
 	page, err := host.Runtime().EgressAttempts().List(ctx, egressaudit.PageRequest{Purpose: egressaudit.PurposeDatagram, Limit: 20})
 	if err != nil || len(page.Items) != 2 {
 		t.Fatal("missing two real datagram audit terminals", err)

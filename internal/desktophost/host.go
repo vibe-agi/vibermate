@@ -132,6 +132,13 @@ type Host struct {
 // Start establishes both listeners and every route before atomically
 // publishing local control discovery. The returned Host is externally ready.
 func Start(ctx context.Context, options Options) (*Host, error) {
+	return startWithConstructors(ctx, options, productruntime.Start, serverhost.Attach)
+}
+
+func startWithConstructors(ctx context.Context, options Options,
+	startRuntime func(context.Context, productruntime.Options) (*productruntime.Runtime, error),
+	attachServer func(context.Context, serverhost.AttachOptions) (*serverhost.Host, error),
+) (*Host, error) {
 	if ctx == nil {
 		return nil, errors.New("Desktop Host startup context is nil")
 	}
@@ -151,6 +158,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire Desktop generation: %w", err)
 	}
+	var runtime *productruntime.Runtime
 	var rollback startupRollback
 	rollback.register("generation lock", func(context.Context) error {
 		return guard.Release()
@@ -161,16 +169,25 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			options.ShutdownTimeout,
 		)
 		defer cancel()
-		return nil, errors.Join(
-			fmt.Errorf("start Desktop Host stage %q: %w", stage, root),
-			rollback.run(rollbackContext),
-		)
-	}
-	if dataDirectory := options.Runtime.Paths.DataDirectory(); dataDirectory != "" {
-		if err := localca.ApplyPendingRootReset(ctx, dataDirectory); err != nil {
-			return fail("local Root reset", err)
+		cause := fmt.Errorf("start Desktop Host stage %q: %w", stage, root)
+		// Initiate cancellation before joining attached handlers. The single
+		// failed-start owner keeps the rollback stack and generation guard until
+		// actual cleanup returns, independently of the caller's wait budget.
+		if runtime != nil {
+			runtime.BeginShutdown()
+		}
+		cleanup := rollback
+		rollback = startupRollback{}
+		done := make(chan error, 1)
+		go func() { done <- cleanup.run(context.WithoutCancel(ctx)) }()
+		select {
+		case cleanupErr := <-done:
+			return nil, errors.Join(cause, cleanupErr)
+		case <-rollbackContext.Done():
+			return nil, errors.Join(cause, rollbackContext.Err())
 		}
 	}
+	options.Runtime.ConsumePendingRootReset = true
 	discovery, err := localdiscovery.NewPublisher(
 		options.Paths.DiscoveryPath(),
 		options.Runtime.Clock,
@@ -205,11 +222,15 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("capability separation", errors.New("random capabilities collided"))
 	}
 
-	runtime, err := productruntime.Start(ctx, options.Runtime)
+	runtime, err = startRuntime(ctx, options.Runtime)
 	if err != nil {
 		return fail("ProductRuntime", err)
 	}
-	rollback.register("ProductRuntime", runtime.Shutdown)
+	rollback.register("ProductRuntime", func(cleanupContext context.Context) error {
+		err := runtime.Shutdown(cleanupContext)
+		<-runtime.ShutdownDone()
+		return err
+	})
 	rootTrust, err := desktoptrust.NewOptionalProduction(
 		desktoptrust.ProductionOptions{
 			OwnerContext: ctx,
@@ -247,11 +268,11 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		remoteOptions.ShutdownTimeout = options.ShutdownTimeout
 		remoteOptions.ResolveLocalIdentities = true
 		remoteOptions.VLESSAvailable = options.Runtime.VLESSExecutable != ""
-		remoteServer, err = serverhost.Attach(ctx, remoteOptions)
+		remoteServer, err = attachServer(ctx, remoteOptions)
 		if err != nil {
 			return fail("remote Runtime Server", err)
 		}
-		rollback.register("remote Runtime Server", remoteServer.Shutdown)
+		rollback.register("remote Runtime Server", remoteServer.JoinAttachedShutdown)
 	}
 
 	proxyListener, err := listenLoopback(ctx, options.ProxyListenAddress)
@@ -408,12 +429,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		}
 	}
 	conversationIndexer, err := conversationprojection.New(conversationprojection.Options{
-		Activities:  runtime.Activities(),
-		Contents:    runtime.ExchangeContents(),
-		CaptureRuns: runtime.CaptureRunReader(),
-		Identities:  runtime.ConversationIdentities(),
-		Writer:      runtime.ConversationProjectionWriter(),
-		Resolvers:   identityResolvers,
+		Activities:         runtime.Activities(),
+		Contents:           runtime.ExchangeContents(),
+		CaptureRuns:        runtime.CaptureRunReader(),
+		IdentityInspection: runtime.IdentityInspection(),
+		RepairWriter:       runtime.ConversationRepairWriter(),
+		Resolvers:          identityResolvers,
 	})
 	if err != nil {
 		return fail("Agent Conversation projection", err)
@@ -435,44 +456,50 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("upstream model catalog", err)
 	}
 	controlOptions := desktopcontrol.Options{
-		NetworkAccess:       &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
-		Storage:             runtime,
-		ACP:                 runtime.ACPObservations(),
-		Readiness:           ready,
-		Status:              runtime,
-		Environments:        runtime.Environments(),
-		ClientToolAccess:    runtime,
-		Assignments:         runtime.CaptureAssignments(),
-		Activities:          runtime.Activities(),
-		ConversationIndexer: conversationIndexer,
-		Contents:            runtime.ExchangeContents(),
-		Connections:         runtime.ConnectionEvents(),
-		Egress:              runtime.EgressAttempts(),
-		Approvals:           runtime.ToolApprovals(),
-		NativeTools:         runtime.NativeToolRepository(),
-		NativePreviews:      runtime.NativeToolPreviews(),
-		NativeContentKey:    runtime.NativeToolContentKey(),
-		Endpoints:           runtime.UpstreamEndpoints(),
-		Models:              models,
-		ClientModels:        modelMetadata,
-		Accounts:            runtime.ProviderAccounts(),
-		AccountReads:        runtime.AccountReads(),
-		CodexOAuth:          runtime.CodexOAuthAccounts(),
-		CodexLogins:         runtime.CodexOAuthLogins(),
-		CodeLibrary:         runtime.CodeLibrary(),
-		EgressProfiles:      runtime.EgressProfiles(),
-		VLESSProfiles:       runtime.VLESSProfiles(),
-		EgressDefaults:      runtime.EgressDefaults(),
-		ProductUpdates:      runtime.ProductUpdates(),
-		RawEvidence:         runtime.RawEvidence(),
-		Offline:             runtime,
-		ConnectionRules:     runtime.ConnectionRules(),
-		CaptureRuns:         runtime.CaptureRunReader(),
-		ManualCaptures:      runtime.ManualCaptures(),
-		Archive:             runtime.EvidenceArchive(),
-		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
-		RootTrust:           rootTrust,
-		Clock:               options.Runtime.Clock,
+		NetworkAccess:                  &desktopcontrol.NetworkAccess{SOCKSAddress: socksAddress, VLESSAvailable: options.Runtime.VLESSExecutable != ""},
+		Storage:                        runtime,
+		ACP:                            runtime.ACPObservations(),
+		ACPInspection:                  runtime.ACPInspection(),
+		ACPMarkers:                     runtime.ACPMarkers(),
+		Readiness:                      ready,
+		Status:                         runtime,
+		Environments:                   runtime.Environments(),
+		ClientToolAccess:               runtime,
+		Assignments:                    runtime.CaptureAssignments(),
+		ActivityInspection:             runtime.Activities(),
+		ActivityRecorder:               runtime.ActivityRecorder(),
+		CaptureObservations:            runtime.CaptureObservations(),
+		ConversationIdentityInspection: conversationIndexer,
+		ConversationIndexer:            conversationIndexer,
+		Contents:                       runtime.ExchangeContents(),
+		Connections:                    runtime.ConnectionEvents(),
+		Egress:                         runtime.EgressAttempts(),
+		Approvals:                      runtime.ToolApprovals(),
+		NativeAuthority:                runtime.NativeToolRepository(),
+		NativeInspection:               runtime.NativeInspection(),
+		NativePreviews:                 runtime.NativeToolPreviews(),
+		NativeContentKey:               runtime.NativeToolContentKey(),
+		Endpoints:                      runtime.UpstreamEndpoints(),
+		Models:                         models,
+		ClientModels:                   modelMetadata,
+		Accounts:                       runtime.ProviderAccounts(),
+		AccountReads:                   runtime.AccountReads(),
+		CodexOAuth:                     runtime.CodexOAuthAccounts(),
+		CodexLogins:                    runtime.CodexOAuthLogins(),
+		CodeLibrary:                    runtime.CodeLibrary(),
+		EgressProfiles:                 runtime.EgressProfiles(),
+		VLESSProfiles:                  runtime.VLESSProfiles(),
+		EgressDefaults:                 runtime.EgressDefaults(),
+		ProductUpdates:                 runtime.ProductUpdates(),
+		RawEvidence:                    runtime.RawEvidence(),
+		Offline:                        runtime,
+		ConnectionRules:                runtime.ConnectionRules(),
+		CaptureRuns:                    runtime.CaptureRunReader(),
+		ManualCaptures:                 runtime.ManualCaptures(),
+		Archive:                        runtime.EvidenceArchive(),
+		ArchiveBarrier:                 runtime.EvidenceArchiveBarrier(),
+		RootTrust:                      rootTrust,
+		Clock:                          options.Runtime.Clock,
 	}
 	if limits, ok := runtime.ExchangeContentLimits(); ok {
 		controlOptions.ContentLimits = &limits
@@ -703,7 +730,16 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	host.beginShutdown(nil)
 	select {
 	case <-host.shutdownDone:
-		return host.shutdownErr
+		result := host.shutdownErr
+		if host.runtime.ShutdownCompleted() {
+			if host.remoteServer != nil {
+				result = errors.Join(result, host.remoteServer.Shutdown(ctx))
+			}
+			if host.remoteServer == nil || host.remoteServer.ShutdownCompleted() {
+				result = errors.Join(result, host.guard.Release())
+			}
+		}
+		return result
 	case <-ctx.Done():
 		return fmt.Errorf("wait for Desktop Host shutdown: %w", ctx.Err())
 	}

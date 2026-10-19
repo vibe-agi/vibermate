@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,16 +21,17 @@ import (
 const maxOriginalRequestBytes = 16 << 20
 
 type RequestOptions struct {
-	ResolvedEgress egressprofile.Resolved
-	RequestID      string
-	Kind           offlinehold.EgressKind
-	Origin         originidentity.ProviderOrigin
-	Method         string
-	Path           string
-	RawQuery       string
-	Headers        http.Header
-	Body           []byte
-	PayloadClass   protocolspec.OperationPayloadClass
+	ObservationStamp recording.Stamp
+	ResolvedEgress   egressprofile.Resolved
+	RequestID        string
+	Kind             offlinehold.EgressKind
+	Origin           originidentity.ProviderOrigin
+	Method           string
+	Path             string
+	RawQuery         string
+	Headers          http.Header
+	Body             []byte
+	PayloadClass     protocolspec.OperationPayloadClass
 	// ConnectionID and ParentID associate this outbound with the client
 	// connection and the original request that caused it. They travel as typed
 	// references so no identity encodes containment of another.
@@ -41,19 +43,20 @@ type RequestOptions struct {
 // Request freezes an original-origin auxiliary or opaque representation. It
 // pins a pathless actual inbound authority; Path already contains the client base path.
 type Request struct {
-	resolvedEgress egressprofile.Resolved
-	requestID      string
-	kind           offlinehold.EgressKind
-	origin         originidentity.ProviderOrigin
-	method         string
-	path           string
-	rawQuery       string
-	headers        http.Header
-	body           []byte
-	payloadClass   protocolspec.OperationPayloadClass
-	connectionID   string
-	parentID       string
-	egressPolicy   egressnetwork.Policy
+	observationStamp recording.Stamp
+	resolvedEgress   egressprofile.Resolved
+	requestID        string
+	kind             offlinehold.EgressKind
+	origin           originidentity.ProviderOrigin
+	method           string
+	path             string
+	rawQuery         string
+	headers          http.Header
+	body             []byte
+	payloadClass     protocolspec.OperationPayloadClass
+	connectionID     string
+	parentID         string
+	egressPolicy     egressnetwork.Policy
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -128,19 +131,20 @@ func NewRequest(options RequestOptions) (Request, error) {
 		return Request{}, errors.New("original-origin request target is invalid")
 	}
 	return Request{
-		resolvedEgress: resolved,
-		requestID:      options.RequestID,
-		kind:           options.Kind,
-		origin:         options.Origin,
-		method:         options.Method,
-		path:           options.Path,
-		rawQuery:       options.RawQuery,
-		headers:        sanitizeHeaders(options.Headers),
-		body:           bytes.Clone(options.Body),
-		payloadClass:   options.PayloadClass,
-		connectionID:   options.ConnectionID,
-		parentID:       options.ParentID,
-		egressPolicy:   egressPolicy,
+		observationStamp: options.ObservationStamp,
+		resolvedEgress:   resolved,
+		requestID:        options.RequestID,
+		kind:             options.Kind,
+		origin:           options.Origin,
+		method:           options.Method,
+		path:             options.Path,
+		rawQuery:         options.RawQuery,
+		headers:          sanitizeHeaders(options.Headers),
+		body:             bytes.Clone(options.Body),
+		payloadClass:     options.PayloadClass,
+		connectionID:     options.ConnectionID,
+		parentID:         options.ParentID,
+		egressPolicy:     egressPolicy,
 	}, nil
 }
 

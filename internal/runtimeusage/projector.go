@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/modelcatalog"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"golang.org/x/sync/singleflight"
 )
@@ -20,41 +21,57 @@ const ReportSchema = "vibermate-runtime-usage-report-v1"
 type Clock interface{ Now() time.Time }
 
 type Options struct {
-	Ledger Repository
-	Clock  Clock
-	Prices *modelcatalog.ReferencePrices
+	Ledger   Repository
+	Reader   InspectionReader
+	Policies PolicyRepository
+	Clock    Clock
+	Prices   *modelcatalog.ReferencePrices
 }
 
 type Projector struct {
-	options Options
-	mu      sync.Mutex
-	cache   map[string]Report
-	flights singleflight.Group
+	options  Options
+	reader   Reader
+	policies PolicyRepository
+	mu       sync.Mutex
+	cache    map[string]Report
+	flights  singleflight.Group
 }
 
 func New(options Options) (*Projector, error) {
-	if options.Ledger == nil || options.Clock == nil {
+	if options.Clock == nil || (options.Ledger != nil && (options.Reader != nil || options.Policies != nil)) {
+		return nil, errors.New("Runtime usage dependencies are incomplete or mixed")
+	}
+	var reader Reader = options.Reader
+	var policies PolicyRepository = options.Policies
+	if options.Ledger != nil {
+		reader = options.Ledger
+		policies = options.Ledger
+	}
+	if reader == nil || policies == nil {
 		return nil, errors.New("Runtime usage dependencies are incomplete")
 	}
-	return &Projector{options: options}, nil
+	return &Projector{options: options, reader: reader, policies: policies}, nil
 }
 
 // A report is either the complete summary (empty Dimension, Total and Days) or
 // one bounded page (Dimension, Groups and NextCursor). No six eager trees, user
 // enumeration, Capture scan, or legacy-attribution reconstruction is involved.
 type Report struct {
-	Schema      string           `json:"schema"`
-	GeneratedAt time.Time        `json:"generatedAt"`
-	Period      Period           `json:"period"`
-	Snapshot    string           `json:"snapshot"`
-	Collection  CollectionPolicy `json:"collection"`
-	Pricing     PricingInfo      `json:"pricing"`
-	Dimension   string           `json:"dimension"`
-	Filters     []Filter         `json:"filters"`
-	Total       *GroupUsage      `json:"total"`
-	Days        []DayUsage       `json:"days"`
-	Groups      []GroupUsage     `json:"groups"`
-	NextCursor  string           `json:"nextCursor"`
+	// Original read boundary, retained across pricing, cache and HTTP encoding.
+	InspectionToken     recording.InspectionToken `json:"-"`
+	InspectionExpiresAt time.Time                 `json:"-"`
+	Schema              string                    `json:"schema"`
+	GeneratedAt         time.Time                 `json:"generatedAt"`
+	Period              Period                    `json:"period"`
+	Snapshot            string                    `json:"snapshot"`
+	Collection          CollectionPolicy          `json:"collection"`
+	Pricing             PricingInfo               `json:"pricing"`
+	Dimension           string                    `json:"dimension"`
+	Filters             []Filter                  `json:"filters"`
+	Total               *GroupUsage               `json:"total"`
+	Days                []DayUsage                `json:"days"`
+	Groups              []GroupUsage              `json:"groups"`
+	NextCursor          string                    `json:"nextCursor"`
 }
 
 type GroupUsage struct {
@@ -97,7 +114,7 @@ type DayUsage struct {
 }
 
 func (projector *Projector) SetCollectionPolicy(ctx context.Context, policy CollectionPolicy) (CollectionPolicy, error) {
-	return projector.options.Ledger.SetUsagePolicy(ctx, policy, projector.options.Clock.Now().UTC())
+	return projector.policies.SetUsagePolicy(ctx, policy, projector.options.Clock.Now().UTC())
 }
 
 func (projector *Projector) Report(ctx context.Context, query AggregationQuery) (Report, error) {
@@ -117,12 +134,19 @@ func (projector *Projector) project(ctx context.Context, query AggregationQuery,
 		Dimension: query.Dimension, Filters: append([]Filter{}, query.Filters...),
 		Days: []DayUsage{}, Groups: []GroupUsage{},
 	}
+	if projector.options.Reader != nil {
+		token, err := projector.options.Reader.Begin(ctx)
+		if err != nil {
+			return Report{}, err
+		}
+		report.InspectionToken = token
+	}
 	days := map[string]*DayUsage{}
 	groups := map[string]*GroupUsage{}
 	if query.Dimension == "" {
 		report.Total = &GroupUsage{ID: "all", Label: "all"}
 	}
-	result, err := projector.options.Ledger.ScanUsage(ctx, query, userID, now, func(bucket UsageBucket) error {
+	result, err := projector.reader.ScanUsage(ctx, query, userID, now, func(bucket UsageBucket) error {
 		totals := bucket.Totals(prices)
 		if query.Dimension != "" {
 			group := groups[bucket.GroupID]
@@ -161,9 +185,15 @@ func (projector *Projector) project(ctx context.Context, query AggregationQuery,
 	}
 	if result.Unchanged {
 		cached.GeneratedAt = now
+		cached.InspectionToken = report.InspectionToken
+		cached.InspectionExpiresAt = result.ExpiresAt
+		if err := projector.CheckReport(ctx, cached); err != nil {
+			return Report{}, err
+		}
 		return cached, nil
 	}
 	report.Collection, report.Snapshot, report.NextCursor = result.Collection, result.Snapshot, result.NextCursor
+	report.InspectionExpiresAt = result.ExpiresAt
 	for _, day := range days {
 		report.Days = append(report.Days, *day)
 	}
@@ -175,6 +205,9 @@ func (projector *Projector) project(ctx context.Context, query AggregationQuery,
 		}
 		totals.ID, totals.Label, totals.Dimension, totals.Evidence = descriptor.ID, descriptor.Label, descriptor.Dimension, descriptor.Evidence
 		report.Groups = append(report.Groups, *totals)
+	}
+	if err := projector.CheckReport(ctx, report); err != nil {
+		return Report{}, err
 	}
 	return report, nil
 }
@@ -204,4 +237,20 @@ func (aggregate *TokenAggregate) addAggregate(value TokenAggregate) {
 	aggregate.Tokens += value.Tokens
 	aggregate.KnownCalls += value.KnownCalls
 	aggregate.UnknownCalls += value.UnknownCalls
+}
+
+func (projector *Projector) CheckReport(ctx context.Context, report Report) error {
+	if projector == nil {
+		return recording.ErrInspectionUnavailable
+	}
+	if projector.options.Reader == nil {
+		return nil
+	}
+	if err := projector.options.Reader.Check(ctx, report.InspectionToken); err != nil {
+		return err
+	}
+	if !report.InspectionExpiresAt.IsZero() && !projector.options.Clock.Now().Before(report.InspectionExpiresAt) {
+		return ErrSnapshotChanged
+	}
+	return nil
 }

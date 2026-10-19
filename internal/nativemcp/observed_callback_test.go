@@ -197,7 +197,7 @@ func TestNativeGETCallbackDenyReleasesParent(t *testing.T) {
 		t.Fatal("denied callback sent", got)
 	}
 	var once, audits int
-	if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, child.id, child.id).Scan(&once, &audits); err != nil || once != 0 || audits != 0 {
+	if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, child.id, child.id).Scan(&once, &audits); err != nil || once != 0 || audits != 0 {
 		t.Fatal("denied callback created a Start/physical audit", err)
 	}
 	requireNativeClaimAfterDrain(t, f.executor.(*executor), child.id, false)
@@ -386,12 +386,12 @@ func TestNativeGETCallbacksReuseCapacity(t *testing.T) {
 // This observer forwards every real repository method. Publication is signaled
 // only after the actual approval transaction has committed successfully.
 type approvalPublicationObserver struct {
-	nativetool.LifecycleRepository
+	nativetool.LifecycleAuthority
 	observe func(nativetool.Approval)
 }
 
 func (observer approvalPublicationObserver) RequestApproval(ctx context.Context, operation, id nativetool.ID, now, expires time.Time) (nativetool.Approval, error) {
-	approval, err := observer.LifecycleRepository.RequestApproval(ctx, operation, id, now, expires)
+	approval, err := observer.LifecycleAuthority.RequestApproval(ctx, operation, id, now, expires)
 	if err == nil {
 		observer.observe(approval)
 	}

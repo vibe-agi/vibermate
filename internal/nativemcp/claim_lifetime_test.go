@@ -112,7 +112,7 @@ func TestNativeClaimWaitsForRealResponseCleanup(t *testing.T) {
 				}
 				f.transport.handler = func(*http.Request, []byte) (*http.Response, error) { return response, nil }
 				if cleanup != "not_started" {
-					e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store, target: request.id, after: func() {
+					e.dependencies.Store = &claimAfterFinishStore{Repository: e.dependencies.Store.(nativetool.Repository), target: request.id, after: func() {
 						cancel()
 						<-body.entered
 						if cleanup == "returned" {
@@ -307,7 +307,7 @@ func TestNativeClaimObservedClassificationPrecedesClosureRace(t *testing.T) {
 	f := newNativeFixture(t, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff})
 	f.handshake(t)
 	e := f.executor.(*executor)
-	held := &claimHeldObservationStore{Repository: e.dependencies.Store, entered: make(chan struct{}), release: make(chan struct{})}
+	held := &claimHeldObservationStore{Repository: e.dependencies.Store.(nativetool.Repository), entered: make(chan struct{}), release: make(chan struct{})}
 	e.dependencies.Store = held
 	f.transport.handler = func(*http.Request, []byte) (*http.Response, error) {
 		return wireResponse("data: {\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"ping\"}\n\n", true), nil
@@ -436,7 +436,7 @@ func TestNativeClaimExactTokenCollectionAndOldReceipt(t *testing.T) {
 			if nativeClaimLifetimeFacts(t, f).Claims != 0 {
 				t.Fatal("terminal+drained token retained")
 			}
-			oldAudit := freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())
+			oldAudit := freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())
 			oldOnce := freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, receipt.OperationID())
 			if err := e.dependencies.Store.VerifyStartReceipt(context.Background(), receipt, time.Now().UTC()); err == nil {
 				t.Fatal("terminal physical audit still granted send")
@@ -454,7 +454,7 @@ func TestNativeClaimExactTokenCollectionAndOldReceipt(t *testing.T) {
 			if facts := nativeClaimLifetimeFacts(t, f); facts.Claims != 1 || facts.Budget != facts.SessionRetained+128 {
 				t.Fatal("old-token ABA event collected a new token")
 			}
-			if !reflect.DeepEqual(oldAudit, freshGETRow(t, f, `SELECT * FROM runtime_egress_attempts WHERE parent_id=?`, receipt.OperationID())) || !reflect.DeepEqual(oldOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, receipt.OperationID())) {
+			if !reflect.DeepEqual(oldAudit, freshGETRow(t, f, `SELECT * FROM native_tool_deliveries WHERE operation_id=?`, receipt.OperationID())) || !reflect.DeepEqual(oldOnce, freshGETRow(t, f, `SELECT * FROM native_tool_once WHERE operation_id=?`, receipt.OperationID())) {
 				t.Fatal("replayed receipt changed physical history")
 			}
 			if err := e.Close(context.Background()); err != nil {
@@ -546,9 +546,9 @@ func nativeClaimLifetimeFacts(t *testing.T, f *nativeFixture) nativeClaimLifetim
 	e.budget.mu.Unlock()
 	err := f.db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM native_tool_once),
-		(SELECT COUNT(*) FROM runtime_egress_attempts WHERE purpose='client_tool_service'),
-		(SELECT COUNT(*) FROM runtime_egress_attempts WHERE purpose='client_tool_service' AND completed_at_unix_ms IS NOT NULL),
-		(SELECT COUNT(*) FROM runtime_egress_attempts WHERE purpose='client_tool_service' AND completed_at_unix_ms IS NOT NULL AND byte_counts_known=1),
+		(SELECT COUNT(*) FROM native_tool_deliveries),
+		(SELECT COUNT(*) FROM native_tool_deliveries WHERE completed_at_unix_ms IS NOT NULL),
+		(SELECT COUNT(*) FROM native_tool_deliveries WHERE completed_at_unix_ms IS NOT NULL AND byte_counts_known=1),
 		(SELECT COUNT(*) FROM native_tool_operations WHERE state='completed'),
 		(SELECT COUNT(*) FROM native_tool_sessions),
 		(SELECT COUNT(*) FROM native_tool_sessions WHERE state='ready'),
@@ -597,7 +597,7 @@ func TestCompletedNativeRequestsDoNotRetainLifetimeClaims(t *testing.T) {
 		terminal := e.Serve(context.Background(), request, httptest.NewRecorder())
 		facts := readFreshGETFacts(t, f, request.id)
 		var once, audits int
-		if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM runtime_egress_attempts WHERE parent_id=?)`, request.id, request.id).Scan(&once, &audits); err != nil {
+		if err := f.db.QueryRow(`SELECT (SELECT COUNT(*) FROM native_tool_once WHERE operation_id=?),(SELECT COUNT(*) FROM native_tool_deliveries WHERE operation_id=?)`, request.id, request.id).Scan(&once, &audits); err != nil {
 			t.Fatal(err)
 		}
 		if terminal.Outcome != OutcomeCompleted || facts.OperationState != "completed" || facts.AuditOutcome != "completed" || facts.AuditKnown != 1 || !facts.BytesIn.Valid || !facts.BytesOut.Valid || facts.BytesIn.Int64 != facts.AuditBytesIn || facts.BytesOut.Int64 != facts.AuditBytesOut || once != 1 || audits != 1 || f.transport.sends() != before+1 {

@@ -38,7 +38,7 @@ type claimPhysicalFinishFault struct {
 }
 
 func (f *claimPhysicalFinishFault) Commit(tx *sql.Tx) error {
-	record, err := scanEgressAttempt(tx.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, f.operation))
+	record, err := scanEgressAttempt(tx.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, f.operation))
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func TestNativeScopeClosurePreservesKnownLogicalPhysicalObligation(t *testing.T)
 						h.f.store.nativeTools.committer = sqlTransactionCommitter{}
 						h.f.store.nativeTools.issuerMu.Unlock()
 						if receipt.OperationID() != "" {
-							audit, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, receipt.OperationID()))
+							audit, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, receipt.OperationID()))
 							if err == nil && !audit.Attempt.Terminal() {
 								if err := h.f.store.NativeToolRepository().FinishAttempt(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: h.now()}); err != nil {
 									t.Error("fixture final physical cleanup", err)
@@ -141,7 +141,7 @@ func TestNativeScopeClosurePreservesKnownLogicalPhysicalObligation(t *testing.T)
 					}
 					repo := h.f.store.NativeToolRepository()
 					op, err := repo.Get(ctx, id)
-					before, readErr := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					before, readErr := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil || readErr != nil || op.State != "completed" || before.Attempt.Terminal() {
 						t.Fatal("not at actual logical-before-physical boundary")
 					}
@@ -192,7 +192,7 @@ func TestNativeScopeClosurePreservesKnownLogicalPhysicalObligation(t *testing.T)
 					if !fault.used.Load() || fault.physical.Outcome() != egressaudit.OutcomeCompleted || !fault.physical.ByteCountsKnown() || fault.physical.BytesIn() <= 0 || fault.physical.BytesOut() <= 0 || fault.blocked.Load() == 0 {
 						t.Fatal("actual physical transaction fault did not fire")
 					}
-					after, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					after, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -218,7 +218,7 @@ func TestNativeScopeClosurePreservesKnownLogicalPhysicalObligation(t *testing.T)
 					if err != nil {
 						t.Fatal(err)
 					}
-					settled, err := scanEgressAttempt(h.f.store.database.QueryRow(egressAttemptSelect+` WHERE parent_id=?`, id))
+					settled, err := scanEgressAttempt(h.f.store.database.QueryRow(nativeDeliverySelect+` WHERE operation_id=?`, id))
 					if err != nil {
 						t.Fatal(err)
 					}

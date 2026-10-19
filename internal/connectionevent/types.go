@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -430,6 +431,7 @@ func (record Record) Validate() error {
 }
 
 type PageRequest struct {
+	Cursor              string
 	BeforeSequence      int64
 	Limit               int
 	IngressID           string
@@ -437,7 +439,7 @@ type PageRequest struct {
 }
 
 func (request PageRequest) Validate() error {
-	if request.BeforeSequence < 0 ||
+	if len(request.Cursor) > 512 || (request.Cursor != "" && request.BeforeSequence != 0) || request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
 		validateIdentity("ingress filter", request.IngressID, true) != nil {
@@ -461,6 +463,11 @@ type Repository interface {
 	List(context.Context, PageRequest) (Page, error)
 	Timeline(context.Context, string) (Timeline, error)
 	Recover(context.Context, time.Time) (int, error)
+}
+
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
 }
 
 type Reader interface {
@@ -532,4 +539,11 @@ func validateHost(label, value string, allowEmpty bool) error {
 		)
 	}
 	return validateIdentity(label, value, false)
+}
+
+type Observer interface {
+	ObserveConnection(recording.Stamp, Event) recording.OfferResult
+}
+type ScopedStore interface {
+	PutConnection(context.Context, recording.Scope, Event) error
 }

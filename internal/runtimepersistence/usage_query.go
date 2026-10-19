@@ -250,9 +250,9 @@ func scanUsageGroups(ctx context.Context, tx *sql.Tx, query runtimeusage.Aggrega
 	return groups, next, nil
 }
 
-func usageGroupLabel(ctx context.Context, tx *sql.Tx, sequence int64, group *runtimeusage.GroupUsage) error {
-	label, evidence := usageColumn(group.Dimension), "''"
-	switch group.Dimension {
+func usageGroupLabelExpressions(dimension string) (label, evidence string) {
+	label, evidence = usageColumn(dimension), "''"
+	switch dimension {
 	case "profile":
 		label = "coalesce(json_extract(observation_json,'$.environmentName'),'')"
 	case "account":
@@ -267,6 +267,11 @@ func usageGroupLabel(ctx context.Context, tx *sql.Tx, sequence int64, group *run
 		label = "coalesce(json_extract(observation_json,'$.attribution.gitAtLaunch.branch'),'')"
 		evidence = "CASE WHEN branch_id='detached' THEN 'detached' WHEN branch_id<>'' THEN 'launch_snapshot' ELSE '' END"
 	}
+	return label, evidence
+}
+
+func usageGroupLabel(ctx context.Context, tx *sql.Tx, sequence int64, group *runtimeusage.GroupUsage) error {
+	label, evidence := usageGroupLabelExpressions(group.Dimension)
 	return tx.QueryRowContext(ctx, `SELECT `+label+`,`+evidence+` FROM runtime_usage_observations WHERE sequence=?`, sequence).Scan(&group.Label, &group.Evidence)
 }
 

@@ -2,6 +2,7 @@ package runtimedata
 
 import (
 	"context"
+	"database/sql"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,7 @@ func TestNativeInspectionPurposeSurvivesActualBackupRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	shutdownBackupStore(t, store)
+	freezePublishedBackupFixture(t, source)
 	backup := filepath.Join(filepath.Dir(source), "native-backup")
 	restored := filepath.Join(filepath.Dir(source), "native-restored")
 	if err := Backup(ctx, source, backup, time.Now().UTC()); err != nil {
@@ -25,10 +27,14 @@ func TestNativeInspectionPurposeSurvivesActualBackupRestore(t *testing.T) {
 	if err := Restore(ctx, backup, restored); err != nil {
 		t.Fatal(err)
 	}
-	store = openBackupStore(t, filepath.Join(restored, "runtime.db"))
-	defer shutdownBackupStore(t, store)
-	page, err := store.ConnectionEventRepository().List(ctx, connectionevent.PageRequest{Limit: 20})
-	if err != nil || len(page.Items) != 1 || page.Items[0].InspectionPurpose != "client_tools" || page.Items[0].ClientEndpointID != "" || page.Items[0].ClientEndpointRevision != 0 {
-		t.Fatalf("restored native purpose %+v %v", page, err)
+	db, err := sql.Open("sqlite", "file:"+backupHistoryPath(t, restored)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var purpose, endpoint string
+	var revision int64
+	if err = db.QueryRow(`SELECT inspection_purpose,client_endpoint_id,client_endpoint_revision FROM runtime_connection_events WHERE connection_id='native-backup'`).Scan(&purpose, &endpoint, &revision); err != nil || purpose != "client_tools" || endpoint != "" || revision != 0 {
+		t.Fatalf("restored native purpose %s %s %d %v", purpose, endpoint, revision, err)
 	}
 }

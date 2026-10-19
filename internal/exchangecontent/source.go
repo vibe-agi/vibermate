@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type Part uint8
@@ -77,11 +78,13 @@ type RecordCost struct{ CanonicalBytes, RetainedBytes, StructureBytes, Transcrip
 // Source borrows its input. The caller must keep it immutable until all
 // synchronous consumption ends; it creates no goroutines or retained callbacks.
 type Source struct {
-	limits   SourceLimits
-	metadata RecordMetadata
-	request  protocolcore.Request
-	response *protocolcore.Response
-	record   *Record
+	reservation  *recording.Reservation
+	scratchBytes uint64
+	limits       SourceLimits
+	metadata     RecordMetadata
+	request      protocolcore.Request
+	response     *protocolcore.Response
+	record       *Record
 }
 type MessageSource struct {
 	source *Source
@@ -108,6 +111,9 @@ func NewSource(id string, f FrozenRef, p environment.ContentRecordingPolicy, t t
 	return NewSourceWithin(l, id, f, p, t, r, v, o...)
 }
 func NewSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.ContentRecordingPolicy, t time.Time, r protocolcore.Request, v *protocolcore.Response, o ...RecordOption) (*Source, error) {
+	return newSourceWithin(l, id, f, p, t, r, v, nil, o...)
+}
+func newSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.ContentRecordingPolicy, t time.Time, r protocolcore.Request, v *protocolcore.Response, reservation *recording.Reservation, o ...RecordOption) (*Source, error) {
 	if err := l.Validate(); err != nil {
 		return nil, err
 	}
@@ -138,7 +144,7 @@ func NewSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.Conte
 	if v != nil {
 		meta.Response = &ResponseMetadata{ID: v.ID, RequestedModel: v.RequestedModel, EffectiveModel: v.EffectiveModel, ReportedModel: v.ReportedModel, StopReason: string(v.StopReason), Usage: usageView(v.Usage), ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue{}, v.ProtocolEvidence...)}
 	}
-	s := &Source{limits: l, metadata: meta, request: r}
+	s := &Source{limits: l, metadata: meta, request: r, reservation: reservation}
 	if v != nil {
 		copy := *v
 		s.response = &copy
@@ -367,6 +373,8 @@ func (m MessageSource) WalkBlocks(ctx context.Context, fn func(Block) error) err
 // Scratch allowances are per sequential phase, never cumulative across leaves.
 // The sanitizer can grow only header (+11 per >=8 bytes), bearer (+2 per
 // >=15), provider key (+6 per >=15), and URL userinfo (+7 per >=11) matches.
+// Whole-line header redaction still matches at least eight bytes (cookie:x);
+// its replacement grows by ten bytes, within the existing +11 allowance.
 // Home replacements shrink. Reserve input plus the replacement byte buffer and
 // returned string; no-match text retains the original immutable string.
 func sanitizerBound(n uint64) (uint64, error) {
@@ -386,6 +394,18 @@ func sanitizerBound(n uint64) (uint64, error) {
 func (s *Source) reserveScratch(payload, structure uint64) error {
 	if payload > s.limits.Scratch.PayloadBytes || structure > s.limits.Scratch.StructureBytes {
 		return fmt.Errorf("%w: projection scratch exceeded", ErrInvalidEvidence)
+	}
+	if s.reservation != nil {
+		n := payload + structure
+		if n > math.MaxInt64 {
+			return ErrInvalidEvidence
+		}
+		if n > s.scratchBytes {
+			if !s.reservation.TryGrow(int64(n - s.scratchBytes)) {
+				return ErrOwnershipCapacity
+			}
+			s.scratchBytes = n
+		}
 	}
 	return nil
 }

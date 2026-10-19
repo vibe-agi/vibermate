@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const egressAttemptSelect = `SELECT
@@ -40,8 +41,9 @@ const egressAttemptSelect = `SELECT
 	 FROM runtime_egress_attempts`
 
 type egressAttemptRepository struct {
-	database   *sql.DB
-	operations *operationGate
+	observationOnly bool
+	database        *sql.DB
+	operations      *operationGate
 }
 
 var _ egressaudit.Repository = (*egressAttemptRepository)(nil)
@@ -401,7 +403,7 @@ func (repository *egressAttemptRepository) List(
 	return page, nil
 }
 
-func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record, error) {
+func scanEgressAttempt(rows interface{ Scan(...any) error }, extra ...any) (egressaudit.Record, error) {
 	var (
 		sequence                int64
 		attemptID               string
@@ -433,7 +435,7 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		bytesIn                 int64
 		known                   int64
 	)
-	if err := rows.Scan(
+	dest := []any{
 		&sequence,
 		&attemptID,
 		&connectionID,
@@ -460,7 +462,8 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		&bytesOut,
 		&bytesIn,
 		&known,
-	); err != nil {
+	}
+	if err := rows.Scan(append(dest, extra...)...); err != nil {
 		return egressaudit.Record{}, fmt.Errorf(
 			"scan EgressAttempt: %w",
 			err,
@@ -536,4 +539,109 @@ func scanEgressAttempt(rows interface{ Scan(...any) error }) (egressaudit.Record
 		}
 	}
 	return egressaudit.Record{Sequence: sequence, Attempt: attempt}, nil
+}
+
+// PutAttempt retains a complete snapshot without requiring an earlier start.
+// A late start is harmless; immutable coordinates and terminal facts cannot
+// overwrite conflicting evidence. Native control transactions remain separate.
+func (repository *egressAttemptRepository) PutAttempt(ctx context.Context, attempt egressaudit.Attempt) error {
+	return repository.putAttempt(ctx, recording.Scope{}, attempt)
+}
+func (repository *egressAttemptRepository) PutScopedAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	return repository.putAttempt(ctx, scope, attempt)
+}
+func (repository *egressAttemptRepository) putAttempt(ctx context.Context, scope recording.Scope, attempt egressaudit.Attempt) (writeErr error) {
+	defer func() { writeErr = recordingWriteError(writeErr) }()
+	if attempt.Purpose() == egressaudit.PurposeClientToolService {
+		return errors.New("native execution requires its control transaction")
+	}
+	input := normalizedEgressStart(attempt)
+	validated, err := egressaudit.New(input)
+	if err != nil {
+		return err
+	}
+	if attempt.Terminal() {
+		if _, err := validated.Finish(normalizedEgressTerminal(attempt)); err != nil {
+			return err
+		}
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	tx, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if repository.observationOnly {
+		var denied bool
+		if err := tx.QueryRowContext(operation, `SELECT EXISTS(SELECT 1 FROM recording_denials WHERE (kind='attempt' AND identity=?) OR (kind='connection' AND identity=?) OR (kind='exchange' AND identity=?))`, attempt.ID(), attempt.ConnectionID(), attempt.Parent().ExchangeID).Scan(&denied); err != nil {
+			return err
+		}
+		if denied {
+			return recording.ErrObservationDiscarded
+		}
+	}
+	if repository.observationOnly {
+		if err := checkRecordingReplayAdmission(operation, tx, scope); err != nil {
+			return err
+		}
+	}
+	priorScope, scopeErr := readRecordingScope(operation, tx, "runtime_egress_attempts", "attempt_id", attempt.ID())
+	if scopeErr != nil && !errors.Is(scopeErr, sql.ErrNoRows) {
+		return scopeErr
+	}
+	if scopeErr == nil && priorScope != scope {
+		return errors.New("egress recording scope conflicts")
+	}
+	existing, err := scanEgressAttempt(tx.QueryRowContext(operation, egressAttemptSelect+" WHERE attempt_id = ?", attempt.ID()))
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err = appendEgressAttempt(operation, tx, validated); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if normalizedEgressStart(existing.Attempt) != input {
+		return errors.New("EgressAttempt immutable coordinates conflict")
+	} else if existing.Attempt.Terminal() {
+		if attempt.Terminal() && normalizedEgressTerminal(existing.Attempt) != normalizedEgressTerminal(attempt) {
+			return errors.New("EgressAttempt terminal conflicts")
+		}
+		return tx.Commit()
+	}
+	if _, err = tx.ExecContext(operation, `UPDATE runtime_egress_attempts SET recording_scope_kind=?,recording_scope_id=?,recording_archive_epoch=?,recording_capture_generation=? WHERE attempt_id=?`, scope.Capture.Kind, scope.Capture.ID, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration, attempt.ID()); err != nil {
+		return err
+	}
+	if attempt.Terminal() {
+		if _, err = completeEgressAttempt(operation, tx, attempt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func normalizedEgressStart(a egressaudit.Attempt) egressaudit.NewInput {
+	return egressaudit.NewInput{
+		ID: a.ID(), ConnectionID: a.ConnectionID(),
+		Purpose: a.Purpose(), PayloadClass: a.PayloadClass(), Parent: a.Parent(),
+		Caller: a.Caller(), CallerID: a.CallerID(), TargetOrigin: a.TargetOrigin(),
+		Decision: a.Decision(), ReusedTransport: a.ReusedTransport(),
+		StartedAt: fromUnixMillis(toUnixMillis(a.StartedAt())),
+	}
+}
+
+var _ egressaudit.AttemptStore = (*egressAttemptRepository)(nil)
+
+func normalizedEgressTerminal(a egressaudit.Attempt) egressaudit.TerminalInput {
+	return egressaudit.TerminalInput{
+		Outcome: a.Outcome(), ErrorClass: a.ErrorClass(),
+		BytesOut: a.BytesOut(), BytesIn: a.BytesIn(),
+		CompletedAt:          fromUnixMillis(toUnixMillis(a.CompletedAt())),
+		UnobservedByteCounts: !a.ByteCountsKnown(),
+	}
 }

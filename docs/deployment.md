@@ -451,6 +451,30 @@ backup preserves real Blue/Red preferences and requires a reader with runtime3
 support. Keep private snapshots private; ordinary backup exclusions remain in
 force. See [format compatibility and rollback](backup-and-restore.md#format-compatibility-and-rollback).
 
+Role-aware storage adds required `runtime.db` (`vibermate-control/3`), optional
+`observations.db` (`vibermate-observations/1`), and explicitly declared retained
+legacy archives in `storage-layout.json`. Back up the directory through the
+stopped, guarded APIs so each role’s WAL and recording provisioning/privacy
+metadata survive. Role SHM files are disposable. A missing optional store must
+stay visibly absent; never delete its provisioning receipt to recreate it.
+
+Agent startup, Capture renewal, forwarding and Finish use the control store.
+A missing, corrupt, locked or full observation store can leave recording
+incomplete while authorized work continues. Missing history does not prove that
+no traffic occurred. Finish closes recording admission; shutdown may discard
+queued copies and does not promise a final history row. A shutdown deadline can
+return while owned I/O still drains, so wait for the actual process/ownership
+boundary before moving or restoring its directory.
+
+Old private v1 rollback snapshots keep the original monolithic completion
+boundary and credentials. Split private v2 snapshots preserve the recorded
+layout and all persistent local files under the same private policy, and refuse
+pending cleanup or lost required privacy proof. Public v1 restore certifies the
+old inventory before destination-only cutover; it never changes the backup
+source. Public v2 explicitly reports absent or semantically unverified history.
+These formats do not certify records that were never captured. See the linked
+backup guide for exact status and old-reader limits.
+
 Desktop readiness normally has a two-minute budget after its initial starting
 frame. One storage preparation or upgrade frame allows at most twenty minutes
 from process launch, with fifteen minutes for owned work and bounded commit

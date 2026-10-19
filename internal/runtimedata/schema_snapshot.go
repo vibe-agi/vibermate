@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ const (
 )
 
 type schemaSnapshotManifest struct {
+	backupRoles
 	Schema    string                         `json:"schema"`
 	CreatedAt string                         `json:"createdAt"`
 	Database  runtimepersistence.SchemaState `json:"database"`
@@ -125,8 +127,9 @@ func (runner schemaSnapshotRunner) create(ctx context.Context, source, target st
 	if err != nil || !sameBackupFiles(before, copied) {
 		return snapshotOperationError(ctx, ErrCopy)
 	}
-	// Recovery/checkpointing is restricted to the independent destination.
-	state, err := runtimepersistence.ValidateOfflineDatabase(ctx, filepath.Join(target, "runtime.db"))
+	// Validation recovers only independently owned inspection copies; both the
+	// source and the snapshot keep their recorded DB/WAL bytes.
+	state, roles, err := inspectBackupRoles(ctx, target)
 	if err != nil {
 		return snapshotOperationError(ctx, ErrBackupIncompatible)
 	}
@@ -141,7 +144,10 @@ func (runner schemaSnapshotRunner) create(ctx context.Context, source, target st
 	if err := runner.syncTree(ctx, target); err != nil {
 		return err
 	}
-	manifest := schemaSnapshotManifest{Schema: schemaSnapshotManifestSchema, CreatedAt: createdAt.Format(time.RFC3339Nano), Database: state, Files: files}
+	manifest := schemaSnapshotManifest{backupRoles: roles, Schema: schemaSnapshotManifestSchema, CreatedAt: createdAt.Format(time.RFC3339Nano), Database: state, Files: files}
+	if roles.Layout != nil {
+		manifest.Schema = schemaSnapshotManifestSchemaV2
+	}
 	if err := runner.writeManifest(ctx, target, manifest); err != nil {
 		return err
 	}
@@ -226,8 +232,8 @@ func (runner schemaSnapshotRunner) restore(ctx context.Context, snapshot, target
 	if err != nil || !sameBackupFiles(manifest.Files, files) {
 		return snapshotOperationError(ctx, ErrBackupInvalid)
 	}
-	state, err := runtimepersistence.ValidateOfflineDatabase(ctx, filepath.Join(target, "runtime.db"))
-	if err != nil || state != manifest.Database {
+	state, roles, err := inspectBackupRoles(ctx, target)
+	if err != nil || state != manifest.Database || !reflect.DeepEqual(roles, manifest.backupRoles) {
 		return snapshotOperationError(ctx, ErrBackupIncompatible)
 	}
 	files, err = schemaSnapshotFiles(ctx, target, true)
@@ -271,7 +277,7 @@ func (runner schemaSnapshotRunner) certifySnapshotLocked(ctx context.Context, di
 	if err != nil {
 		return manifest, err
 	}
-	if manifest.Schema != after.Schema || manifest.CreatedAt != after.CreatedAt || manifest.Database != after.Database || !sameBackupFiles(manifest.Files, after.Files) {
+	if !reflect.DeepEqual(manifest.backupRoles, after.backupRoles) || manifest.Schema != after.Schema || manifest.CreatedAt != after.CreatedAt || manifest.Database != after.Database || !sameBackupFiles(manifest.Files, after.Files) {
 		return manifest, ErrBackupInvalid
 	}
 	return manifest, nil
@@ -349,6 +355,7 @@ func snapshotEphemeral(rel string) bool {
 
 func schemaSnapshotFiles(ctx context.Context, directory string, private bool) ([]backupFile, error) {
 	var files []backupFile
+	shm := roleSHMPaths(directory)
 	err := filepath.WalkDir(directory, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return ErrBackupInvalid
@@ -376,7 +383,7 @@ func schemaSnapshotFiles(ctx context.Context, directory string, private bool) ([
 		if rel == "." || info.IsDir() {
 			return nil
 		}
-		if snapshotEphemeral(rel) || rel == schemaSnapshotManifestName {
+		if snapshotEphemeral(rel) || shm[filepath.ToSlash(rel)] || rel == schemaSnapshotManifestName {
 			return nil
 		}
 		digest, err := digestFile(ctx, name)
@@ -410,6 +417,7 @@ func snapshotHasDatabase(files []backupFile) bool {
 }
 
 func (runner schemaSnapshotRunner) copyDirectory(ctx context.Context, source, target string) error {
+	shm := roleSHMPaths(source)
 	err := filepath.WalkDir(source, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return ErrCopy
@@ -428,7 +436,7 @@ func (runner schemaSnapshotRunner) copyDirectory(ctx context.Context, source, ta
 		if rel == "." {
 			return nil
 		}
-		if snapshotEphemeral(rel) || rel == schemaSnapshotManifestName {
+		if snapshotEphemeral(rel) || shm[filepath.ToSlash(rel)] || rel == schemaSnapshotManifestName {
 			if info.IsDir() {
 				return ErrCopy
 			}
@@ -540,7 +548,10 @@ func readSchemaSnapshotManifest(directory string) (schemaSnapshotManifest, error
 		return manifest, ErrBackupInvalid
 	}
 	created, err := time.Parse(time.RFC3339Nano, manifest.CreatedAt)
-	if err != nil || created.IsZero() || created.Location() != time.UTC || manifest.Schema != schemaSnapshotManifestSchema || len(manifest.Files) == 0 || len(manifest.Files) > maximumManifestFiles {
+	if err != nil || created.IsZero() || created.Location() != time.UTC || (manifest.Schema != schemaSnapshotManifestSchema && manifest.Schema != schemaSnapshotManifestSchemaV2) || len(manifest.Files) == 0 || len(manifest.Files) > maximumManifestFiles {
+		return manifest, ErrBackupInvalid
+	}
+	if !validBackupRolesVersion(manifest.Schema == schemaSnapshotManifestSchemaV2, manifest.backupRoles) {
 		return manifest, ErrBackupInvalid
 	}
 	for index, file := range manifest.Files {
@@ -569,11 +580,8 @@ func validateSchemaSnapshotLocked(ctx context.Context, directory string) (schema
 	if err != nil || !sameBackupFiles(manifest.Files, files) {
 		return manifest, snapshotOperationError(ctx, ErrBackupInvalid)
 	}
-	state, err := runtimepersistence.InspectSchema(ctx, filepath.Join(directory, "runtime.db"), runtimepersistence.DefaultBusyTimeout)
-	if err != nil || state != manifest.Database || state.Revision == 0 {
-		return manifest, snapshotOperationError(ctx, ErrBackupIncompatible)
-	}
-	if _, err := runtimepersistence.ValidateOfflineDatabase(ctx, filepath.Join(directory, "runtime.db")); err != nil {
+	state, roles, err := inspectBackupRoles(ctx, directory)
+	if err != nil || state != manifest.Database || state.Revision == 0 || !reflect.DeepEqual(roles, manifest.backupRoles) {
 		return manifest, snapshotOperationError(ctx, ErrBackupIncompatible)
 	}
 	files, err = schemaSnapshotFiles(ctx, directory, true)

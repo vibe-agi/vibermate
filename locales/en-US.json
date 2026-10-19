@@ -86,6 +86,7 @@
   "cli.doctor.reason.environment_catalog": "Reason environment_catalog: check catalog access and Runtime Server availability with its owner.",
   "cli.doctor.reason.environment_unavailable": "Reason environment_unavailable: choose an active Environment allowed by the Runtime User policy; check vibermate profiles --server <same-server> --json.",
   "cli.status.storage_failure": "FAIL Proxy stopped after a core audit failure: {{operation}} / {{reason}} at {{at}}. Check storage availability and disk space, then restart the Runtime. Refreshing the page cannot recover the proxy.",
+  "cli.status.recording_state": "WARN Recording: {{state}}; dropped={{dropped}}, unconfirmed={{unconfirmed}}, cleanupPending={{pending}} in this Runtime session. Missing evidence does not mean no traffic; Agent control remains independent.",
   "cli.status.recording_failure": "WARN Recording is incomplete: {{operation}} / {{reason}} at {{at}}. This warning does not stop proxy traffic. Request history, usage or retained content may have gaps; restarting cannot backfill missing records.",
   "cli.doctor.unhealthy": "FAIL Runtime diagnostics: runtime_diagnostics_failed. Inspect runtime/storage/recording diagnostics and resolve the reported failure before launching another Agent.",
   "cli.transport.http": "unencrypted HTTP (trusted private networks only)",

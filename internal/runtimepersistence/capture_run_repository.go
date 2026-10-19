@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -58,9 +59,12 @@ const captureRunColumns = `
 	git_json`
 
 type captureRunRepository struct {
-	database      *sql.DB
-	operations    *operationGate
-	stopCommitter transactionCommitter
+	database        *sql.DB
+	operations      *operationGate
+	stopCommitter   transactionCommitter
+	controlOnly     bool
+	captureObserver recording.CaptureObserver
+	recordingScopes recording.ScopeIssuer
 }
 
 // Derive display/order from scoped, body-free evidence using the existing
@@ -210,6 +214,12 @@ func (repository *captureRunRepository) Create(
 	} else if affected != 1 {
 		return capturerun.ErrCapabilityRejected
 	}
+	if _, err := tx.ExecContext(operation, `INSERT INTO recording_capture_fences(capture_kind,capture_id,generation,deleted) VALUES('managed_run',?,1,0)`, record.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(operation, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1 WHERE singleton=1`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -223,9 +233,10 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		return capturerun.DurableRecord{}, err
 	}
 	defer finish()
-	record, err := scanCaptureRun(repository.database.QueryRowContext(
+	var original recording.Fence
+	record, err := scanCaptureRun(captureObservationScan{row: repository.database.QueryRowContext(
 		operation,
-		`SELECT `+captureRunColumns+`
+		`SELECT `+captureRunColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='managed_run' AND capture_id=capture_runs.run_id AND deleted=0),0)
 		 FROM capture_runs
 		 WHERE proxy_capability_hash = ?
 		   AND state IN ('created', 'attached')
@@ -233,44 +244,18 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		digest[:],
 		toUnixMillis(now),
 		toUnixMillis(now),
-	))
+	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
 		return capturerun.DurableRecord{}, capturerun.ErrCapabilityRejected
 	}
 	if err != nil {
 		return capturerun.DurableRecord{}, fmt.Errorf("authorize CaptureRun proxy: %w", err)
 	}
-	// This is the only place that can honestly mark observation: an
-	// authenticated proxy connection is the one signal that traffic actually
-	// arrived through this run. The write is conditional so a later connection
-	// cannot move the first-observed time.
-	// The stored value is what a later read will see, so the value returned to
-	// this caller is the stored one. Handing back an untruncated time would
-	// make the same fact differ between the first call and every later one.
-	storedAt := fromUnixMillis(toUnixMillis(now))
-	observed, changed := record.WithObservedTraffic(storedAt)
-	if !changed {
-		return record, nil
-	}
-	if _, err := repository.database.ExecContext(
-		operation,
-		`UPDATE capture_runs
-		    SET observation = 'observed',
-		        first_observed_at_unix_ms = ?,
-		        updated_at_unix_ms = ?
-		  WHERE run_id = ?
-		    AND observation = 'waiting_for_traffic'
-		    AND state IN ('created', 'attached')`,
-		toUnixMillis(storedAt),
-		toUnixMillis(now),
-		record.ID,
-	); err != nil {
-		return capturerun.DurableRecord{}, fmt.Errorf(
-			"record CaptureRun observation: %w",
-			err,
-		)
-	}
-	return observed, nil
+	// Authentication depends only on current control facts. Traffic display is
+	// optional evidence published by the admitted connection/exchange producer.
+	record.RecordingScope = recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, Fence: original}
+	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: record.ID}, 0, now, original)
+	return record, nil
 }
 
 func (repository *captureRunRepository) Attach(
@@ -722,7 +707,7 @@ func (repository *captureRunRepository) List(
 	}
 	defer finish()
 	const runningRank = `CASE WHEN state IN ('created', 'attached') THEN 0 ELSE 1 END`
-	query := `SELECT ` + captureRunColumns + `, ` + captureRunActivityAt + ` AS activity_at_unix_ms
+	query := `SELECT ` + captureRunColumns + `, ` + repository.activityExpression() + ` AS activity_at_unix_ms
 		 FROM capture_runs WHERE 1=1`
 	arguments := make([]any, 0, 7)
 	if request.RuntimeUserID != "" {
@@ -797,7 +782,7 @@ func (repository *captureRunRepository) Get(
 	var activityAt int64
 	record, err := scanCaptureRun(repository.database.QueryRowContext(
 		operation,
-		`SELECT `+captureRunColumns+`, `+captureRunActivityAt+` FROM capture_runs WHERE run_id = ?`,
+		`SELECT `+captureRunColumns+`, `+repository.activityExpression()+` FROM capture_runs WHERE run_id = ?`,
 		runID,
 	), &activityAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -845,4 +830,11 @@ func (repository *captureRunRepository) Active(
 	default:
 		return false, capturerun.ErrInvalidRequest
 	}
+}
+
+func (repository *captureRunRepository) activityExpression() string {
+	if repository.controlOnly {
+		return `MAX(created_at_unix_ms,COALESCE(first_observed_at_unix_ms,CASE WHEN state IN ('created','attached') THEN created_at_unix_ms ELSE updated_at_unix_ms END))`
+	}
+	return captureRunActivityAt
 }

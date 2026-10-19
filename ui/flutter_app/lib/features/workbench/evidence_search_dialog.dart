@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/api/control_api.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
@@ -116,6 +117,11 @@ final class _EvidenceSearchDialogState extends State<_EvidenceSearchDialog> {
     } on Object catch (error) {
       if (!mounted || generation != _generation) return;
       setState(() {
+        if (error is ControlProblem &&
+            (error.status == 409 || error.status == 422)) {
+          _page = null;
+          _request = null;
+        }
         _failure = ControlFailure.from(error);
         _loading = false;
       });

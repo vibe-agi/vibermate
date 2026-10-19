@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/socksproxy"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 type nativeIDs struct{ random io.Reader }
@@ -47,10 +48,11 @@ func (ids nativeIDs) NewOwnerEpoch(ctx context.Context) (uint64, error) {
 // This adapter exists before assignments recover; listeners start only after
 // the actual module has recovered the same Store and is installed here.
 type nativeRevocation struct {
-	mu       sync.RWMutex
-	executor nativemcp.Executor
-	socks    *socksproxy.Server
-	retained *captureadmission.Retained
+	approvals toolapproval.CaptureCanceler
+	mu        sync.RWMutex
+	executor  nativemcp.Executor
+	socks     *socksproxy.Server
+	retained  *captureadmission.Retained
 }
 
 func (adapter *nativeRevocation) installSOCKS(server *socksproxy.Server) {
@@ -76,6 +78,7 @@ func (adapter *nativeRevocation) Revoke(ctx context.Context, capture captureiden
 	executor := adapter.executor
 	socks := adapter.socks
 	retained := adapter.retained
+	approvals := adapter.approvals
 	adapter.mu.RUnlock()
 	var errs []error
 	var waitSOCKS func(context.Context) error
@@ -87,6 +90,9 @@ func (adapter *nativeRevocation) Revoke(ctx context.Context, capture captureiden
 		var err error
 		waitSOCKS, err = socks.BeginRevoke(capture)
 		errs = append(errs, err)
+	}
+	if approvals != nil {
+		errs = append(errs, approvals.CancelCaptureApprovals(ctx, capture, reason))
 	}
 	if executor != nil {
 		errs = append(errs, executor.Revoke(ctx, capture, nativemcp.RevocationReason(reason)))
@@ -115,4 +121,10 @@ func (adapter *nativeRevocation) Changed(ctx context.Context, change captureauth
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	return retained.Changed(ctx, change)
+}
+
+func (adapter *nativeRevocation) installApprovals(owner toolapproval.CaptureCanceler) {
+	adapter.mu.Lock()
+	adapter.approvals = owner
+	adapter.mu.Unlock()
 }

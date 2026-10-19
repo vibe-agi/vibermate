@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -366,5 +368,46 @@ func TestUsageArchiveClearAndReopen(t *testing.T) {
 	policy, err := store.UsagePolicy(ctx)
 	if err != nil || !policy.Enabled {
 		t.Fatalf("clearing usage changed consent: %#v %v", policy, err)
+	}
+}
+
+func TestCollectedUsagePreservesFrozenLabelsAndOriginalExpiry(t *testing.T) {
+	ctx := context.Background()
+	store := openDisabledUsageTestStore(t, filepath.Join(t.TempDir(), "usage.db"))
+	defer shutdownTestStore(t, store)
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	policy, err := store.SetUsagePolicy(ctx, runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 30, Revision: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, _ := recording.NewEpoch(1)
+	stamp, _ := recording.NewStamp(epoch, captureidentity.Reference{}, recording.Fence{ArchiveEpoch: 1})
+	value := runtimeusage.CollectedObservation{Value: runtimeusage.Observation{ExchangeID: "collected", StartedAt: now, OccurredAt: now, Status: activity.StatusSucceeded, Source: "proxy", EnvironmentID: "env", EnvironmentName: "Frozen environment", AccountID: "account", AccountName: "Frozen account"}, PolicyRevision: policy.Revision, ExpiresAt: now.Add(24 * time.Hour), Stamp: stamp}
+	if err := store.PutCollectedUsage(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	query, _ := runtimeusage.NewQuery("2026-09-28", "2026-09-29", "UTC")
+	got, _, err := store.ListUsage(ctx, query, "", now, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("collected unavailable: %+v %v", got, err)
+	}
+	if got[0].EnvironmentName != "Frozen environment" || got[0].AccountName != "Frozen account" {
+		t.Fatalf("storage looked up current labels: %+v", got[0])
+	}
+	got, _, err = store.ListUsage(ctx, query, "", now.Add(24*time.Hour), 10)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("original expiry extended: %+v %v", got, err)
+	}
+	policy.Enabled = false
+	_, err = store.SetUsagePolicy(ctx, policy, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Current policy is checked in the typed worker, never by this optional
+	// observation writer. Original stamps still reject stale writes.
+	epoch.Advance(2)
+	value.Value.ExchangeID = "stale"
+	if err := store.PutCollectedUsage(ctx, value); !errors.Is(err, runtimeusage.ErrObservationDiscarded) {
+		t.Fatalf("definite stale discard reported as success: %v", err)
 	}
 }

@@ -207,13 +207,25 @@ func TestSchemaSwitchPendingReceiptSurvivesCrash(t *testing.T) {
 			t.Fatalf("private file changed %s", name)
 		}
 	}
-	// The old API remains a frozen-v2 boundary. Inspect it offline; current
-	// Store admission requires the separately owned second stage.
-	state, err := runtimepersistence.InspectSchema(context.Background(), filepath.Join(source, "runtime.db"), time.Second)
-	if err != nil || state.Revision != 2 {
-		t.Fatalf("legacy receipt result %+v %v", state, err)
+	// Marker consumption precedes ordinary changes, which must not be compared
+	// to the historical snapshot on later normal2 startups.
+	// The current role-aware binary intentionally refuses ordinary Open on v2.
+	// Exercise the old receipt protocol with an explicit released-schema write;
+	// PrepareStorageOwned separately owns subsequent role cutover.
+	changed, err := sql.Open("sqlite", "file:"+filepath.Join(source, "runtime.db")+"?mode=rw")
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	writeResult, writeErr := changed.Exec(`UPDATE connection_rule_sets SET revision=revision+1 WHERE id=1`)
+	if writeErr == nil {
+		count, countErr := writeResult.RowsAffected()
+		if countErr != nil || count != 1 {
+			t.Fatal("frozen v2 authored mutation did not change its singleton")
+		}
+	}
+	if err = errors.Join(writeErr, changed.Close()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := UpgradeSchemaOwned(context.Background(), source, filepath.Join(filepath.Dir(source), "still-unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("normal2 emitted upgrade"); return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +423,7 @@ func TestSchemaSwitchPreparationThresholdAndCurrent2(t *testing.T) {
 			t.Fatalf("threshold=%v %v", got, err)
 		}
 	}
-	current, _ := backupFixture(t)
+	current := frozenRevision2UpgradeFixture(t)
 	owner, host := upgradeGuards(t, current)
 	if _, err := UpgradeSchemaOwned(context.Background(), current, filepath.Join(filepath.Dir(current), "unused"), owner, host, time.Now().UTC(), time.Minute, func(SchemaUpgradePhase) error { t.Fatal("small current2 prepared"); return nil }); err != nil {
 		t.Fatal(err)
@@ -419,7 +431,7 @@ func TestSchemaSwitchPreparationThresholdAndCurrent2(t *testing.T) {
 }
 
 func TestSchemaSwitchCurrent2RequiresOwnershipThroughInspection(t *testing.T) {
-	source, _ := backupFixture(t)
+	source := frozenRevision2UpgradeFixture(t)
 	owner, host := upgradeGuards(t, source)
 	runner := newSchemaUpgradeRunner()
 	inspect := runner.inspect
@@ -476,7 +488,7 @@ func TestSchemaSwitchPendingPublicBackupAndMoveProduceNoOutput(t *testing.T) {
 	}
 }
 func TestSchemaSwitchOrdinaryManifestRejectsOperationalReceipt(t *testing.T) {
-	source, _ := backupFixture(t)
+	source := frozenRevision2UpgradeFixture(t)
 	backup := filepath.Join(filepath.Dir(source), "backup")
 	if err := Backup(context.Background(), source, backup, time.Now().UTC()); err != nil {
 		t.Fatal(err)

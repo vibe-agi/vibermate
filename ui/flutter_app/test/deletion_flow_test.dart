@@ -7,6 +7,66 @@ import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/deletion_dialog.dart';
 
 void main() {
+  testWidgets(
+    'pending deletion reports incomplete cleanup and retained metadata',
+    (tester) async {
+      final outcome = DeletionOutcome.fromJson(const {
+        'deleted': true,
+        'holderCount': 0,
+        'holders': <Object?>[],
+        'released': {
+          'exchanges': 0,
+          'envelopes': 0,
+          'activities': 0,
+          'connections': 0,
+          'attempts': 0,
+          'approvals': 1,
+          'assignments': 1,
+          'captures': 1,
+          'cleanupPending': true,
+          'countsIncomplete': true,
+          'approvalOwnershipUnknown': true,
+          'privacyMetadataRetained': true,
+        },
+      }, 'deletion');
+      final copy = AppCopy.forLanguage(AppLanguage.english);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showDialog<DeletionOutcome>(
+                  context: context,
+                  builder: (_) => DeletionConfirmation(
+                    title: 'Delete',
+                    subject: 'Capture',
+                    consequence: 'Recorded data',
+                    copy: copy,
+                    onConfirm: () async => outcome,
+                  ),
+                ),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('deletion-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('deletion-cleanup-notice')), findsOneWidget);
+      final text = tester
+          .widget<Text>(find.byKey(const Key('deletion-cleanup-notice')))
+          .data!;
+      expect(text, contains('Physical cleanup is pending'));
+      expect(text, contains('Confirmed removals only'));
+      expect(text, contains('unknown Capture ownership'));
+      expect(text, contains('metadata is retained'));
+    },
+  );
+
   // The two answers are mutually exclusive at the source. A client that does
   // not enforce that would render "deleted" over a list of reasons it was not,
   // which is the one way this contract can mislead.

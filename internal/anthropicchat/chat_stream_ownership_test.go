@@ -96,3 +96,46 @@ func TestChatStreamRetainedGrowthConsumesCreditBeforeAppend(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalObservationBorrowSurvivesDecisionWithoutCopy(t *testing.T) {
+	for _, approve := range []bool{false, true} {
+		codec, err := New(DefaultOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream, err := codec.NewProviderStream(newStreamingRequest(t, codec))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire := joinProviderEvents(t, `{"id":"r","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"original"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "[DONE]")
+		if _, err = stream.Feed(context.Background(), wire); err != nil {
+			t.Fatal(err)
+		}
+		clear(wire)
+		terminal, err := stream.FinishDecoded(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		copied := terminal.DecodedResponse()
+		copied.Blocks[0].Text = "mutated"
+		if n := testing.AllocsPerRun(10, func() {
+			if terminal.BorrowDecodedResponse().Blocks[0].Text != "original" {
+				t.Fatal("borrow aliases owned caller copy")
+			}
+		}); n != 0 {
+			t.Fatalf("observation copied response before recording admission: %v", n)
+		}
+		borrowed := terminal.BorrowDecodedResponse()
+		if approve {
+			_, err = terminal.Approve()
+		} else {
+			err = terminal.Reject()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if borrowed.Blocks[0].Text != "original" {
+			t.Fatal("decision invalidated observation borrow")
+		}
+	}
+}

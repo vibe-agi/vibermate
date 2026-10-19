@@ -6,6 +6,7 @@ package captureadmission
 import (
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -88,6 +89,7 @@ func (ProxyCredential) GoString() string {
 // connection. Optional identities stay private and are exposed through typed
 // accessors so a caller cannot confuse an absent identity with an empty one.
 type Admission struct {
+	recordingScope     recording.Scope
 	receipt            *retainedReceipt
 	kind               Kind
 	admissionRef       string
@@ -103,6 +105,7 @@ type Admission struct {
 	adapter            *clientadapter.Evidence
 	runtime            capturerun.RuntimeMetadata
 	runtimeUsername    string
+	runtimeUserID      runtimeuser.UserID
 }
 
 // NewManual constructs the route-neutral admission produced by a future
@@ -175,6 +178,9 @@ func (admission Admission) Validate() error {
 		if admission.runtime.Validate() != nil {
 			return fmt.Errorf("%w: managed runtime metadata is invalid", ErrInvalidAdmission)
 		}
+		if admission.runtimeUserID != "" && !admission.runtimeUserID.Valid() {
+			return ErrInvalidAdmission
+		}
 		if admission.runtimeUsername != "" &&
 			!runtimeuser.ValidUsername(admission.runtimeUsername) {
 			return fmt.Errorf("%w: Runtime username is invalid", ErrInvalidAdmission)
@@ -185,7 +191,7 @@ func (admission Admission) Validate() error {
 			admission.captureRunID != "" || admission.adapter != nil ||
 			hasWorkspace || admission.workspaceRoot != "" ||
 			admission.runtime != (capturerun.RuntimeMetadata{}) ||
-			admission.runtimeUsername != "" ||
+			admission.runtimeUsername != "" || admission.runtimeUserID != "" ||
 			admission.confidence != AttributionConfigured {
 			return fmt.Errorf("%w: manual-capture evidence is invalid", ErrInvalidAdmission)
 		}
@@ -313,3 +319,10 @@ func validLabel(value string) bool {
 	}
 	return true
 }
+
+func (admission Admission) RuntimeUserID() (runtimeuser.UserID, bool) {
+	return admission.runtimeUserID, admission.runtimeUserID != ""
+}
+
+// RecordingScope is optional provenance selected by the authenticating control read.
+func (a Admission) RecordingScope() recording.Scope { return a.recordingScope }

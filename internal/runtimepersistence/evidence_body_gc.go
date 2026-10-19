@@ -10,6 +10,10 @@ import (
 // Only bodies named by deleted envelopes can have become unreachable. Their
 // reverse chunk index keeps this independent of the amount of retained traffic.
 func deleteRawEvidence(ctx context.Context, tx *sql.Tx, query string, args ...any) (int64, error) {
+	return deleteRawEvidenceCompatible(ctx, tx, true, query, args...)
+}
+
+func deleteRawEvidenceCompatible(ctx context.Context, tx *sql.Tx, native bool, query string, args ...any) (int64, error) {
 	rows, err := tx.QueryContext(ctx, query+` RETURNING stored_body_digest`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete raw evidence: %w", err)
@@ -31,7 +35,7 @@ func deleteRawEvidence(ctx context.Context, tx *sql.Tx, query string, args ...an
 		return 0, err
 	}
 	for _, digest := range uniqueStrings(bodies) {
-		if err := releaseEvidenceBody(ctx, tx, []byte(digest)); err != nil {
+		if err := releaseEvidenceBodyCompatible(ctx, tx, []byte(digest), native); err != nil {
 			return 0, err
 		}
 	}
@@ -39,11 +43,20 @@ func deleteRawEvidence(ctx context.Context, tx *sql.Tx, query string, args ...an
 }
 
 func releaseEvidenceBody(ctx context.Context, tx *sql.Tx, digest []byte) error {
+	return releaseEvidenceBodyCompatible(ctx, tx, digest, true)
+}
+
+func releaseEvidenceBodyCompatible(ctx context.Context, tx *sql.Tx, digest []byte, native bool) error {
 	var manifest []byte
+	nativeGuard := ""
+	args := []any{digest, digest}
+	if native {
+		nativeGuard = ` AND NOT EXISTS(SELECT 1 FROM native_tool_contents WHERE body_digest=?)`
+		args = append(args, digest)
+	}
 	err := tx.QueryRowContext(ctx, `DELETE FROM runtime_evidence_bodies
 		 WHERE digest=? AND NOT EXISTS(SELECT 1 FROM runtime_raw_evidence_envelopes WHERE stored_body_digest=?)
-		 AND NOT EXISTS(SELECT 1 FROM native_tool_contents WHERE body_digest=?)
-		 RETURNING chunk_manifest`, digest, digest, digest).Scan(&manifest)
+		 `+nativeGuard+` RETURNING chunk_manifest`, args...).Scan(&manifest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

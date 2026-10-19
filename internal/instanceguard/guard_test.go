@@ -203,3 +203,61 @@ func TestGuardHelperProcess(t *testing.T) {
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	os.Exit(0)
 }
+
+func TestGuardOwnershipRejectsReplacedDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "owned")
+	guard, err := instanceguard.Acquire(filepath.Join(root, "runtime-data.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Release()
+	if !guard.OwnsDirectory(root) {
+		t.Fatal("live guard not owned")
+	}
+	moved := root + "-moved"
+	if err = os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Link(filepath.Join(moved, "runtime-data.lock"), filepath.Join(root, "runtime-data.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if guard.OwnsDirectory(root) {
+		t.Fatal("guard authorized a substituted directory")
+	}
+	if err = os.Remove(filepath.Join(root, "runtime-data.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(moved, root); err != nil {
+		t.Fatal(err)
+	}
+	if guard.OwnsDirectory(root) {
+		t.Fatal("guard authorized a symlinked directory")
+	}
+
+}
+
+func TestGuardPreservesInitialAncestorAlias(t *testing.T) {
+	parent := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(alias, "runtime")
+	guard, err := instanceguard.Acquire(filepath.Join(root, "runtime-data.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Release()
+	if !guard.OwnsDirectory(root) {
+		t.Fatal("initial ancestor alias lost ownership")
+	}
+	if guard.OwnsDirectory(filepath.Join(parent, "runtime")) {
+		t.Fatal("guard's lexical path contract changed")
+	}
+}

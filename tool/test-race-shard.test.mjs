@@ -9,20 +9,27 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const native = 'github.com/vibe-agi/vibermate/internal/nativemcp';
 const persistence = 'github.com/vibe-agi/vibermate/internal/runtimepersistence';
+const runtimeData = 'github.com/vibe-agi/vibermate/internal/runtimedata';
+const runtimeProduct = 'github.com/vibe-agi/vibermate/internal/productruntime';
+const isolated = [native, persistence, runtimeData, runtimeProduct];
 const ordinary = [
   'github.com/vibe-agi/vibermate/cmd/future-command',
   `${native}extra`,
   `${native}/nested`,
   `${persistence}extra`,
+  `${runtimeData}extra`,
+  `${runtimeData}/nested`,
+  `${runtimeProduct}extra`,
+  `${runtimeProduct}/nested`,
   'example.org/another/runtimepersistence',
 ];
 const raceOnly = 'github.com/vibe-agi/vibermate/internal/future-race-only';
-const universe = [native, ...ordinary, persistence, raceOnly];
-const shards = ['native', 'persistence', 'rest'];
-const expected = { native: [native], persistence: [persistence], rest: [...ordinary, raceOnly] };
+const universe = [native, ...ordinary, persistence, runtimeData, runtimeProduct, raceOnly];
+const shards = ['native', 'persistence', 'runtime-data', 'runtime-product', 'rest'];
+const expected = { native: [native], persistence: [persistence], 'runtime-data': [runtimeData], 'runtime-product': [runtimeProduct], rest: [...ordinary, raceOnly] };
 
 const catalog = ['TestSchemaSwitchFuture', 'TestRevision2Future', 'TestSchemaMigrationFuture',
-  'TestOrdinary', 'TestNotSchemaSwitch', 'TestRaceOnly', 'FuzzFuture', 'ExampleFuture', 'Example', 'BenchmarkFuture'];
+  'TestContentSourceFuture', 'TestContentSourceBoundsManifestBytesBeforeScan', 'TestNotContentSource', 'TestOrdinary', 'TestNotSchemaSwitch', 'TestRaceOnly', 'FuzzFuture', 'ExampleFuture', 'Example', 'BenchmarkFuture'];
 const splitModes = ['persistence-migration', 'persistence-rest'];
 
 function fakeGoMain() {
@@ -148,9 +155,8 @@ test('failed or malformed discovery never starts a test process for any shard', 
   const cases = [
     { listExit: 19 },
     { packages: [] },
-    { packages: [...universe, native] },
-    { packages: universe.filter(p => p !== native) },
-    { packages: universe.filter(p => p !== persistence) },
+    ...isolated.map(p => ({ packages: [...universe, p] })),
+    ...isolated.map(p => ({ packages: universe.filter(candidate => candidate !== p) })),
     ...['', 'bad package', '-unsafe', './relative', 'example.org/pkg\r', 'example.org//empty'].map(p => ({ packages: [p, ...universe] })),
   ];
   for (const config of cases) {
@@ -165,7 +171,7 @@ test('failed or malformed discovery never starts a test process for any shard', 
 });
 
 test('an empty selected rest shard never starts a test process', t => {
-  const go = fixture(t, { packages: [native, persistence] });
+  const go = fixture(t, { packages: isolated });
   const result = go.run(['rest']);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /package/iu);
@@ -182,6 +188,9 @@ test('split persistence catalog covers Test, Example, Fuzz and future race roots
     const manifest = JSON.parse(readFileSync(go.manifest(mode)));
     assert.equal(manifest.status, 'discovered');
     assert.deepEqual(result.stdout.trim().split('\n'), manifest.selection);
+    const moved = ['TestContentSourceFuture', 'TestContentSourceBoundsManifestBytesBeforeScan'];
+    for (const name of moved) assert.equal(manifest.selection.includes(name), mode === 'persistence-migration');
+    assert.equal(manifest.selection.includes('TestNotContentSource'), mode === 'persistence-rest');
     assert.deepEqual(manifest.catalog, catalog.filter(n => !n.startsWith('Benchmark')).sort());
     assert.deepEqual(manifest.benchmarks, ['BenchmarkFuture']);
     selected.push(...manifest.selection);
@@ -200,7 +209,7 @@ for (const mode of splitModes) for (const status of [0, 23]) {
     assert.equal(result.status, status, result.stderr);
     const manifest = JSON.parse(readFileSync(go.manifest(mode)));
     const call = go.calls().find(c => c.args.includes('-run'));
-    assert.deepEqual(call.args.slice(0, 8), ['test','-race','-short','-p=1',persistence,'-count=1','-timeout=60m','-json']);
+    assert.deepEqual(call.args.slice(0, 8), ['test','-race','-short','-p=1',persistence,'-count=1','-timeout=120m','-json']);
     assert.equal(call.goflags, '-mod=readonly -tags=fixture');
     const pattern = call.args[call.args.indexOf('-run')+1];
     assert(pattern.startsWith('^(') && pattern.endsWith(')$') && !pattern.includes('/'));
@@ -257,12 +266,12 @@ test('comparison requires identical clean source/build/catalog and two complete 
 
 test('workflow runs both persistence lanes and requires manifest comparison without changing other campaigns', () => {
   const source=readFileSync(join(root,'.github/workflows/ci.yml'),'utf8');
-  assert.match(source,/shard: \[native, persistence-migration, persistence-rest, rest\]/);
+  assert.match(source,/shard: \[native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest\]/);
   assert.match(source,/race-coverage:[\s\S]*?needs: race[\s\S]*?persistence-race-partition\.mjs compare/);
   assert.match(source,/RACE_PARTITION_MANIFEST:/);
   const raceJob=source.split('  race:')[1].split('  race-coverage:')[0];
   assert.match(raceJob,/fail-fast: false/);
-  assert.match(raceJob,/timeout-minutes: 120/);
+  assert.match(raceJob,/timeout-minutes: 150/);
   assert.match(raceJob,/if: always\(\) && startsWith\(matrix.shard, 'persistence-'\)/);
   assert.match(raceJob,/if-no-files-found: error/);
   assert.match(source,/name: race-\$\{\{ matrix\.shard \}\}-\$\{\{ github\.run_attempt \}\}/);

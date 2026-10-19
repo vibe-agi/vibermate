@@ -152,15 +152,8 @@ func (e *executor) retainResult(ctx context.Context, id nativetool.ID, request, 
 	if request.retention == nil {
 		return nil
 	}
-	profile, ok := request.retention.profile, request.retention.known
-	if !ok {
-		return nil
-	}
-	if body, permitted := retainedToolResult(result.object["result"], profile.result, e.limits); permitted {
-		if err := e.dependencies.Store.PutContent(ctx, id, "tool_result", body, e.dependencies.Clock().UTC()); err != nil {
-			request.retention.unavailable = true
-		}
-		return nil
+	if request.retention.known {
+		e.observeContent(request, nativetool.ContentToolResult, result.object["result"])
 	}
 	return nil
 }

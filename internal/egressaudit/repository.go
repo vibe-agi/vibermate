@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const (
@@ -45,6 +47,24 @@ func (request PageRequest) Normalized() (PageRequest, error) {
 		return PageRequest{}, errors.New(
 			"an egress parent filter requires both a kind and an ID",
 		)
+	}
+	if request.ConnectionID != "" {
+		if err := validateIdentity("Connection ID", request.ConnectionID); err != nil {
+			return PageRequest{}, err
+		}
+	}
+	if request.ParentID != "" {
+		if err := validateIdentity("parent ID", request.ParentID); err != nil {
+			return PageRequest{}, err
+		}
+		switch request.ParentKind {
+		case ParentUpstreamAttempt, ParentClientOperation, ParentOriginalRequest, ParentBlindConnection, ParentDatagramConnection, ParentRuntimeAction:
+		default:
+			return PageRequest{}, errors.New("egress parent kind is invalid")
+		}
+	}
+	if len(request.AfterCursor) > 512 || strings.ContainsAny(request.AfterCursor, " \t\r\n") {
+		return PageRequest{}, ErrInvalidCursor
 	}
 	if request.ExchangeID != "" {
 		if err := validateIdentity("Exchange ID", request.ExchangeID); err != nil {
@@ -91,6 +111,11 @@ type Writer interface {
 }
 
 // Reader is the read-only projection used by control surfaces.
+type InspectionReader interface {
+	Reader
+	recording.InspectionBoundary
+}
+
 type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
 }
@@ -126,4 +151,20 @@ func ParseCursor(value string) (int64, error) {
 		return 0, ErrInvalidCursor
 	}
 	return sequence, nil
+}
+
+// Observer accepts optional owned snapshots. Acceptance is not durability.
+type Observer interface {
+	ObserveEgress(recording.Stamp, Attempt) recording.OfferResult
+}
+
+// AttemptStore retains a self-contained start or terminal snapshot.
+// Native execution transactions continue to use their mandatory repository.
+type AttemptStore interface {
+	PutAttempt(context.Context, Attempt) error
+}
+
+// ScopedAttemptStore retains explicit observation ownership with the snapshot.
+type ScopedAttemptStore interface {
+	PutScopedAttempt(context.Context, recording.Scope, Attempt) error
 }

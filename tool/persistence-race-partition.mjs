@@ -7,11 +7,15 @@ import { dirname, join, resolve } from 'node:path';
 const pkg = 'github.com/vibe-agi/vibermate/internal/runtimepersistence';
 const schema = 'vibermate-persistence-race/v1';
 const flags = ['-race', '-short', '-p=1'];
-const limits = ['-count=1', '-timeout=60m'];
+// Finite aggregate containment for the complete instrumented partition.
+// This does not alter any product operation or per-fixture semantic deadline.
+const limits = ['-count=1', '-timeout=120m'];
 const buildKeys = ['GOVERSION', 'GOOS', 'GOARCH', 'GOFLAGS', 'GOEXPERIMENT', 'CGO_ENABLED',
   'GOAMD64', 'GOARM64', 'GO386', 'GOARM', 'GOTOOLCHAIN', 'CC', 'CXX',
   'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_LDFLAGS'];
-const family = /^Test(?:Revision2|SchemaSwitch|SchemaMigration)/u;
+// Keep the existing lane IDs/manifests; move the measured ContentSource family
+// beside migrations. The other lane is always the compiled catalog complement.
+const family = /^Test(?:Revision2|SchemaSwitch|SchemaMigration|ContentSource)/u;
 const namePattern = /^(?:Test|Fuzz|Benchmark|Example)(?:[A-Z0-9_][A-Za-z0-9_]*)?$/u;
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);

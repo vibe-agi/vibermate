@@ -20,6 +20,7 @@ import (
 
 func TestBackupRestoreRoundTripExcludesProviderSecrets(t *testing.T) {
 	source, expectedBody := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	root := filepath.Dir(source)
 	backup := filepath.Join(root, "backup")
 	restored := filepath.Join(root, "restored")
@@ -59,22 +60,20 @@ func TestBackupRestoreRoundTripExcludesProviderSecrets(t *testing.T) {
 	if value, err := os.ReadFile(filepath.Join(restored, "local-ca", "root-key.pem")); err != nil || string(value) != "test-only-root-key" {
 		t.Fatalf("restored Proxy CA = %q, %v", value, err)
 	}
-	store := openBackupStore(t, filepath.Join(restored, "runtime.db"))
-	defer shutdownBackupStore(t, store)
+	store := openBackupControlReader(t, restored)
 	rules, err := store.ConnectionRuleRepository().Load(context.Background())
 	if err != nil || rules.Revision != 1 {
 		t.Fatalf("restored configuration = %+v, %v", rules, err)
 	}
-	record, err := store.RawEvidenceRepository().GetEnvelope(
-		context.Background(), "backup-envelope",
-	)
-	if err != nil || string(record.Body) != string(expectedBody) {
-		t.Fatalf("restored evidence = %q, %v", record.Body, err)
+	body := readBackupRawBody(t, restored, "backup-envelope")
+	if string(body) != string(expectedBody) {
+		t.Fatalf("restored evidence = %q", body)
 	}
 }
 
 func TestBackupIncludesDurableWAL(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	database, err := sql.Open("sqlite", "file:"+filepath.Join(source, "runtime.db")+"?mode=rw")
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +97,7 @@ func TestBackupIncludesDurableWAL(t *testing.T) {
 	if err := Restore(context.Background(), backup, restored); err != nil {
 		t.Fatal(err)
 	}
-	store := openBackupStore(t, filepath.Join(restored, "runtime.db"))
-	defer shutdownBackupStore(t, store)
+	store := openBackupControlReader(t, restored)
 	rules, err := store.ConnectionRuleRepository().Load(context.Background())
 	if err != nil || rules.Mode != connectionpolicy.ModeDenyUnknown {
 		t.Fatalf("WAL configuration was lost: %+v, %v", rules, err)
@@ -112,6 +110,7 @@ func TestBackupValidationRejectsTamperingIncompatibilityAndUnknownTargets(t *tes
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := backupFixture(t)
+			freezePublishedBackupFixture(t, source)
 			root := filepath.Dir(source)
 			backup := filepath.Join(root, "backup")
 			if scenario == "busy" {
@@ -219,6 +218,7 @@ func TestBackupValidationRejectsTamperingIncompatibilityAndUnknownTargets(t *tes
 
 func TestBackupRefusesToClaimMissingProxyCA(t *testing.T) {
 	source, _ := backupFixture(t)
+	freezePublishedBackupFixture(t, source)
 	if err := os.Remove(filepath.Join(source, "local-ca", "root-key.pem")); err != nil {
 		t.Fatal(err)
 	}

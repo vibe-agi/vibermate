@@ -62,7 +62,13 @@ void main() {
       final held = Completer<NativeToolOperationPage>();
       addTearDown(() {
         if (!held.isCompleted) {
-          held.complete(const NativeToolOperationPage([], 0));
+          held.complete(
+            const NativeToolOperationPage(
+              [],
+              'cursor0',
+              'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            ),
+          );
         }
       });
       final oldApi = _ActivationApi(read: (_) => held.future);
@@ -90,40 +96,51 @@ void main() {
     },
   );
 
-  testWidgets(
-    'capture refresh rejects late old response and coalesces rebuilds',
-    (tester) async {
-      final held = Completer<NativeToolOperationPage>();
-      addTearDown(() {
-        if (!held.isCompleted) {
-          held.complete(const NativeToolOperationPage([], 0));
-        }
-      });
-      final api = _ActivationApi(
-        read: (capture) => capture == nativeCapture
-            ? held.future
-            : Future.value(const NativeToolOperationPage([], 0)),
-      );
-      final controller = nativeController(api);
-      addTearDown(controller.dispose);
-      await tester.pumpWidget(_reader(controller));
-      final epoch = controller.nativeReaderGeneration;
-      await controller.selectCapture('manual_capture:next');
-      expect(controller.nativeReaderGeneration, greaterThan(epoch));
-      expect(controller.nativeOperations, isEmpty);
-      await tester.pumpAndSettle();
-      expect(api.readCaptures, [nativeCapture, 'manual_capture:next']);
-      held.complete(_oldPage());
-      await tester.pumpAndSettle();
-      await tester.pumpWidget(_reader(controller));
-      await tester.pumpAndSettle();
-      expect(api.readCaptures, [nativeCapture, 'manual_capture:next']);
-      expect(controller.nativeOperations, isEmpty);
-      expect(controller.nativeOperationsError, isNull);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
+  testWidgets('capture refresh rejects late old response and coalesces rebuilds', (
+    tester,
+  ) async {
+    final held = Completer<NativeToolOperationPage>();
+    addTearDown(() {
+      if (!held.isCompleted) {
+        held.complete(
+          const NativeToolOperationPage(
+            [],
+            'cursor0',
+            'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+          ),
+        );
+      }
+    });
+    final api = _ActivationApi(
+      read: (capture) => capture == nativeCapture
+          ? held.future
+          : Future.value(
+              const NativeToolOperationPage(
+                [],
+                'cursor0',
+                'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+              ),
+            ),
+    );
+    final controller = nativeController(api);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(_reader(controller));
+    final epoch = controller.nativeReaderGeneration;
+    await controller.selectCapture('manual_capture:next');
+    expect(controller.nativeReaderGeneration, greaterThan(epoch));
+    expect(controller.nativeOperations, isEmpty);
+    await tester.pumpAndSettle();
+    expect(api.readCaptures, [nativeCapture, 'manual_capture:next']);
+    held.complete(_oldPage());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(_reader(controller));
+    await tester.pumpAndSettle();
+    expect(api.readCaptures, [nativeCapture, 'manual_capture:next']);
+    expect(controller.nativeOperations, isEmpty);
+    expect(controller.nativeOperationsError, isNull);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets(
     'leaving reader immediately invalidates and never revives late content',
@@ -131,7 +148,13 @@ void main() {
       final held = Completer<NativeToolOperationPage>();
       addTearDown(() {
         if (!held.isCompleted) {
-          held.complete(const NativeToolOperationPage([], 0));
+          held.complete(
+            const NativeToolOperationPage(
+              [],
+              'cursor0',
+              'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            ),
+          );
         }
       });
       final api = _ActivationApi(read: (_) => held.future);
@@ -154,9 +177,11 @@ void main() {
   );
 }
 
-NativeToolOperationPage _oldPage() => NativeToolOperationPage([
-  NativeToolOperation.fromJson(nativeOperationFixture(), nativeCapture),
-], 4);
+NativeToolOperationPage _oldPage() => NativeToolOperationPage(
+  [NativeToolOperation.fromJson(nativeOperationFixture(), nativeCapture)],
+  'cursor4',
+  'e' * 64,
+);
 
 Widget _reader(WorkbenchController controller) => MaterialApp(
   home: Scaffold(
@@ -180,7 +205,7 @@ final class _ActivationApi implements ControlApi {
   @override
   Future<NativeToolOperationPage> nativeToolOperations(
     String capture, {
-    int afterSequence = 0,
+    String cursor = '',
     int limit = 50,
   }) {
     readCaptures.add(capture);

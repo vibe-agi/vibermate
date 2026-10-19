@@ -12,21 +12,24 @@ import (
 	"io"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 const transcriptNodeDomain = "vibermate:exchange-transcript-node\x00"
 
 type exchangeContentRepository struct {
-	database     *sql.DB
-	reads        *sql.DB
-	operations   *operationGate
-	limits       *exchangecontent.SourceLimits
-	loadPhysical storedPhysicalLoader
+	coordinates, requireScope bool
+	database                  *sql.DB
+	reads                     contentReadQueries
+	operations                *operationGate
+	limits                    *exchangecontent.SourceLimits
+	loadPhysical              storedPhysicalLoader
 }
 
 type storedExchangeContentManifest struct {
@@ -118,6 +121,9 @@ func (repository *exchangeContentRepository) Put(
 	ctx context.Context,
 	record exchangecontent.Record,
 ) error {
+	if repository.requireScope {
+		return recording.ErrObservationDiscarded
+	}
 	if repository.limits != nil {
 		source, err := exchangecontent.SourceFromRecordWithin(*repository.limits, record)
 		if err != nil {
@@ -132,7 +138,7 @@ func (repository *exchangeContentRepository) Put(
 	if err != nil {
 		return err
 	}
-	return repository.publishContent(ctx, manifest, encodedManifest, transcript, func(ctx context.Context, tx *sql.Tx, digest string) error {
+	return repository.publishContent(ctx, manifest, encodedManifest, transcript, recording.Scope{}, func(ctx context.Context, tx *sql.Tx, digest string) error {
 		payload, ok := transcript.messages[digest]
 		if !ok {
 			return exchangecontent.ErrInvalidEvidence
@@ -141,7 +147,7 @@ func (repository *exchangeContentRepository) Put(
 	})
 }
 
-func (repository *exchangeContentRepository) publishContent(ctx context.Context, manifest storedExchangeContentManifest, encodedManifest []byte, transcript storedTranscript, writeMessage func(context.Context, *sql.Tx, string) error) error {
+func (repository *exchangeContentRepository) publishContent(ctx context.Context, manifest storedExchangeContentManifest, encodedManifest []byte, transcript storedTranscript, scope recording.Scope, writeMessage func(context.Context, *sql.Tx, string) error) error {
 	scopeKind, scopeID := storedContentScope(manifest.Parent)
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
@@ -153,6 +159,16 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		return fmt.Errorf("begin Exchange content transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	if repository.coordinates {
+		var epoch, generation uint64
+		err := transaction.QueryRowContext(operation, `SELECT recording_archive_epoch,recording_capture_generation FROM runtime_exchange_contents WHERE exchange_id=?`, manifest.ExchangeID).Scan(&epoch, &generation)
+		if err == nil && (epoch != scope.Fence.ArchiveEpoch || generation != scope.Fence.CaptureGeneration) {
+			return recording.ErrObservationDiscarded
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
 	completed, err := completeStoredExchangeContent(
 		operation,
 		transaction,
@@ -173,13 +189,17 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		}
 		return nil
 	}
+	var baseFence *recording.Fence
+	if repository.coordinates {
+		baseFence = &scope.Fence
+	}
 	baseDigest, inherited, err := findStoredTranscriptBase(
 		operation,
 		transaction,
 		scopeKind,
 		scopeID,
 		transcript.nodes,
-		transcript.requestCount,
+		transcript.requestCount, baseFence,
 	)
 	if err != nil {
 		return err
@@ -202,16 +222,15 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 	if baseDigest != "" {
 		base = baseDigest
 	}
-	_, err = transaction.ExecContext(
-		operation,
-		`INSERT INTO runtime_exchange_contents (
+	columns := `
 		   exchange_id, scope_kind, scope_id, mode,
 		   recorded_at_unix_ms, expires_at_unix_ms,
 		   request_transcript_digest, expected_transcript_digest,
 		   base_transcript_digest, request_message_count,
 		   expected_message_count, inherited_message_count,
 		   response_message_digest, system_message_digest, manifest_json
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 `
+	args := []any{
 		manifest.ExchangeID,
 		scopeKind,
 		scopeID,
@@ -227,7 +246,12 @@ func (repository *exchangeContentRepository) publishContent(ctx context.Context,
 		nullableDigest(transcript.responseDigest),
 		nullableDigest(transcript.systemDigest),
 		encodedManifest,
-	)
+	}
+	if repository.coordinates {
+		columns += ",recording_archive_epoch,recording_capture_generation"
+		args = append(args, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration)
+	}
+	_, err = transaction.ExecContext(operation, `INSERT INTO runtime_exchange_contents (`+columns+`) VALUES (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`, args...)
 	if err != nil {
 		return fmt.Errorf("persist Exchange content manifest: %w", err)
 	}
@@ -785,26 +809,30 @@ func (repository *exchangeContentRepository) RequestPreviews(
 
 func loadStoredContentReference(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	exchangeID string,
 	now time.Time,
 ) (storedContentReference, error) {
 	return loadStoredContentReferenceWithin(ctx, database, exchangeID, now, nil)
 }
 
-func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exchangeID string, now time.Time, limits *exchangecontent.SourceLimits) (storedContentReference, error) {
+func loadStoredContentReferenceWithin(ctx context.Context, database contentReadQueries, exchangeID string, now time.Time, limits *exchangecontent.SourceLimits) (storedContentReference, error) {
 	var reference storedContentReference
 	var scopeKind, scopeID, mode string
 	var recordedMillis, expiresMillis int64
 	var encodedManifest []byte
 	err := database.QueryRowContext(
 		ctx,
-		`SELECT scope_kind, scope_id, mode,
+		`SELECT CASE WHEN length(CAST(scope_kind AS BLOB))<=32 THEN scope_kind END,
+                CASE WHEN length(CAST(scope_id AS BLOB))<=128 THEN scope_id END,
+                CASE WHEN length(CAST(mode AS BLOB))<=32 THEN mode END,
 		        recorded_at_unix_ms, expires_at_unix_ms,
-		        request_transcript_digest, expected_transcript_digest,
-		        base_transcript_digest, request_message_count,
+		        CASE WHEN length(CAST(request_transcript_digest AS BLOB))=64 THEN request_transcript_digest END,
+                CASE WHEN length(CAST(expected_transcript_digest AS BLOB))=64 THEN expected_transcript_digest END,
+		        CASE WHEN base_transcript_digest IS NULL OR length(CAST(base_transcript_digest AS BLOB))=64 THEN base_transcript_digest ELSE '' END, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, system_message_digest,
+		        CASE WHEN response_message_digest IS NULL OR length(CAST(response_message_digest AS BLOB))=64 THEN response_message_digest ELSE '' END,
+                CASE WHEN system_message_digest IS NULL OR length(CAST(system_message_digest AS BLOB))=64 THEN system_message_digest ELSE '' END,
 		        CASE WHEN length(manifest_json) BETWEEN 1 AND 33554432 THEN manifest_json END
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ? AND expires_at_unix_ms > ?`,
@@ -847,6 +875,7 @@ func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exc
 		reference.inherited > reference.requestCount ||
 		!validStoredDigest(reference.requestRoot) ||
 		!validStoredDigest(reference.expectedRoot) ||
+		(reference.systemDigest.Valid && !validStoredDigest(reference.systemDigest.String)) ||
 		(reference.inherited == 0 && reference.baseRoot.Valid) ||
 		(reference.inherited > 0 && (!reference.baseRoot.Valid ||
 			!validStoredDigest(reference.baseRoot.String))) {
@@ -874,7 +903,7 @@ func loadStoredContentReferenceWithin(ctx context.Context, database *sql.DB, exc
 
 func loadFullStoredContent(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	reference storedContentReference,
 ) (exchangecontent.Record, error) {
 	messages, err := loadStoredTranscript(
@@ -1306,6 +1335,7 @@ func findStoredTranscriptBase(
 	scopeKind, scopeID string,
 	nodes []storedTranscriptNode,
 	requestCount int,
+	fence *recording.Fence,
 ) (string, int, error) {
 	// A managed run is one launched client process. Manual captures can carry
 	// unrelated sessions and therefore get content-addressed deduplication but
@@ -1332,6 +1362,12 @@ func findStoredTranscriptBase(
 	}
 	var digest string
 	var depth int
+	extra := ""
+	args := []any{string(encodedCandidates), scopeKind, scopeID}
+	if fence != nil {
+		extra = ` AND contents.recording_archive_epoch=? AND contents.recording_capture_generation=?`
+		args = append(args, fence.ArchiveEpoch, fence.CaptureGeneration)
+	}
 	err = transaction.QueryRowContext(
 		ctx,
 		`WITH candidates(digest, depth) AS (
@@ -1341,14 +1377,12 @@ func findStoredTranscriptBase(
 		 )
 		 SELECT candidates.digest, candidates.depth FROM candidates
 		 WHERE EXISTS(SELECT 1 FROM runtime_exchange_contents AS contents
-		   WHERE contents.scope_kind = ? AND contents.scope_id = ?
+		   WHERE contents.scope_kind = ? AND contents.scope_id = ?`+extra+`
 		     AND contents.expected_transcript_digest = candidates.digest
 		     AND contents.expected_message_count = candidates.depth)
 		 ORDER BY candidates.depth DESC
 		  LIMIT 1`,
-		string(encodedCandidates),
-		scopeKind,
-		scopeID,
+		args...,
 	).Scan(&digest, &depth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, nil
@@ -1364,7 +1398,7 @@ func findStoredTranscriptBase(
 
 func loadStoredTranscript(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	root string,
 	wantCount int,
 ) ([]exchangecontent.Message, error) {
@@ -1427,7 +1461,7 @@ func loadStoredTranscript(
 
 func loadStoredTranscriptSuffix(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	root string,
 	baseRoot sql.NullString,
 	inherited int,
@@ -1532,7 +1566,7 @@ func loadStoredTranscriptSuffix(
 
 func loadStoredResponseMessage(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest sql.NullString,
 ) (*exchangecontent.Message, error) {
 	if !digest.Valid {
@@ -1551,7 +1585,7 @@ func loadStoredResponseMessage(
 // never a message in its transcript.
 func loadStoredSystemBlocks(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest sql.NullString,
 ) ([]exchangecontent.Block, error) {
 	if !digest.Valid {
@@ -1566,7 +1600,7 @@ func loadStoredSystemBlocks(
 
 func loadStoredMessage(
 	ctx context.Context,
-	database *sql.DB,
+	database contentReadQueries,
 	digest string,
 ) (exchangecontent.Message, error) {
 	return loadStoredMessageBlocks(ctx, database, digest)
