@@ -22,7 +22,7 @@ function assertRaceGate(source) {
   assert.ok(job, 'complete short race job is required');
   assert.match(job, /^    needs: generated-structural$/mu);
   assert.match(job, /^    runs-on: ubuntu-latest$/mu);
-  assert.match(job, /^    timeout-minutes: 120$/mu);
+  assert.match(job, /^    timeout-minutes: 150$/mu);
   const strategy = job.match(/^    strategy:\n(?:(?!^    \S)[\s\S])*/mu)?.[0];
   assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence-migration, persistence-rest, rest]');
   assert.match(job, /^      - run: bash tool\/test-race-shard\.sh \$\{\{ matrix\.shard \}\}$/mu);
@@ -59,7 +59,7 @@ test('race gate rejects omitted shards, cancellation, optional execution, and ch
     ['fail-fast: false', 'fail-fast: true'],
     ['    strategy:', '    if: false\n    strategy:'],
     ['    strategy:', '    continue-on-error: true\n    strategy:'],
-    ['timeout-minutes: 120', 'timeout-minutes: 180'],
+    ['timeout-minutes: 150', 'timeout-minutes: 180'],
     ['      - run: bash tool/test-race-shard.sh ${{ matrix.shard }}', "      - run: bash tool/test-race-shard.sh ${{ matrix.shard }}\n        if: startsWith(matrix.shard, 'persistence-')"],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'make test-race'],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh native'],
