@@ -101,8 +101,8 @@ func ParseCatalog(body []byte) (Catalog, error) {
 }
 
 // ApplyPreference makes the selected account authoritative over the client's
-// mode. Blue and Red require exact per-model evidence; an unavailable selection
-// fails instead of falling back to the client's unrelated account preference.
+// mode. Blue and Red prefer exact per-model support, falling back to Standard
+// only when the same model explicitly advertises it. Otherwise selection fails.
 // Standard is always sent explicitly and remains subject to upstream validation.
 func ApplyPreference(body []byte, catalog Catalog, mode Preference) ([]byte, bool, error) {
 	if !mode.Valid() {
@@ -112,9 +112,19 @@ func ApplyPreference(body []byte, catalog Catalog, mode Preference) ([]byte, boo
 	if err := json.Unmarshal(body, &root); err != nil || root == nil {
 		return nil, false, errors.New("Responses request is invalid")
 	}
-	var model string
-	if mode != Standard && (json.Unmarshal(root["model"], &model) != nil || !slices.Contains(catalog[model], mode.WireValue())) {
-		return nil, false, ErrProgramUnavailable
+	if mode != Standard {
+		var model string
+		if json.Unmarshal(root["model"], &model) != nil {
+			return nil, false, ErrProgramUnavailable
+		}
+		programs := catalog[model]
+		switch {
+		case slices.Contains(programs, mode.WireValue()):
+		case slices.Contains(programs, Standard.WireValue()):
+			mode = Standard
+		default:
+			return nil, false, ErrProgramUnavailable
+		}
 	}
 	programs := make(map[string]json.RawMessage)
 	if raw, exists := root["access_programs"]; exists {
