@@ -106,43 +106,63 @@ func TestActivityIndexerInspectionRechecksIdentityAfterEnrichment(t *testing.T) 
 
 type delayedEvidenceInspection struct {
 	exchangecontent.InspectionReader
-	wait bool
+	wait           bool
+	observedExpiry time.Time
+	observedBefore bool
+	returnedAfter  bool
 }
 
 func (r *delayedEvidenceInspection) GetConversationEvidence(ctx context.Context, id string) (exchangecontent.ConversationEvidence, error) {
 	result, err := r.InspectionReader.GetConversationEvidence(ctx, id)
-	if err == nil && r.wait {
-		time.Sleep(time.Until(result.ExpiresAt) + time.Millisecond)
+	if err == nil {
+		r.observedExpiry = result.ExpiresAt
+		r.observedBefore = time.Now().Before(result.ExpiresAt)
+		if r.wait {
+			time.Sleep(time.Until(result.ExpiresAt) + time.Millisecond)
+		}
+		r.returnedAfter = !time.Now().Before(result.ExpiresAt)
 	}
 	return result, err
 }
-func TestActivityIndexerInspectionRetainsProtocolFallbackExpiry(t *testing.T) {
-	f := newEgressInspectionFixture(t)
-	// Complete cold attachment/reference setup before authoring the original
-	// short lifetime, without pinning the archive's pre-authoring identity.
-	warmInspectionFixtureReferences(t, f.reader.catalog)
 
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	record := transcriptContentRecordFixture(t, "protocol-only", now, exchangecontent.ParentRef{CaptureRunID: "audit-a"}, []transcriptMessage{{role: protocolcore.RoleUser, text: "body must not be read"}}, "response")
-	record.Request.ProtocolEvidence = []protocolcore.ProtocolEvidenceValue{{Name: "openai_responses.session_id", Value: "session"}}
-	record.ExpiresAt = now.Add(time.Second)
-	if err := newExchangeContentRepository(f.legacy, f.legacy, newOperationGate(), nil).Put(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	reader := newActivityInspectionTestReader(t, f)
-	contents := &delayedEvidenceInspection{InspectionReader: reader.content}
-	indexer, err := conversationprojection.New(conversationprojection.Options{Activities: reader, Contents: contents, IdentityInspection: reader, CaptureRuns: inspectionRunReader{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := indexer.InspectIdentity(context.Background(), record.ExchangeID)
-	if err != nil || got.Identity.SessionID != "session" || !got.InspectionExpiresAt.Equal(record.ExpiresAt) {
-		t.Fatalf("fallback original expiry: %+v %v", got, err)
-	}
-	contents.wait = true
-	got, err = indexer.InspectIdentity(context.Background(), record.ExchangeID)
-	if !errors.Is(err, ErrInspectionChanged) || got.Identity.SessionID != "" || !got.InspectionExpiresAt.IsZero() {
-		t.Fatalf("expired enriched identity escaped: %+v %v", got, err)
+func TestActivityIndexerInspectionRetainsProtocolFallbackExpiry(t *testing.T) {
+	for _, wait := range []bool{false, true} {
+		name := "before_expiry"
+		if wait {
+			name = "expires_during_enrichment"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newEgressInspectionFixture(t)
+			// Give each single inspection its own immutable original lifetime.
+			// A prior full inspection must not consume this stage's expiry window.
+			warmInspectionFixtureReferences(t, f.reader.catalog)
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			record := transcriptContentRecordFixture(t, "protocol-only", now, exchangecontent.ParentRef{CaptureRunID: "audit-a"}, []transcriptMessage{{role: protocolcore.RoleUser, text: "body must not be read"}}, "response")
+			record.Request.ProtocolEvidence = []protocolcore.ProtocolEvidenceValue{{Name: "openai_responses.session_id", Value: "session"}}
+			record.ExpiresAt = now.Add(time.Second)
+			if err := newExchangeContentRepository(f.legacy, f.legacy, newOperationGate(), nil).Put(context.Background(), record); err != nil {
+				t.Fatal(err)
+			}
+			reader := newActivityInspectionTestReader(t, f)
+			contents := &delayedEvidenceInspection{InspectionReader: reader.content, wait: wait}
+			indexer, err := conversationprojection.New(conversationprojection.Options{Activities: reader, Contents: contents, IdentityInspection: reader, CaptureRuns: inspectionRunReader{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := indexer.InspectIdentity(context.Background(), record.ExchangeID)
+			if !contents.observedBefore || !contents.observedExpiry.Equal(record.ExpiresAt) || contents.returnedAfter != wait {
+				t.Fatalf("fallback stage missed original expiry: before=%t after=%t observed=%s original=%s err=%v", contents.observedBefore, contents.returnedAfter, contents.observedExpiry, record.ExpiresAt, err)
+			}
+			if !wait {
+				if err != nil || got.Identity.SessionID != "session" || !got.InspectionExpiresAt.Equal(record.ExpiresAt) {
+					t.Fatalf("fallback original expiry: %+v %v", got, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInspectionChanged) || got.Identity.SessionID != "" || !got.InspectionExpiresAt.IsZero() {
+				t.Fatalf("expired enriched identity escaped: %+v %v", got, err)
+			}
+		})
 	}
 }
 

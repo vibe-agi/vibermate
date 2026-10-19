@@ -472,10 +472,12 @@ func TestUsageInspectionCanceledVisitorRetainsOwnerUntilReturn(t *testing.T) {
 }
 func TestUsageInspectionBucketBudgetRefusesWithoutPartialVisitors(t *testing.T) {
 	f := newUsageInspectionFixture(t)
-	f.reader.catalog.timeout = 20 * time.Second
+	f.reader.catalog.timeout = inspectionStressBudget(20 * time.Second)
 	f.put(t, true, f.value("seed", "profile"), f.now.Add(time.Hour), 3)
 	nativeExec(t, f.current.store.database, `WITH RECURSIVE n(i) AS(VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<65537) INSERT INTO runtime_usage_observations(exchange_id,capture_run_id,manual_capture_id,runtime_user_id,occurred_at_unix_ms,expires_at_unix_ms,observation_json,policy_revision,recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation) SELECT 'budget-'||i,capture_run_id,manual_capture_id,runtime_user_id,occurred_at_unix_ms,expires_at_unix_ms,json_set(observation_json,'$.exchangeId','budget-'||i,'$.usage.InputUncached.Tokens',i),policy_revision,recording_scope_kind,recording_scope_id,recording_archive_epoch,recording_capture_generation FROM n CROSS JOIN runtime_usage_observations WHERE exchange_id='seed'`)
+	started := time.Now()
 	_, calls, err := f.scan(t)
+	t.Logf("usage bucket scan budget=%s elapsed=%s calls=%d err=%v", f.reader.catalog.timeout, time.Since(started), calls, err)
 	if !errors.Is(err, ErrInspectionSourceLimit) || calls != 0 {
 		t.Fatalf("bucket budget returned partial output: calls=%d err=%v", calls, err)
 	}
