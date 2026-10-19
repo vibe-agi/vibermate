@@ -55,18 +55,22 @@ func (p *cyberModeProvider) AccountCyberPrograms(_ context.Context, r providertr
 // final upstream model after the route applies its model mapping.
 func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 	for _, test := range []struct {
-		name                              string
-		mode                              cyberaccess.Preference
-		supported, transform, unavailable bool
-		origin, current, want             string
+		name                                 string
+		mode                                 cyberaccess.Preference
+		transform, unavailable, incomingBlue bool
+		programs                             []string
+		origin, current, want                string
 	}{
-		{name: "Blue overrides standard", mode: cyberaccess.Blue, supported: true, current: "standard", want: "daybreak_blue"},
+		{name: "Blue overrides standard", mode: cyberaccess.Blue, programs: []string{"standard", "daybreak_blue"}, current: "standard", want: "daybreak_blue"},
 		{name: "Standard overrides client Blue", current: "daybreak_blue", want: "standard"},
-		{name: "Red overrides client Blue", mode: cyberaccess.Red, supported: true, current: "daybreak_blue", want: "daybreak_red"},
+		{name: "Red overrides client Blue", mode: cyberaccess.Red, programs: []string{"standard", "daybreak_red"}, current: "daybreak_blue", want: "daybreak_red"},
 		{name: "model unsupported fails", mode: cyberaccess.Blue, current: "standard"},
 		{name: "unknown capability fails", mode: cyberaccess.Blue, unavailable: true, current: "standard"},
-		{name: "mapped model", mode: cyberaccess.Blue, supported: true, transform: true, current: "standard", want: "daybreak_blue"},
-		{name: "other upstream", mode: cyberaccess.Blue, supported: true, origin: "https://api.openai.com", current: "standard", want: "standard"},
+		{name: "mapped model", mode: cyberaccess.Blue, programs: []string{"standard", "daybreak_blue"}, transform: true, current: "standard", want: "daybreak_blue"},
+		{name: "Blue Standard fallback overrides client Red", mode: cyberaccess.Blue, programs: []string{"standard"}, current: "daybreak_red", want: "standard"},
+		{name: "Red Standard fallback overrides client Blue", mode: cyberaccess.Red, programs: []string{"standard"}, current: "daybreak_blue", want: "standard"},
+		{name: "mapped Standard-only model ignores incoming Blue support", mode: cyberaccess.Blue, transform: true, incomingBlue: true, programs: []string{"standard"}, current: "daybreak_blue", want: "standard"},
+		{name: "other upstream", mode: cyberaccess.Blue, programs: []string{"standard", "daybreak_blue"}, origin: "https://api.openai.com", current: "standard", want: "standard"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			origin := test.origin
@@ -89,8 +93,11 @@ func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 			if test.transform {
 				model = "mapped-final"
 			}
-			if test.supported {
-				catalog[model] = []string{"standard", test.mode.WireValue()}
+			if test.programs != nil {
+				catalog[model] = test.programs
+			}
+			if test.incomingBlue {
+				catalog["client-model"] = []string{"daybreak_blue"}
 			}
 			provider := &cyberModeProvider{providerDouble: &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse(model))}}}, catalog: catalog}
 			if test.unavailable {
@@ -115,6 +122,10 @@ func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 			requests := provider.requestsSnapshot()
 			if len(requests) != 1 {
 				t.Fatalf("requests=%d", len(requests))
+			}
+			selected, ok := requests[0].AccountRef()
+			if !ok || selected.ID != "account.selected" || selected.CredentialEpoch != 7 || selected.CyberAccessProgram != test.mode {
+				t.Fatal("changed frozen account authority")
 			}
 			var wire struct {
 				Access struct {
@@ -169,6 +180,8 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 		{name: "classifier role header", mode: cyberaccess.Red, headers: http.Header{"X-Codex-Guardian": {"classifier"}, "X-Openai-Subagent": {"guardian"}}, metadata: json.RawMessage(`{"x-openai-subagent":"guardian"}`), current: "standard", programs: []string{"daybreak_blue"}, want: "daybreak_blue"},
 		{name: "Blue account ignores client Red", mode: cyberaccess.Blue, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_red", programs: []string{"daybreak_blue"}, want: "daybreak_blue"},
 		{name: "Standard account ignores client Blue", mode: cyberaccess.Standard, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", want: "standard"},
+		{name: "Guardian derived Blue falls back to Standard", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_red", programs: []string{"standard"}, want: "standard"},
+		{name: "Guardian derived Blue chooses Standard over Red", mode: cyberaccess.Red, headers: http.Header{"X-Codex-Guardian": {"reviewer"}}, current: "daybreak_red", programs: []string{"standard", "daybreak_red"}, want: "standard"},
 		{name: "Guardian still requires Blue support", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", programs: []string{"daybreak_red"}, wantFailure: ReasonCyberAccessProgramUnavailable},
 		{name: "different model cannot authorize Guardian", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", programs: []string{"daybreak_blue"}, otherModel: true, wantFailure: ReasonCyberAccessProgramUnavailable},
 		{name: "unadvertised internal alias remains unavailable", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", model: "codex-auto-review", wantFailure: ReasonCyberAccessProgramUnavailable},
