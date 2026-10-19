@@ -16,6 +16,7 @@ import (
 // logical Usage totals or payload content. It uses the complete source catalog
 // and privacy mirror; attachment exhaustion explicitly refuses the snapshot.
 func (c *InspectionCatalog) InspectRecordingStorage(ctx context.Context, visibility recording.InspectionVisibility, now time.Time, archivePreview bool) (statistics StorageStatistics, archive resourcedeletion.Released, result error) {
+	defer func(caller context.Context) { result = c.classifyReadCancellation(caller, result) }(ctx)
 	if ctx == nil || visibility == nil || now.IsZero() {
 		return statistics, archive, ErrInspectionUnavailable
 	}

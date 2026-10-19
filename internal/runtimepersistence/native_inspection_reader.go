@@ -85,7 +85,10 @@ func nativeBodyQuery(q nativetool.InspectionContentRequest) string {
 	}{q.Capture, q.OperationID, q.Part, q.Descriptor.Digest, q.Descriptor.ExpiresAt.UnixMilli(), q.Token.Control})
 	return string(b)
 }
-func (r *NativeInspectionReader) Get(ctx context.Context, c captureidentity.Reference, id nativetool.ID) (nativetool.InspectionOperation, error) {
+func (r *NativeInspectionReader) Get(ctx context.Context, c captureidentity.Reference, id nativetool.ID) (resultValue nativetool.InspectionOperation, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if !nativeID(id) {
 		return nativetool.InspectionOperation{}, nativetool.ErrInvalid
 	}
@@ -107,7 +110,10 @@ func (r *NativeInspectionReader) Get(ctx context.Context, c captureidentity.Refe
 
 // Discovery selects one canonical publication per ID before the continuation
 // predicate. Event rows in released archives are positions, not snapshots.
-func (r *NativeInspectionReader) Page(ctx context.Context, q nativetool.InspectionPageRequest) (nativetool.InspectionPage, error) {
+func (r *NativeInspectionReader) Page(ctx context.Context, q nativetool.InspectionPageRequest) (resultValue nativetool.InspectionPage, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	result := nativetool.InspectionPage{Items: []nativetool.InspectionOperation{}}
 	if q.Limit < 1 || q.Limit > 199 {
 		return result, nativetool.ErrInvalid
@@ -386,7 +392,10 @@ func (q inspectionEvidenceQueryer) QueryRowContext(ctx context.Context, s string
 func (q inspectionEvidenceQueryer) QueryContext(ctx context.Context, s string, args ...any) (*sql.Rows, error) {
 	return q.tx.QueryContext(ctx, q.query(s), args...)
 }
-func (r *NativeInspectionReader) ReadContent(ctx context.Context, q nativetool.InspectionContentRequest) ([]byte, error) {
+func (r *NativeInspectionReader) ReadContent(ctx context.Context, q nativetool.InspectionContentRequest) (resultValue []byte, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if !nativeID(q.OperationID) || !nativeContentPart(string(q.Part)) || q.Offset < 0 || q.Limit < 1 || q.Limit > 128<<10 {
 		return nil, nativetool.ErrInvalid
 	}

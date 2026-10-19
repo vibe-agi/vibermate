@@ -145,7 +145,10 @@ func (r *ActivityInspectionReader) compareSearchContents(s *activityInspectionRe
 		after = ids[len(ids)-1]
 	}
 }
-func (r *ActivityInspectionReader) Search(ctx context.Context, q activity.SearchQuery) (activity.SearchPage, error) {
+func (r *ActivityInspectionReader) Search(ctx context.Context, q activity.SearchQuery) (resultValue activity.SearchPage, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := activity.SearchPage{Items: []activity.SearchHit{}}
 	if q.Validate() != nil {
 		return empty, activity.ErrInvalidEvent

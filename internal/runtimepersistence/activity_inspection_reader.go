@@ -229,7 +229,10 @@ func sameInspectedActivity(a, b activity.Record, event bool) bool {
 	b.CaptureLabel = ""
 	return reflect.DeepEqual(a, b)
 }
-func (r *ActivityInspectionReader) GetExchange(ctx context.Context, id string) (activity.Record, error) {
+func (r *ActivityInspectionReader) GetExchange(ctx context.Context, id string) (resultValue activity.Record, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	s, err := r.begin(ctx)
 	if err != nil {
 		return activity.Record{}, err
@@ -264,7 +267,10 @@ func (r *ActivityInspectionReader) ListExchanges(ctx context.Context, q activity
 func (r *ActivityInspectionReader) List(ctx context.Context, q activity.PageRequest) (activity.Page, error) {
 	return r.list(ctx, q, false)
 }
-func (r *ActivityInspectionReader) list(ctx context.Context, q activity.PageRequest, exchanges bool) (activity.Page, error) {
+func (r *ActivityInspectionReader) list(ctx context.Context, q activity.PageRequest, exchanges bool) (resultValue activity.Page, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := activity.Page{Items: []activity.Record{}}
 	if q.Validate() != nil {
 		return empty, activity.ErrInvalidEvent

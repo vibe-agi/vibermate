@@ -29,6 +29,9 @@ func (r *CaptureInspectionReader) CheckCaptureObservation(ctx context.Context, v
 	return r.catalog.Check(v.Sources)
 }
 func (r *CaptureInspectionReader) ReadCaptureObservation(ctx context.Context, ref captureidentity.Reference) (result recording.CaptureObservationView, err error) {
+	if r != nil {
+		defer func(caller context.Context) { err = r.catalog.classifyReadCancellation(caller, err) }(ctx)
+	}
 	if ctx == nil || r == nil || r.catalog == nil || r.control == nil || ref.Validate() != nil {
 		return result, ErrInspectionUnavailable
 	}

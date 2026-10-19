@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
@@ -151,6 +152,135 @@ func TestAuditInspectionClassifiesOnlyActiveCallerOwnerCancellation(t *testing.T
 			}
 			if !test.unavailable && err != failure {
 				t.Fatal("unrelated/caller failure was wrapped", err)
+			}
+		})
+	}
+}
+
+func closeInspectionOwnerDuringRead(t *testing.T, catalog *InspectionCatalog, caller, work context.Context) {
+	t.Helper()
+	catalog.mu.Lock()
+	active, slots := catalog.active, len(catalog.slots)
+	catalog.mu.Unlock()
+	if active != 1 || slots != 1 {
+		t.Fatalf("post-begin read lacks its real lease: active=%d slots=%d", active, slots)
+	}
+	closing, cancel := context.WithCancel(caller)
+	cancel()
+	if err := catalog.Close(closing); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close released active read: %v", err)
+	}
+	select {
+	case <-work.Done():
+	case <-caller.Done():
+		t.Fatal("owner did not cancel private read before caller deadline", caller.Err())
+	}
+	if caller.Err() != nil {
+		t.Fatal("original caller was canceled", caller.Err())
+	}
+}
+
+type closingAuditVisibility struct {
+	recording.InspectionVisibility
+	t       *testing.T
+	catalog *InspectionCatalog
+	caller  context.Context
+	checked bool
+}
+
+func (v *closingAuditVisibility) RecheckInspectionStamp(ctx context.Context, _ recording.InspectionStamp) error {
+	v.checked = true
+	closeInspectionOwnerDuringRead(v.t, v.catalog, v.caller, ctx)
+	// Honor the actual received context, as a cancellation-aware visibility
+	// reader may. Initial authority/schema/data were read from real stores.
+	return ctx.Err()
+}
+
+func TestAuditInspectionOwnerCloseAfterBegin(t *testing.T) {
+	for _, operation := range []string{"connection_list", "connection_timeline", "egress_list", "connection_sql"} {
+		t.Run(operation, func(t *testing.T) {
+			f := newEgressInspectionFixture(t)
+			catalog := f.reader.catalog
+			caller, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			id := "post-begin-connection"
+			event := connectionevent.Event{ConnectionID: id, SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Unix(10, 0).UTC()}
+			if err := f.current.ConnectionEventRepository().(connectionevent.ScopedStore).PutConnection(caller, f.scope, event); err != nil {
+				t.Fatal(err)
+			}
+			attempt := providerAttempt(t, "post-begin-attempt")
+			f.put(t, true, attempt)
+			if operation == "connection_sql" {
+				read, err := beginAuditInspection(caller, catalog, f.control)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer read.close()
+				q := connectionevent.PageRequest{Limit: 1}
+				candidates, _, err := read.connectionCandidates(q, nil, 1)
+				if err != nil || len(candidates) != 1 || candidates[0].id != id {
+					t.Fatalf("real candidate query missing before Close: %+v %v", candidates, err)
+				}
+				if source, err := read.connectionSource(id); err != nil || source < 0 {
+					t.Fatalf("real source query missing before Close: %d %v", source, err)
+				}
+				closeInspectionOwnerDuringRead(t, catalog, caller, read.lease.ctx)
+				candidates, more, candidateErr := read.connectionCandidates(q, nil, 1)
+				source, sourceErr := read.connectionSource(id)
+				if len(candidates) != 0 || more || source != -1 || !errors.Is(candidateErr, context.Canceled) || !errors.Is(sourceErr, context.Canceled) || errors.Is(candidateErr, ErrInspectionUnavailable) || errors.Is(sourceErr, ErrInspectionUnavailable) {
+					t.Fatalf("post-begin SQL cancellation witness changed: candidates=%+v more=%t source=%d errors=%v/%v", candidates, more, source, candidateErr, sourceErr)
+				}
+				t.Logf("actual post-begin SQL refused without data: candidate=%v source=%v originalCaller=%v", candidateErr, sourceErr, caller.Err())
+				read.close()
+			} else {
+				read := func(visibility recording.InspectionVisibility) (int, error) {
+					switch operation {
+					case "connection_list":
+						page, err := NewConnectionInspectionReader(catalog, visibility).List(caller, connectionevent.PageRequest{Limit: 1})
+						if err == nil && (len(page.Items) != 1 || page.Items[0].ConnectionID != id) {
+							t.Fatalf("real successful connection page changed: %+v", page)
+						}
+						if err != nil && page.NextCursor != "" {
+							t.Fatal("failed page retained cursor")
+						}
+						return len(page.Items), err
+					case "connection_timeline":
+						timeline, err := NewConnectionInspectionReader(catalog, visibility).Timeline(caller, id)
+						if err == nil && (timeline.ConnectionID != id || len(timeline.Events) != 1 || timeline.Events[0].ConnectionID != id) {
+							t.Fatalf("real successful timeline changed: %+v", timeline)
+						}
+						if err != nil && timeline.ConnectionID != "" {
+							t.Fatal("failed timeline retained identity")
+						}
+						return len(timeline.Events), err
+					default:
+						page, err := NewEgressInspectionReader(catalog, visibility).List(caller, egressaudit.PageRequest{Limit: 1})
+						if err == nil && (len(page.Items) != 1 || page.Items[0].Attempt.ID() != attempt.ID()) {
+							t.Fatalf("real successful egress page changed: %+v", page)
+						}
+						if err != nil && page.NextCursor != "" {
+							t.Fatal("failed egress page retained cursor")
+						}
+						return len(page.Items), err
+					}
+				}
+				if count, err := read(f.control); err != nil || count != 1 {
+					t.Fatalf("positive read failed: count=%d err=%v", count, err)
+				}
+				visibility := &closingAuditVisibility{InspectionVisibility: f.control, t: t, catalog: catalog, caller: caller}
+				count, err := read(visibility)
+				if !visibility.checked || count != 0 || caller.Err() != nil || !errors.Is(err, ErrInspectionUnavailable) || !errors.Is(err, context.Canceled) {
+					t.Errorf("post-begin close was not an empty typed refusal: checked=%t count=%d err=%v caller=%v", visibility.checked, count, err, caller.Err())
+				}
+			}
+			catalog.mu.Lock()
+			active, slots := catalog.active, len(catalog.slots)
+			catalog.mu.Unlock()
+			if active != 0 || slots != 0 {
+				t.Fatalf("public read leaked physical ownership: active=%d slots=%d", active, slots)
+			}
+			if err := catalog.Close(caller); err != nil {
+				t.Fatal("Close did not join after real reader release", err)
 			}
 		})
 	}

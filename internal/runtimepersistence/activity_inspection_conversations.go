@@ -25,7 +25,10 @@ func (s *activityInspectionRead) exchangeAnchorSQL() (string, string) {
 	}
 	return ordinal + `ELSE NULL END`, `coalesce(` + strings.Join(append(sequences, "NULL"), ",") + `)`
 }
-func (r *ActivityInspectionReader) ListConversations(ctx context.Context, q activity.ConversationIndexRequest) (activity.ConversationPage, error) {
+func (r *ActivityInspectionReader) ListConversations(ctx context.Context, q activity.ConversationIndexRequest) (resultValue activity.ConversationPage, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := activity.ConversationPage{Items: []activity.ConversationRecord{}}
 	if q.Validate() != nil {
 		return empty, activity.ErrInvalidEvent

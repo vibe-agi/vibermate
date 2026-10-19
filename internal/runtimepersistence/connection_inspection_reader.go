@@ -224,7 +224,10 @@ func (s *auditInspectionRead) connectionVisibility(canonical map[string]int) (ma
 	}
 	return result, nil
 }
-func (r *ConnectionInspectionReader) List(ctx context.Context, q connectionevent.PageRequest) (connectionevent.Page, error) {
+func (r *ConnectionInspectionReader) List(ctx context.Context, q connectionevent.PageRequest) (result connectionevent.Page, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := connectionevent.Page{Items: []connectionevent.Record{}}
 	if q.Validate() != nil {
 		return empty, connectionevent.ErrInvalidEvent
@@ -310,7 +313,10 @@ func (r *ConnectionInspectionReader) List(ctx context.Context, q connectionevent
 	}
 	return page, nil
 }
-func (r *ConnectionInspectionReader) Timeline(ctx context.Context, id string) (connectionevent.Timeline, error) {
+func (r *ConnectionInspectionReader) Timeline(ctx context.Context, id string) (result connectionevent.Timeline, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := connectionevent.Timeline{}
 	if id == "" || len(id) > connectionevent.MaxIdentityBytes || !utf8.ValidString(id) || strings.TrimSpace(id) != id {
 		return empty, connectionevent.ErrInvalidEvent

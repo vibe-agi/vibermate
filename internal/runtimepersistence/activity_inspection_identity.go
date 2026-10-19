@@ -73,7 +73,10 @@ func scanInspectionIdentity(row activityScanner) (agentconversation.ClientIdenti
 	}
 	return identity, scope, nil
 }
-func (r *ActivityInspectionReader) GetConversationIdentity(ctx context.Context, id string) (agentconversation.ClientIdentity, error) {
+func (r *ActivityInspectionReader) GetConversationIdentity(ctx context.Context, id string) (resultValue agentconversation.ClientIdentity, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if !validActivityInspectionID(id) {
 		return agentconversation.ClientIdentity{}, activity.ErrInvalidEvent
 	}

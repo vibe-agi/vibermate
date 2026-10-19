@@ -86,7 +86,10 @@ func (s *auditInspectionRead) egressCandidates(q egressaudit.PageRequest, p *ins
 func egressInspectionMatches(a egressaudit.Attempt, q egressaudit.PageRequest) bool {
 	return (q.ConnectionID == "" || a.ConnectionID() == q.ConnectionID) && (q.ExchangeID == "" || a.Parent().ExchangeID == q.ExchangeID) && (q.ParentKind == "" || (a.Parent().Kind == q.ParentKind && a.Parent().ID == q.ParentID)) && (q.Purpose == "" || a.Purpose() == q.Purpose)
 }
-func (r *EgressInspectionReader) List(ctx context.Context, request egressaudit.PageRequest) (egressaudit.Page, error) {
+func (r *EgressInspectionReader) List(ctx context.Context, request egressaudit.PageRequest) (result egressaudit.Page, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := egressaudit.Page{Items: []egressaudit.Record{}}
 	q, err := request.Normalized()
 	if err != nil {

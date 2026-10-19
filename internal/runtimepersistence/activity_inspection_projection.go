@@ -135,7 +135,10 @@ func (s *activityInspectionRead) compareLifecycleCopies(cte string, args []any) 
 	}
 	return nil
 }
-func (r *ActivityInspectionReader) SummarizeExchanges(ctx context.Context, q activity.SummaryScope) (activity.ExchangeSummary, error) {
+func (r *ActivityInspectionReader) SummarizeExchanges(ctx context.Context, q activity.SummaryScope) (resultValue activity.ExchangeSummary, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if q.Validate() != nil {
 		return activity.ExchangeSummary{}, activity.ErrInvalidEvent
 	}

@@ -239,7 +239,10 @@ func (s *rawInspectionRead) rows(column, id string, payload bool) ([]locatedRawE
 	return result, rows.Err()
 }
 
-func (r *RawInspectionReader) ListExchange(ctx context.Context, id string) ([]rawevidence.EnvelopeMetadata, error) {
+func (r *RawInspectionReader) ListExchange(ctx context.Context, id string) (resultValue []rawevidence.EnvelopeMetadata, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if !rawInspectionID(id) {
 		return nil, rawevidence.ErrInvalidRead
 	}
@@ -303,7 +306,10 @@ func (r *RawInspectionReader) auditReveal(s *rawInspectionRead, item locatedRawE
 	}
 	return nil
 }
-func (r *RawInspectionReader) Reveal(ctx context.Context, q rawevidence.RevealRequest) (rawevidence.RevealedEnvelope, error) {
+func (r *RawInspectionReader) Reveal(ctx context.Context, q rawevidence.RevealRequest) (resultValue rawevidence.RevealedEnvelope, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if err := q.Validate(); err != nil {
 		return rawevidence.RevealedEnvelope{}, err
 	}
@@ -330,7 +336,10 @@ func (r *RawInspectionReader) Reveal(ctx context.Context, q rawevidence.RevealRe
 	}
 	return rawevidence.RevealedEnvelope{Metadata: rawevidence.MetadataOf(item.record), Payload: payload}, nil
 }
-func (r *RawInspectionReader) RevealHeader(ctx context.Context, q rawevidence.HeaderRevealRequest, source providerauth.HeaderReader) (rawevidence.RevealedHeader, error) {
+func (r *RawInspectionReader) RevealHeader(ctx context.Context, q rawevidence.HeaderRevealRequest, source providerauth.HeaderReader) (resultValue rawevidence.RevealedHeader, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if err := q.Validate(); err != nil {
 		return rawevidence.RevealedHeader{}, err
 	}

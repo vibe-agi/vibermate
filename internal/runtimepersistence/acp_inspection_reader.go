@@ -29,7 +29,10 @@ func (r *ACPInspectionReader) Begin(ctx context.Context) (recording.InspectionTo
 func (r *ACPInspectionReader) Check(ctx context.Context, t recording.InspectionToken) error {
 	return NewInspectionBoundary(r.visibility, r.catalog).Check(ctx, t)
 }
-func (r *ACPInspectionReader) Read(ctx context.Context, id string, now int64) (acpobservation.Record, error) {
+func (r *ACPInspectionReader) Read(ctx context.Context, id string, now int64) (resultValue acpobservation.Record, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := acpobservation.Record{}
 	capture, err := captureidentity.New(captureidentity.KindManagedRun, id)
 	if err != nil || ctx == nil || now <= 0 {

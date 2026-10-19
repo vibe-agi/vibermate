@@ -205,6 +205,9 @@ func (r *ContentInspectionReader) repository(s *contentInspectionRead, selected 
 }
 
 func readInspectedContent[T any](r *ContentInspectionReader, ctx context.Context, id string, cursor string, read func(*contentInspectionRead, locatedContent, *exchangeContentRepository, string) (T, error)) (result T, err error) {
+	if r != nil {
+		defer func(caller context.Context) { err = r.catalog.classifyReadCancellation(caller, err) }(ctx)
+	}
 	s, err := r.begin(ctx)
 	if err != nil {
 		return result, err
@@ -366,7 +369,10 @@ func (r *ContentInspectionReader) GetConversationEvidence(ctx context.Context, i
 		return repo.GetConversationEvidence(s.lease.ctx, id, r.now())
 	})
 }
-func readInspectedContentBatch[T any](r *ContentInspectionReader, ctx context.Context, ids []string, read func(*contentInspectionRead, locatedContent) (T, bool, error)) (map[string]T, time.Time, error) {
+func readInspectedContentBatch[T any](r *ContentInspectionReader, ctx context.Context, ids []string, read func(*contentInspectionRead, locatedContent) (T, bool, error)) (resultValue map[string]T, resultExpiry time.Time, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	if len(ids) > exchangecontent.MaxRequestPreviewBatch {
 		return nil, time.Time{}, exchangecontent.ErrInvalidEvidence
 	}

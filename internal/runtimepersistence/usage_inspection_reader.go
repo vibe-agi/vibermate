@@ -195,7 +195,10 @@ func (s *usageInspectionRead) compareCopies() error {
 const usageInspectionMaximumBuckets = 65536
 const usageInspectionMaximumBucketBytes = 8 << 20
 
-func (r *UsageInspectionReader) ScanUsage(ctx context.Context, q runtimeusage.AggregationQuery, user runtimeuser.UserID, now time.Time, visit func(runtimeusage.UsageBucket) error) (runtimeusage.AggregationResult, error) {
+func (r *UsageInspectionReader) ScanUsage(ctx context.Context, q runtimeusage.AggregationQuery, user runtimeuser.UserID, now time.Time, visit func(runtimeusage.UsageBucket) error) (resultValue runtimeusage.AggregationResult, resultErr error) {
+	if r != nil {
+		defer func(caller context.Context) { resultErr = r.catalog.classifyReadCancellation(caller, resultErr) }(ctx)
+	}
 	empty := runtimeusage.AggregationResult{}
 	if q.Validate() != nil || now.IsZero() || visit == nil || (user != "" && !user.Valid()) {
 		return empty, runtimeusage.ErrInvalidQuery
