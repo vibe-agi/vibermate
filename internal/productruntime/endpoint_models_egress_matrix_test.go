@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -77,7 +78,7 @@ type endpointModelsCounts struct {
 // with an expected route inferred from the terminal decision.
 func endpointModelsAudit(t *testing.T, f *auxFixture, account provideraccount.View, expected map[string]egressprofile.Resolved, outcome egressaudit.Outcome) {
 	t.Helper()
-	page, err := f.runtime.EgressAttempts().List(t.Context(), egressaudit.PageRequest{Limit: 100})
+	page, err := productruntime.SettledEgressTestPage(t, f.runtime, egressaudit.PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != len(expected) {
 		t.Fatalf("models SQL terminals=%d want=%d err=%v", len(page.Items), len(expected), err)
 	}
