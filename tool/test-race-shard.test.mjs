@@ -9,17 +9,24 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const native = 'github.com/vibe-agi/vibermate/internal/nativemcp';
 const persistence = 'github.com/vibe-agi/vibermate/internal/runtimepersistence';
+const runtimeData = 'github.com/vibe-agi/vibermate/internal/runtimedata';
+const runtimeProduct = 'github.com/vibe-agi/vibermate/internal/productruntime';
+const isolated = [native, persistence, runtimeData, runtimeProduct];
 const ordinary = [
   'github.com/vibe-agi/vibermate/cmd/future-command',
   `${native}extra`,
   `${native}/nested`,
   `${persistence}extra`,
+  `${runtimeData}extra`,
+  `${runtimeData}/nested`,
+  `${runtimeProduct}extra`,
+  `${runtimeProduct}/nested`,
   'example.org/another/runtimepersistence',
 ];
 const raceOnly = 'github.com/vibe-agi/vibermate/internal/future-race-only';
-const universe = [native, ...ordinary, persistence, raceOnly];
-const shards = ['native', 'persistence', 'rest'];
-const expected = { native: [native], persistence: [persistence], rest: [...ordinary, raceOnly] };
+const universe = [native, ...ordinary, persistence, runtimeData, runtimeProduct, raceOnly];
+const shards = ['native', 'persistence', 'runtime-data', 'runtime-product', 'rest'];
+const expected = { native: [native], persistence: [persistence], 'runtime-data': [runtimeData], 'runtime-product': [runtimeProduct], rest: [...ordinary, raceOnly] };
 
 const catalog = ['TestSchemaSwitchFuture', 'TestRevision2Future', 'TestSchemaMigrationFuture',
   'TestContentSourceFuture', 'TestContentSourceBoundsManifestBytesBeforeScan', 'TestNotContentSource', 'TestOrdinary', 'TestNotSchemaSwitch', 'TestRaceOnly', 'FuzzFuture', 'ExampleFuture', 'Example', 'BenchmarkFuture'];
@@ -148,9 +155,8 @@ test('failed or malformed discovery never starts a test process for any shard', 
   const cases = [
     { listExit: 19 },
     { packages: [] },
-    { packages: [...universe, native] },
-    { packages: universe.filter(p => p !== native) },
-    { packages: universe.filter(p => p !== persistence) },
+    ...isolated.map(p => ({ packages: [...universe, p] })),
+    ...isolated.map(p => ({ packages: universe.filter(candidate => candidate !== p) })),
     ...['', 'bad package', '-unsafe', './relative', 'example.org/pkg\r', 'example.org//empty'].map(p => ({ packages: [p, ...universe] })),
   ];
   for (const config of cases) {
@@ -165,7 +171,7 @@ test('failed or malformed discovery never starts a test process for any shard', 
 });
 
 test('an empty selected rest shard never starts a test process', t => {
-  const go = fixture(t, { packages: [native, persistence] });
+  const go = fixture(t, { packages: isolated });
   const result = go.run(['rest']);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /package/iu);
@@ -260,7 +266,7 @@ test('comparison requires identical clean source/build/catalog and two complete 
 
 test('workflow runs both persistence lanes and requires manifest comparison without changing other campaigns', () => {
   const source=readFileSync(join(root,'.github/workflows/ci.yml'),'utf8');
-  assert.match(source,/shard: \[native, persistence-migration, persistence-rest, rest\]/);
+  assert.match(source,/shard: \[native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest\]/);
   assert.match(source,/race-coverage:[\s\S]*?needs: race[\s\S]*?persistence-race-partition\.mjs compare/);
   assert.match(source,/RACE_PARTITION_MANIFEST:/);
   const raceJob=source.split('  race:')[1].split('  race-coverage:')[0];

@@ -157,7 +157,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [native, persistence-migration, persistence-rest, rest]
+        shard: [native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]
     runs-on: ubuntu-latest
     # Enclose the finite 120m persistence process plus setup/artifact upload.
     # Other race process watchdogs and all product operation budgets are unchanged.

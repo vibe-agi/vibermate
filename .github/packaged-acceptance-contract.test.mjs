@@ -24,7 +24,7 @@ function assertRaceGate(source) {
   assert.match(job, /^    runs-on: ubuntu-latest$/mu);
   assert.match(job, /^    timeout-minutes: 150$/mu);
   const strategy = job.match(/^    strategy:\n(?:(?!^    \S)[\s\S])*/mu)?.[0];
-  assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence-migration, persistence-rest, rest]');
+  assert.equal(strategy?.trimEnd(), '    strategy:\n      fail-fast: false\n      matrix:\n        shard: [native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]');
   assert.match(job, /^      - run: bash tool\/test-race-shard\.sh \$\{\{ matrix\.shard \}\}$/mu);
   assert.doesNotMatch(job, /continue-on-error|\boptional\b|\bretry\b|\|\||\bGOFLAGS\b/u);
   assert.doesNotMatch(job, /^    if:/mu);
@@ -55,7 +55,7 @@ test('aggregate short race remains an unconditional bounded CI gate with complet
 test('race gate rejects omitted shards, cancellation, optional execution, and changed containment', () => {
   assertRaceGate(ci);
   const mutations = [
-    ['[native, persistence-migration, persistence-rest, rest]', '[native, rest]'],
+    ['[native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]', '[native, rest]'],
     ['fail-fast: false', 'fail-fast: true'],
     ['    strategy:', '    if: false\n    strategy:'],
     ['    strategy:', '    continue-on-error: true\n    strategy:'],
@@ -64,7 +64,7 @@ test('race gate rejects omitted shards, cancellation, optional execution, and ch
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'make test-race'],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh native'],
     ['bash tool/test-race-shard.sh ${{ matrix.shard }}', 'bash tool/test-race-shard.sh ${{ matrix.shard }} || true'],
-    ['        shard: [native, persistence-migration, persistence-rest, rest]', '        shard: [native, persistence-migration, persistence-rest, rest]\n        exclude:\n          - shard: persistence-migration'],
+    ['        shard: [native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]', '        shard: [native, persistence-migration, persistence-rest, runtime-data, runtime-product, rest]\n        exclude:\n          - shard: persistence-migration'],
   ];
   const job = ci.match(/^  race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)[0];
   for (const [before, after] of mutations) {
