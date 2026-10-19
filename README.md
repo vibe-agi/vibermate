@@ -44,6 +44,42 @@ up the `vibermate` command. Then, in your project:
 vibermate run -- claude    # or: vibermate run -- codex
 ```
 
+To use an Environment's model-service account without a native client login,
+opt in for each launch. The same option supports Codex and Claude:
+
+```sh
+vibermate run --env work -- codex                  # ordinary native login
+vibermate run --env work --managed-auth -- codex   # no OpenAI login required
+vibermate run --env work --managed-auth -- claude
+```
+
+`--managed-auth` requires an explicit Environment with a managed Client Flow
+for the supported client. Original-only capture cannot supply authentication.
+For Claude, the prepared client destination must remain in the Environment's
+managed scope. A custom-base-only destination can be rejected if normal launch
+preparation returns Claude to its default service; use a managed
+`api.anthropic.com` flow in that case.
+
+Codex uses an internal `vibermate` provider while keeping the same `CODEX_HOME`
+and native history. Resume sessions created with this option using the same
+option; address an older `openai` session directly by its UUID:
+
+```sh
+vibermate run --env work --managed-auth -- codex resume
+vibermate run --env work --managed-auth -- codex resume <uuid>
+vibermate run --env work --managed-auth -- codex resume <uuid> --model <model>
+```
+
+The native picker filters by provider, so older `openai` sessions may not appear;
+`--all` only removes the working-directory filter. Use explicit `--model` when
+you want a particular resumed model. Codex owns active-session access: wait for
+release and press **R** to retry, **F** to fork saved history, or **Esc/Q** to exit.
+A fork creates a new ID and may omit unsaved work. If **F** is unavailable, exit
+and use `codex fork` with the same ViberMate run options. ViberMate does not
+migrate stored history or release another application's session lock. Codex may
+update a resumed thread's active settings. Managed model-service authentication
+does not provide Codex Cloud or connector OAuth access.
+
 **Linux server (x86-64 and ARM64)**
 
 Download the archive for your machine from the
