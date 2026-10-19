@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/recording"
@@ -20,12 +21,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -501,29 +505,85 @@ func runRetainedBodyJoin(t *testing.T, expired bool) {
 	defer close(sink.release)
 	body := &cleartextCloseBarrier{entered: make(chan struct{}), release: make(chan struct{})}
 	body.block.Store(true)
+	var revocation *nativeRevocation
 	var bodyCtx context.Context
 	var once sync.Once
 	release := func() { once.Do(func() { close(body.release) }) }
 	defer release()
-	f := newCapturedOriginalFixture(t, capturedOriginalConfig{family: "semantic", choice: "builtin", bodyWrap: func(ctx context.Context, b io.ReadCloser) io.ReadCloser {
+	cfg := capturedOriginalConfig{family: "semantic", choice: "builtin", environment: func(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
+		var ok bool
+		revocation, ok = request.nativeRevocation.(*nativeRevocation)
+		if !ok {
+			t.Fatal("actual Runtime native revocation adapter unavailable")
+		}
+		return buildEnvironment(ctx, request)
+	}, bodyWrap: func(ctx context.Context, b io.ReadCloser) io.ReadCloser {
 		bodyCtx = ctx
 		body.ReadCloser = b
 		return body
 	}, recorder: func(ctx context.Context, b *recording.Budget, _ connectionevent.ScopedStore, _ egressaudit.ScopedAttemptStore) *observationRecorder {
+		if expired {
+			return primeBlockedRecordingQueue(t, ctx, b, sink)
+		}
 		return newObservationRecorder(ctx, b, sink, sink)
-	}})
-	f.transport.DisableKeepAlives = false
-	waitRecording(t, f.r)
-	// Prove the optional worker is blocked before actual authorized Agent traffic.
-	event := connectionevent.Event{ConnectionID: "retained-prime", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
-	if f.r.recorder.ObserveConnection(f.r.recorder.ScopeStamp(captureidentity.Reference{}), event) != recording.Accepted {
-		t.Fatal("prime refused")
+	}}
+	openFailed := make(chan struct{})
+	if expired {
+		var refused sync.Once
+		cfg.openObservations = func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error) {
+			refused.Do(func() { close(openFailed) })
+			return nil, errors.New("synthetic optional-open refusal isolates retained owner join")
+		}
 	}
-	<-sink.entered
+	f := newCapturedOriginalFixture(t, cfg)
+	f.transport.DisableKeepAlives = false
+	if expired {
+		// The independent queue worker was actually primed before availability
+		// installation. The optional owner now confirms open refusal before
+		// traffic; no Raw scope lease can mask the retired-subscription join.
+		select {
+		case <-openFailed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("optional-open refusal not entered")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for f.r.Status().Recording.State != RecordingDegraded {
+			if time.Now().After(deadline) {
+				t.Fatal("optional owner did not acknowledge open refusal")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if f.r.recordingStorage.current.Load() != nil {
+			t.Fatal("Raw owner unexpectedly exists in retained-only join case")
+		}
+	} else {
+		waitRecording(t, f.r)
+		// Ordinary revocation retains the available Raw-owner join coverage.
+		event := connectionevent.Event{ConnectionID: "retained-prime", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+		if f.r.recorder.ObserveConnection(f.r.recorder.ScopeStamp(captureidentity.Reference{}), event) != recording.Accepted {
+			t.Fatal("prime refused")
+		}
+		<-sink.entered
+	}
+	requestCtx := t.Context()
+	var cancelRequest context.CancelFunc
+	var releaseWitness func()
+	defer func() {
+		if releaseWitness != nil {
+			releaseWitness()
+		}
+		if cancelRequest != nil {
+			cancelRequest()
+		}
+	}()
+	var retirement <-chan time.Time
+	var expiry time.Time
+	var expiredID string
+	var expiredCapability capturerun.ProxyCapability
 	var finish func() error
 	if expired {
 		dir := t.TempDir()
-		grant, err := f.r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", Lifetime: time.Second, CatalogRevision: 1})
+		grant, err := f.r.captureRuns.Create(t.Context(), capturerun.CreateCommand{CWD: dir, CanonicalExecutablePath: filepath.Join(dir, "agent"), ExecutableLabel: "agent", Lifetime: 5 * time.Second, CatalogRevision: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -534,7 +594,42 @@ func runRetainedBodyJoin(t *testing.T, expired bool) {
 		proxy, _ := url.Parse(f.listener.URL)
 		proxy.User = url.UserPassword("capture", grant.ProxyCapability.Value())
 		f.transport.Proxy = http.ProxyURL(proxy)
-		finish = func() error { return f.r.captureRuns.Finish(t.Context(), grant.Run.ID, grant.ControlCapability) }
+		// The client timer is not the expiry source. This one held-owner case
+		// gives actual setup/deadline retirement a separate bounded caller budget.
+		requestCtx, cancelRequest = context.WithTimeout(t.Context(), 30*time.Second)
+		f.client.Timeout = 0
+		expiry = time.UnixMilli(grant.Run.ExpiresAt.UnixMilli()).UTC()
+		expiredID = grant.Run.ID
+		expiredCapability = grant.ProxyCapability
+		revocation.mu.RLock()
+		retained := revocation.retained
+		revocation.mu.RUnlock()
+		if retained == nil {
+			t.Fatal("actual Runtime retained authority unavailable")
+		}
+		credential, err := captureadmission.NewProxyCredential(grant.ProxyCapability.Value())
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission, err := retained.Authorize(requestCtx, credential)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, err := admission.CaptureReference()
+		if err != nil || ref != capture || admission.AdmissionRef() != "capture-run/"+grant.Run.ID || admission.CredentialRevision() != 1 {
+			t.Fatal("expiry witness does not identify the same authenticated Capture generation")
+		}
+		retired := make(chan time.Time, 1)
+		// This sealed admission comes from the same actual authorizer used by
+		// the HTTP owner. Retain keys it by the same admission/revision and
+		// requires the same issuer. Its callback runs only after the deadline
+		// worker removes the shared entry and withdraws all its subscriptions.
+		releaseWitness, err = retained.Retain(requestCtx, admission, func() { retired <- f.r.clock.Now().UTC() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		retirement = retired
+		finish = func() error { return f.r.captureRuns.Finish(requestCtx, grant.Run.ID, grant.ControlCapability) }
 	} else {
 		id, _ := manualcapture.ParseID(f.capture.ID)
 		finish = func() error {
@@ -543,21 +638,71 @@ func runRetainedBodyJoin(t *testing.T, expired bool) {
 		}
 	}
 	requestDone := make(chan capturedOriginalReply, 1)
-	go func() { requestDone <- f.send(t.Context(), "POST", semanticOriginalPath, semanticOriginalBody) }()
+	go func() { requestDone <- f.send(requestCtx, "POST", semanticOriginalPath, semanticOriginalBody) }()
 	select {
 	case <-body.entered:
 	case <-time.After(3 * time.Second):
 		t.Fatal("actual provider body Close not entered")
 	}
 	if expired {
-		select {
-		case <-bodyCtx.Done():
-		case <-time.After(3 * time.Second):
-			t.Fatal("expiry did not cancel actual provider owner")
+		if !f.r.clock.Now().Before(expiry) {
+			t.Fatal("actual HTTP body owner was not established before expiry")
 		}
+		validity := f.r.captureRuns.(interface {
+			ProxyValidity(context.Context, capturerun.ProxyCapability) (captureauthority.Validity, error)
+		})
+		live, err := validity.ProxyValidity(requestCtx, expiredCapability)
+		if err != nil || !live.ExpiresAt.Equal(expiry) {
+			t.Fatal("Capture was not live while its actual body owner was held", err)
+		}
+		var retiredAt time.Time
+		select {
+		case retiredAt = <-retirement:
+		case <-requestCtx.Done():
+			t.Fatal("actual retained expiry/withdrawal was not acknowledged", requestCtx.Err())
+		}
+		if retiredAt.Before(expiry) {
+			t.Fatal("retained witness canceled before the actual expiry deadline")
+		}
+		if _, err = validity.ProxyValidity(requestCtx, expiredCapability); !errors.Is(err, capturerun.ErrCapabilityRejected) {
+			t.Fatal("retirement did not correspond to actual expired authority", err)
+		}
+		select {
+		case <-body.release:
+			t.Fatal("real body released before expiry proof")
+		default:
+		}
+		select {
+		case <-sink.release:
+			t.Fatal("optional writer released before expiry proof")
+		default:
+		}
+		// Remove the no-I/O witness before Finish: it must not be the owner
+		// making Finish block. Only the real HTTP/body subscription remains.
+		releaseWitness()
+		releaseWitness = nil
+		t.Logf("actual expiry retired shared Capture entry before Finish: expires=%s retired=%s witness_released=true body_held=true optional_held=true", expiry.Format(time.RFC3339Nano), retiredAt.Format(time.RFC3339Nano))
 	}
 	finished := make(chan error, 1)
 	go func() { finished <- finish() }()
+	if expired {
+		// A committed required state proves that the later wait is not slow
+		// control SQL or the optional writer; the retired HTTP owner still holds it.
+		for {
+			run, err := f.r.CaptureRunReader().GetRun(requestCtx, expiredID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.State == capturerun.StateFinished {
+				break
+			}
+			select {
+			case <-requestCtx.Done():
+				t.Fatal("Finish did not reach required commit", requestCtx.Err())
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
 	select {
 	case <-bodyCtx.Done():
 	case <-time.After(time.Second):

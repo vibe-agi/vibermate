@@ -49,12 +49,15 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type capturedOriginalConfig struct {
+	openObservations     func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error)
+	environment          func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
 	bodyWrap             func(context.Context, io.ReadCloser) io.ReadCloser
 	recorder             observationRecorderBuilder
 	connectionEvent      func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
@@ -338,7 +341,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	f.options.Secrets = f.secrets
 	f.options.OriginalTransport = wire
 	f.r, err = startWithBuilders(t.Context(), f.options, runtimeBuildOverrides{
-		connectionEvent: cfg.connectionEvent, recorder: cfg.recorder,
+		connectionEvent: cfg.connectionEvent, recorder: cfg.recorder, environment: cfg.environment, openObservations: cfg.openObservations,
 		egressObserver: func(r *runtimeEgressRepository) egressaudit.Observer { return capturedAuditObserver{r, f} },
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
