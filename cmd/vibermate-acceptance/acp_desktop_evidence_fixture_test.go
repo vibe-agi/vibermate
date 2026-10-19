@@ -26,6 +26,12 @@ import (
 
 func packagedACPFixture(t *testing.T) string {
 	t.Helper()
+	root, _ := packagedACPFixtureState(t, true)
+	return root
+}
+
+func packagedACPFixtureState(t *testing.T, finished bool) (string, func()) {
+	t.Helper()
 	ctx := t.Context()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -35,12 +41,20 @@ func packagedACPFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer owner.Release()
+	if finished {
+		defer owner.Release()
+	} else {
+		t.Cleanup(func() { owner.Release() })
+	}
 	host, err := instanceguard.Acquire(filepath.Join(root, "server.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer host.Release()
+	if finished {
+		defer host.Release()
+	} else {
+		t.Cleanup(func() { host.Release() })
+	}
 	layout, err := runtimedata.PrepareStorageOwned(ctx, runtimedata.OwnedStorage{Directory: root, Runtime: owner, Host: host}, time.Now().UTC(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -49,18 +63,30 @@ func packagedACPFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer control.Shutdown(context.Background())
+	if finished {
+		defer control.Shutdown(context.Background())
+	} else {
+		t.Cleanup(func() { control.Shutdown(context.Background()) })
+	}
 	digest := sha256.Sum256([]byte(layout.ID))
 	observations, err := runtimepersistence.OpenObservations(ctx, runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: "current-" + hex.EncodeToString(digest[:16]), BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer observations.Shutdown(context.Background())
+	if finished {
+		defer observations.Shutdown(context.Background())
+	} else {
+		t.Cleanup(func() { observations.Shutdown(context.Background()) })
+	}
 	runs, err := capturerun.NewManager(ctx, capturerun.DefaultOptions(control.CaptureRunRepository()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runs.Shutdown(context.Background())
+	if finished {
+		defer runs.Shutdown(context.Background())
+	} else {
+		t.Cleanup(func() { runs.Shutdown(context.Background()) })
+	}
 	for _, mode := range []environment.ContentRecordingMode{environment.ContentRecordingMetadataOnly, environment.ContentRecordingFull} {
 		grant, err := runs.Create(ctx, capturerun.CreateCommand{CWD: "/fixture", CanonicalExecutablePath: "/bin/fixture", ExecutableLabel: "fixture", CatalogRevision: 1, Lifetime: time.Minute})
 		if err != nil {
@@ -76,17 +102,25 @@ func packagedACPFixture(t *testing.T) string {
 			snapshot.Prompts[0].UserText = "fixture question"
 			snapshot.Prompts[0].AgentText = "fixture answer"
 		}
-		if err = observations.PutACP(ctx, acpobservation.Record{RunID: grant.Run.ID, Scope: recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: grant.Run.ID}, Fence: registration.Fence}, Policy: registration.Policy, ExpiresAtMillis: registration.ExpiresAtMillis, Snapshot: snapshot}); err != nil {
-			t.Fatal(err)
+		if finished {
+			if err = observations.PutACP(ctx, acpobservation.Record{RunID: grant.Run.ID, Scope: recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: grant.Run.ID}, Fence: registration.Fence}, Policy: registration.Policy, ExpiresAtMillis: registration.ExpiresAtMillis, Snapshot: snapshot}); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err = runs.Finish(ctx, grant.Run.ID, grant.ControlCapability); err != nil {
-			t.Fatal(err)
+		if finished {
+			if err = runs.Finish(ctx, grant.Run.ID, grant.ControlCapability); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err = runtimedata.MarkObservationProvisioned(ctx, root, layout.ID, owner); err != nil {
 		t.Fatal(err)
 	}
-	return root
+	return root, func() {
+		if err := observations.PublishInspectionMirror(ctx, control); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestPackagedACPReadbackUsesDeclaredCurrentRoles(t *testing.T) {

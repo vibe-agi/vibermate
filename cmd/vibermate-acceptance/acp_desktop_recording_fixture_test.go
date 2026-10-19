@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,7 +77,6 @@ func TestPackagedACPRecordingRefusesLossAndWrongAuthority(t *testing.T) {
 		status          int
 		wrongGeneration bool
 	}{
-		{"dropped", productruntime.RecordingStatus{State: productruntime.RecordingAvailable, Dropped: 1}, 200, false},
 		{"unconfirmed", productruntime.RecordingStatus{State: productruntime.RecordingAvailable, Unconfirmed: 1}, 200, false},
 		{"disabled", productruntime.RecordingStatus{State: productruntime.RecordingDisabled}, 200, false},
 		{"wrong_state", productruntime.RecordingStatus{State: "unknown"}, 200, false},
@@ -108,5 +109,25 @@ func TestPackagedACPRecordingPinsCLIGeneration(t *testing.T) {
 	d.source = packagedACPDiscoveryFunc(func() (localdiscovery.Session, error) { return changed, nil })
 	if err := waitPackagedACPRecording(t.Context(), d); err == nil || calls.Load() != 0 {
 		t.Fatal("replacement discovery used", err, calls.Load())
+	}
+}
+
+func TestPackagedACPRecordingAllowsKnownDropsButRequiresFinalEvidence(t *testing.T) {
+	d, calls := packagedACPStatusFixture(t, []productruntime.RecordingStatus{{State: productruntime.RecordingDegraded, Dropped: 2, ReservedRecords: 1, ReservedBytes: 64}, {State: productruntime.RecordingDegraded, Dropped: 2}}, 200, false)
+	if err := waitPackagedACPRecording(t.Context(), d); err != nil {
+		t.Fatal("known prior drops prevented final verification", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatal("known drops bypassed owned work", calls.Load())
+	}
+	root := packagedACPFixture(t)
+	if values, err := readPackagedACPEvidence(t.Context(), root); err != nil || len(values) != 2 {
+		t.Fatal("complete final evidence rejected", err)
+	}
+	if err := os.Remove(filepath.Join(root, "observations.db")); err != nil {
+		t.Fatal(err)
+	}
+	if values, err := readPackagedACPEvidence(t.Context(), root); err == nil || len(values) != 0 {
+		t.Fatal("aggregate settlement accepted missing final evidence", err)
 	}
 }

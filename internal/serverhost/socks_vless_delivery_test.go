@@ -86,6 +86,10 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	}
 	control.call(http.MethodPatch, "/api/v1/policies/connections", control.write, rules.Revision, desktopcontrol.ConnectionRuleSetInput{Rules: inputs, Mode: "deny_unknown"}, 200, &rules)
 	grant, tag := control.grant("owned-real-SOCKS")
+	// A newly committed Capture is required authority, not proof that its
+	// original fence has reached the optional recording mirror yet.
+	deliveryWait(t, func() bool { return host.Runtime().RawEvidenceStatistics().WriterID != "" })
+	waitServerRecording(t, host.Runtime())
 	var status struct {
 		NetworkAccess struct {
 			SOCKSAddress   string `json:"socksAddress"`

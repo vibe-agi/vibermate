@@ -31,7 +31,7 @@ func (d packagedACPDiscovery) Load() (localdiscovery.Session, error) {
 
 // Positive retained-history fixtures inspect only the generation-bound CLI
 // status capability. Required peer/ACP commands are never passed or retried.
-func waitPackagedACPRecording(ctx context.Context, discovery runlauncher.Discovery) error {
+func waitPackagedACPRecording(ctx context.Context, discovery runlauncher.Discovery, observe ...func(productruntime.RecordingStatus)) error {
 	read, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	tick := time.NewTicker(20 * time.Millisecond)
@@ -42,8 +42,8 @@ func waitPackagedACPRecording(ctx context.Context, discovery runlauncher.Discove
 			return err
 		}
 		state := value.Recording
-		if value.Host != "desktop" || value.Storage != "healthy" || value.StorageFailure != nil || value.RecordingFailure != nil || state.Dropped != 0 || state.Unconfirmed != 0 {
-			return fmt.Errorf("packaged ACP recording loss/unavailable: state=%s dropped=%d unconfirmed=%d", state.State, state.Dropped, state.Unconfirmed)
+		if value.Host != "desktop" || value.Storage != "healthy" || value.StorageFailure != nil || value.RecordingFailure != nil || state.Unconfirmed != 0 {
+			return fmt.Errorf("packaged ACP recording unavailable: host=%s storage=%s state=%s dropped=%d unconfirmed=%d storageFailure=%+v recordingFailure=%+v", value.Host, value.Storage, state.State, state.Dropped, state.Unconfirmed, value.StorageFailure, value.RecordingFailure)
 		}
 		switch state.State {
 		case productruntime.RecordingStarting, productruntime.RecordingDegraded, productruntime.RecordingAvailable:
@@ -53,7 +53,13 @@ func waitPackagedACPRecording(ctx context.Context, discovery runlauncher.Discove
 		if state.ReservedRecords < 0 || state.ReservedBytes < 0 {
 			return errors.New("packaged ACP recording ownership is invalid")
 		}
-		if value.Ready && state.State == productruntime.RecordingAvailable && state.ReservedRecords == 0 && state.ReservedBytes == 0 && !state.CleanupPending {
+		// Known lifetime drops can coexist with complete final ACP evidence.
+		// Scope readiness and the strict stopped reader are separate proofs.
+		settledState := state.State == productruntime.RecordingAvailable || (state.State == productruntime.RecordingDegraded && state.Dropped > 0)
+		if value.Ready && settledState && state.ReservedRecords == 0 && state.ReservedBytes == 0 && !state.CleanupPending {
+			if len(observe) != 0 {
+				observe[0](state)
+			}
 			return nil
 		}
 		select {

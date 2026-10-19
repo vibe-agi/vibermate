@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	_ "modernc.org/sqlite"
 )
@@ -58,12 +60,14 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 			return fmt.Errorf("before ACP peers: %w", err)
 		}
 		for _, content := range []bool{false, true} {
-			if err := exercisePackagedACPPeer(ctx, filepath.Join(app, "Contents", "MacOS", "vibermate"), home, content); err != nil {
+			if err := exercisePackagedACPPeer(ctx, filepath.Join(app, "Contents", "MacOS", "vibermate"), home, content, func(stderr string) { t.Logf("owned ACP peer content=%t stderr=%q", content, stderr) }); err != nil {
 				return err
 			}
 			// CLI return joins final publication/Finish, but accepted recording
 			// is independent. Join its real owned slots before stopping the App.
-			if err := waitPackagedACPRecording(ctx, pinned); err != nil {
+			if err := waitPackagedACPRecording(ctx, pinned, func(state productruntime.RecordingStatus) {
+				t.Logf("after ACP peer content=%t recording=%+v; strict final evidence still required", content, state)
+			}); err != nil {
 				return fmt.Errorf("after ACP peer content=%t: %w", content, err)
 			}
 		}
@@ -100,7 +104,14 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 	}
 }
 
-func exercisePackagedACPPeer(ctx context.Context, cli, home string, content bool) error {
+func exercisePackagedACPPeer(ctx context.Context, cli, home string, content bool, observeStderr func(string)) error {
+	stderr := newBoundedBuffer(64 << 10)
+	defer func() {
+		if observeStderr != nil {
+			data, overflow := stderr.snapshot()
+			observeStderr(fmt.Sprintf("overflow=%t output=%s", overflow, data))
+		}
+	}()
 	const peer = `
 test "$ACP_FIXTURE_SETTING" = editor-owned || exit 70
 test -z "$HTTP_PROXY" || exit 71
@@ -121,7 +132,7 @@ cat >/dev/null
 	command := exec.CommandContext(ctx, cli, args...)
 	command.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "ACP_FIXTURE_SETTING=editor-owned"}
 	command.Dir = home
-	command.Stderr = io.Discard
+	command.Stderr = stderr
 	command.WaitDelay = 3 * time.Second
 	input, err := command.StdinPipe()
 	if err != nil {
@@ -142,6 +153,16 @@ cat >/dev/null
 			_ = command.Wait()
 		}
 	}()
+	// The real CLI has started but the editor has not sent initialization or
+	// a prompt. Witness its original registration in the complete live mirror.
+	mode := environment.ContentRecordingMetadataOnly
+	if content {
+		mode = environment.ContentRecordingFull
+	}
+	root := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID)
+	if err := waitPackagedACPScope(ctx, root, mode); err != nil {
+		return err
+	}
 	deadline, _ := ctx.Deadline()
 	if file, ok := output.(*os.File); ok {
 		_ = file.SetReadDeadline(deadline)
