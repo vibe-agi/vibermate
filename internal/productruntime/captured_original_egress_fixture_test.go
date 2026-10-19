@@ -286,6 +286,11 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 					select {
 					case <-f.release:
 					case <-r.Context().Done():
+						if cfg.edge == "stream_disconnect" {
+							// A normal handler return can emit a valid final chunk.
+							// This fixture requires an interrupted HTTP response.
+							panic(http.ErrAbortHandler)
+						}
 					}
 				})
 			}
