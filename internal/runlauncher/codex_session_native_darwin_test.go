@@ -287,6 +287,12 @@ func TestInstalledCodexLockedSessionChoices(t *testing.T) {
 	}
 }
 
+// CodexNativeTestPTY shares the synthetic terminal with external launcher acceptance tests.
+func CodexNativeTestPTY(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	return codexTestPTY(t)
+}
+
 func codexTestPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
