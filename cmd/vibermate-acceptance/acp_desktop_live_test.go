@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	_ "modernc.org/sqlite"
 )
@@ -44,9 +45,26 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err = exercisePackagedDesktopLaunch(ctx, app, layout, home, func(ctx context.Context, _ <-chan error) error {
+		discovery, err := localdiscovery.NewFile(layout.CLIControlRecord, wallClock{})
+		if err != nil {
+			return err
+		}
+		generation, err := discovery.Load()
+		if err != nil {
+			return err
+		}
+		pinned := packagedACPDiscovery{source: discovery, expected: generation}
+		if err := waitPackagedACPRecording(ctx, pinned); err != nil {
+			return fmt.Errorf("before ACP peers: %w", err)
+		}
 		for _, content := range []bool{false, true} {
 			if err := exercisePackagedACPPeer(ctx, filepath.Join(app, "Contents", "MacOS", "vibermate"), home, content); err != nil {
 				return err
+			}
+			// CLI return joins final publication/Finish, but accepted recording
+			// is independent. Join its real owned slots before stopping the App.
+			if err := waitPackagedACPRecording(ctx, pinned); err != nil {
+				return fmt.Errorf("after ACP peer content=%t: %w", content, err)
 			}
 		}
 		return nil

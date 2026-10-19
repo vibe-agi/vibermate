@@ -1250,6 +1250,26 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if _, policyErr := host.Runtime().UsageRepository().SetUsagePolicy(context.Background(), runtimeusage.CollectionPolicy{Enabled: true, RetentionDays: 90, Revision: 1}, time.Now().UTC()); policyErr != nil {
 		t.Fatal(policyErr)
 	}
+	// The control commit requests physical cleanup. Join that durable intent
+	// before creating the unchanged short-lived Capture; status alone can
+	// report no pending work before the optional owner notices the request.
+	cleanupContext, stopCleanup := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stopCleanup()
+	for {
+		location, err := host.Runtime().StorageLocation(cleanupContext)
+		if err == nil && !location.CleanupPreview.CleanupPending {
+			break
+		}
+		if err != nil && !errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) {
+			t.Fatal("usage-policy cleanup inspection", err)
+		}
+		select {
+		case <-cleanupContext.Done():
+			t.Fatal("usage-policy cleanup did not complete", cleanupContext.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	waitServerRecording(t, host.Runtime())
 	rules := host.Runtime().ConnectionRules()
 	current := rules.Current()
 	if _, err := rules.Replace(
@@ -1396,7 +1416,18 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	response.Body.Close()
 	if readErr != nil || response.StatusCode != http.StatusOK ||
 		!bytes.Contains(responsePayload, []byte("captured")) {
-		t.Fatalf("proxied response status=%d bodyBytes=%d error=%v", response.StatusCode, len(responsePayload), readErr)
+		t.Fatalf("proxied response status=%d reason=%q bodyBytes=%d error=%v", response.StatusCode, response.Header.Get("X-Vibermate-Reason"), len(responsePayload), readErr)
+	}
+	// HTTP delivery can precede terminal observations. Join the actual owned
+	// Exchange before a zero recording-slot count proves producer settlement.
+	drainer, ok := host.Runtime().ExchangeExecutor().(interface{ Drain(context.Context) error })
+	if !ok {
+		t.Fatal("actual Runtime Exchange drain unavailable")
+	}
+	drainContext, stopDrain := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stopDrain()
+	if err := drainer.Drain(drainContext); err != nil {
+		t.Fatal("custom Claude producer drain", err)
 	}
 	waitServerRecordingSettled(t, host.Runtime())
 	page, err := host.Runtime().Activities().ListExchanges(context.Background(), activity.PageRequest{CaptureRunID: grant.Run.ID, Limit: 10})

@@ -185,7 +185,11 @@ func (f *udpShutdownFixture) firstTerminal(t *testing.T) udpTerminalWrite {
 }
 func (f *udpShutdownFixture) requireControlsClosed(t *testing.T) {
 	t.Helper()
-	watchdog := time.NewTimer(f.budget)
+	f.requireControlsClosedBefore(t, time.Now().Add(f.budget))
+}
+func (f *udpShutdownFixture) requireControlsClosedBefore(t *testing.T, deadline time.Time) {
+	t.Helper()
+	watchdog := time.NewTimer(time.Until(deadline))
 	defer watchdog.Stop()
 	for _, closed := range f.closed {
 		select {
@@ -206,9 +210,39 @@ func TestRuntimeUDPShutdownCancelsAllSessionsBeforeSharedTerminalBudget(t *testi
 	f := newUDPShutdownFixture(t)
 	f.controls[0].Close()
 	f.firstTerminal(t)
+	canceledAll := make(chan time.Time, 1)
+	found := false
+	for i := range f.runtime.cleanups.entries {
+		entry := &f.runtime.cleanups.entries[i]
+		if entry.name == "SOCKS proxy admission" {
+			original := entry.run
+			entry.run = func(ctx context.Context) error {
+				err := original(ctx)
+				canceledAll <- time.Now()
+				return err
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("actual SOCKS shutdown admission entry missing")
+	}
+	deadline := time.Now().Add(f.budget)
 	done := make(chan error, 1)
 	go func() { done <- f.runtime.Shutdown(context.Background()) }()
-	f.requireControlsClosed(t)
+	f.requireControlsClosedBefore(t, deadline)
+	// Control EOF is emitted before session.close finishes its flow loop.
+	// Join that actual synchronous fanout within the SAME original budget.
+	remaining := time.NewTimer(time.Until(deadline))
+	defer remaining.Stop()
+	select {
+	case returnedAt := <-canceledAll:
+		if returnedAt.After(deadline) {
+			t.Fatal("all-session cancellation exceeded the original shared budget")
+		}
+	case <-remaining.C:
+		t.Fatal("all-session cancellation waited behind optional terminal persistence")
+	}
 	f.network.requireClosed(t)
 	select {
 	case err := <-done:

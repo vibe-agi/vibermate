@@ -38,6 +38,7 @@ func TestServerHostOwnerUpdateQueuesUnderHoldAndCancellationDrains(t *testing.T)
 	}
 	setup.Body.Close()
 	r := host.Runtime()
+	waitServerRecording(t, r)
 	if _, err := r.EnterOfflineHold(context.Background(), r.OfflineHoldSnapshot().Revision); err != nil {
 		t.Fatal(err)
 	}

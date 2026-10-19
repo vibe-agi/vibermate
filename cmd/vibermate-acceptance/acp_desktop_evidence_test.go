@@ -165,7 +165,7 @@ func readPackagedACPEvidence(ctx context.Context, root string) (evidence []packa
 		return nil, err
 	}
 	if registered != len(evidence) {
-		return nil, errors.New("ACP registration has no retained current snapshot")
+		return nil, fmt.Errorf("ACP registration has no retained current snapshot: registrations=%d snapshots=%d", registered, len(evidence))
 	}
 	return evidence, nil
 }
