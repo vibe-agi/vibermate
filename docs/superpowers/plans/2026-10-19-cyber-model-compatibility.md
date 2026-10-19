@@ -27,13 +27,14 @@
 **Files:**
 - Modify: `internal/cyberaccess/programs.go`
 - Test: `internal/cyberaccess/programs_test.go`
+- Test: `internal/cyberaccess/preference_test.go` (align the old Red-on-Standard-capable expectation)
 - Test: `internal/exchange/cyber_access_test.go`
 
 **Interfaces:**
 - Consumes: `ApplyPreference(body []byte, catalog Catalog, mode Preference) ([]byte, bool, error)`, `Catalog map[string][]string`, existing pipeline account lease and final model mapping.
 - Produces: the same interface, now selecting Standard when the preferred program is absent and Standard is explicitly present for the final model.
 
-- [ ] **Step 1: Add independent, table-driven regressions.**
+- [x] **Step 1: Add independent, table-driven regressions.**
 
 Use literal catalogs and expected values. Cover Blue and Red with Standard-only models, client modes absent/Standard/Blue/Red, preference present alongside Standard, the other Daybreak mode with/without Standard, unknown/nil/empty catalogs and evidence for a different model. Assert outgoing JSON `model`, `input`, an opaque integer `9007199254740993`, and unrelated `access_programs.other` survive. For an already-Standard body falling back to Standard, assert `changed == false` and identical bytes. Update the old test that classifies a known Standard-only model as unavailable.
 
@@ -55,11 +56,11 @@ if json.Unmarshal(got, &wire) != nil || wire.Model != "ordinary" || wire.Access.
 
 Extend the real exchange test matrix to exercise a mapped final model that is Standard-only while the incoming model has Blue support; it must send the mapped model unchanged with Standard. Add Blue/Red fallback overriding a client's conflicting mode; preserve exact selected account/epoch assertions. Add Guardian Red-derived-Blue with a Standard-capable model and verify Standard, never Red. Retain unknown and directory-error failures with zero provider sends.
 
-- [ ] **Step 2: Verify red.**
+- [x] **Step 2: Verify red.**
 
 Run `go test ./internal/cyberaccess ./internal/exchange -run 'Cyber|ApplyPreference|ParseCatalog|ParsePrograms' -count=1`. The new known Standard fallback cases must fail with unavailable, while pre-existing failures remain intentional. Save the relevant output to the task report.
 
-- [ ] **Step 3: Implement the minimum resolution.**
+- [x] **Step 3: Implement the minimum resolution.**
 
 Inside the existing non-Standard branch, parse the final model and resolve a local effective `mode` before the existing preservation/rewrite logic:
 
@@ -81,11 +82,11 @@ if mode != Standard {
 
 Update the function comment to describe the preference and exact-model fallback. Preserve existing input validation, unknown failure classification, Guardian handling and raw-message preservation; do not add a new public interface or a second discovery call.
 
-- [ ] **Step 4: Verify green and the affected pipeline.**
+- [x] **Step 4: Verify green and the affected pipeline.**
 
 First rerun the focused red command. Then run `go test ./internal/cyberaccess ./internal/exchange ./internal/providertransport ./internal/loopbackproxy -count=1` once. Format changed Go files with gofmt. Record exact commands/results, any baseline/environment failure, and self-review the diff.
 
-- [ ] **Step 5: Commit backend implementation and tests.**
+- [x] **Step 5: Commit backend implementation and tests.**
 
 Stage only this task's files; commit as `fix(cyber): fall back to advertised standard per model`.
 
@@ -101,7 +102,7 @@ Stage only this task's files; commit as `fix(cyber): fall back to advertised sta
 - Consumes: unchanged `ProviderAccount.cyberAccessProgram`, account/endpoint-scoped `UpstreamModelCatalog`, each model's `verifiedAvailable` and nullable `availableCyberPrograms`, and Task 1's exact-model fallback rule.
 - Produces: visible fallback model information while persisting the exact same preferred mode through existing settings calls.
 
-- [ ] **Step 1: Add a behavioral widget regression before UI production edits.**
+- [x] **Step 1: Add a behavioral widget regression before UI production edits.**
 
 Use the existing `_CyberApi` fixture with a mixed catalog and select Blue:
 
@@ -116,11 +117,11 @@ api.modelPrograms = {
 
 Assert the visible fallback summary contains ordinary-model and red-model, but not blue-model or red-only-model; the stored selection remains `daybreak_blue`. Selecting Red changes the fallback set to ordinary-model and blue-model; selecting Standard removes the summary. Exercise null/empty evidence and refresh failure through existing fixtures so they never produce a verified fallback claim. Cover English and Simplified Chinese rendering and a narrow viewport using existing test infrastructure. Existing literal copy assertions may be updated for new wording; do not add tests merely asserting source strings.
 
-- [ ] **Step 2: Verify red.**
+- [x] **Step 2: Verify red.**
 
 Run from `ui/flutter_app`: `flutter test test/provider_account_cyber_access_test.dart`. The new fallback summary assertions should fail against the existing widget, not due to setup or selector errors. Save relevant output.
 
-- [ ] **Step 3: Add the derived summary and aligned copy.**
+- [x] **Step 3: Add the derived summary and aligned copy.**
 
 Compute fallback models only for a non-Standard selection, using the same verified models as the current supported list:
 
@@ -140,17 +141,17 @@ Change the preference label to `Cyber access preference` / `网络安全模式�
 
 Update the current `codex-cyber-access` row in `docs/capability-support.md` to describe exact-model Standard fallback and the retained unknown/no-compatible-mode failure. Do not rewrite historical v0.1.30 release notes or touch unrelated UI.
 
-- [ ] **Step 4: Verify green.**
+- [x] **Step 4: Verify green.**
 
 Run the focused widget suite, the related account/settings UI suite once if a shared copy assertion is affected, `flutter analyze lib/features/workbench/provider_account_cyber_access.dart lib/core/i18n/app_copy.dart test/provider_account_cyber_access_test.dart`, and formatting checks for changed Dart files. Record results. No new dependencies.
 
-- [ ] **Step 5: Commit the UI and current capability documentation.**
+- [x] **Step 5: Commit the UI and current capability documentation.**
 
 Stage only this task's files; commit as `feat(ui): explain adaptive cyber preferences per model`.
 
 ## Final validation and integration
 
 - [ ] Review each task for specification compliance and code quality, then review the combined branch.
-- [ ] Confirm no schema, wire value, model selection, CLI or Codex configuration changes.
-- [ ] Run `git diff --check` and the repository's relevant existing consistency checks; reuse valid task test evidence rather than rerunning unchanged suites.
+- [x] Confirm no schema, wire value, model selection, CLI or Codex configuration changes.
+- [x] Run `git diff --check` and the repository's relevant existing consistency checks; reuse valid task test evidence rather than rerunning unchanged suites.
 - [ ] Prepare a concrete reviewable branch/diff. Do not replace the running app or publish a release as part of this task.
