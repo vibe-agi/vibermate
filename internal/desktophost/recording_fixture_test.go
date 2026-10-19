@@ -25,11 +25,15 @@ func waitHostInspection(t *testing.T, r *productruntime.Runtime) {
 			changed := r.Activities().Check(t.Context(), token)
 			generationCanceled = errors.Is(changed, recording.ErrInspectionChanged) || errors.Is(changed, recording.ErrInspectionUnavailable)
 		}
-		if err == nil {
+		// Initialization publishes the mirror before the actual producer sinks.
+		// A positive history fixture must witness both before releasing its
+		// child; Statistics acquires the current owner and refuses a pause.
+		if err == nil && r.RawEvidenceStatistics().WriterID != "" {
 			return
 		}
-		if (!errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) && !generationCanceled) || time.Now().After(deadline) {
-			t.Fatal("optional mirror did not become readable", err)
+		retry := err == nil || errors.Is(err, recording.ErrInspectionUnavailable) || errors.Is(err, recording.ErrInspectionChanged) || generationCanceled
+		if !retry || time.Now().After(deadline) {
+			t.Fatal("optional mirror and producer did not become ready", err, r.Status().Recording)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -48,6 +52,33 @@ func waitHostRecordingSlots(t *testing.T, r *productruntime.Runtime) {
 	for r.Status().Recording.ReservedRecords != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("optional recording did not settle", r.Status().Recording)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Read the actual target page: success of another inspector is not a promise
+// that the catalog cannot change before this read. This retries only explicit
+// optional availability/generation outcomes, never commands or outbound work.
+func readHostInspection[T any](t *testing.T, boundary recording.InspectionBoundary, read func(context.Context) (T, error)) T {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		token, err := boundary.Begin(t.Context())
+		var value T
+		if err == nil {
+			value, err = read(t.Context())
+		}
+		if err == nil {
+			return value
+		}
+		changed := false
+		if errors.Is(err, context.Canceled) && t.Context().Err() == nil {
+			check := boundary.Check(t.Context(), token)
+			changed = errors.Is(check, recording.ErrInspectionChanged) || errors.Is(check, recording.ErrInspectionUnavailable)
+		}
+		if (!errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) && !changed) || time.Now().After(deadline) {
+			t.Fatal("target inspection did not become readable", err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

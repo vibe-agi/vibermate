@@ -392,7 +392,7 @@ func TestEgressInspectionTransitiveSemanticOwnership(t *testing.T) {
 
 func TestAuditInspectionOwnershipGraphLimitRefusesBeforePublication(t *testing.T) {
 	f := newEgressInspectionFixture(t)
-	f.reader.catalog.timeout = 20 * time.Second
+	f.reader.catalog.timeout = inspectionStressBudget(20 * time.Second)
 	a := providerAttempt(t, "graph-seed")
 	f.put(t, false, a)
 	f.activityRoot(t, a, "audit-a")

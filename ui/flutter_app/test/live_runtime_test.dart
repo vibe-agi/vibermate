@@ -12,6 +12,7 @@ import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/features/workbench/environment_editing.dart';
 
 import 'code_library_contract.dart';
+import 'live_inspection_fixture.dart';
 
 void main() {
   final daemonPath = Platform.environment['VIBERMATE_LIVE_TEST_DAEMON'];
@@ -116,7 +117,10 @@ void main() {
         expect(initialRootMaterial.rootRevision, initialRoot.rootRevision);
         expect(initialRootMaterial.fingerprint, initialRoot.fingerprint);
         expect(initialRootMaterial.certificateDer, isNotEmpty);
-        final network = await runtime.api.loadNetwork();
+        final network = await readLiveInspection(
+          'initial network history',
+          runtime.api.loadNetwork,
+        );
         expect(network.rules.revision, greaterThan(0));
         expect(const {
           'monitor',
@@ -454,8 +458,11 @@ void main() {
         expect(createdManual.grant.capture.state, 'active');
         expect(createdManual.grant.proxyPassword, isNotEmpty);
         expect(createdManual.stateTag, isNotEmpty);
-        final manualActivities = await runtime.api.activities(
-          manualCaptureId: createdManual.grant.capture.id,
+        final manualActivities = await readLiveInspection(
+          'new Manual Capture activities',
+          () => runtime!.api.activities(
+            manualCaptureId: createdManual.grant.capture.id,
+          ),
         );
         expect(manualActivities.items, isEmpty);
         expect(manualActivities.nextCursor, isNull);

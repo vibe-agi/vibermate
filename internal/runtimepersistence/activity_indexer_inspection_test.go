@@ -118,6 +118,10 @@ func (r *delayedEvidenceInspection) GetConversationEvidence(ctx context.Context,
 }
 func TestActivityIndexerInspectionRetainsProtocolFallbackExpiry(t *testing.T) {
 	f := newEgressInspectionFixture(t)
+	// Complete cold attachment/reference setup before authoring the original
+	// short lifetime, without pinning the archive's pre-authoring identity.
+	warmInspectionFixtureReferences(t, f.reader.catalog)
+
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	record := transcriptContentRecordFixture(t, "protocol-only", now, exchangecontent.ParentRef{CaptureRunID: "audit-a"}, []transcriptMessage{{role: protocolcore.RoleUser, text: "body must not be read"}}, "response")
 	record.Request.ProtocolEvidence = []protocolcore.ProtocolEvidenceValue{{Name: "openai_responses.session_id", Value: "session"}}

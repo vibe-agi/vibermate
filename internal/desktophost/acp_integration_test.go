@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
@@ -143,6 +144,9 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 					}
 				}
 			}
+			// Renewal changes required visibility after the simulated sleep.
+			// Prime that new mirror before the sole positive prompt/final offer.
+			waitHostInspection(t, host.Runtime())
 			exchange(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"native-session","prompt":[{"type":"text","text":"hello private prompt"}]}}`, `"method":"session/request_permission"`)
 			exchange(`{"jsonrpc":"2.0","id":3,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`, `"sessionUpdate":"agent_message_chunk"`)
 			line, err := reader.ReadString('\n')
@@ -167,12 +171,28 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 				t.Fatalf("ACP launch context used server environment: %+v", run.Runtime)
 			}
 			app := host.AppSession()
-			response := controlRequest(t, app.BaseURL, http.MethodGet, "/api/v1/captures/managed_run:"+run.ID+"/acp", app.ReadToken, "vibermate://desktop")
-			defer response.Body.Close()
-			var record acpobservation.Record
-			if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&record) != nil {
-				t.Fatalf("App ACP read status %d", response.StatusCode)
-			}
+			record := readHostInspection(t, host.Runtime().ACPInspection(), func(context.Context) (acpobservation.Record, error) {
+				response := controlRequest(t, app.BaseURL, http.MethodGet, "/api/v1/captures/managed_run:"+run.ID+"/acp", app.ReadToken, "vibermate://desktop")
+				defer response.Body.Close()
+				var record acpobservation.Record
+				if response.StatusCode == http.StatusServiceUnavailable {
+					var problem struct {
+						Code string `json:"code"`
+					}
+					if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+						return record, err
+					}
+					if problem.Code == "acp_observation_unavailable" {
+						return record, recording.ErrInspectionUnavailable
+					}
+					return record, fmt.Errorf("ACP read refused: %s", problem.Code)
+				}
+				if response.StatusCode != http.StatusOK {
+					return record, fmt.Errorf("App ACP read status %d", response.StatusCode)
+				}
+				err := json.NewDecoder(response.Body).Decode(&record)
+				return record, err
+			})
 			if !record.Snapshot.Final || len(record.Snapshot.Sessions) != 1 || len(record.Snapshot.Prompts) != 1 || record.Snapshot.Prompts[0].State != "completed" {
 				t.Fatalf("App evidence: %+v", record)
 			}

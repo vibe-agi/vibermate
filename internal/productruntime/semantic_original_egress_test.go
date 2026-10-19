@@ -113,8 +113,20 @@ func TestActualRuntimeSemanticOriginalHoldAndFailure(t *testing.T) {
 			f.assertAudits(t, 0)
 			f.editDefault(t)
 			if row.edge == "held_cancel" {
+				if err := flight.context.Err(); err != nil {
+					t.Fatal("semantic caller ended before explicit cancel", err)
+				}
+				select {
+				case reply := <-flight.done:
+					flight.joined = true
+					t.Fatalf("semantic caller completed before explicit cancel: %+v", reply)
+				default:
+				}
 				flight.cancel()
-				if reply := flight.join(t); !errors.Is(reply.Err, context.Canceled) {
+				if !errors.Is(flight.context.Err(), context.Canceled) {
+					t.Fatal("original caller was not explicitly canceled", flight.context.Err())
+				}
+				if reply := flight.join(t); !semanticOriginalCanceledReply(reply) {
 					t.Fatalf("canceled semantic reply: %+v", reply)
 				}
 				f.drain(t)
@@ -190,15 +202,16 @@ func TestActualRuntimeSemanticOriginalHoldAndFailure(t *testing.T) {
 }
 
 type semanticOriginalFlight struct {
-	done   chan capturedOriginalReply
-	cancel context.CancelFunc
-	joined bool
+	context context.Context
+	done    chan capturedOriginalReply
+	cancel  context.CancelFunc
+	joined  bool
 }
 
 func startSemanticOriginal(t *testing.T, f *capturedOriginalFixture) *semanticOriginalFlight {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	flight := &semanticOriginalFlight{done: make(chan capturedOriginalReply, 1), cancel: cancel}
+	flight := &semanticOriginalFlight{context: ctx, done: make(chan capturedOriginalReply, 1), cancel: cancel}
 	go func() { flight.done <- f.send(ctx, http.MethodPost, semanticOriginalPath, semanticOriginalBody) }()
 	t.Cleanup(func() {
 		cancel()
@@ -344,4 +357,67 @@ func (f *capturedOriginalFixture) drainSemantic(t *testing.T, ctx context.Contex
 		t.Fatal("semantic managed-account/token effect", len(accounts), err, f.secrets.reads.Load(), f.secrets.inspects.Load(), f.secrets.writes.Load(), f.network.tokenAttempts.Load())
 	}
 	t.Logf("semantic pipeline/body/gate drained accounts=0 secretReads=0 secretInspects=0 secretWrites=0 tokenAttempts=0 requests=%d", len(f.semanticRequests))
+}
+
+// A fully read HTTP cancellation terminal and transport cancellation are
+// separate representations of the same canceled operation, not success.
+func semanticOriginalCanceledReply(reply capturedOriginalReply) bool {
+	if errors.Is(reply.Err, context.Canceled) {
+		return true
+	}
+	if reply.Err != nil || reply.Status != http.StatusBadGateway || reply.Header.Get("X-Vibermate-Reason") != "exchange_canceled" || reply.Header.Get("Content-Type") != "application/json" || reply.Header.Get("Cache-Control") != "no-store" {
+		return false
+	}
+	var envelope any
+	if json.Unmarshal(reply.Body, &envelope) != nil {
+		return false
+	}
+	return reflect.DeepEqual(envelope, map[string]any{"error": map[string]any{
+		"message": "ViberMate could not complete this request (exchange_canceled).",
+		"type":    "api_error", "param": nil, "code": "exchange_canceled",
+	}})
+}
+
+func TestSemanticOriginalCancellationReplyContract(t *testing.T) {
+	const body = `{"error":{"message":"ViberMate could not complete this request (exchange_canceled).","type":"api_error","param":null,"code":"exchange_canceled"}}`
+	valid := func() capturedOriginalReply {
+		return capturedOriginalReply{Status: http.StatusBadGateway, Header: http.Header{"X-Vibermate-Reason": {"exchange_canceled"}, "Content-Type": {"application/json"}, "Cache-Control": {"no-store"}}, Body: []byte(body)}
+	}
+	for _, trial := range []struct {
+		name string
+		edit func(*capturedOriginalReply)
+		want bool
+	}{
+		{"exact cancellation envelope", func(*capturedOriginalReply) {}, true},
+		{"transport cancellation", func(r *capturedOriginalReply) {
+			*r = capturedOriginalReply{Err: errors.Join(errors.New("client request"), context.Canceled)}
+		}, true},
+		{"successful status", func(r *capturedOriginalReply) { r.Status = 200 }, false},
+		{"unavailable status", func(r *capturedOriginalReply) { r.Status = 503 }, false},
+		{"wrong reason", func(r *capturedOriginalReply) { r.Header.Set("X-Vibermate-Reason", "runtime_stopping") }, false},
+		{"missing reason", func(r *capturedOriginalReply) { r.Header.Del("X-Vibermate-Reason") }, false},
+		{"wrong content type", func(r *capturedOriginalReply) { r.Header.Set("Content-Type", "text/html") }, false},
+		{"wrong cache contract", func(r *capturedOriginalReply) { r.Header.Del("Cache-Control") }, false},
+		{"wrong code", func(r *capturedOriginalReply) {
+			r.Body = []byte(strings.Replace(body, `"code":"exchange_canceled"`, `"code":"provider_transport_failed"`, 1))
+		}, false},
+		{"wrong message", func(r *capturedOriginalReply) {
+			r.Body = []byte(strings.Replace(body, "could not complete", "did complete", 1))
+		}, false},
+		{"wrong type", func(r *capturedOriginalReply) { r.Body = []byte(strings.Replace(body, "api_error", "other_error", 1)) }, false},
+		{"wrong param", func(r *capturedOriginalReply) {
+			r.Body = []byte(strings.Replace(body, `"param":null`, `"param":"model"`, 1))
+		}, false},
+		{"malformed JSON", func(r *capturedOriginalReply) { r.Body = []byte(`{"error":`) }, false},
+		{"body read error", func(r *capturedOriginalReply) { r.Err = errors.New("read failed") }, false},
+		{"deadline is not cancel", func(r *capturedOriginalReply) { r.Err = context.DeadlineExceeded }, false},
+	} {
+		t.Run(trial.name, func(t *testing.T) {
+			r := valid()
+			trial.edit(&r)
+			if got := semanticOriginalCanceledReply(r); got != trial.want {
+				t.Fatalf("cancellation accepted=%t want=%t reply=%+v", got, trial.want, r)
+			}
+		})
+	}
 }

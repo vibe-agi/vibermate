@@ -302,6 +302,10 @@ func TestNativeInspectionRetainsExpiredDescriptorForKnownLifecycle(t *testing.T)
 
 func TestNativeInspectionReadContentRechecksOriginalExpiryAfterFinalVisibility(t *testing.T) {
 	r, current, control, v := nativeInspectionFixture(t)
+	// Complete cold attachment/reference setup before authoring the original
+	// short lifetime, without pinning the archive's pre-authoring identity.
+	warmInspectionFixtureReferences(t, r.catalog)
+
 	r.catalog.timeout = 30 * time.Second
 	v.Identity.ExpiresAt = time.Now().UTC().Truncate(time.Millisecond).Add(2 * time.Second)
 	v.Identity.CreatedAt = v.Identity.ExpiresAt.Add(-24 * time.Hour)

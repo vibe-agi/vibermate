@@ -68,13 +68,14 @@ func TestScopedRecordingDeletionWithoutLinks(t *testing.T) {
 		t.Fatalf("connections: %+v %v", page, err)
 	}
 	attempts, err := s.EgressAttemptRepository().List(ctx, egressaudit.PageRequest{})
-	if err != nil || len(attempts.Items) != 2 {
+	if err != nil || len(attempts.Items) != 1 || attempts.Items[0].Attempt.ID() != "other" {
 		t.Fatalf("attempts: %+v %v", attempts, err)
 	}
-	for _, r := range attempts.Items {
-		if r.Attempt.ID() != "other" && r.Attempt.ID() != "native-preserved" {
-			t.Fatal("deleted attempt remains")
-		}
+	// Native delivery is required control proof, separate from optional
+	// Egress inspection. Keep its physical identity and once verification.
+	var deliveryOperation string
+	if err := s.database.QueryRowContext(ctx, `SELECT operation_id FROM native_tool_deliveries WHERE attempt_id=?`, receipt.AttemptID()).Scan(&deliveryOperation); err != nil || deliveryOperation != string(nativeID) {
+		t.Fatalf("unrelated native delivery changed: %q %v", deliveryOperation, err)
 	}
 	if err := nativeRepo.VerifyStartReceipt(ctx, receipt, now); err != nil {
 		t.Fatalf("unrelated native proof changed: %v", err)

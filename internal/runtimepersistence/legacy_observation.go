@@ -395,27 +395,17 @@ func inspectAttachedObservation(ctx context.Context, conn *sql.Conn, alias, layo
 	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	schemas := []string{schemaV1SQL}
+	variants := []referenceSchemaVariant{referenceV1}
 	if source.Current {
-		schemas = []string{observationSchemaSQL}
+		variants = []referenceSchemaVariant{referenceObservations}
 	} else if source.Database.Revision == 3 {
-		schemas = []string{schemaRuntimeV3SQL, schemaV2SQL + "\n" + migration002To003SQL, schemaV1SQL + "\n" + migration001To002SQL + "\n" + migration002To003SQL}
+		variants = []referenceSchemaVariant{referenceV3, referenceV2ToV3, referenceV1ToV3}
 	} else if source.Database.Revision == 2 {
-		schemas = []string{schemaV2SQL, schemaV1SQL + "\n" + migration001To002SQL}
+		variants = []referenceSchemaVariant{referenceV2, referenceMigratedV2}
 	}
-	for _, ddl := range schemas {
-		reference, err := sql.Open("sqlite", ":memory:")
+	for _, variant := range variants {
+		expected, err := expectedObservationSchemas.read(ctx, variant, materializeReferenceSchema)
 		if err != nil {
-			return err
-		}
-		reference.SetMaxOpenConns(1)
-		if _, err = reference.ExecContext(ctx, ddl); err != nil {
-			reference.Close()
-			return err
-		}
-		expected, err := schemaObjects(ctx, reference)
-		closed := reference.Close()
-		if err = errors.Join(err, closed); err != nil {
 			return err
 		}
 		if slices.Equal(observed, expected) {

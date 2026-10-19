@@ -40,7 +40,10 @@ func inspectionSourcesFixture(t *testing.T) (InspectionCatalogOptions, *Observat
 	if err = os.WriteFile(filepath.Join(archive, "runtime.db"), bytes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	return InspectionCatalogOptions{Root: root, LayoutID: "layout", Generation: 1, Concurrency: 2, Timeout: time.Second, Sources: []InspectionSource{
+	// These functional fixtures include actual attachment/schema validation.
+	// Use the production default read budget; explicit cancellation/deadline
+	// tests retain their own short caller contexts.
+	return InspectionCatalogOptions{Root: root, LayoutID: "layout", Generation: 1, Concurrency: 2, Sources: []InspectionSource{
 		{ID: "legacy", RelativePath: "archives/legacy/runtime.db", Database: SchemaState{Identity: "vibermate-runtime", Revision: 2, InitializedAt: "2026-10-03T00:00:00Z"}},
 		{ID: "current", RelativePath: "observations.db", Database: SchemaState{Identity: "vibermate-observations", Revision: 1}, Current: true},
 	}}, current
@@ -355,4 +358,26 @@ func TestInspectionRecoveryCatalogBlocksAdmissionAtPersistedGeneration(t *testin
 		t.Fatal(err)
 	}
 	lease.close()
+}
+
+// Warm only immutable reference construction. The tested catalog must not pin
+// a legacy file identity before this fixture finishes authoring that file.
+func warmInspectionFixtureReferences(t *testing.T, catalog *InspectionCatalog) {
+	t.Helper()
+	warm, err := NewInspectionCatalog(InspectionCatalogOptions{Root: catalog.root, LayoutID: catalog.layout, Generation: catalog.Version().Generation, Sources: catalog.sources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := warm.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	lease, err := warm.acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.close(); err != nil {
+		t.Fatal(err)
+	}
 }

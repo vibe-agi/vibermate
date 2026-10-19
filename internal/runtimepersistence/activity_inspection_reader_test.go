@@ -154,7 +154,7 @@ func newActivityInspectionTestReader(t *testing.T, f *egressInspectionFixture) *
 
 func TestActivityInspectionFailureSummaryHasBoundedResultMemory(t *testing.T) {
 	f := newEgressInspectionFixture(t)
-	f.reader.catalog.timeout = 30 * time.Second
+	f.reader.catalog.timeout = inspectionStressBudget(30 * time.Second)
 	record := inspectionActivity("failure-seed", "failure-seed", activity.KindExchangeCompleted, time.Now().UTC().Truncate(time.Millisecond))
 	record.Status = activity.StatusFailed
 	record.ReasonCode = "seed"

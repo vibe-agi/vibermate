@@ -159,8 +159,9 @@ jobs:
       matrix:
         shard: [native, persistence-migration, persistence-rest, rest]
     runs-on: ubuntu-latest
-    # Enclose sequential packages' finite process watchdogs, not product SLAs.
-    timeout-minutes: 120
+    # Enclose the finite 120m persistence process plus setup/artifact upload.
+    # Other race process watchdogs and all product operation budgets are unchanged.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0

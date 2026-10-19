@@ -195,6 +195,9 @@ func TestRawInspectionAuditReleasesSQLButRetainsOwnershipAndRechecks(t *testing.
 	r, current, control, record, _, _ := rawInspectionFixture(t)
 	ctx := context.Background()
 	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	r.audit = locatedAuditFunc(func(ctx context.Context, a rawevidence.LocatedRevealAudit) error {
 		if err := current.AppendLocatedRevealAudit(ctx, a); err != nil {
 			return err
@@ -221,7 +224,9 @@ func TestRawInspectionAuditReleasesSQLButRetainsOwnershipAndRechecks(t *testing.
 	}()
 	select {
 	case <-entered:
-	case <-time.After(2 * time.Second):
+	case err := <-results:
+		t.Fatalf("reveal returned before the audit boundary: %v", err)
+	case <-time.After(r.catalog.timeout + time.Second):
 		t.Fatal("audit did not release history transaction")
 	}
 	nativeExec(t, control.store.database, `UPDATE recording_capture_fences SET deleted=1,generation=generation+1;UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1`)
@@ -231,7 +236,7 @@ func TestRawInspectionAuditReleasesSQLButRetainsOwnershipAndRechecks(t *testing.
 	if active != 1 {
 		t.Error("audit lost bounded physical read ownership")
 	}
-	close(release)
+	unblock()
 	if err := <-results; !errors.Is(err, ErrInspectionChanged) {
 		t.Fatalf("post-audit visibility not rechecked: %v", err)
 	}
@@ -494,7 +499,9 @@ func TestRawInspectionCanceledAuditRetainsOwnerUntilActualReturn(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(2 * time.Second):
+	case err := <-result:
+		t.Fatalf("reveal returned before the audit boundary: %v", err)
+	case <-time.After(r.catalog.timeout + time.Second):
 		t.Fatal("audit not entered")
 	}
 	cancel()
@@ -549,7 +556,9 @@ func TestRawInspectionSourceGenerationChangesWhileAuditOwnsLease(t *testing.T) {
 	}()
 	select {
 	case <-entered:
-	case <-time.After(2 * time.Second):
+	case err := <-results:
+		t.Fatalf("reveal returned before the audit boundary: %v", err)
+	case <-time.After(r.catalog.timeout + time.Second):
 		t.Fatal("audit not entered")
 	}
 	r.catalog.mu.Lock()

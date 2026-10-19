@@ -278,6 +278,7 @@ type originalForwardRun struct {
 }
 
 func newOriginalForwardRun(t *testing.T, f *capturedOriginalFixture) *originalForwardRun {
+	f.client.Timeout = inspectionFixtureBudget(3*time.Second, 30*time.Second)
 	run := &originalForwardRun{f: f}
 	t.Cleanup(func() {
 		// Cancel/release/join callers and server producers before draining. This
@@ -343,7 +344,7 @@ func (run *originalForwardRun) allJoined() bool {
 
 func (run *originalForwardRun) start(t *testing.T) *originalForwardFlight {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), inspectionFixtureBudget(3*time.Second, 30*time.Second))
 	flight := &originalForwardFlight{done: make(chan capturedOriginalReply, 1), chunk: make(chan capturedOriginalReply, 1), cancel: cancel}
 	run.flights = append(run.flights, flight)
 	go func() {
@@ -581,7 +582,7 @@ func assertOriginalRequestAuthority(t *testing.T, request providertransport.Requ
 
 func (f *capturedOriginalFixture) assertForwardAudits(t *testing.T, want int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), inspectionFixtureBudget(2*time.Second, 30*time.Second))
 	defer cancel()
 	if want > 0 {
 		if err := f.r.exchanges.Drain(ctx); err != nil {

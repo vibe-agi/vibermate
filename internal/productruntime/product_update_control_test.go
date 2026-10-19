@@ -10,12 +10,14 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +35,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimecontrol"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -404,7 +407,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 	if len(edges) > 0 && edges[0] == "default-unavailable" {
 		// Test-only persisted configuration fault; never SQL authority/session/
 		// credential mutation. Restore exact known singleton before shutdown.
-		db, err := sql.Open("sqlite", options.Paths.DatabasePath())
+		db, err := openOwnerDefaultFaultDB(options.Paths.DatabasePath())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -710,5 +713,112 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 		if failures != 1 {
 			t.Fatal("failed direct update has wrong outcome count")
 		}
+	}
+}
+
+// External-package counterpart of openSyntheticDefaultFaultDB. It is confined
+// to live-runtime fixture corruption and never changes the production pool.
+func openOwnerDefaultFaultDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", runtimepersistence.DefaultBusyTimeout.Milliseconds())); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return db, nil
+}
+
+func TestOwnerDefaultFaultConnectionWaitsForSQLiteWriter(t *testing.T) {
+	for _, phase := range []string{"delete", "restore"} {
+		t.Run(phase, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fixture.db")
+			seed, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer seed.Close()
+			if _, err := seed.Exec(`CREATE TABLE runtime_egress_default(singleton INTEGER PRIMARY KEY,revision INTEGER,egress_id TEXT,egress_revision INTEGER);INSERT INTO runtime_egress_default VALUES(1,2,'profile-owner',1)`); err != nil {
+				t.Fatal(err)
+			}
+			fixture, err := openOwnerDefaultFaultDB(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fixture.Close()
+			if phase == "restore" {
+				if _, err := fixture.Exec(`DELETE FROM runtime_egress_default`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), runtimepersistence.DefaultBusyTimeout+time.Second)
+			defer cancel()
+			conn, err := seed.Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+				t.Fatal(err)
+			}
+			released := false
+			defer func() {
+				if !released {
+					conn.ExecContext(context.Background(), `ROLLBACK`)
+				}
+			}()
+			done := make(chan error, 1)
+			go func() {
+				statement := `DELETE FROM runtime_egress_default WHERE singleton=1`
+				if phase == "restore" {
+					statement = `INSERT INTO runtime_egress_default VALUES(1,2,'profile-owner',1)`
+				}
+				_, err := fixture.ExecContext(ctx, statement)
+				done <- err
+			}()
+			var result error
+			early := false
+			select {
+			case result = <-done:
+				early = true
+			case <-time.After(100 * time.Millisecond):
+			}
+			if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+				t.Fatal(err)
+			}
+			released = true
+			if !early {
+				select {
+				case result = <-done:
+				case <-ctx.Done():
+					t.Fatal("fixture mutation did not join", ctx.Err())
+				}
+			}
+			if early {
+				t.Fatalf("fixture %s returned while writer held lock: %v", phase, result)
+			}
+			if result != nil {
+				t.Fatal(result)
+			}
+			var count int
+			if err := fixture.QueryRow(`SELECT count(*) FROM runtime_egress_default`).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			expected := 0
+			if phase == "restore" {
+				expected = 1
+			}
+			if count != expected {
+				t.Fatalf("fixture %s retained %d rows, want %d", phase, count, expected)
+			}
+			if phase == "restore" {
+				var revision, profileRevision int
+				var profile string
+				if err := fixture.QueryRow(`SELECT revision,egress_id,egress_revision FROM runtime_egress_default WHERE singleton=1`).Scan(&revision, &profile, &profileRevision); err != nil || revision != 2 || profile != "profile-owner" || profileRevision != 1 {
+					t.Fatalf("exact restored singleton changed: %d %s %d %v", revision, profile, profileRevision, err)
+				}
+			}
+		})
 	}
 }

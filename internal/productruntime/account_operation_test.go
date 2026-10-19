@@ -202,12 +202,20 @@ func newAccountReadFixtureWithDriver(t *testing.T, driver providerauth.DriverRef
 }
 func newAccountReadFixtureWithBuilders(t *testing.T, driver providerauth.DriverRef, overrides runtimeBuildOverrides, resources ...exchange.ResourcePolicy) accountReadFixture {
 	t.Helper()
+	return newAccountReadFixtureWithClock(t, driver, overrides, nil, resources...)
+}
+
+func newAccountReadFixtureWithClock(t *testing.T, driver providerauth.DriverRef, overrides runtimeBuildOverrides, clock Clock, resources ...exchange.ResourcePolicy) accountReadFixture {
+	t.Helper()
 	ctx := context.Background()
 	gate, err := offlinehold.New(offlinehold.Config{MaxHeldRequests: 8, MaxHeldBytes: 1 << 20, MaxHoldDuration: time.Second, ReleaseConcurrency: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	options := testOptions(t, hostcontract.Desktop(), gate)
+	if clock != nil {
+		options.Clock = clock
+	}
 	if len(resources) != 0 {
 		options.Resources = &resources[0]
 	}

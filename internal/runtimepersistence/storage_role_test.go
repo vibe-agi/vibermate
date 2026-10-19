@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // A recording transaction must not hold Capture creation or lease renewal.
@@ -158,6 +159,7 @@ func TestStorageRoleObservationRawGraphCollectsWithoutControlTables(t *testing.T
 	}()
 	now := time.Now().UTC()
 	record := rawEvidenceRecordForTest("writer-1.1", 1, rawevidence.LayerClientIngress, []byte("independent-observation-body"), []byte(`{"version":1,"headers":[]}`))
+	record.RecordingFence = recording.Fence{ArchiveEpoch: 1, CaptureGeneration: 1}
 	record.ObservedAt = now.Add(-time.Hour)
 	record.ExpiresAt = now.Add(time.Minute)
 	repo := store.RawEvidenceRepository()
@@ -165,8 +167,8 @@ func TestStorageRoleObservationRawGraphCollectsWithoutControlTables(t *testing.T
 		t.Fatal(err)
 	}
 	got, err := repo.ListExchange(ctx, record.ExchangeID)
-	if err != nil || len(got) != 1 {
-		t.Fatal("optional graph not published", err)
+	if err != nil || len(got) != 1 || got[0].RecordingScope() != record.RecordingScope() {
+		t.Fatal("optional graph lost original scope or was not published", err)
 	}
 	recovery, err := repo.BeginWriterSession(ctx, rawevidence.WriterSession{WriterID: "next", StartedAt: now.Add(time.Hour), MaximumUnflushedTime: time.Millisecond})
 	if err != nil || recovery.PurgedExpiredEnvelopes != 1 {

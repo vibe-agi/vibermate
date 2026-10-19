@@ -126,7 +126,14 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 			t.Log("invalid-tail actual shutdown joined; runtime and host guards reacquired")
 		})
 	}
-	f := newAccountReadFixtureWithDriver(t, providerauth.StaticHeaderDriverRef())
+	var fixtureClock Clock
+	if acceptance != nil && (acceptance.concurrentMode != nil || acceptance.httpFour) {
+		// This scenario proves concurrent full-history persistence and real
+		// controls. Hold the domain clock before unrelated minute-based expiry
+		// maintenance; pipeline, HTTP and context budgets still use real time.
+		fixtureClock = captureActivityClock{now: time.Now().UTC()}
+	}
+	f := newAccountReadFixtureWithClock(t, providerauth.StaticHeaderDriverRef(), runtimeBuildOverrides{}, fixtureClock)
 	WaitRecordingTestRuntime(t, f.runtime)
 	stopped = f.runtime
 	wantCredential := "Bearer " + f.token

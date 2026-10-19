@@ -203,7 +203,7 @@ for (const mode of splitModes) for (const status of [0, 23]) {
     assert.equal(result.status, status, result.stderr);
     const manifest = JSON.parse(readFileSync(go.manifest(mode)));
     const call = go.calls().find(c => c.args.includes('-run'));
-    assert.deepEqual(call.args.slice(0, 8), ['test','-race','-short','-p=1',persistence,'-count=1','-timeout=60m','-json']);
+    assert.deepEqual(call.args.slice(0, 8), ['test','-race','-short','-p=1',persistence,'-count=1','-timeout=120m','-json']);
     assert.equal(call.goflags, '-mod=readonly -tags=fixture');
     const pattern = call.args[call.args.indexOf('-run')+1];
     assert(pattern.startsWith('^(') && pattern.endsWith(')$') && !pattern.includes('/'));
@@ -265,7 +265,7 @@ test('workflow runs both persistence lanes and requires manifest comparison with
   assert.match(source,/RACE_PARTITION_MANIFEST:/);
   const raceJob=source.split('  race:')[1].split('  race-coverage:')[0];
   assert.match(raceJob,/fail-fast: false/);
-  assert.match(raceJob,/timeout-minutes: 120/);
+  assert.match(raceJob,/timeout-minutes: 150/);
   assert.match(raceJob,/if: always\(\) && startsWith\(matrix.shard, 'persistence-'\)/);
   assert.match(raceJob,/if-no-files-found: error/);
   assert.match(source,/name: race-\$\{\{ matrix\.shard \}\}-\$\{\{ github\.run_attempt \}\}/);

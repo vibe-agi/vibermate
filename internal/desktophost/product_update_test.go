@@ -71,8 +71,10 @@ func TestDesktopHostUpdateCommandQueuesUnderHoldAndCancellationDrains(t *testing
 		}
 		time.Sleep(time.Millisecond)
 	}
-	page, err := r.EgressAttempts().List(context.Background(), egressaudit.PageRequest{Limit: 10})
-	if err != nil || len(page.Items) != 0 {
-		t.Fatal("Held Desktop update reached outbound audit", err)
+	page := readHostInspection(t, r.Activities(), func(ctx context.Context) (egressaudit.Page, error) {
+		return r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 10})
+	})
+	if len(page.Items) != 0 {
+		t.Fatal("Held Desktop update reached outbound audit", page)
 	}
 }

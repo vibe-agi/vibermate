@@ -313,7 +313,7 @@ func TestRuntimeCleanupMaintainsFrozenArchivesAndPreservesProvenance(t *testing.
 			if receipt, err := runtime.recordingStorage.DeleteCapture(t.Context(), "managed_run", "legacy-owned"); err != nil || !receipt.CleanupPending {
 				t.Fatalf("legacy required deletion: %+v %v", receipt, err)
 			}
-			deadline := time.Now().Add(10 * time.Second)
+			deadline := time.Now().Add(inspectionFixtureBudget(10*time.Second, time.Minute))
 			for {
 				state, err := runtime.storage.RecordingCleanupState(t.Context())
 				if err != nil {

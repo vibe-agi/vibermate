@@ -943,6 +943,12 @@ func resolveEnvironmentDigest(
 
 func runManagedChild(t *testing.T, host *desktophost.Host, paths desktophost.Paths, environmentID environment.EnvironmentID, expectFailure bool, extraEnvironment ...string) {
 	t.Helper()
+	// Successful child completion uses the launcher's unchanged control default.
+	// The refusal fixture retains its deliberately shorter caller containment.
+	controlTimeout := 2 * time.Second
+	if !expectFailure {
+		controlTimeout = 0
+	}
 	discovery, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		hostClock{},
@@ -980,7 +986,7 @@ func runManagedChild(t *testing.T, host *desktophost.Host, paths desktophost.Pat
 		BaseEnvironment: baseEnvironment,
 		Stdin:           input, Stdout: output, Stderr: &stderr,
 		HeartbeatInterval: 10 * time.Millisecond,
-		ControlTimeout:    2 * time.Second, CreateTimeout: 5 * time.Second,
+		ControlTimeout:    controlTimeout, CreateTimeout: 5 * time.Second,
 		TerminationTimeout: 2 * time.Second,
 	})
 	if err != nil {
@@ -1038,7 +1044,7 @@ func assertManagedEvidence(
 		activity.PageRequest{Limit: 20, EnvironmentID: environmentID.String()},
 	)
 	if err != nil || len(page.Items) == 0 {
-		t.Fatalf("managed Activity = %+v, %v", page, err)
+		t.Fatalf("managed Activity = %+v, %v; recording=%+v failure=%+v", page, err, host.Runtime().Status().Recording, host.Runtime().Status().RecordingFailure)
 	}
 	record := page.Items[0]
 	if record.Status != activity.StatusSucceeded ||
