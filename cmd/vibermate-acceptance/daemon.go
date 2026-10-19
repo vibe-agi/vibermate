@@ -23,7 +23,7 @@ import (
 
 const (
 	bootstrapLimit    = 16 << 10
-	bootstrapFrames   = 2
+	bootstrapFrames   = 3 // runtime starting, optional storage progress, terminal
 	bootstrapDeadline = 2 * time.Minute
 	capabilityBytes   = 32
 )
@@ -267,6 +267,15 @@ func decodeDescriptorObserved(reader io.Reader, observed func(frame int)) (deskt
 			return desktopbootstrap.Descriptor{}, errors.New(
 				"daemon bootstrap descriptor is invalid",
 			)
+		}
+		if envelope.Schema == desktopbootstrap.ProgressSchema {
+			var progress desktopbootstrap.Progress
+			if index != 1 || decodeBootstrapFrame(payload, &progress) != nil ||
+				progress.Validate() != nil ||
+				(progress.Phase != desktopbootstrap.ProgressStoragePreparing && progress.Phase != desktopbootstrap.ProgressStorageUpgrade) {
+				return desktopbootstrap.Descriptor{}, errors.New("daemon bootstrap storage progress is invalid")
+			}
+			continue
 		}
 		if envelope.Schema == desktopbootstrap.FailureSchema {
 			var failure desktopbootstrap.Failure
