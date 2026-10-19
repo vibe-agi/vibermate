@@ -166,6 +166,19 @@ final class _ProviderAccountCyberAccessState
         copy('provider_accounts.cyber_access.option.$program');
     final selected = account.cyberAccessProgram;
     final supported = support[selected] ?? const <String>[];
+    final standardFallback = selected == 'standard'
+        ? const <String>[]
+        : models
+              .where(
+                (model) =>
+                    model.verifiedAvailable &&
+                    (model.availableCyberPrograms?.contains('standard') ??
+                        false) &&
+                    !(model.availableCyberPrograms?.contains(selected) ??
+                        false),
+              )
+              .map((model) => model.id)
+              .toList(growable: false);
     final unknown =
         _catalog == null ||
         models.any((model) => model.availableCyberPrograms == null);
@@ -330,6 +343,18 @@ final class _ProviderAccountCyberAccessState
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: SelectableText(supported.join(' · '), style: style),
+          ),
+        if (standardFallback.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              key: Key('account-cyber-standard-fallback-${account.id}'),
+              copy.format('provider_accounts.cyber_access.standard_fallback', {
+                'models': standardFallback.join(' · '),
+              }),
+              style: style,
+              softWrap: true,
+            ),
           ),
       ],
     );

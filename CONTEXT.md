@@ -133,7 +133,7 @@ An Account's independently revisioned egress, automatic-refresh, and cyber acces
 _Avoid_: Account Link, credential epoch, Capture override
 
 **Account Cyber Access Mode**:
-The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account. Standard is the default. The selected Account determines the request mode independently of the client's login or preference. Blue and Red require explicit upstream permission for the request model; unknown or incompatible permissions prevent the request rather than selecting another mode. Native Codex Guardian reviewer/classifier requests derive Blue from either Daybreak mode, with the same account and exact model permission check.
+The owner's selection of Standard, Daybreak Blue, or Daybreak Red for an Account, with Standard as the default; the selected Account determines the request preference independently of the client's login or preference. For the final exact model, Blue or Red is used when explicitly advertised, otherwise Standard is used only when that same model explicitly advertises it; unknown or incompatible capabilities and failed discovery reject the request, while native Codex Guardian reviewer/classifier requests derive a Blue preference from either Daybreak mode under the same Account and exact-model rule.
 _Avoid_: Cyber account flag, entitlement grant, security level slider
 
 **Account Automatic Refresh**:

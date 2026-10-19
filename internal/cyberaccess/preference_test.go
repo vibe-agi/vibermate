@@ -37,7 +37,7 @@ func TestApplyPreferenceSelectsOneSupportedMode(t *testing.T) {
 		{"Red replaces standard", "cyber", "standard", Red, "daybreak_red", true},
 		{"Red replaces Blue", "cyber", "daybreak_blue", Red, "daybreak_red", true},
 		{"same mode is untouched", "cyber", "daybreak_red", Red, "daybreak_red", false},
-		{"Red does not imply Blue", "general", "standard", Red, "", false},
+		{"Red falls back to advertised Standard rather than Blue", "general", "standard", Red, "standard", false},
 		{"standard overrides client", "cyber", "daybreak_red", Standard, "standard", true},
 		{"unknown model", "absent", "standard", Blue, "", false},
 		{"client value is overridden", "general", "future_program", Blue, "daybreak_blue", true},
