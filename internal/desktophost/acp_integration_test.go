@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 )
 
 func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
@@ -58,6 +59,15 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer stderr.Close()
+			defer func() {
+				if t.Failed() {
+					data, _ := os.ReadFile(stderr.Name())
+					certificate, exists, err := runtimedata.ReadRecordingMaintenanceCertificate(filepath.Join(root, "data"))
+					receipt, receiptExists, receiptErr := runtimedata.ReadRecordingCleanupReceipt(filepath.Join(root, "data"))
+					t.Logf("ACP failure receipt: exists=%t phase=%s generation=%d target=%d cutoff=%d countsExact=%t err=%v writer=%q", receiptExists, receipt.Phase, receipt.SourceGeneration, receipt.TargetRevision, receipt.CutoffMillis, receipt.CountsExact, receiptErr, host.Runtime().RawEvidenceStatistics().WriterID)
+					t.Logf("ACP failure: recording=%+v maintenanceExists=%t cutoff=%d generation=%d target=%d err=%v stderr=%q", host.Runtime().Status().Recording, exists, certificate.CutoffMillis, certificate.SourceGeneration, certificate.TargetRevision, err, data)
+				}
+			}()
 			executable, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -118,6 +128,9 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 			exchange(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}`, `"protocolVersion":1`)
 			exchange(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/editor/project","mcpServers":[]}}`, `"sessionId":"native-session"`)
 			if scenario.sleep {
+				// Capture the floor before publishing the jump so the next real
+				// cleanup cannot precede it by a scheduling/millisecond race.
+				cleanupFloor := clock.Now().Add(3 * time.Hour).UnixMilli()
 				clock.offset.Store(int64(3 * time.Hour))
 				page, err := host.Runtime().CaptureRunReader().ListRuns(ctx, capturerun.PageRequest{Limit: 20})
 				if err != nil || len(page.Items) != 1 || page.Items[0].State != capturerun.StateExpired {
@@ -143,9 +156,70 @@ func TestACPRegisteredEditorFlowReachesAppWithoutProxyInjection(t *testing.T) {
 					case <-time.After(10 * time.Millisecond):
 					}
 				}
+				// The same clock jump also makes routine optional cleanup due.
+				// Readability before its next owner tick is not completion. Keep
+				// stdin parked until that actual cleanup is certified, using the
+				// remaining original fixture context, before the sole prompt.
+				cleanupContext := ctx
+				app := host.AppSession()
+				transport := &http.Transport{Proxy: nil, DisableCompression: true}
+				defer transport.CloseIdleConnections()
+				client := &http.Client{Transport: transport}
+				for {
+					certificate, exists, err := runtimedata.ReadRecordingMaintenanceCertificate(filepath.Join(root, "data"))
+					if err != nil {
+						t.Fatal("sleep cleanup certificate", err)
+					}
+					if exists && certificate.CutoffMillis >= cleanupFloor {
+						request, err := http.NewRequestWithContext(cleanupContext, http.MethodGet, app.BaseURL+"/api/v1/storage", nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						request.Header.Set("Authorization", "Bearer "+app.ReadToken)
+						request.Header.Set("Origin", "vibermate://desktop")
+						request.Header.Set("Sec-Fetch-Site", "cross-site")
+						request.Header.Set("Sec-Fetch-Mode", "cors")
+						request.Header.Set("Sec-Fetch-Dest", "empty")
+						response, err := client.Do(request)
+						if err != nil {
+							t.Fatal("sleep cleanup authenticated read", err)
+						}
+						var location productruntime.StorageLocation
+						if response.StatusCode == http.StatusOK {
+							err = json.NewDecoder(response.Body).Decode(&location)
+						} else {
+							var problem struct {
+								Code string `json:"code"`
+							}
+							err = json.NewDecoder(response.Body).Decode(&problem)
+							if err == nil && (response.StatusCode != http.StatusServiceUnavailable || problem.Code != "runtime_unavailable") {
+								err = fmt.Errorf("sleep cleanup status=%d code=%s", response.StatusCode, problem.Code)
+							}
+						}
+						response.Body.Close()
+						if err != nil {
+							t.Fatal(err)
+						}
+						if response.StatusCode == http.StatusOK && location.LastCleanup != nil && !location.CleanupPreview.CleanupPending {
+							token, err := host.Runtime().ACPInspection().Begin(cleanupContext)
+							if err != nil && !errors.Is(err, recording.ErrInspectionUnavailable) && !errors.Is(err, recording.ErrInspectionChanged) {
+								t.Fatal("sleep cleanup generation", err)
+							}
+							if err == nil && token.Control.LayoutID == certificate.LayoutID && token.Sources.SourceSet == certificate.SourceSet && token.Sources.Generation == certificate.SourceGeneration && !host.Runtime().Status().Recording.CleanupPending && host.Runtime().RawEvidenceStatistics().WriterID != "" {
+								t.Logf("sleep cleanup completed before prompt: cutoff=%d floor=%d generation=%d target=%d", certificate.CutoffMillis, cleanupFloor, certificate.SourceGeneration, certificate.TargetRevision)
+								break
+							}
+						}
+					}
+					select {
+					case <-cleanupContext.Done():
+						t.Fatal("sleep-induced recording cleanup did not complete", cleanupContext.Err())
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
 			}
-			// Renewal changes required visibility after the simulated sleep.
-			// Prime that new mirror before the sole positive prompt/final offer.
+			// Validate the complete original-scope mirror and available producer
+			// after cleanup, before the sole positive prompt/final offer.
 			waitHostInspection(t, host.Runtime())
 			exchange(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"native-session","prompt":[{"type":"text","text":"hello private prompt"}]}}`, `"method":"session/request_permission"`)
 			exchange(`{"jsonrpc":"2.0","id":3,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`, `"sessionUpdate":"agent_message_chunk"`)
