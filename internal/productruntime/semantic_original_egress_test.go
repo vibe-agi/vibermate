@@ -289,6 +289,9 @@ func (f *capturedOriginalFixture) assertSemanticAudits(t *testing.T, want int) {
 		if err := f.r.exchanges.Drain(ctx); err != nil {
 			t.Fatal("semantic audit pipeline drain", err)
 		}
+		if err := f.r.recorder.Flush(ctx); err != nil {
+			t.Fatal("semantic terminal recording settlement", err)
+		}
 	}
 	page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != want {

@@ -588,6 +588,9 @@ func (f *capturedOriginalFixture) assertForwardAudits(t *testing.T, want int) {
 		if err := f.r.exchanges.Drain(ctx); err != nil {
 			t.Fatal("original audit Runtime consumer drain", err)
 		}
+		if err := f.r.recorder.Flush(ctx); err != nil {
+			t.Fatal("original terminal recording settlement", err)
+		}
 	}
 	page, err := f.r.EgressAttempts().List(ctx, egressaudit.PageRequest{Limit: 100})
 	if err != nil || len(page.Items) != want {

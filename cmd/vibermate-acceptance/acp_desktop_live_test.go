@@ -5,12 +5,10 @@ package main
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	_ "modernc.org/sqlite"
 )
@@ -57,36 +54,20 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Read only this test's database, after the App has shut down. No management
-	// token is extracted from the native App and no personal data is inspected.
-	path := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID, "runtime.db")
-	databaseURL := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
-	database, err := sql.Open("sqlite", databaseURL.String())
+	// Read only private copies of this test's declared roles after App shutdown.
+	// No management token or personal data is inspected.
+	root := filepath.Join(home, "Library", "Application Support", runtimepath.ApplicationID)
+	evidence, err := readPackagedACPEvidence(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
-	rows, err := database.QueryContext(ctx, `SELECT a.policy,a.snapshot,r.state FROM acp_observations a JOIN capture_runs r USING(run_id)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
 	modes := map[string]bool{}
-	for rows.Next() {
-		var policyJSON, snapshotJSON []byte
-		var state string
-		if err := rows.Scan(&policyJSON, &snapshotJSON, &state); err != nil {
-			t.Fatal(err)
-		}
-		var policy struct{ Mode string }
-		var snapshot acpobservation.Snapshot
-		if json.Unmarshal(policyJSON, &policy) != nil || json.Unmarshal(snapshotJSON, &snapshot) != nil {
-			t.Fatal("ACP evidence could not be decoded")
-		}
-		if modes[policy.Mode] || state != "finished" || !snapshot.Final || snapshot.Incomplete || len(snapshot.Sessions) != 1 || len(snapshot.Prompts) != 1 || snapshot.Prompts[0].State != "completed" {
+	for _, record := range evidence {
+		policy, snapshot, state := record.Policy, record.Snapshot, record.State
+		if modes[string(policy.Mode)] || state != "finished" || !snapshot.Final || snapshot.Incomplete || len(snapshot.Sessions) != 1 || len(snapshot.Prompts) != 1 || snapshot.Prompts[0].State != "completed" {
 			t.Fatal("native App did not retain one completed ACP session and prompt")
 		}
-		modes[policy.Mode] = true
+		modes[string(policy.Mode)] = true
 		prompt := snapshot.Prompts[0]
 		if policy.Mode == "full" {
 			if prompt.UserText != "fixture question" || prompt.AgentText != "fixture answer" {
@@ -96,7 +77,7 @@ func TestPackagedACPThroughDesktopAppLive(t *testing.T) {
 			t.Fatal("metadata-only run retained text")
 		}
 	}
-	if rows.Err() != nil || len(modes) != 2 || !modes["full"] || !modes["metadata_only"] {
+	if len(modes) != 2 || !modes["full"] || !modes["metadata_only"] {
 		t.Fatal("native App did not retain both recording modes")
 	}
 }

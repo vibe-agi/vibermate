@@ -70,6 +70,9 @@ func exercisePackagedDesktopShell(
 		return fmt.Errorf("create packaged Desktop preference identity: %w", err)
 	}
 	statePath := desktopPreferencesStatePath(homeDirectory)
+	if _, err := preparePackagedDesktopFixtureData(ctx, filepath.Dir(filepath.Dir(statePath))); err != nil {
+		return fmt.Errorf("prepare packaged Desktop fixture storage: %w", err)
+	}
 	restoredEnvironmentID := string(environment.SystemTransparentID)
 	restoredEndpointID := upstreamendpoint.AnthropicOfficialID.String()
 	expected := canonicalDesktopPreferences(

@@ -543,6 +543,14 @@ func (f *b4Fixture) start(count int) egressaudit.Attempt {
 func (f *b4Fixture) terminal(start egressaudit.Attempt, want egressaudit.DecisionRef, outcome egressaudit.Outcome, count int) {
 	f.t.Helper()
 	f.expectedAttempts = count
+	// A finished client can precede the server's deferred terminal offer.
+	// The action releases after that offer; then join accepted recording I/O.
+	if err := f.gate.Drain(f.ctx); err != nil {
+		f.t.Fatal("blind terminal producer drain", err)
+	}
+	if err := f.r.recorder.Flush(f.ctx); err != nil {
+		f.t.Fatal("blind terminal recording settlement", err)
+	}
 	var end egressaudit.Attempt
 	f.observe("own durable terminal", func() bool {
 		page, err := f.r.EgressAttempts().List(f.ctx, egressaudit.PageRequest{Limit: 10})

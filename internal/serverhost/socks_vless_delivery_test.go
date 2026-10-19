@@ -140,6 +140,9 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	if fixture.udpBytes.Load() != total {
 		t.Fatal("control EOF sent another target datagram")
 	}
+	// The association's actual producer is drained above. Now join its
+	// accepted optional writes before asserting persisted terminal bytes.
+	deliveryWait(t, func() bool { return host.Runtime().Status().Recording.ReservedRecords == 0 })
 	page, err := host.Runtime().EgressAttempts().List(ctx, egressaudit.PageRequest{Purpose: egressaudit.PurposeDatagram, Limit: 20})
 	if err != nil || len(page.Items) != 2 {
 		t.Fatal("missing two real datagram audit terminals", err)
