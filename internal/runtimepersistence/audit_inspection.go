@@ -31,10 +31,11 @@ func (s *auditInspectionRead) endSQL() {
 	}
 }
 func (s *auditInspectionRead) close() { s.endSQL(); s.lease.close(); s.cancel() }
-func beginAuditInspection(ctx context.Context, c *InspectionCatalog, v recording.InspectionVisibility) (*auditInspectionRead, error) {
+func beginAuditInspection(ctx context.Context, c *InspectionCatalog, v recording.InspectionVisibility) (read *auditInspectionRead, result error) {
 	if ctx == nil || c == nil || v == nil {
 		return nil, ErrInspectionUnavailable
 	}
+	defer func() { result = c.classifyReadCancellation(ctx, result) }()
 	work, cancel := context.WithTimeout(ctx, c.timeout)
 	snapshot, err := v.ReadInspectionSnapshot(work, nil)
 	if err != nil {

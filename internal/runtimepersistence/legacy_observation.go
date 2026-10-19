@@ -179,10 +179,27 @@ func (c *InspectionCatalog) Close(ctx context.Context) error {
 	c.mu.Unlock()
 	return nil
 }
+
+// Catalog shutdown cancels private work without canceling its caller. Keep
+// that refusal typed while retaining the original cancellation and details.
+func (c *InspectionCatalog) classifyReadCancellation(ctx context.Context, err error) error {
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrInspectionUnavailable) || ctx == nil {
+		return err
+	}
+	c.mu.Lock()
+	closed := c.closed && c.owner.Err() != nil
+	c.mu.Unlock()
+	if closed && ctx.Err() == nil {
+		return errors.Join(ErrInspectionUnavailable, err)
+	}
+	return err
+}
+
 func (c *InspectionCatalog) acquire(ctx context.Context) (lease *inspectionLease, result error) {
 	if ctx == nil {
 		return nil, ErrInspectionUnavailable
 	}
+	defer func() { result = c.classifyReadCancellation(ctx, result) }()
 	work, cancel := context.WithTimeout(ctx, c.timeout)
 	stop := context.AfterFunc(c.owner, cancel)
 	select {
