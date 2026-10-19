@@ -474,17 +474,19 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         'Allow this Runtime to refresh OAuth credentials when needed. Imports start off; OAuth sign-in starts on. Turning this off does not sign out or prevent manual refresh.',
     'provider_accounts.egress.label': 'Account network exit',
-    'provider_accounts.cyber_access.label': 'Cyber access mode',
+    'provider_accounts.cyber_access.label': 'Cyber access preference',
     'provider_accounts.cyber_access.option.standard': 'Standard',
     'provider_accounts.cyber_access.option.daybreak_blue': 'Daybreak Blue',
     'provider_accounts.cyber_access.option.daybreak_red': 'Daybreak Red',
     'provider_accounts.cyber_access.detail':
-        'This account setting takes precedence over the client’s cyber mode. Daybreak Blue and Daybreak Red require support from the requested model; unsupported or unknown models are rejected. These are separate modes, not increasing levels.',
+        'This account preference takes precedence over the client’s cyber mode without changing the model. For Daybreak Blue or Daybreak Red, a model uses the preferred mode when advertised; otherwise it uses Standard only when explicitly advertised. Unknown capabilities or failed discovery do not permit fallback. Models without a compatible mode are rejected. Blue and Red are separate modes.',
     'provider_accounts.cyber_access.loading': 'Checking model capabilities…',
     'provider_accounts.cyber_access.supported_one':
         '{mode}: supported by 1 model',
     'provider_accounts.cyber_access.supported':
         '{mode}: supported by {count} models',
+    'provider_accounts.cyber_access.standard_fallback':
+        'Uses Standard: {models}',
     'provider_accounts.cyber_access.standard_available':
         'Standard is available. No verified Daybreak capabilities were reported.',
     'provider_accounts.cyber_access.unsupported':
@@ -3459,15 +3461,17 @@ final class AppCopy {
     'provider_accounts.automatic_refresh.detail':
         '允许当前 Runtime 按需刷新 OAuth 凭据。新导入默认关闭，OAuth 登录默认开启。关闭不会退出账号，也不影响手动刷新。',
     'provider_accounts.egress.label': '账号网络出口',
-    'provider_accounts.cyber_access.label': '网络安全模式',
+    'provider_accounts.cyber_access.label': '网络安全模式偏好',
     'provider_accounts.cyber_access.option.standard': 'Standard',
     'provider_accounts.cyber_access.option.daybreak_blue': 'Daybreak Blue',
     'provider_accounts.cyber_access.option.daybreak_red': 'Daybreak Red',
     'provider_accounts.cyber_access.detail':
-        '账号设置优先于客户端的网络安全模式。Daybreak Blue 和 Daybreak Red 需要请求的模型明确支持；不支持或能力未知时会拒绝请求。这是三种独立模式，不是逐级提升的等级。',
+        '账号偏好优先于客户端的网络安全模式，且不会更换模型。选择 Daybreak Blue 或 Daybreak Red 时，模型声明支持偏好模式就使用该模式；否则，仅在模型明确声明支持 Standard 时使用 Standard。能力未知或查询失败不允许回退；没有兼容模式的模型会拒绝请求。Blue 和 Red 是独立模式。',
     'provider_accounts.cyber_access.loading': '正在查询模型能力…',
     'provider_accounts.cyber_access.supported_one': '{mode}：1 个模型支持',
     'provider_accounts.cyber_access.supported': '{mode}：{count} 个模型支持',
+    'provider_accounts.cyber_access.standard_fallback':
+        '以下模型使用 Standard：{models}',
     'provider_accounts.cyber_access.standard_available':
         'Standard 可用，未查询到已验证的 Daybreak 能力。',
     'provider_accounts.cyber_access.unsupported': '当前没有模型声明支持 {mode}。',

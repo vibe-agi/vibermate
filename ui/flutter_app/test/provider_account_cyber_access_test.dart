@@ -195,6 +195,102 @@ void main() {
     },
   );
 
+  for (final language in [AppLanguage.english, AppLanguage.simplifiedChinese]) {
+    testWidgets(
+      'Standard fallback follows the saved preference and verified evidence in $language',
+      (tester) async {
+        final api = _CyberApi()
+          ..modelPrograms = {
+            'ordinary-model': ['standard'],
+            'blue-model': ['standard', 'daybreak_blue'],
+            'red-model': ['standard', 'daybreak_red'],
+            'red-only-model': ['daybreak_red'],
+            'unknown-model': null,
+            'empty-model': [],
+            'unverified-model': ['standard'],
+          }
+          ..unverifiedModels = {'unverified-model'};
+        final controller = await _mount(
+          tester,
+          api,
+          size: const Size(390, 900),
+          language: language,
+        );
+        await _expand(tester);
+        await tester.pumpAndSettle();
+        final fallback = find.byKey(
+          const Key('account-cyber-standard-fallback-account.blue'),
+        );
+        final prefix = language == AppLanguage.english
+            ? 'Uses Standard: '
+            : '以下模型使用 Standard：';
+        expect(fallback, findsNothing);
+
+        for (final (program, models) in [
+          ('daybreak_blue', 'ordinary-model · red-model'),
+          ('daybreak_red', 'ordinary-model · blue-model'),
+        ]) {
+          await _choose(tester, program);
+          expect(_account(controller).cyberAccessProgram, program);
+          expect(_select(tester).initialValue, program);
+          expect(fallback, findsOneWidget);
+          expect(tester.widget<Text>(fallback).data, '$prefix$models');
+          await tester.ensureVisible(fallback);
+          expect(tester.takeException(), isNull);
+        }
+
+        await _choose(tester, 'standard');
+        expect(_account(controller).cyberAccessProgram, 'standard');
+        expect(fallback, findsNothing);
+
+        await _choose(tester, 'daybreak_blue');
+        expect(fallback, findsOneWidget);
+        final mixed = api.modelPrograms;
+        api.modelPrograms = {
+          'unknown-model': null,
+          'empty-model': [],
+          'unverified-model': ['standard'],
+        };
+        api.pending = Completer<UpstreamModelCatalog>();
+        final refresh = find.byKey(
+          const Key('account-cyber-refresh-account.blue'),
+        );
+        await tester.ensureVisible(refresh);
+        await tester.tap(refresh);
+        await tester.pump();
+        expect(fallback, findsNothing);
+        api.pending!.complete(await api.catalog(api.programs));
+        await tester.pumpAndSettle();
+        expect(fallback, findsNothing);
+        expect(_account(controller).cyberAccessProgram, 'daybreak_blue');
+
+        api.pending = null;
+        api.modelPrograms = mixed;
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<Text>(fallback).data,
+          '${prefix}ordinary-model · red-model',
+        );
+        api.failure = StateError('offline');
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(fallback, findsNothing);
+        expect(_account(controller).cyberAccessProgram, 'daybreak_blue');
+        expect(_select(tester).initialValue, 'daybreak_blue');
+        expect(
+          find.text(
+            language == AppLanguage.english
+                ? 'Support check unavailable. Your saved mode is unchanged.'
+                : '暂时无法查询支持情况，已保存的模式保持不变。',
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('removed support remains distinct from a failed lookup', (
     tester,
   ) async {
@@ -536,6 +632,7 @@ final class _CyberApi extends Fake implements ControlApi {
   bool timeoutAfterSettingsCommit = false;
   int settingsWrites = 0;
   Map<String, List<String>?>? modelPrograms;
+  Set<String> unverifiedModels = {};
 
   Future<UpstreamModelCatalog> catalog(
     List<String>? programs, {
@@ -559,7 +656,7 @@ final class _CyberApi extends Fake implements ControlApi {
             'id': entry.key,
             'displayName': 'GPT Blue',
             'ownedBy': 'openai',
-            'verifiedAvailable': true,
+            'verifiedAvailable': !unverifiedModels.contains(entry.key),
             'contextLimit': 400000,
             'outputLimit': 128000,
             'availableCyberPrograms': entry.value,
