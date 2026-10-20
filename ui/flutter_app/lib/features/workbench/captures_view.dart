@@ -17,6 +17,7 @@ import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
 import 'workbench_controller.dart';
+import 'control_failure_notice.dart';
 
 final class CapturesView extends StatefulWidget {
   const CapturesView({required this.controller, required this.copy, super.key});
@@ -605,6 +606,12 @@ final class _CaptureDetail extends StatelessWidget {
       color: context.viberColors.canvas,
       child: Column(
         children: [
+          if (controller.captureInspectionFailure case final failure?)
+            ControlFailureNotice(
+              message: failure.messageKey,
+              diagnostic: failure.diagnostic,
+              copy: copy,
+            ),
           if (controller.errorMessage case final message?)
             InlineNotice(message: message, error: true),
           if (notice case final value?)

@@ -36,7 +36,7 @@ func (handler *Handler) summarizeActivities(writer http.ResponseWriter, request 
 	}
 	result, err := handler.activities.SummarizeExchanges(request.Context(), scope)
 	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		writeInspectionProblem(writer, err)
 		return
 	}
 	result.CaptureObservation = nil
