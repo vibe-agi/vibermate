@@ -30,15 +30,15 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "ViberMate_0.1.32_universal.dmg";
+const archiveFilename = "ViberMate_0.1.33_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 test("frozen release identity is coherent", () => {
-  assert.equal(macOSDistributionPolicy.appVersion, "0.1.32");
-  assert.equal(macOSDistributionPolicy.appBuildNumber, "34");
+  assert.equal(macOSDistributionPolicy.appVersion, "0.1.33");
+  assert.equal(macOSDistributionPolicy.appBuildNumber, "35");
   assert.equal(
     macOSDistributionPolicy.diskImageFilename,
-    "ViberMate_0.1.32_universal.dmg",
+    "ViberMate_0.1.33_universal.dmg",
   );
   const pubspec = readFileSync(
     new URL("../../ui/flutter_app/pubspec.yaml", import.meta.url),
@@ -48,12 +48,12 @@ test("frozen release identity is coherent", () => {
     new URL("../../.github/workflows/macos-developer-id-candidate.yml", import.meta.url),
     "utf8",
   );
-  assert.match(pubspec, /^version: 0\.1\.32\+34$/mu);
+  assert.match(pubspec, /^version: 0\.1\.33\+35$/mu);
   assert.equal(
-    [...workflow.matchAll(/ViberMate_0\.1\.32_universal\.dmg/gu)].length,
+    [...workflow.matchAll(/ViberMate_0\.1\.33_universal\.dmg/gu)].length,
     3,
   );
-  assert.doesNotMatch(workflow, /ViberMate_0\.1\.31_universal\.dmg/u);
+  assert.doesNotMatch(workflow, /ViberMate_0\.1\.32_universal\.dmg/u);
 });
 
 function privacyResourceTickets() {
@@ -262,9 +262,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "34",
+      bundleVersion: "35",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.32",
+      shortVersion: "0.1.33",
     }),
   );
   assert.throws(() =>
@@ -280,9 +280,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "34",
+      bundleVersion: "35",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.32",
+      shortVersion: "0.1.33",
     }),
   );
   assert.doesNotThrow(() =>
@@ -811,7 +811,7 @@ test("private evidence has a closed secret-free schema", () => {
       sourceRevision: "4".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedArchiveSHA256: "9".repeat(64),
-      version: "0.1.32",
+      version: "0.1.33",
     },
     codeSigning: {
       certificateSHA256: "5".repeat(64),

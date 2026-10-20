@@ -3,12 +3,12 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Published-status snapshot at candidate preparation: **2026-10-19 19:26:20 UTC+08:00**.
+Published-status snapshot at candidate preparation: **2026-10-20 06:12:52 UTC**.
 
-Source package version: **0.1.32**. Latest published release: **v0.1.30**.
+Source package version: **0.1.33**. Latest published release: **v0.1.32**.
 
-At that snapshot, [v0.1.30](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.30)
-was the latest published release; v0.1.32 is an unpublished source candidate.
+At that snapshot, [v0.1.32](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.32)
+was the latest published release; v0.1.33 is an unpublished source candidate.
 The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
 and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
 schema-revision-1 data compatibility. Current source upgrades and private rollback
@@ -40,7 +40,8 @@ the historical boundary does not establish candidate downgrade compatibility.
 | Capability ID | Status | Current boundary |
 | --- | --- | --- |
 | `managed-claude-codex` | Released | `vibermate run` starts recognized Claude Code or Codex CLI processes through a local App or an explicitly selected Server. Release evidence is version- and path-specific; it is not a claim that every future client build is compatible. |
-| `managed-client-authentication` | Available | Explicit `vibermate run --env work --managed-auth -- codex` starts a supported recognized client using an existing managed destination without requiring a local OpenAI login; Claude uses the existing managed gateway-token path. Native Codex 0.163.0 synthetic acceptance covers fresh interactive startup and UUID resume. Local auth/config/history stay client-owned; catalogs, quota and Cloud/connector features retain their own supported boundaries. |
+| `managed-client-authentication` | Released | Explicit `vibermate run --env work --managed-auth -- codex` starts a supported recognized client using an existing managed destination without requiring a local OpenAI login; Claude uses the existing managed gateway-token path. Native Codex 0.163.0 synthetic acceptance covers fresh interactive startup and UUID resume. Local auth/config/history stay client-owned; catalogs, quota and Cloud/connector features retain their own supported boundaries. |
+| `local-run-recovery` | Available | Runs started with the updated CLI and Desktop App keep a stable local proxy entrance across App restarts. Recovery attaches the same process to a fresh Capture after checking the original launch policy, client artifact and Root. Old grants remain terminal; model requests are not replayed by the proxy, and native tool approvals must be granted again. Older running CLI processes need one restart; remote Server and ACP supervision retain their existing behavior. |
 | `provider-static-credentials` | Released | Upstream API credentials are managed independently from Runtime User login and are injected only after route selection. |
 | `codex-oauth` | Experimental | OAuth login and `auth.json` import use one managed Codex credential format and explicit manual refresh. Auto refresh defaults off for new imports and on for OAuth-created accounts; replacing credentials preserves the account's setting. When enabled, ViberMate owns refresh for its copy; refreshing the original file can invalidate either copy. This is not an official OpenAI integration or a stable public API contract. |
 | `codex-quota-history` | Experimental | An Owner may explicitly query the selected managed Codex account's upstream quota and, when separately authorized, history. These observations are not ViberMate traffic statistics or billing authority. |
@@ -64,7 +65,7 @@ the historical boundary does not establish candidate downgrade compatibility.
 | `raw-stage-compare` | Released | The workbench compares retained client/upstream request and response stages without rewriting retained bytes. |
 | `outbound-visibility` | Released | The workbench distinguishes inspected HTTP, decoded content, blind forwarding, and traffic not observed by ViberMate. It cannot infer a local file path from network bytes. |
 | `runtime3-upgrade` | Released | v0.1.30 shipped monolithic vibermate-runtime revision 3, guarded 1→2→3 or 2→3 upgrades and private rollback snapshots. These published revisions remain supported inputs to the current source; the new role cutover is described below and in the [operator boundary](backup-and-restore.md#format-compatibility-and-rollback). |
-| `recording-storage-isolation` | Available | Required compact `vibermate-control/3` is separate from optional `vibermate-observations/1` and retained legacy archives. Bounded recording queues may drop history without failing authorized live Agent traffic; known loss and unconfirmed completion remain distinct. Account/configuration, permissions, native once/delivery and privacy intent remain required state. Guarded cutover preserves a private snapshot; split public backups use v2 and disclose absent or unverified history. Old releases require faithful old-format private restore into a new directory. |
+| `recording-storage-isolation` | Released | Required compact `vibermate-control/3` is separate from optional `vibermate-observations/1` and retained legacy archives. Bounded recording queues may drop history without failing authorized live Agent traffic; known loss and unconfirmed completion remain distinct. Account/configuration, permissions, native once/delivery and privacy intent remain required state. Guarded cutover preserves a private snapshot; split public backups use v2 and disclose absent or unverified history. Old releases require faithful old-format private restore into a new directory. |
 | `verified-backup-restore` | Released | Offline backup, verification, and restore are manifest-bound. Provider secrets and externally supplied TLS keys are excluded. |
 | `release-check` | Released | Settings compares App, Runtime, and terminal-command builds and checks the official GitHub Release only after an explicit user action. |
 | `automatic-updates` | Unsupported | Releases, checksums, Homebrew, and the website are published explicitly; the product does not silently self-update. |
@@ -72,7 +73,7 @@ the historical boundary does not establish candidate downgrade compatibility.
 | `postgresql-runtime-store` | Unsupported | The current runtime store is SQLite. A PostgreSQL backend and verified migration are later-stage work. |
 | `team-knowledge-base` | Unsupported | Captured evidence is not yet an approved, independently retained team knowledge-document system. |
 
-The 0.1.32 candidate separates required control and native execution/replay from
+Published v0.1.32 separates required control and native execution/replay from
 best-effort recording. Optional history may be missing or dropped under bounded
 capacity; recording or inspection unavailability does not become execution
 authority or a reason to fail authorized live traffic. Privacy denial and cleanup
