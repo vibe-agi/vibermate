@@ -32,7 +32,16 @@ func (authority *Authority) decideNative(ctx context.Context, request exchange.T
 		if op.State != "validated" {
 			return exchange.ToolDecision{}, nativetool.ErrDenied
 		}
-		return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
+		scope, err := authority.nativeRepository.GetScope(ctx, binding.Capture())
+		if err != nil {
+			return exchange.ToolDecision{}, err
+		}
+		if scope.State != "active" || scope.OwnerEpoch != binding.OwnerEpoch() || !scope.ExpiresAt.After(authority.clock.Now().UTC()) {
+			return exchange.ToolDecision{}, nativetool.ErrDenied
+		}
+		if !scope.ReplayBarrier {
+			return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
+		}
 	case environment.ToolPolicyStrict:
 		return exchange.ToolDecision{Outcome: exchange.ToolDecisionRejected, ReasonCode: "tool_policy_strict"}, nil
 	case environment.ToolPolicyReview:

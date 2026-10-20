@@ -46,6 +46,7 @@ import (
 
 type runtimeNativeEgressConfig struct {
 	choice, edge  string
+	toolMode      environment.ToolPolicyMode
 	recorder      observationRecorderBuilder
 	fullRecording bool
 }
@@ -537,7 +538,11 @@ func newRuntimeNativeEgressFixture(t *testing.T, cfg runtimeNativeEgressConfig) 
 		authored = egressprofile.Inherit()
 	}
 	origin, _ := originidentity.ParseProviderOrigin("https://native.example")
-	env := environment.Environment{ID: "native.egress", Name: "Native egress", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: environment.ToolPolicyReview}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.egress.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authored}}}
+	toolMode := cfg.toolMode
+	if toolMode == "" {
+		toolMode = environment.ToolPolicyReview
+	}
+	env := environment.Environment{ID: "native.egress", Name: "Native egress", State: environment.StateActive, Revision: 1, ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, PolicySet: &environment.PolicySet{ToolMode: toolMode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.egress.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authored}}}
 	if cfg.fullRecording {
 		env.ContentRecording = environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}
 	}

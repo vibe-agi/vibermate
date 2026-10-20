@@ -77,6 +77,7 @@ type ClientSignerView struct {
 // sensitive and memory-only; none of the nested evidence includes internal
 // release digests or feature flags.
 type LaunchGrant struct {
+	LocalRecovery   *LocalRecoveryView            `json:"localRecovery,omitempty"`
 	NativeToolLogin *NativeToolLoginView          `json:"nativeToolLogin,omitempty"`
 	Run             CaptureRunView                `json:"run"`
 	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
@@ -103,6 +104,33 @@ type LaunchGrant struct {
 }
 
 type NativeToolLoginView = capturegrant.NativeToolLoginView
+
+// LocalRecoveryView is non-secret launch evidence negotiated only by a local
+// launcher. It identifies the original authority; it cannot revive a run.
+type LocalRecoveryView struct {
+	InitialEnvironmentID       environment.EnvironmentID `json:"initialEnvironmentId"`
+	InitialEnvironmentRevision environment.Revision      `json:"initialEnvironmentRevision"`
+	InitialEnvironmentDigest   string                    `json:"initialEnvironmentDigest"`
+	LaunchAuthorityDigest      string                    `json:"launchAuthorityDigest"`
+	CanNativeReview            bool                      `json:"canNativeReview"`
+}
+
+func (view LocalRecoveryView) validate(protected, managed []string) error {
+	id, err := environment.NewEnvironmentID(view.InitialEnvironmentID.String())
+	if err != nil {
+		return err
+	}
+	digest, err := environment.ParseCandidateDigest(view.InitialEnvironmentDigest)
+	if err != nil || digest.String() != view.InitialEnvironmentDigest {
+		return errors.New("local recovery environment digest is invalid")
+	}
+	authority, err := environment.ParseCandidateDigest(view.LaunchAuthorityDigest)
+	if err != nil || authority.String() != view.LaunchAuthorityDigest {
+		return errors.New("local recovery authority digest is invalid")
+	}
+	_, err = environment.RestoreLaunchAuthorityBoundary(id, view.InitialEnvironmentRevision, digest, protected, managed, environment.LaunchAuthorityDigest(authority))
+	return err
+}
 
 // CaptureRunViewOf projects a trusted lifecycle view onto the contracted
 // launcher wire. A persisted run is either verified or generic; failed adapter
@@ -246,6 +274,11 @@ func (evidence ClientSignerView) validate() error {
 // Validate is the one place a launch grant's producer and launcher consumer
 // agree on evidence, recognition, recipe, and contracted run metadata.
 func (grant LaunchGrant) Validate() error {
+	if grant.LocalRecovery != nil {
+		if grant.ProxyDelivery != capturegrant.ProxyDeliveryLocalListener || grant.LocalRecovery.validate(grant.ProtectedAuthorities, grant.ManagedCredentialAuthorities) != nil {
+			return errors.New("CaptureRun local recovery evidence is invalid")
+		}
+	}
 	if grant.NativeToolLogin != nil {
 		if grant.NativeToolLogin.Validate() != nil {
 			return errors.New("CaptureRun native login view is invalid")

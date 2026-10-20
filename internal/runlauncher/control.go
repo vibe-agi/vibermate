@@ -99,6 +99,7 @@ func safeControlReason(reason capturecontrol.ReasonCode) capturecontrol.ReasonCo
 type controlClient struct {
 	origin      string
 	credential  string
+	generation  string
 	httpClient  requestDoer
 	closeHTTP   func()
 	description string
@@ -142,6 +143,10 @@ func InspectLocal(
 		return RuntimeInspection{}, fmt.Errorf("construct local control client: %w", err)
 	}
 	defer client.close()
+	return client.inspectLocal(ctx, session)
+}
+
+func (client *controlClient) inspectLocal(ctx context.Context, session localdiscovery.Session) (RuntimeInspection, error) {
 	var response desktopcontrol.StatusResponse
 	if err := client.jsonRequest(
 		ctx,
@@ -217,6 +222,7 @@ func newControlClient(
 	return &controlClient{
 		origin:      session.BaseURL,
 		credential:  session.ControlCredential,
+		generation:  session.InstanceID,
 		httpClient:  client,
 		closeHTTP:   client.Close,
 		description: "local",
@@ -252,11 +258,21 @@ func (client *controlClient) create(
 	ctx context.Context,
 	input capturecontrol.CreateRequest,
 ) (capturecontrol.LaunchGrant, error) {
+	return client.createAt(ctx, input, "/api/v1/capture-runs")
+}
+
+func (client *controlClient) createLocal(ctx context.Context, input capturecontrol.CreateRequest) (capturecontrol.LaunchGrant, error) {
+	// Negotiated on the URL so an older App can return its unchanged closed
+	// launch-grant wire. New metadata must never break older CLI decoders.
+	return client.createAt(ctx, input, "/api/v1/capture-runs?localRecovery=1")
+}
+
+func (client *controlClient) createAt(ctx context.Context, input capturecontrol.CreateRequest, path string) (capturecontrol.LaunchGrant, error) {
 	var output capturecontrol.LaunchGrant
 	err := client.jsonRequest(
 		ctx,
 		http.MethodPost,
-		"/api/v1/capture-runs",
+		path,
 		client.credential,
 		"",
 		input,
@@ -271,17 +287,36 @@ func (client *controlClient) attach(
 	grant capturecontrol.LaunchGrant,
 	processID int,
 ) error {
+	return client.attachAt(ctx, grant, processID, runActionPath(grant.Run.ID, "attach-process"), false)
+}
+
+func (client *controlClient) attachRecovered(ctx context.Context, grant capturecontrol.LaunchGrant, processID int) error {
+	path := runActionPath(grant.Run.ID, "attach-process")
+	if grant.NativeToolLogin != nil {
+		if grant.LocalRecovery == nil || !grant.LocalRecovery.CanNativeReview {
+			return errors.New("local Runtime cannot prepare fresh tool approvals after restart")
+		}
+		path += "?requireNativeReview=1"
+	}
+	return client.attachAt(ctx, grant, processID, path, true)
+}
+
+func (client *controlClient) attachAt(ctx context.Context, grant capturecontrol.LaunchGrant, processID int, path string, verifyProcess bool) error {
 	var output capturecontrol.CaptureRunView
-	return client.jsonRequest(
+	err := client.jsonRequest(
 		ctx,
 		http.MethodPost,
-		runActionPath(grant.Run.ID, "attach-process"),
+		path,
 		"",
 		grant.RunCapability,
 		capturecontrol.AttachRequest{ProcessID: processID},
 		http.StatusOK,
 		&output,
 	)
+	if err == nil && verifyProcess && (output.ID != grant.Run.ID || output.ProcessID != processID) {
+		return errors.New("local Runtime acknowledged a different captured process")
+	}
+	return err
 }
 
 func (client *controlClient) heartbeat(

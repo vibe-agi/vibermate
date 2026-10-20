@@ -41,6 +41,9 @@ const (
 // needs no external tool and still exercises a real process through the real
 // launcher.
 func TestMain(m *testing.M) {
+	if target := os.Getenv(childRecoveryEnvironment); target != "" {
+		os.Exit(runCapturedRecoveryChild(target))
+	}
 	if os.Getenv("VIBERMATE_RECORDING_FIXTURE_HANDOFF") == "1" {
 		fmt.Fprint(os.Stdout, "R")
 		marker := make([]byte, 1)
