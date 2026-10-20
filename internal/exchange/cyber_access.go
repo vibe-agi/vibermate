@@ -17,9 +17,21 @@ type accountCyberCatalog interface {
 	AccountCyberPrograms(context.Context, providertransport.Request) (cyberaccess.Catalog, error)
 }
 
+// Failure to obtain trustworthy evidence is distinct from a directory that
+// successfully confirms the final model cannot use the selected preference.
+type cyberDiscoveryFailure struct{ cause error }
+
+func (*cyberDiscoveryFailure) Error() string {
+	return "account model capability discovery is unavailable"
+}
+func (failure *cyberDiscoveryFailure) Unwrap() error { return failure.cause }
+
 func newProviderRequestFailure(exchangeID string, cause error) *Failure {
 	reason := ReasonProviderRequestInvalid
-	if errors.Is(cause, cyberaccess.ErrProgramUnavailable) {
+	var discovery *cyberDiscoveryFailure
+	if errors.As(cause, &discovery) {
+		reason = ReasonCyberDiscoveryUnavailable
+	} else if errors.Is(cause, cyberaccess.ErrProgramUnavailable) {
 		reason = ReasonCyberAccessProgramUnavailable
 	}
 	return newFailure(reason, exchangeID, 0, cause)
@@ -54,14 +66,14 @@ func (pipeline *Pipeline) finalizeAccountCyberMode(ctx context.Context, request 
 	if mode != cyberaccess.Standard {
 		reader, ok := pipeline.provider.(accountCyberCatalog)
 		if !ok {
-			return providertransport.Request{}, cyberaccess.ErrProgramUnavailable
+			return providertransport.Request{}, &cyberDiscoveryFailure{cause: errors.New("account capability reader is unavailable")}
 		}
 		programs, err = reader.AccountCyberPrograms(ctx, draft)
 		if err != nil {
 			if ctx.Err() != nil {
 				return providertransport.Request{}, ctx.Err()
 			}
-			return providertransport.Request{}, errors.Join(cyberaccess.ErrProgramUnavailable, err)
+			return providertransport.Request{}, &cyberDiscoveryFailure{cause: err}
 		}
 	}
 	updated, changed, err := cyberaccess.ApplyPreference(body, programs, mode)

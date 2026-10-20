@@ -51,6 +51,7 @@ const (
 	ReasonOfflineHoldUnavailable        ReasonCode = "offline_hold_unavailable"
 	ReasonProviderRequestInvalid        ReasonCode = "provider_request_invalid"
 	ReasonCyberAccessProgramUnavailable ReasonCode = "cyber_access_program_unavailable"
+	ReasonCyberDiscoveryUnavailable     ReasonCode = "cyber_access_discovery_unavailable"
 	ReasonMessageTransformFailed        ReasonCode = "message_transform_failed"
 	ReasonProviderCredentialUnavailable ReasonCode = "provider_credential_unavailable"
 	ReasonProviderTransportFailed       ReasonCode = "provider_transport_failed"

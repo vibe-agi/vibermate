@@ -2302,6 +2302,7 @@ func exchangeStatus(err error) int {
 		// the user needs to take.
 		return http.StatusUnauthorized
 	case exchange.ReasonEnvironmentPlanInvalid,
+		exchange.ReasonCyberDiscoveryUnavailable,
 		exchange.ReasonExchangeRuntimeStopping,
 		exchange.ReasonToolDecisionUnavailable:
 		return http.StatusServiceUnavailable

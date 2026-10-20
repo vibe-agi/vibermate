@@ -1234,18 +1234,47 @@ final class _ProviderAccountQuotaMiniState
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (facts?.credits case final credits?)
-          Text(
-            copy.format('account_facts.credits', {
-              'balance': credits.unlimited
-                  ? copy('account_facts.unlimited')
-                  : !credits.hasCredits
-                  ? copy('account_facts.no_credits')
-                  : accountCreditsLabel(
-                      credits.balance,
-                      copy('account_facts.unknown'),
+          Builder(
+            builder: (context) {
+              final hint = copy.format('account_facts.credits', {
+                'balance': credits.unlimited
+                    ? copy('account_facts.unlimited')
+                    : !credits.hasCredits
+                    ? copy('account_facts.no_credits')
+                    : accountCreditsLabel(
+                        credits.balance,
+                        copy('account_facts.unknown'),
+                      ),
+              });
+              return Tooltip(
+                message: hint,
+                excludeFromSemantics: true,
+                child: Semantics(
+                  label: hint,
+                  child: ExcludeSemantics(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.toll_outlined,
+                          size: 13,
+                          color: colors.textFaint,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          credits.unlimited
+                              ? '∞'
+                              : !credits.hasCredits
+                              ? '0.00'
+                              : accountCreditsLabel(credits.balance, '?'),
+                          style: caption,
+                        ),
+                      ],
                     ),
-            }),
-            style: caption,
+                  ),
+                ),
+              );
+            },
           ),
         for (final window in windows)
           Padding(

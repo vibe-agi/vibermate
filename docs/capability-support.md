@@ -3,12 +3,12 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Published-status snapshot at candidate preparation: **2026-10-20 08:44:30 UTC**.
+Published-status snapshot at candidate preparation: **2026-10-20 15:59:23 UTC**.
 
-Source package version: **0.1.34**. Latest published release: **v0.1.33**.
+Source package version: **0.1.35**. Latest published release: **v0.1.34**.
 
-At that snapshot, [v0.1.33](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.33)
-was the latest published release; v0.1.34 is an unpublished source candidate.
+At that snapshot, [v0.1.34](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.34)
+was the latest published release; v0.1.35 is an unpublished source candidate.
 The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
 and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
 schema-revision-1 data compatibility. Current source upgrades and private rollback

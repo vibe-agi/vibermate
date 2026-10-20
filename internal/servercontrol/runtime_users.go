@@ -130,7 +130,7 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 			return
 		}
 		report, err := handler.usage.Report(request.Context(), query)
-		if errors.Is(err, runtimeusage.ErrSnapshotChanged) {
+		if usageSnapshotChanged(err) {
 			writeProblem(writer, http.StatusConflict, "usage_snapshot_changed")
 			return
 		}

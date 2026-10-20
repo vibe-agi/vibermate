@@ -320,6 +320,8 @@ func encodeExchangeStreamFailure(dialect protocolspec.Dialect, notice exchange.F
 
 func exchangeReasonMessage(reason exchange.ReasonCode) string {
 	switch reason {
+	case exchange.ReasonCyberDiscoveryUnavailable:
+		return "ViberMate temporarily could not check this account's model capabilities. Check the network exit and retry this request (" + string(reason) + ")."
 	case exchange.ReasonCyberAccessProgramUnavailable:
 		return "ViberMate cannot confirm the selected cyber access mode for this account and model. Refresh the account's model capabilities or choose a compatible mode (" + string(reason) + ")."
 	case exchange.ReasonProviderCredentialUnavailable:

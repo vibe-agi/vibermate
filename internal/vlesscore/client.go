@@ -33,6 +33,10 @@ type Client struct {
 func (*Client) String() string   { return "vlesscore.Client{redacted}" }
 func (*Client) GoString() string { return "vlesscore.Client{redacted}" }
 
+// Done closes after the core process exits and its owned connections and
+// private files are drained. A remote dial failure does not close Done.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
 // Start launches one immutable core. The owner context owns its lifetime.
 func Start(owner context.Context, config Config) (*Client, error) {
 	if err := owner.Err(); err != nil {

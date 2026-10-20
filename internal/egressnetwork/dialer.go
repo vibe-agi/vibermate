@@ -21,6 +21,10 @@ type Resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
 }
 
+// Bound resolution and the complete proxy handshake, not only the first TCP
+// socket to the proxy. This budget never owns an established Agent stream.
+const connectionEstablishmentTimeout = 30 * time.Second
+
 // VLESSConnector is trusted host composition; it only receives frozen public
 // identity and admitted literal targets, never owner-supplied executable paths.
 type VLESSConnector interface {
@@ -127,6 +131,8 @@ func (dialer *policyDialer) DialContext(
 	if dialer == nil || ctx == nil || dialer.base == nil {
 		return nil, errors.New("traffic egress dial request is incomplete")
 	}
+	ctx, cancel := context.WithTimeout(ctx, connectionEstablishmentTimeout)
+	defer cancel()
 	if network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil, errors.New("traffic egress supports only TCP")
 	}
@@ -225,17 +231,36 @@ func (dialer *policyDialer) resolveAndDial(
 			}
 		}
 	}
-	var failures []error
+	// Filter only after checking the complete DNS answer for private targets.
+	// Incompatible families must not consume another candidate's dial budget.
+	candidates := make([]netip.Addr, 0, len(addresses))
 	for _, address := range addresses {
 		address = address.Unmap()
-		if !address.IsValid() || !addressMatchesNetwork(address, network) {
-			continue
+		if address.IsValid() && addressMatchesNetwork(address, network) {
+			candidates = append(candidates, address)
+		}
+	}
+	var failures []error
+	for index, address := range candidates {
+		// A stale address must not consume the whole operation deadline before
+		// another answer for this same destination can be tried. All attempts
+		// retain the selected proxy and the already validated DNS answer set.
+		attempt := ctx
+		cancel := func() {}
+		if deadline, bounded := ctx.Deadline(); bounded {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				failures = append(failures, context.DeadlineExceeded)
+				break
+			}
+			attempt, cancel = context.WithTimeout(ctx, remaining/time.Duration(len(candidates)-index))
 		}
 		connection, dialErr := target.DialContext(
-			ctx,
+			attempt,
 			network,
 			net.JoinHostPort(address.String(), port),
 		)
+		cancel()
 		if dialErr == nil {
 			return connection, nil
 		}

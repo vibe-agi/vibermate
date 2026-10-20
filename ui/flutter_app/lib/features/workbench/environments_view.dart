@@ -1366,7 +1366,7 @@ final class _RouteAccountActivationRow extends StatelessWidget {
   }
 }
 
-final class _AccountActivationControl extends StatelessWidget {
+final class _AccountActivationControl extends StatefulWidget {
   const _AccountActivationControl({
     required this.controlKey,
     required this.name,
@@ -1384,35 +1384,97 @@ final class _AccountActivationControl extends StatelessWidget {
   final VoidCallback onActivate;
 
   @override
-  Widget build(BuildContext context) => MergeSemantics(
-    child: Semantics(
-      selected: active,
-      child: IconButton.outlined(
-        key: controlKey,
-        tooltip: copy.format(
-          active
-              ? 'environment.account.active_named'
-              : 'environment.account.activate_named',
-          {'name': name},
-        ),
-        onPressed: enabled && !active ? onActivate : null,
-        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-        padding: const EdgeInsets.all(4),
-        style: IconButton.styleFrom(
-          disabledForegroundColor: active ? context.viberColors.verified : null,
-          side: active
-              ? BorderSide(
-                  color: context.viberColors.verified.withValues(alpha: .5),
-                )
-              : null,
-        ),
-        icon: Icon(
-          active ? Icons.check : Icons.radio_button_unchecked,
-          size: 16,
+  State<_AccountActivationControl> createState() =>
+      _AccountActivationControlState();
+}
+
+final class _AccountActivationControlState
+    extends State<_AccountActivationControl> {
+  final _focusNode = FocusNode();
+  bool _hovered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(_focusChanged);
+  }
+
+  void _focusChanged() => setState(() {});
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_focusChanged);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final intent =
+        widget.enabled && !widget.active && (_hovered || _focusNode.hasFocus);
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 150);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: MergeSemantics(
+        child: Semantics(
+          selected: widget.active,
+          child: IconButton.outlined(
+            key: widget.controlKey,
+            focusNode: _focusNode,
+            tooltip: widget.copy.format(
+              widget.active
+                  ? 'environment.account.active_named'
+                  : 'environment.account.activate_named',
+              {'name': widget.name},
+            ),
+            onPressed: widget.enabled && !widget.active
+                ? widget.onActivate
+                : null,
+            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            padding: const EdgeInsets.all(6),
+            style: IconButton.styleFrom(
+              foregroundColor: intent ? colors.verified : colors.textMuted,
+              backgroundColor: intent
+                  ? colors.verified.withValues(alpha: .12)
+                  : colors.panel,
+              disabledForegroundColor: widget.active
+                  ? colors.verified
+                  : colors.textFaint,
+              disabledBackgroundColor: widget.active
+                  ? colors.verified.withValues(alpha: .14)
+                  : colors.panel,
+              side: BorderSide(
+                color: _focusNode.hasFocus
+                    ? colors.focus
+                    : widget.active || intent
+                    ? colors.verified.withValues(alpha: .6)
+                    : colors.divider,
+              ),
+              shape: const RoundedRectangleBorder(
+                borderRadius: ViberMetrics.controlRadius,
+              ),
+            ).copyWith(animationDuration: duration),
+            icon: AnimatedSwitcher(
+              duration: duration,
+              transitionBuilder: (child, animation) =>
+                  ScaleTransition(scale: animation, child: child),
+              child: Icon(
+                widget.active || intent
+                    ? Icons.check_rounded
+                    : Icons.play_arrow_rounded,
+                key: ValueKey((widget.active, intent)),
+                size: 18,
+              ),
+            ),
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 final class _EnvironmentEditorPageFrame extends StatelessWidget {

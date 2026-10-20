@@ -323,19 +323,24 @@ type socksServer struct {
 	t           *testing.T
 	listener    net.Listener
 	forward     bool
+	holdTarget  string
 	targets     chan string
 	closeOnce   sync.Once
 	connections sync.WaitGroup
 }
 
 func newSOCKSServer(t *testing.T, forward bool) *socksServer {
+	return newSOCKSServerHoldingTarget(t, forward, "")
+}
+
+func newSOCKSServerHoldingTarget(t *testing.T, forward bool, holdTarget string) *socksServer {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen SOCKS server: %v", err)
 	}
 	server := &socksServer{
-		t: t, listener: listener, forward: forward, targets: make(chan string, 8),
+		t: t, listener: listener, forward: forward, holdTarget: holdTarget, targets: make(chan string, 8),
 	}
 	server.connections.Add(1)
 	go func() {
@@ -405,6 +410,10 @@ func (server *socksServer) handle(client net.Conn) {
 	port := int(binary.BigEndian.Uint16(portBytes))
 	target := net.JoinHostPort(host, strconv.Itoa(port))
 	server.targets <- target
+	if target == server.holdTarget {
+		_, _ = io.Copy(io.Discard, client)
+		return
+	}
 	if !server.forward {
 		_, _ = client.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
 		return

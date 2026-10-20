@@ -3,10 +3,16 @@ package servercontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 )
+
+func usageSnapshotChanged(err error) bool {
+	return errors.Is(err, runtimeusage.ErrSnapshotChanged) || errors.Is(err, recording.ErrInspectionChanged)
+}
 
 // The separate-role Projector carries its original read token through cache and
 // pricing. Encoding finishes before the final visibility/source recheck.
@@ -20,7 +26,11 @@ func writeUsageReport(w http.ResponseWriter, request *http.Request, report runti
 		}
 	}
 	if err != nil {
-		writeProblem(w, http.StatusServiceUnavailable, "runtime_usage_unavailable")
+		if usageSnapshotChanged(err) {
+			writeProblem(w, http.StatusConflict, "usage_snapshot_changed")
+		} else {
+			writeProblem(w, http.StatusServiceUnavailable, "runtime_usage_unavailable")
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

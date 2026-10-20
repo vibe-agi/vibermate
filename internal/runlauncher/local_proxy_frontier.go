@@ -310,6 +310,20 @@ func (frontier *localProxyFrontier) serveHTTP(writer http.ResponseWriter, reques
 			frontier.releaseConnection(entry.client)
 		}
 	}()
+	// DialContext stops owning cancellation once it returns a raw connection.
+	// Keep the HTTP request's lifetime attached while waiting on Runtime headers
+	// or streaming its response; a disconnected client must release both sides.
+	backendCanceled := make(chan struct{})
+	stopBackendCancellation := context.AfterFunc(request.Context(), func() {
+		defer close(backendCanceled)
+		_ = backend.Close()
+	})
+	joinBackendCancellation := sync.OnceFunc(func() {
+		if !stopBackendCancellation() {
+			<-backendCanceled
+		}
+	})
+	defer joinBackendCancellation()
 	forward := request.Clone(request.Context())
 	forward.RequestURI = ""
 	forward.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("capture:"+entry.target.ProxyToken)))
@@ -328,6 +342,12 @@ func (frontier *localProxyFrontier) serveHTTP(writer http.ResponseWriter, reques
 		return
 	}
 	if connect && response.StatusCode >= 200 && response.StatusCode < 300 {
+		// Hijacking transfers the socket lifetime to the tunnel. Stop and join
+		// HTTP cancellation before that handoff, so it cannot close a live tunnel.
+		joinBackendCancellation()
+		if request.Context().Err() != nil {
+			return
+		}
 		hijacked = frontier.tunnel(writer, backend, reader, response)
 		return
 	}

@@ -15,6 +15,77 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
+func TestCyberDiscoveryFailureRecoversOnNextRequestWithoutChangingAccount(t *testing.T) {
+	for _, failure := range []struct {
+		name  string
+		cause error
+	}{
+		{"transport", errors.New("synthetic private network detail")},
+		{"discovery deadline", context.DeadlineExceeded},
+		{"invalid catalog", cyberaccess.ErrInvalidCatalog},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			account := testAccount{id: "account.selected", revision: 3, epoch: 7}
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				clientProtocol: environment.ClientProtocolOpenAIResponses, chatGPTClient: true,
+				destination: environment.DestinationKindUpstream, providerOrigin: "https://chatgpt.com",
+				backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough,
+				accounts: []testAccount{account}, preferred: account.id,
+			})
+			provider := &cyberModeProvider{providerDouble: &providerDouble{results: []providerResult{{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("client-model"))}}}, err: failure.cause}
+			pipeline := newTestPipeline(t, cyberModeAuthority{newAccountAuthority(t, account), cyberaccess.Blue}, provider, approvedDecisions(), &attemptObserverDouble{})
+			defer shutdownPipeline(t, pipeline)
+			body := []byte(`{"model":"client-model","stream":false,"input":"hi"}`)
+			_, err := pipeline.Execute(context.Background(), mustClientRequest(t, "capability-first", plan, body), &downstreamRecorder{})
+			if ReasonOf(err) != ReasonCode("cyber_access_discovery_unavailable") || !errors.Is(err, failure.cause) || len(provider.requestsSnapshot()) != 0 || len(provider.queries) != 1 {
+				t.Fatalf("discovery failure classification/send boundary: reason=%s, model requests=%d, reads=%d, err=%v", ReasonOf(err), len(provider.requestsSnapshot()), len(provider.queries), err)
+			}
+			provider.err = nil
+			provider.catalog = cyberaccess.Catalog{"client-model": {"standard", "daybreak_blue"}}
+			result, err := pipeline.Execute(context.Background(), mustClientRequest(t, "capability-recovered", plan, body), &downstreamRecorder{})
+			requests := provider.requestsSnapshot()
+			if err != nil || result.Outcome != AttemptSucceeded || len(requests) != 1 || len(provider.queries) != 2 {
+				t.Fatalf("same-scope recovery did not resume explicitly: result=%+v, sends=%d, reads=%d, err=%v", result, len(requests), len(provider.queries), err)
+			}
+			actual, ok := requests[0].AccountRef()
+			if !ok || actual.ID != account.id || actual.Revision != uint64(account.revision) || actual.CredentialEpoch != account.epoch || actual.CyberAccessProgram != cyberaccess.Blue {
+				t.Fatal("recovery changed the frozen account or saved mode")
+			}
+			var wire struct {
+				Access struct {
+					Cyber string `json:"cyber"`
+				} `json:"access_programs"`
+			}
+			if json.Unmarshal(requests[0].Body(), &wire) != nil || wire.Access.Cyber != "daybreak_blue" {
+				t.Fatal("recovery silently changed the selected mode")
+			}
+		})
+	}
+}
+
+func TestCyberDiscoveryPreservesParentCancellation(t *testing.T) {
+	account := testAccount{id: "account.selected", revision: 3, epoch: 7}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses, chatGPTClient: true,
+		destination: environment.DestinationKindUpstream, providerOrigin: "https://chatgpt.com",
+		backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough,
+		accounts: []testAccount{account}, preferred: account.id,
+	})
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := &cyberModeProvider{providerDouble: &providerDouble{}, discover: func(ctx context.Context) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	pipeline := newTestPipeline(t, cyberModeAuthority{newAccountAuthority(t, account), cyberaccess.Blue}, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	result, err := pipeline.Execute(parent, mustClientRequest(t, "capability-cancelled", plan, []byte(`{"model":"client-model","input":"hi"}`)), &downstreamRecorder{})
+	if ReasonOf(err) != ReasonExchangeCanceled || !errors.Is(err, context.Canceled) || result.Outcome != AttemptCanceled || len(provider.requestsSnapshot()) != 0 {
+		t.Fatalf("parent cancellation changed to discovery failure: reason=%s outcome=%s err=%v", ReasonOf(err), result.Outcome, err)
+	}
+}
+
 type cyberModeAuthority struct {
 	AccountLeaseAuthority
 	mode cyberaccess.Preference
@@ -41,13 +112,17 @@ func (l cyberModeLease) Account() (providerauth.AccountRef, bool) {
 
 type cyberModeProvider struct {
 	*providerDouble
-	catalog cyberaccess.Catalog
-	err     error
-	queries []providertransport.Request
+	catalog  cyberaccess.Catalog
+	err      error
+	queries  []providertransport.Request
+	discover func(context.Context) error
 }
 
-func (p *cyberModeProvider) AccountCyberPrograms(_ context.Context, r providertransport.Request) (cyberaccess.Catalog, error) {
+func (p *cyberModeProvider) AccountCyberPrograms(ctx context.Context, r providertransport.Request) (cyberaccess.Catalog, error) {
 	p.queries = append(p.queries, r)
+	if p.discover != nil {
+		return nil, p.discover(ctx)
+	}
 	return p.catalog, p.err
 }
 
@@ -108,7 +183,11 @@ func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 			body := []byte(`{"model":"client-model","stream":false,"input":"hi","access_programs":{"cyber":"` + test.current + `"}}`)
 			result, err := pipeline.Execute(context.Background(), mustClientRequest(t, "exchange-blue", plan, body), &downstreamRecorder{})
 			if test.want == "" {
-				if ReasonOf(err) != ReasonCode("cyber_access_program_unavailable") {
+				wantReason := ReasonCyberAccessProgramUnavailable
+				if test.unavailable {
+					wantReason = ReasonCyberDiscoveryUnavailable
+				}
+				if ReasonOf(err) != wantReason {
 					t.Fatalf("want explicit mode unavailable, got %v", err)
 				}
 				if len(provider.requestsSnapshot()) != 0 {
@@ -186,7 +265,7 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 		{name: "different model cannot authorize Guardian", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", programs: []string{"daybreak_blue"}, otherModel: true, wantFailure: ReasonCyberAccessProgramUnavailable},
 		{name: "unadvertised internal alias remains unavailable", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", model: "codex-auto-review", wantFailure: ReasonCyberAccessProgramUnavailable},
 		{name: "advertised internal alias uses exact evidence", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_red", model: "codex-auto-review", programs: []string{"daybreak_blue"}, want: "daybreak_blue"},
-		{name: "Guardian directory failure stays unavailable", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", directoryErr: true, wantFailure: ReasonCyberAccessProgramUnavailable},
+		{name: "Guardian directory failure stays unavailable", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian"}}, current: "daybreak_blue", directoryErr: true, wantFailure: ReasonCyberDiscoveryUnavailable},
 		{name: "unrelated subagent stays Red", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"worker"}}, metadata: json.RawMessage(`{"x-openai-subagent":"worker"}`), current: "daybreak_blue", programs: []string{"daybreak_red"}, want: "daybreak_red"},
 		{name: "substring is not Guardian", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"guardian-worker"}}, current: "daybreak_blue", programs: []string{"daybreak_red"}, want: "daybreak_red"},
 		{name: "role value is case sensitive", mode: cyberaccess.Red, headers: http.Header{"X-Openai-Subagent": {"Guardian"}}, current: "daybreak_blue", programs: []string{"daybreak_red"}, want: "daybreak_red"},

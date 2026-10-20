@@ -71,28 +71,35 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Credits: 123.46'), findsOneWidget);
+    expect(find.text('123.46'), findsOneWidget);
+    expect(find.byTooltip('Credits: 123.46'), findsOneWidget);
+    final semantics = tester.ensureSemantics();
+    expect(find.bySemanticsLabel('Credits: 123.46'), findsOneWidget);
+    semantics.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  for (final (credits, english, chinese)
-      in <(Map<String, Object>?, String, String)>[
+  for (final (credits, english, chinese, compact)
+      in <(Map<String, Object>?, String, String, String?)>[
         (
           {'hasCredits': true, 'unlimited': true},
           'Credits: Unlimited',
           '积分余额：无限制',
+          '∞',
         ),
         (
           {'hasCredits': false, 'unlimited': false},
           'Credits: No credits available',
           '积分余额：无可用积分',
+          '0.00',
         ),
         (
           {'hasCredits': true, 'unlimited': false},
           'Credits: Not provided',
           '积分余额：未提供',
+          '?',
         ),
-        (null, 'The upstream did not provide this data.', '上游暂未提供此项数据。'),
+        (null, 'The upstream did not provide this data.', '上游暂未提供此项数据。', null),
       ]) {
     for (final language in [
       AppLanguage.english,
@@ -126,10 +133,19 @@ void main() {
           ),
         );
         expect(
-          find.text(language == AppLanguage.english ? english : chinese),
+          credits == null
+              ? find.text(language == AppLanguage.english ? english : chinese)
+              : find.byTooltip(
+                  language == AppLanguage.english ? english : chinese,
+                ),
           findsOneWidget,
         );
-        expect(find.textContaining('0.00'), findsNothing);
+        if (compact != null) {
+          expect(find.text(compact), findsOneWidget);
+        }
+        if (compact != '0.00') {
+          expect(find.textContaining('0.00'), findsNothing);
+        }
         if (credits != null) {
           await tester.pumpWidget(
             MaterialApp(
@@ -145,7 +161,7 @@ void main() {
             ),
           );
           expect(
-            find.text(language == AppLanguage.english ? english : chinese),
+            find.byTooltip(language == AppLanguage.english ? english : chinese),
             findsOneWidget,
           );
           expect(
@@ -414,28 +430,31 @@ void main() {
                 home: Scaffold(
                   body: RepaintBoundary(
                     key: boundary,
-                    child: AnimatedBuilder(
-                      animation: controller,
-                      builder: (_, _) => ValueListenableBuilder(
-                        valueListenable: accountsVisible,
-                        builder: (_, showAccounts, _) => Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            Offstage(
-                              offstage: showAccounts,
-                              child: EnvironmentsView(
-                                controller: controller,
-                                copy: copy,
+                    child: ColoredBox(
+                      color: theme.scaffoldBackgroundColor,
+                      child: AnimatedBuilder(
+                        animation: controller,
+                        builder: (_, _) => ValueListenableBuilder(
+                          valueListenable: accountsVisible,
+                          builder: (_, showAccounts, _) => Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Offstage(
+                                offstage: showAccounts,
+                                child: EnvironmentsView(
+                                  controller: controller,
+                                  copy: copy,
+                                ),
                               ),
-                            ),
-                            Offstage(
-                              offstage: !showAccounts,
-                              child: ProviderAccountsView(
-                                controller: controller,
-                                copy: copy,
+                              Offstage(
+                                offstage: !showAccounts,
+                                child: ProviderAccountsView(
+                                  controller: controller,
+                                  copy: copy,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -445,9 +464,9 @@ void main() {
             );
             await tester.pumpAndSettle();
             expect(api.calls, ['a-far', 'b-soon', 'c-unknown', 'd-expired']);
-            expect(find.text('123.46', skipOffstage: false), findsNWidgets(4));
+            expect(find.text('123.46', skipOffstage: false), findsNWidgets(8));
             expect(
-              find.text(
+              find.byTooltip(
                 copy.format('account_facts.credits', {'balance': '123.46'}),
               ),
               findsNWidgets(4),
@@ -603,12 +622,12 @@ void main() {
               'd-expired',
             ]);
             expect(
-              find.text(
+              find.byTooltip(
                 copy.format('account_facts.credits', {'balance': '234.57'}),
               ),
               findsNWidgets(4),
             );
-            expect(find.text('234.57', skipOffstage: false), findsNWidgets(4));
+            expect(find.text('234.57', skipOffstage: false), findsNWidgets(8));
             expect(find.text('5h · 42%'), findsNWidgets(3));
             expect(find.text('42%', skipOffstage: false), findsNWidgets(3));
             expect(order(), ['a-far', 'b-soon', 'c-unknown', 'd-expired']);
@@ -630,6 +649,43 @@ void main() {
               reviewDirectory,
               'quota-flow-${width.toInt()}-${dark ? 'zh-dark' : 'en-light'}-scale$scale',
             );
+            if (reviewDirectory != null && dark && scale == 1) {
+              await tester.ensureVisible(inactive);
+              final mouse = await tester.createGesture(
+                kind: ui.PointerDeviceKind.mouse,
+              );
+              await mouse.addPointer(location: Offset.zero);
+              await mouse.moveTo(tester.getCenter(inactive));
+              await tester.pump();
+              await tester.pump(const Duration(milliseconds: 200));
+              await _review(
+                tester,
+                boundary,
+                reviewDirectory,
+                'quota-activation-${width.toInt()}-hover-2x',
+              );
+              await mouse.removePointer();
+              tester.widget<IconButton>(inactive).focusNode!.requestFocus();
+              await tester.pump();
+              await tester.pump(const Duration(milliseconds: 200));
+              await _review(
+                tester,
+                boundary,
+                reviewDirectory,
+                'quota-activation-${width.toInt()}-focus-2x',
+              );
+              expect(
+                controller
+                    .selectedEnvironment!
+                    .routes
+                    .single
+                    .accountPolicy
+                    .fixedAccountId,
+                'a-far',
+              );
+              FocusManager.instance.primaryFocus?.unfocus();
+              await tester.pumpAndSettle();
+            }
             accountsVisible.value = true;
             await tester.pumpAndSettle();
             final accountRefresh = find.byKey(
@@ -735,7 +791,7 @@ Future<void> _review(
   await tester.runAsync(() async {
     final boundary =
         key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-    final image = await boundary.toImage();
+    final image = await boundary.toImage(pixelRatio: 2);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     await Directory(directory).create(recursive: true);
     await File(

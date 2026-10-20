@@ -69,6 +69,7 @@ type session struct {
 	ready  chan struct{}
 	client *vlesscore.Client
 	err    error
+	cancel context.CancelFunc
 }
 type Manager struct {
 	store        secretstore.Store
@@ -282,23 +283,47 @@ func (m *Manager) client(ctx context.Context, policy egressnetwork.ProxyPolicy) 
 	if err != nil || ref.Namespace() != "egress-vless" || policy.Kind != egressnetwork.ProxyVLESS || policy.CredentialRevision == 0 || policy.CredentialRevision > uint64(secretstore.MaxRevision) {
 		return nil, ErrUnavailable
 	}
-	m.mu.Lock()
-	if m.closed {
+	var entry *session
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, ErrUnavailable
+		}
+		var exists bool
+		entry, exists = m.sessions[policy]
+		if !exists {
+			entry = &session{ready: make(chan struct{})}
+			m.sessions[policy] = entry
+		}
 		m.mu.Unlock()
-		return nil, ErrUnavailable
-	}
-	entry, exists := m.sessions[policy]
-	if !exists {
-		entry = &session{ready: make(chan struct{})}
-		m.sessions[policy] = entry
-	}
-	m.mu.Unlock()
-	if exists {
+		if !exists {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-entry.ready:
-			return entry.client, entry.err
+		}
+		if entry.err != nil {
+			return nil, entry.err
+		}
+		select {
+		case <-entry.client.Done():
+			// Only a confirmed exited and drained process loses its cache
+			// entry. Concurrent later operations share one fresh startup;
+			// request errors never retire a live core or replay its traffic.
+			m.mu.Lock()
+			if m.sessions[policy] == entry {
+				delete(m.sessions, policy)
+			}
+			m.mu.Unlock()
+			entry.cancel()
+		default:
+			return entry.client, nil
 		}
 	}
 	// Startup belongs to the manager, while caller cancellation still aborts
@@ -326,7 +351,7 @@ func (m *Manager) client(ctx context.Context, policy egressnetwork.ProxyPolicy) 
 		client = nil
 		loadErr = ErrUnavailable
 	}
-	entry.client, entry.err = client, loadErr
+	entry.client, entry.err, entry.cancel = client, loadErr, cancelStartup
 	if loadErr != nil {
 		delete(m.sessions, policy)
 	}
