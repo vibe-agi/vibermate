@@ -53,7 +53,7 @@ func (handler *WebSelfHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		return
 	}
 	report, err := handler.usage.ReportForUser(request.Context(), query, principal.UserID)
-	if errors.Is(err, runtimeusage.ErrSnapshotChanged) {
+	if usageSnapshotChanged(err) {
 		writeProblem(writer, http.StatusConflict, "usage_snapshot_changed")
 		return
 	}

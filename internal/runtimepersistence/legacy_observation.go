@@ -465,8 +465,13 @@ func sameInspectionSourceFiles(a, b inspectionFiles, current bool) bool {
 	if a.database.Size() != b.database.Size() || !a.database.ModTime().Equal(b.database.ModTime()) {
 		return false
 	}
-	if a.wal == nil || b.wal == nil {
-		return a.wal == nil && b.wal == nil
+	// SQLite may create or remove an empty WAL while attaching a checkpointed
+	// WAL-mode archive read-only. Neither absent nor zero-byte WAL carries
+	// committed frames, so that sidecar transition does not change the source.
+	// Retained nonempty WAL still requires exact identity, size and mtime.
+	aEmpty, bEmpty := a.wal == nil || a.wal.Size() == 0, b.wal == nil || b.wal.Size() == 0
+	if aEmpty || bEmpty {
+		return aEmpty && bEmpty
 	}
 	return os.SameFile(a.wal, b.wal) && a.wal.Size() == b.wal.Size() && a.wal.ModTime().Equal(b.wal.ModTime())
 }
