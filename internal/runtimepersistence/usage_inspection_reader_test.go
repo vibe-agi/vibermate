@@ -403,13 +403,17 @@ func TestUsageInspectionHTTPRechecksActualReaderAfterProjection(t *testing.T) {
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, servercontrol.RuntimeUserUsagePath+"?from=2026-10-01&until=2026-10-20&timeZone=UTC", nil))
 			expected := http.StatusOK
 			if changed {
-				expected = http.StatusServiceUnavailable
+				expected = http.StatusConflict
 			}
 			if response.Code != expected {
 				t.Fatalf("HTTP published stale independent inspection: %d %s", response.Code, response.Body.String())
 			}
 			if !changed && (!strings.Contains(response.Body.String(), `"agentApiCalls":1`) || response.Header().Get("Cache-Control") != "no-store") {
 				t.Fatalf("independent report response: %s", response.Body.String())
+			}
+			if changed && (!strings.Contains(response.Body.String(), `"code":"usage_snapshot_changed"`) ||
+				strings.Contains(response.Body.String(), `"agentApiCalls"`)) {
+				t.Fatalf("changed inspection lost its conflict contract or exposed a stale report: %s", response.Body.String())
 			}
 			if strings.Contains(response.Body.String(), "InspectionToken") || strings.Contains(response.Body.String(), "SourceSet") {
 				t.Fatal("internal token leaked")
@@ -583,7 +587,10 @@ func TestUsageInspectionAuthenticatedHTTPUsesActualMemberAndGuard(t *testing.T) 
 		nativeExec(t, f.control.store.database, `UPDATE runtime_storage_state SET visibility_revision=visibility_revision+1`)
 	}
 	response = request()
-	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "member-profile") {
+	if response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), `"code":"usage_snapshot_changed"`) ||
+		strings.Contains(response.Body.String(), "member-profile") ||
+		strings.Contains(response.Body.String(), `"agentApiCalls"`) {
 		t.Fatalf("self HTTP stale report: %d %s", response.Code, response.Body.String())
 	}
 }
