@@ -328,7 +328,7 @@ func (codec *Codec) decodeClientRequest(
 	namespaces := make([]protocolcore.ToolNamespace, 0)
 	for index, raw := range input {
 		decodedMessages, decodedTools, decodedNamespaces, itemReport, err :=
-			codec.decodeInputItem(index, raw, !strictRoot)
+			codec.decodeInputItem(index, raw, !strictRoot, budget)
 		if err != nil {
 			return protocolcore.Request{}, report.Build(), err
 		}
@@ -341,43 +341,12 @@ func (codec *Codec) decodeClientRequest(
 	}
 	for index, raw := range wire.Tools {
 		path := fmt.Sprintf("$.tools[%d]", index)
-		kind, err := peekType(raw)
+		unprojected, toolReport, err := unprojectedToolDeclaration(raw, path, !strictRoot)
 		if err != nil {
-			return protocolcore.Request{}, report.Build(), invalidClient(path, err)
+			return protocolcore.Request{}, report.Build(), err
 		}
-		if kind == "web_search" {
-			var hosted webSearchToolWire
-			if err := decodeClientWire(raw, &hosted, !strictRoot); err != nil {
-				return protocolcore.Request{}, report.Build(), invalidClient(path, err)
-			}
-			if err := protocolcore.AppendReportWithin(&report, notice(
-				protocolcore.NoticeHostedToolNotForwarded,
-				path,
-			), budget); err != nil {
-				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
-			}
-			continue
-		}
-		if kind == "tool_search" {
-			if strictRoot {
-				return protocolcore.Request{}, report.Build(), invalidClient(
-					path+".type",
-					errors.New("Responses tool search requires a same-dialect path"),
-				)
-			}
-			if err := protocolcore.AppendReportWithin(&report, notice(
-				protocolcore.NoticeHostedToolNotForwarded,
-				path,
-			), budget); err != nil {
-				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
-			}
-			continue
-		}
-		if !strictRoot && !modelledResponsesToolType(kind) {
-			// Hosted and client-native tools the projection does not model.
-			// They carry no definition into the tool policy: calls they
-			// produce are unproven there, so nothing is approved by omission.
-			if err := protocolcore.AppendReportWithin(&report, notice(protocolcore.NoticeNativeContentNotProjected, path), budget); err != nil {
+		if unprojected {
+			if err := protocolcore.AppendReportWithin(&report, toolReport, budget); err != nil {
 				return protocolcore.Request{}, report.Build(), invalidClient("$", err)
 			}
 			continue
@@ -604,6 +573,7 @@ func (codec *Codec) decodeInputItem(
 	index int,
 	raw json.RawMessage,
 	compatible bool,
+	budget *protocolcore.ResourceBudget,
 ) (
 	[]protocolcore.Message,
 	[]protocolcore.ToolDefinition,
@@ -657,10 +627,26 @@ func (codec *Codec) decodeInputItem(
 		}
 		tools := make([]protocolcore.ToolDefinition, 0, len(wire.Tools))
 		namespaces := make([]protocolcore.ToolNamespace, 0)
+		var report protocolcore.TranslationReportBuilder
 		for toolIndex, rawTool := range wire.Tools {
+			toolPath := fmt.Sprintf("%s.tools[%d]", path, toolIndex)
+			if compatible {
+				unprojected, toolReport, err := unprojectedToolDeclaration(rawTool, toolPath, true)
+				if err != nil {
+					return nil, nil, nil, protocolcore.TranslationReport{}, err
+				}
+				if unprojected {
+					// Charge this item's accumulator/freeze before growth. The
+					// caller separately charges its distinct root report copies.
+					if err := protocolcore.AppendReportWithin(&report, toolReport, budget); err != nil {
+						return nil, nil, nil, protocolcore.TranslationReport{}, invalidClient(toolPath, err)
+					}
+					continue
+				}
+			}
 			tool, namespace, err := codec.decodeTool(
 				rawTool,
-				fmt.Sprintf("%s.tools[%d]", path, toolIndex),
+				toolPath,
 				true,
 				compatible,
 			)
@@ -673,10 +659,13 @@ func (codec *Codec) decodeInputItem(
 				tools = append(tools, tool)
 			}
 		}
-		return nil, tools, namespaces, notice(
+		if err := protocolcore.AppendReportWithin(&report, notice(
 			protocolcore.NoticeToolPlacementNormalized,
 			path,
-		), nil
+		), budget); err != nil {
+			return nil, nil, nil, protocolcore.TranslationReport{}, invalidClient(path, err)
+		}
+		return nil, tools, namespaces, report.Build(), nil
 	default:
 		// Other items are history the same-dialect wire carries unchanged:
 		// provider-native state, hosted-tool results, references, or item
@@ -744,6 +733,35 @@ func modelledResponsesToolType(kind string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// unprojectedToolDeclaration applies the same native declaration policy to
+// top-level tools and compatible additional_tools items. These declarations
+// remain on the authoritative source wire and create no semantic tool catalog
+// entry; provider calls they produce still require independent proven authority.
+func unprojectedToolDeclaration(raw json.RawMessage, path string, compatible bool) (bool, protocolcore.TranslationReport, error) {
+	kind, err := peekType(raw)
+	if err != nil {
+		return false, protocolcore.TranslationReport{}, invalidClient(path, err)
+	}
+	switch kind {
+	case "web_search":
+		var hosted webSearchToolWire
+		if err := decodeClientWire(raw, &hosted, compatible); err != nil {
+			return false, protocolcore.TranslationReport{}, invalidClient(path, err)
+		}
+		return true, notice(protocolcore.NoticeHostedToolNotForwarded, path), nil
+	case "tool_search":
+		if !compatible {
+			return false, protocolcore.TranslationReport{}, invalidClient(path+".type", errors.New("Responses tool search requires a same-dialect path"))
+		}
+		return true, notice(protocolcore.NoticeHostedToolNotForwarded, path), nil
+	default:
+		if compatible && !modelledResponsesToolType(kind) {
+			return true, notice(protocolcore.NoticeNativeContentNotProjected, path), nil
+		}
+		return false, protocolcore.TranslationReport{}, nil
 	}
 }
 
