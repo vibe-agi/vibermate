@@ -101,9 +101,21 @@ func (e *executor) previewIntents(b nativetool.Binding, intents []protocolcore.T
 	}
 	return nil, nil
 }
-func (e *executor) retainPreview(id nativetool.ID, b nativetool.Binding, intents []protocolcore.ToolIntent, r rpc, s *session) error {
+func (e *executor) retainPreview(ctx context.Context, id nativetool.ID, b nativetool.Binding, intents []protocolcore.ToolIntent, r rpc, s *session) error {
 	if b.Plan().PolicySet().ToolMode != environment.ToolPolicyReview {
-		return nil
+		if b.Plan().PolicySet().ToolMode != environment.ToolPolicyObserve {
+			return nil
+		}
+		scope, err := e.dependencies.Store.GetScope(ctx, b.Capture())
+		if err != nil {
+			return err
+		}
+		if scope.State != "active" || scope.OwnerEpoch != b.OwnerEpoch() || !scope.ExpiresAt.After(e.dependencies.Clock().UTC()) {
+			return nativetool.ErrDenied
+		}
+		if !scope.ReplayBarrier {
+			return nil
+		}
 	}
 	display, err := e.previewIntents(b, intents, r, s)
 	if err != nil || len(display) == 0 {

@@ -181,6 +181,7 @@ func (launcher *Launcher) Run(
 	request LaunchRequest,
 ) (int, error) {
 	command := append([]string(nil), request.Command...)
+	request.Command = command
 	if launcher == nil || ctx == nil || len(command) == 0 || command[0] == "" {
 		return 1, errors.New("launcher requires a context and command")
 	}
@@ -242,10 +243,11 @@ func (launcher *Launcher) Run(
 		launcher.config.CreateTimeout,
 		func(call context.Context) error {
 			var createErr error
-			grant, createErr = control.create(
-				call,
-				createRequest,
-			)
+			if remote == nil {
+				grant, createErr = control.createLocal(call, createRequest)
+			} else {
+				grant, createErr = control.create(call, createRequest)
+			}
 			return createErr
 		},
 	)
@@ -277,9 +279,22 @@ func (launcher *Launcher) Run(
 	// Explain a missing compatible launch recipe without implying that a
 	// publisher-recognized launch is an exact catalogued release.
 	launcher.warnUnverified(grant)
+	var recovery *localRecoverySession
+	environmentGrant := grant
+	if remote == nil {
+		recovery, err = launcher.newLocalRecovery(ctx, control, grant, createRequest, request)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+		if recovery != nil {
+			defer recovery.close()
+			environmentGrant = recovery.childGrant(grant)
+		}
+	}
 	environment, err := buildEnvironment(
 		launcher.config.BaseEnvironment,
-		grant,
+		environmentGrant,
 	)
 	if err != nil {
 		launcher.finishBestEffort(control, grant)
@@ -325,6 +340,9 @@ func (launcher *Launcher) Run(
 		launcher.announceManagedAuth()
 	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
+	if recovery != nil {
+		recovery.childEnvironment = append([]string(nil), environment...)
+	}
 
 	childContext, cancelChild := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelChild(errors.New("launcher child supervision ended"))
@@ -377,33 +395,41 @@ func (launcher *Launcher) Run(
 	heartbeatContext, stopHeartbeat := context.WithCancelCause(
 		context.Background(),
 	)
-	heartbeatFailure := launcher.heartbeat(
-		heartbeatContext,
-		control,
-		grant,
-	)
+	var heartbeatFailure <-chan error
+	if recovery != nil {
+		heartbeatFailure = recovery.heartbeat(heartbeatContext, child.Process.Pid)
+	} else {
+		heartbeatFailure = launcher.heartbeat(heartbeatContext, control, grant)
+	}
+	stopSupervision := func(cause error) {
+		stopHeartbeat(cause)
+		if recovery != nil {
+			<-recovery.done
+			control, grant = recovery.control, recovery.grant
+		}
+	}
 	defer stopHeartbeat(errors.New("captured process ended"))
 
 	var waitErr error
 	select {
 	case waitErr = <-waitResult:
 	case heartbeatErr := <-heartbeatFailure:
-		stopHeartbeat(heartbeatErr)
+		stopSupervision(heartbeatErr)
 		cancelChild(heartbeatErr)
 		waitErr = <-waitResult
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, errors.Join(ErrCaptureSupervisionFailed, fmt.Errorf("CaptureRun heartbeat failed: %w", heartbeatErr))
 	case <-ctx.Done():
-		stopHeartbeat(ctx.Err())
 		cancelChild(ctx.Err())
+		stopSupervision(ctx.Err())
 		waitErr = <-waitResult
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, ctx.Err()
 	}
 	restoreTerminal()
-	stopHeartbeat(errors.New("captured process exited"))
+	stopSupervision(errors.New("captured process exited"))
 	finishErr := launcher.callWithTimeout(
 		context.Background(),
 		func(call context.Context) error {

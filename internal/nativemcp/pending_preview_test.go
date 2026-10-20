@@ -87,12 +87,12 @@ func TestPendingPreviewCapacityDeniesWithoutEvictingPendingIntent(t *testing.T) 
 	}
 	for i := 1; i < 1024; i++ {
 		id, _ := nativetool.NewID(fmt.Sprintf("%032x", 10000+i))
-		if err = e.retainPreview(id, binding, intents, r, s); err != nil {
+		if err = e.retainPreview(context.Background(), id, binding, intents, r, s); err != nil {
 			t.Fatalf("capacity denied before1024: %v", err)
 		}
 	}
 	id, _ := nativetool.NewID(fmt.Sprintf("%032x", 20000))
-	if err = e.retainPreview(id, binding, intents, r, s); err != errBudget {
+	if err = e.retainPreview(context.Background(), id, binding, intents, r, s); err != errBudget {
 		t.Fatalf("capacity accepted %v", err)
 	}
 	if _, err = e.PendingPreview(context.Background(), f.capture, call.id, a.BindingDigest); err != nil {
@@ -154,14 +154,14 @@ func TestPendingPreviewTotalByteBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = e.retainPreview(call.id, binding, intents, r, session); err != nil {
+	if err = e.retainPreview(context.Background(), call.id, binding, intents, r, session); err != nil {
 		t.Fatal(err)
 	}
 	first := e.previews[call.id].data
 	denied := false
 	for index := 0; index < 1024; index++ {
 		id, _ := nativetool.NewID(fmt.Sprintf("%032x", 30000+index))
-		err = e.retainPreview(id, binding, intents, r, session)
+		err = e.retainPreview(context.Background(), id, binding, intents, r, session)
 		if err == errBudget {
 			denied = true
 			break

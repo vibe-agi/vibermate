@@ -18,9 +18,9 @@ import (
 const ReasonStrictPolicy = "tool_policy_strict"
 
 // Gate preserves the user's explicit mode while keeping the durable human
-// approval authority separate. Observe never waits. Review delegates only
-// unproven groups. Strict rejects them without creating a question that no
-// human answer is allowed to override.
+// approval authority separate. Ordinary Observe does not wait; native recovery
+// barriers require a fresh decision. Review delegates unproven groups. Strict
+// rejects them without creating a question a human answer could override.
 type Gate struct {
 	review exchange.ToolDecisionGate
 }
@@ -50,7 +50,9 @@ func (gate Gate) Decide(
 		}
 		switch policy.ToolMode {
 		case environment.ToolPolicyObserve:
-			return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
+			// Native authority may carry a recovery barrier even when the
+			// Environment ordinarily permits execution without a question.
+			return gate.review.Decide(ctx, request)
 		case environment.ToolPolicyStrict:
 			return exchange.ToolDecision{Outcome: exchange.ToolDecisionRejected, ReasonCode: ReasonStrictPolicy}, nil
 		case environment.ToolPolicyReview:

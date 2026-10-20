@@ -18,6 +18,7 @@ type Client struct {
 	origin    string
 	client    *http.Client
 	transport *http.Transport
+	rawDialer *net.Dialer
 }
 
 func New(origin string, timeout time.Duration) (*Client, error) {
@@ -83,6 +84,7 @@ func New(origin string, timeout time.Duration) (*Client, error) {
 			},
 		},
 		transport: transport,
+		rawDialer: &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 15 * time.Second},
 	}, nil
 }
 
@@ -110,8 +112,8 @@ func (client *Client) Close() {
 // It uses the same direct dial policy as Do. The caller owns and must close the
 // returned stream; Client.Close only releases pooled HTTP connections.
 func (client *Client) Dial(ctx context.Context) (net.Conn, error) {
-	if client == nil || client.transport == nil || ctx == nil {
+	if client == nil || client.rawDialer == nil || ctx == nil {
 		return nil, errors.New("loopback client and context are required")
 	}
-	return client.transport.DialContext(ctx, "tcp4", strings.TrimPrefix(client.origin, "http://"))
+	return client.rawDialer.DialContext(ctx, "tcp4", strings.TrimPrefix(client.origin, "http://"))
 }

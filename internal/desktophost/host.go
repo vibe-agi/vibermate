@@ -387,14 +387,15 @@ func startWithConstructors(ctx context.Context, options Options,
 		return fail("ManualCapture control routes", err)
 	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
-		Environments:    runtime.Environments(),
-		LaunchSnapshots: runtime.LaunchSnapshots(),
-		ACP:             runtime.ACPObservations(),
-		Runs:            runtime.CaptureRuns(),
-		Principals:      cliControl,
-		Issuer:          grantIssuer,
-		Manual:          manualCaptureHandler,
-		RunLifetime:     options.CaptureRunLifetime,
+		Environments:           runtime.Environments(),
+		LaunchSnapshots:        runtime.LaunchSnapshots(),
+		ACP:                    runtime.ACPObservations(),
+		Runs:                   runtime.CaptureRuns(),
+		Principals:             cliControl,
+		Issuer:                 grantIssuer,
+		Manual:                 manualCaptureHandler,
+		RunLifetime:            options.CaptureRunLifetime,
+		NativeRecoveryPreparer: runtime.PrepareNativeRecovery,
 	})
 	if err != nil {
 		return fail("capture control routes", err)

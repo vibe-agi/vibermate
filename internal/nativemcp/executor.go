@@ -542,7 +542,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		if err != nil {
 			return reject(w, c.id, ReasonProtocolInvalid)
 		}
-		if err = e.retainPreview(c.id, binding, intents, r, s); err != nil {
+		if err = e.retainPreview(call, c.id, binding, intents, r, s); err != nil {
 			return reject(w, c.id, reasonFor(err))
 		}
 		decision, err := e.dependencies.ToolDecisions.Decide(call, decisionRequest)

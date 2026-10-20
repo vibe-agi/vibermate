@@ -86,6 +86,7 @@ func classifyControlCause(err error, fallback string) string {
 // Only locally constructed methods and paths select a stage. Run identifiers
 // and unrecognized paths never enter the diagnostic output.
 func controlRequestStage(method, path string) string {
+	path, _, _ = strings.Cut(path, "?")
 	if method == http.MethodGet && path == servercontrol.RuntimeUserCurrentSessionPath {
 		return "session_check"
 	}

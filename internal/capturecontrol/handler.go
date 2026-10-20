@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -75,18 +76,22 @@ type Options struct {
 	Issuer          CaptureRunIssuer
 	Manual          *ManualHandler
 	RunLifetime     time.Duration
+	// NativeRecoveryPreparer installs a restrictive native decision barrier
+	// before an opted-in attach can be acknowledged.
+	NativeRecoveryPreparer func(context.Context, capturerun.View) error
 }
 
 type Handler struct {
-	environments    environment.Reader
-	launchSnapshots *launchsnapshot.Store
-	acp             *acpobservation.Manager
-	runs            capturerun.Controller
-	principals      PrincipalAuthenticator
-	issuer          CaptureRunIssuer
-	manual          *ManualHandler
-	runLifetime     time.Duration
-	mux             *http.ServeMux
+	environments           environment.Reader
+	launchSnapshots        *launchsnapshot.Store
+	acp                    *acpobservation.Manager
+	runs                   capturerun.Controller
+	principals             PrincipalAuthenticator
+	issuer                 CaptureRunIssuer
+	manual                 *ManualHandler
+	runLifetime            time.Duration
+	nativeRecoveryPreparer func(context.Context, capturerun.View) error
+	mux                    *http.ServeMux
 }
 
 type CreateRequest struct {
@@ -161,15 +166,16 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
 	}
 	handler := &Handler{
-		environments:    options.Environments,
-		launchSnapshots: options.LaunchSnapshots,
-		acp:             options.ACP,
-		runs:            options.Runs,
-		principals:      options.Principals,
-		issuer:          options.Issuer,
-		manual:          options.Manual,
-		runLifetime:     options.RunLifetime,
-		mux:             http.NewServeMux(),
+		environments:           options.Environments,
+		launchSnapshots:        options.LaunchSnapshots,
+		acp:                    options.ACP,
+		runs:                   options.Runs,
+		principals:             options.Principals,
+		issuer:                 options.Issuer,
+		manual:                 options.Manual,
+		runLifetime:            options.RunLifetime,
+		nativeRecoveryPreparer: options.NativeRecoveryPreparer,
+		mux:                    http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET "+EnvironmentsPath, handler.listEnvironments)
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
@@ -243,6 +249,15 @@ func (handler *Handler) create(
 		)
 		return
 	}
+	localRecovery, err := recoveryQueryOptIn(request.URL.RawQuery, "localRecovery")
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
+	if localRecovery && (principal.Kind() != controlprincipal.KindLocalCLI || !principal.Allows(controlprincipal.GrantCaptureRun)) {
+		writeProblem(writer, http.StatusForbidden, ReasonCaptureGrantNotAllowed)
+		return
+	}
 	var input CreateRequest
 	if err := decodeJSON(request, &input, maxCreateBytes); err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
@@ -297,7 +312,7 @@ func (handler *Handler) create(
 	if handler.launchSnapshots != nil && input.EnvironmentInventory != nil {
 		handler.launchSnapshots.Record(grant.Run.Run, *input.EnvironmentInventory)
 	}
-	writeJSON(writer, http.StatusCreated, LaunchGrant{
+	response := LaunchGrant{
 		NativeToolLogin:      grant.NativeToolLogin,
 		Run:                  runView,
 		CatalogRevision:      grant.CatalogRevision,
@@ -318,7 +333,17 @@ func (handler *Handler) create(
 			grant.ManagedCredentialAuthorities...,
 		),
 		LaunchEnvironment: grant.LaunchEnvironment.Clone(),
-	})
+	}
+	if localRecovery && grant.ProxyDelivery == capturegrant.ProxyDeliveryLocalListener {
+		response.LocalRecovery = &LocalRecoveryView{
+			InitialEnvironmentID:       grant.InitialEnvironmentID,
+			InitialEnvironmentRevision: grant.InitialEnvironmentRevision,
+			InitialEnvironmentDigest:   grant.InitialEnvironmentDigest.String(),
+			LaunchAuthorityDigest:      grant.LaunchAuthorityDigest.String(),
+			CanNativeReview:            handler.nativeRecoveryPreparer != nil,
+		}
+	}
+	writeJSON(writer, http.StatusCreated, response)
 }
 
 func (handler *Handler) attach(
@@ -328,6 +353,11 @@ func (handler *Handler) attach(
 	capability, ok := consumeRunCapability(request)
 	if !ok {
 		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
+		return
+	}
+	requireNativeReview, err := recoveryQueryOptIn(request.URL.RawQuery, "requireNativeReview")
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidProcess)
 		return
 	}
 	var input AttachRequest
@@ -346,7 +376,28 @@ func (handler *Handler) attach(
 		writeRunControlFailure(writer, err)
 		return
 	}
+	if requireNativeReview {
+		if handler.nativeRecoveryPreparer == nil {
+			writeProblem(writer, http.StatusServiceUnavailable, ReasonRunControlUnavailable)
+			return
+		}
+		if err := handler.nativeRecoveryPreparer(request.Context(), view); err != nil {
+			writeRunControlFailure(writer, err)
+			return
+		}
+	}
 	writeJSON(writer, http.StatusOK, CaptureRunViewOf(view))
+}
+
+func recoveryQueryOptIn(rawQuery, name string) (bool, error) {
+	if rawQuery == "" {
+		return false, nil
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values) != 1 || len(values[name]) != 1 || values.Get(name) != "1" {
+		return false, errors.New("invalid recovery negotiation")
+	}
+	return true, nil
 }
 
 func (handler *Handler) heartbeat(

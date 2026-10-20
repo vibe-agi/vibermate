@@ -147,7 +147,7 @@ async function fixture(t) {
   );
   await writeFixtureFile(
     join(repositoryRoot, "ui/flutter_app/pubspec.yaml"),
-    "name: vibermate_app\nversion: 0.1.32+34\nenvironment:\n  sdk: ^3.11.3\n",
+    "name: vibermate_app\nversion: 0.1.33+35\nenvironment:\n  sdk: ^3.11.3\n",
   );
   await writeFixtureFile(
     join(repositoryRoot, "LICENSE"),
@@ -480,7 +480,7 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
       ["alpha-library", "1.2.3"],
       ["beta-library", "2.0.0"],
       ["version-unknown-library", "NOASSERTION"],
-      ["vibermate", "0.1.32"],
+      ["vibermate", "0.1.33"],
     ],
   );
   assert.equal(
