@@ -47,9 +47,43 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
   var _sort = _ProviderAccountSort.defaultOrder;
   String _quotaSignature = '';
   bool _refreshingAccounts = false;
+  final _manualQuotaWaits = <(String, int, int, String), Object>{};
+
+  (String, int, int, String) _quotaScope(ProviderAccount account) => (
+    account.id,
+    account.credentialEpoch,
+    account.settingsRevision,
+    account.credentialOrigin,
+  );
+
+  @override
+  void didUpdateWidget(covariant ProviderAccountsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      _manualQuotaWaits.clear();
+      _quotaSignature = '';
+    }
+  }
+
+  Future<void> _refreshQuota(ProviderAccount account) async {
+    final scope = _quotaScope(account);
+    if (_manualQuotaWaits.containsKey(scope) || !account.usable) return;
+    final wait = Object();
+    setState(() => _manualQuotaWaits[scope] = wait);
+    try {
+      // A background read may already own this scope. The controller returns
+      // its pending future so this action waits without another upstream read.
+      await widget.controller.refreshProviderAccountQuota(account);
+    } finally {
+      if (mounted && identical(_manualQuotaWaits[scope], wait)) {
+        setState(() => _manualQuotaWaits.remove(scope));
+      }
+    }
+  }
 
   @override
   void dispose() {
+    _manualQuotaWaits.clear();
     _search.dispose();
     super.dispose();
   }
@@ -59,6 +93,11 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
     final controller = widget.controller;
     final copy = widget.copy;
     final accounts = controller.data?.accounts ?? const <ProviderAccount>[];
+    final currentScopes = accounts
+        .where((account) => account.usable)
+        .map(_quotaScope)
+        .toSet();
+    _manualQuotaWaits.removeWhere((scope, _) => !currentScopes.contains(scope));
     final endpoints = controller.data?.endpoints ?? const <UpstreamEndpoint>[];
     _scheduleQuotaLoads(accounts);
     final query = _search.text.trim().toLowerCase();
@@ -91,6 +130,10 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
           dismissHelpLabel: copy('common.dismiss'),
           trailing: LayoutBuilder(
             builder: (context, constraints) {
+              final compactActions =
+                  constraints.maxWidth < 360 ||
+                  (!constraints.hasBoundedWidth &&
+                      MediaQuery.textScalerOf(context).scale(12) > 18);
               final onRefresh =
                   _refreshingAccounts || controller.inventoryMutating
                   ? null
@@ -101,7 +144,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       child: CircularProgressIndicator(strokeWidth: 1.5),
                     )
                   : const Icon(Icons.refresh, size: 16);
-              final refresh = constraints.maxWidth < 360
+              final refresh = compactActions
                   ? IconButton.outlined(
                       key: const Key('provider-accounts-refresh-all'),
                       onPressed: onRefresh,
@@ -122,7 +165,7 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                         copy: copy,
                       ),
                     );
-              final add = constraints.maxWidth < 360
+              final add = compactActions
                   ? IconButton.filled(
                       key: const Key('provider-accounts-add'),
                       onPressed: onAdd,
@@ -410,9 +453,9 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               copy: copy,
             ),
           ),
-          refreshingQuota: controller.providerAccountQuotaLoading(account),
+          refreshingQuota: _manualQuotaWaits.containsKey(_quotaScope(account)),
           onRefreshQuota: _supportsQuota(account)
-              ? () => unawaited(controller.refreshProviderAccountQuota(account))
+              ? () => unawaited(_refreshQuota(account))
               : null,
           onReplace: () => unawaited(
             showProviderAccountEditor(
@@ -467,13 +510,8 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ProviderAccountTokenDetails(account: account, copy: copy),
-                  if (isChatGPTCodexOrigin(Uri.parse(account.credentialOrigin)))
-                    ProviderAccountCyberAccess(
-                      account: account,
-                      linkedEndpoints: linkedEndpoints,
-                      controller: controller,
-                      copy: copy,
-                    ),
+                  if (account.tokenInfo != null) const SizedBox(height: 12),
+                  _accountRuntimeSettings(context, account, linkedEndpoints),
                   if (_supportsQuota(account) || account.kind == 'codex_oauth')
                     ProviderAccountFactsPanel(
                       account: account,
@@ -481,45 +519,6 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       copy: copy,
                       showQuotaWindows: false,
                     ),
-                  const Divider(height: 24),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: CompactLabeledControl(
-                        label: copy('provider_accounts.egress.label'),
-                        help: copy('provider_accounts.egress.detail'),
-                        dismissHelpLabel: copy('common.dismiss'),
-                        child: OutlinedButton(
-                          key: Key('account-egress-${account.id}'),
-                          onPressed: controller.inventoryMutating
-                              ? null
-                              : () => unawaited(_selectAccountEgress(account)),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.alt_route_rounded, size: 16),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  account.egressProfile != null
-                                      ? egressProfileSummary(
-                                          copy,
-                                          account.egressProfile!,
-                                        )
-                                      : copy(
-                                          'provider_accounts.egress.inherit',
-                                        ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const Icon(Icons.expand_more, size: 16),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -542,6 +541,96 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
       ),
       clipBehavior: Clip.antiAlias,
       child: content,
+    );
+  }
+
+  Widget _accountRuntimeSettings(
+    BuildContext context,
+    ProviderAccount account,
+    List<UpstreamEndpoint> linkedEndpoints,
+  ) {
+    final copy = widget.copy;
+    final controller = widget.controller;
+    final egress = CompactLabeledControl(
+      label: copy('provider_accounts.egress.label'),
+      help: copy('provider_accounts.egress.detail'),
+      dismissHelpLabel: copy('common.dismiss'),
+      child: OutlinedButton(
+        key: Key('account-egress-${account.id}'),
+        onPressed: controller.inventoryMutating
+            ? null
+            : () => unawaited(_selectAccountEgress(account)),
+        child: Row(
+          children: [
+            const Icon(Icons.alt_route_rounded, size: 16),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                account.egressProfile != null
+                    ? egressProfileSummary(copy, account.egressProfile!)
+                    : copy('provider_accounts.egress.inherit'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Icon(Icons.expand_more, size: 16),
+          ],
+        ),
+      ),
+    );
+    final cyber = isChatGPTCodexOrigin(Uri.parse(account.credentialOrigin))
+        ? ProviderAccountCyberAccess(
+            account: account,
+            linkedEndpoints: linkedEndpoints,
+            controller: controller,
+            copy: copy,
+          )
+        : null;
+    return Container(
+      key: Key('account-runtime-settings-${account.id}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel.withValues(alpha: .45),
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              copy('provider_accounts.details.runtime_settings'),
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (cyber != null && constraints.maxWidth >= 900) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: 300, child: egress),
+                    const SizedBox(width: 24),
+                    Expanded(child: cyber),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: egress,
+                  ),
+                  if (cyber != null) ...[const SizedBox(height: 12), cyber],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 

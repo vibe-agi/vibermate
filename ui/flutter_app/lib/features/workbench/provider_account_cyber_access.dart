@@ -38,6 +38,8 @@ final class _ProviderAccountCyberAccessState
   int _generation = 0;
   int _selectionGeneration = 0;
   bool _loading = false;
+  bool _manuallyRefreshing = false;
+  Future<void>? _pendingLoad;
   bool _failed = false;
   UpstreamModelCatalog? _catalog;
 
@@ -93,19 +95,32 @@ final class _ProviderAccountCyberAccessState
     _catalog = null;
     _failed = false;
     _loading = false;
+    _manuallyRefreshing = false;
+    _pendingLoad = null;
     if (endpoint != null && account.usable) unawaited(_load());
   }
 
-  Future<void> _load({bool refresh = false}) async {
+  Future<void> _load({bool refresh = false}) {
+    final pending = _pendingLoad;
+    if (pending != null) return pending;
     final endpoint = _endpoint;
     final account = widget.account;
-    if (_loading || endpoint == null || !account.usable) return;
+    if (endpoint == null || !account.usable) return Future.value();
     final generation = ++_generation;
     setState(() {
       _loading = true;
       _failed = false;
       _catalog = null;
     });
+    return _pendingLoad = _readCatalog(endpoint, account, generation, refresh);
+  }
+
+  Future<void> _readCatalog(
+    UpstreamEndpoint endpoint,
+    ProviderAccount account,
+    int generation,
+    bool refresh,
+  ) async {
     try {
       final catalog = await widget.controller.upstreamModels(
         endpoint.id,
@@ -128,7 +143,26 @@ final class _ProviderAccountCyberAccessState
       }
     } finally {
       if (mounted && generation == _generation) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _pendingLoad = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshSupport() async {
+    if (_manuallyRefreshing || _endpoint == null || !widget.account.usable) {
+      return;
+    }
+    final request = _load(refresh: true);
+    final generation = _generation;
+    setState(() => _manuallyRefreshing = true);
+    try {
+      await request;
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() => _manuallyRefreshing = false);
       }
     }
   }
@@ -223,10 +257,10 @@ final class _ProviderAccountCyberAccessState
     );
     final refresh = TextButton.icon(
       key: Key('account-cyber-refresh-${account.id}'),
-      onPressed: !_loading && _endpoint != null && account.usable
-          ? () => unawaited(_load(refresh: true))
+      onPressed: !_manuallyRefreshing && _endpoint != null && account.usable
+          ? () => unawaited(_refreshSupport())
           : null,
-      icon: _loading
+      icon: _manuallyRefreshing
           ? const SizedBox.square(
               dimension: 14,
               child: CircularProgressIndicator(strokeWidth: 1.5),
@@ -244,7 +278,6 @@ final class _ProviderAccountCyberAccessState
       key: Key('provider-account-cyber-access-${account.id}'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Divider(height: 24),
         LayoutBuilder(
           builder: (context, constraints) {
             final select = SizedBox(

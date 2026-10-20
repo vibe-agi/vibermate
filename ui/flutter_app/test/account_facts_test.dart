@@ -1,6 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:vibermate_app/core/api/account_facts_models.dart';
@@ -15,6 +22,403 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  final reviewDirectory = kIsWeb
+      ? null
+      : Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
+  if (reviewDirectory != null && Platform.isMacOS) {
+    setUpAll(() async {
+      for (final font in {
+        viberSystemFontFamily: '/System/Library/Fonts/Helvetica.ttc',
+        'Ahem': '/System/Library/Fonts/Helvetica.ttc',
+        'Menlo': '/System/Library/Fonts/Menlo.ttc',
+        'Hiragino Sans GB': '/System/Library/Fonts/Hiragino Sans GB.ttc',
+      }.entries) {
+        final loader = FontLoader(font.key)
+          ..addFont(File(font.value).readAsBytes().then(ByteData.sublistView));
+        await loader.load();
+      }
+      await (FontLoader(
+        'MaterialIcons',
+      )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
+    });
+  }
+
+  for (final language in [AppLanguage.english, AppLanguage.simplifiedChinese]) {
+    for (final width in [390.0, 1180.0]) {
+      testWidgets(
+        'reset expiry countdown follows clock boundaries in $language at $width',
+        (tester) async {
+          await tester.binding.setSurfaceSize(Size(width, 960));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          var now = DateTime.utc(2031, 12, 31, 23, 59, 30);
+          final api = _FactsApi()
+            ..quota = {
+              'rateLimitResets': {
+                'availableCount': 4,
+                'applicableAvailableCount': 4,
+                'details': [
+                  for (final (id, duration) in [
+                    ('days', const Duration(days: 2, hours: 3)),
+                    ('hours', const Duration(hours: 23, minutes: 59)),
+                    ('minute', const Duration(minutes: 1)),
+                    ('day-boundary', const Duration(days: 1)),
+                    ('expired', const Duration(seconds: -1)),
+                  ])
+                    {
+                      'id': id,
+                      'title': 'Full reset · $id',
+                      'description':
+                          'Thanks for using Codex! You have been granted one free rate limit reset.',
+                      'resetType': 'codex_rate_limits',
+                      'status': 'available',
+                      'grantedAt': now
+                          .subtract(const Duration(days: 3))
+                          .toIso8601String(),
+                      'expiresAt': now.add(duration).toIso8601String(),
+                    },
+                ],
+              },
+            };
+          final fixture = await _fixture(api, codexOAuth: true);
+          final copy = AppCopy.forLanguage(language);
+          final boundary = GlobalKey();
+          final baseTheme = ViberTheme.dark();
+          final theme = reviewDirectory == null
+              ? baseTheme
+              : baseTheme.copyWith(
+                  textTheme: baseTheme.textTheme.apply(
+                    fontFamily: viberSystemFontFamily,
+                  ),
+                  dialogTheme: baseTheme.dialogTheme.copyWith(
+                    contentTextStyle: baseTheme.dialogTheme.contentTextStyle
+                        ?.copyWith(fontFamily: viberSystemFontFamily),
+                  ),
+                );
+          await fixture.controller.refreshProviderAccountQuota(fixture.account);
+          await tester.pumpWidget(
+            RepaintBoundary(
+              key: boundary,
+              child: MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: theme,
+                home: Scaffold(
+                  body: Center(
+                    child: ProviderAccountResetCreditsButton(
+                      account: fixture.account,
+                      controller: fixture.controller,
+                      copy: copy,
+                      clock: () => now,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.tap(
+            find.byKey(const Key('provider-account-resets-account.facts')),
+          );
+          await tester.pumpAndSettle();
+          final english = language == AppLanguage.english;
+          Finder entry(String id) =>
+              find.byKey(Key('account-reset-credit-$id'));
+          void countdown(String id, String en, String zh) {
+            expect(
+              find.descendant(
+                of: entry(id),
+                matching: find.text(english ? en : zh),
+              ),
+              findsOneWidget,
+            );
+          }
+
+          countdown('days', 'Expires in 2 days 3 hours', '还有 2 天 3 小时到期');
+          countdown(
+            'hours',
+            'Expires in 23 hours 59 minutes',
+            '还有 23 小时 59 分钟到期',
+          );
+          countdown('minute', 'Expires in 1 minute', '还有 1 分钟到期');
+          countdown('day-boundary', 'Expires in 1 day', '还有 1 天到期');
+          countdown('expired', 'Expiration reached', '已到期');
+          expect(
+            find.textContaining('2032-01-03'),
+            findsOneWidget,
+            reason: 'The absolute expiry stays visible alongside the countdown',
+          );
+          expect(tester.widget<ListTile>(entry('expired')).onTap, isNull);
+          expect(api.redeemCalls, isEmpty);
+          await tester.ensureVisible(entry('minute'));
+          await tester.tap(entry('minute'));
+          await tester.pumpAndSettle();
+          expect(
+            tester
+                .widget<FilledButton>(
+                  find.byKey(const Key('account-reset-confirm')),
+                )
+                .onPressed,
+            isNotNull,
+          );
+          now = now.add(const Duration(seconds: 1));
+          await tester.pump(const Duration(seconds: 1));
+          countdown('minute', 'Expires in less than a minute', '不足 1 分钟到期');
+          countdown(
+            'day-boundary',
+            'Expires in 23 hours 59 minutes',
+            '还有 23 小时 59 分钟到期',
+          );
+          now = now.add(const Duration(seconds: 59));
+          await tester.pump(const Duration(seconds: 59));
+          countdown('minute', 'Expiration reached', '已到期');
+          expect(tester.widget<ListTile>(entry('minute')).onTap, isNull);
+          expect(
+            tester
+                .widget<FilledButton>(
+                  find.byKey(const Key('account-reset-confirm')),
+                )
+                .onPressed,
+            isNull,
+          );
+          expect(
+            api.redeemCalls,
+            isEmpty,
+            reason: 'Clock updates never redeem a reset',
+          );
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.paused,
+          );
+          now = now.add(const Duration(days: 4));
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+          await tester.pump();
+          countdown('days', 'Expiration reached', '已到期');
+          expect(api.calls, [
+            false,
+          ], reason: 'Clock and resume updates do not re-read quota');
+          await tester.tap(find.text(copy('common.cancel')));
+          await tester.pumpAndSettle();
+          now = DateTime.utc(2031, 12, 31, 23, 59, 30);
+          final details =
+              ((api.quota['rateLimitResets']!
+                          as Map<String, Object>)['details']!
+                      as List)
+                  .whereType<Map<String, Object>>()
+                  .where(
+                    (item) => {'day-boundary', 'days'}.contains(item['id']),
+                  )
+                  .toList();
+          api.quota = {
+            'rateLimitResets': {
+              'availableCount': 2,
+              'applicableAvailableCount': 2,
+              'details': details,
+            },
+          };
+          await fixture.controller.refreshProviderAccountQuota(fixture.account);
+          await tester.tap(
+            find.byKey(const Key('provider-account-resets-account.facts')),
+          );
+          await tester.pumpAndSettle();
+          await _reviewReset(
+            tester,
+            boundary,
+            reviewDirectory,
+            'reset-expiry-${width.toInt()}-${english ? 'en' : 'zh'}',
+          );
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text(copy('common.cancel')));
+          await tester.pumpAndSettle();
+          await tester.pumpWidget(const SizedBox.shrink());
+          fixture.controller.dispose();
+        },
+      );
+    }
+  }
+
+  for (final detail in [false, true]) {
+    testWidgets(
+      '${detail ? 'detail' : 'summary'} manual quota wait follows credential replacement and disposal',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1180, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final requests = <Completer<http.Response>>[];
+        final boundaryApi = await _quotaHttpApi((request) {
+          final pending = Completer<http.Response>();
+          requests.add(pending);
+          return pending.future;
+        });
+        addTearDown(boundaryApi.close);
+        var fixture = await _fixture(
+          _FactsApi(),
+          withInventory: true,
+          controlApi: boundaryApi,
+        );
+        Future<void> mount() => detail
+            ? _pumpPanel(tester, fixture)
+            : _pumpSummary(tester, fixture);
+        final oldAccount = fixture.account;
+        final oldRead = fixture.controller.refreshProviderAccountQuota(
+          oldAccount,
+        );
+        await mount();
+        await tester.pump();
+        final refresh = find.byKey(
+          Key(
+            detail
+                ? 'account-quota-account.facts'
+                : 'account-quota-refresh-account.facts',
+          ),
+        );
+        final spinner = find.descendant(
+          of: refresh,
+          matching: find.byType(CircularProgressIndicator),
+        );
+        await tester.tap(refresh);
+        await tester.pump();
+        expect(spinner, findsOneWidget);
+        final replacement = _nextCredential(oldAccount);
+        final data = fixture.controller.data!;
+        fixture.controller.data = DashboardData(
+          status: data.status,
+          captures: data.captures,
+          captureNextCursor: data.captureNextCursor,
+          environments: data.environments,
+          endpoints: data.endpoints,
+          accounts: [replacement],
+        );
+        fixture = (account: replacement, controller: fixture.controller);
+        final newRead = fixture.controller.refreshProviderAccountQuota(
+          replacement,
+        );
+        await mount();
+        await tester.pump();
+        expect(await oldRead, isNull);
+        expect(spinner, findsNothing);
+        await tester.tap(refresh);
+        await tester.pump();
+        expect(spinner, findsOneWidget);
+        expect(requests, hasLength(2));
+        requests[0].complete(_quotaHttpResponse(oldAccount, _alignmentQuota()));
+        await tester.pump();
+        expect(
+          spinner,
+          findsOneWidget,
+          reason: 'An old response cannot stop a new scope wait',
+        );
+        requests[1].complete(
+          _quotaHttpResponse(replacement, _alignmentQuota()),
+        );
+        await newRead;
+        await tester.pumpAndSettle();
+        expect(spinner, findsNothing);
+        expect(
+          fixture.controller.providerAccountQuota(replacement)?.credentialEpoch,
+          2,
+        );
+
+        await tester.tap(refresh);
+        await tester.pump();
+        expect(requests, hasLength(3));
+        expect(spinner, findsOneWidget);
+        await tester.pumpWidget(const SizedBox.shrink());
+        fixture.controller.dispose();
+        requests[2].complete(
+          _quotaHttpResponse(replacement, _alignmentQuota()),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    for (final fails in [false, true]) {
+      testWidgets(
+        '${detail ? 'detail' : 'summary'} refresh joins a background quota read until ${fails ? 'failure' : 'completion'}',
+        (tester) async {
+          await tester.binding.setSurfaceSize(const Size(1180, 900));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          final pending = Completer<http.Response>();
+          final requests = <http.Request>[];
+          final boundaryApi = await _quotaHttpApi((request) {
+            requests.add(request);
+            return pending.future;
+          });
+          addTearDown(boundaryApi.close);
+          final api = _FactsApi()..quota = _alignmentQuota();
+          final fixture = await _fixture(
+            api,
+            withInventory: !detail,
+            controlApi: boundaryApi,
+          );
+          final background = fixture.controller.refreshProviderAccountQuota(
+            fixture.account,
+          );
+          if (detail) {
+            await _pumpPanel(tester, fixture);
+          } else {
+            await _pumpSummary(tester, fixture);
+          }
+          await tester.pump();
+          final refresh = find.byKey(
+            Key(
+              detail
+                  ? 'account-quota-account.facts'
+                  : 'account-quota-refresh-account.facts',
+            ),
+          );
+          final spinner = find.descendant(
+            of: refresh,
+            matching: find.byType(CircularProgressIndicator),
+          );
+          expect(refresh, findsOneWidget);
+          expect(
+            spinner,
+            findsNothing,
+            reason: 'Background reads do not animate a refresh action',
+          );
+          expect(
+            requests.map(
+              (request) =>
+                  '${request.method} ${request.url.path}?${request.url.query}',
+            ),
+            [
+              'GET /api/v1/provider-accounts/account.facts/account-facts?kind=quota',
+            ],
+          );
+          await tester.tap(refresh);
+          await tester.pump();
+          expect(spinner, findsOneWidget);
+          await tester.tap(refresh);
+          await tester.pump(const Duration(seconds: 1));
+          expect(
+            spinner,
+            findsOneWidget,
+            reason: 'Joining must await the actual pending read',
+          );
+          expect(
+            requests,
+            hasLength(1),
+            reason: 'Manual joins never issue a second HTTP request',
+          );
+          if (fails) {
+            pending.completeError(StateError('synthetic quota failure'));
+          } else {
+            pending.complete(_quotaHttpResponse(fixture.account, api.quota));
+          }
+          await background;
+          await tester.pumpAndSettle();
+          expect(spinner, findsNothing);
+          expect(
+            fixture.controller.providerAccountQuotaFailed(fixture.account),
+            fails,
+          );
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+          fixture.controller.dispose();
+        },
+      );
+    }
+  }
+
   for (final detail in [false, true]) {
     testWidgets(
       'quota metadata centers align in real ${detail ? 'detail' : 'summary'}',
@@ -915,11 +1319,90 @@ void main() {
 
 typedef _Fixture = ({ProviderAccount account, WorkbenchController controller});
 
+ProviderAccount _nextCredential(ProviderAccount account) => ProviderAccount(
+  id: account.id,
+  displayName: account.displayName,
+  credentialOrigin: account.credentialOrigin,
+  linkedEndpointIds: account.linkedEndpointIds,
+  associationRevision: account.associationRevision,
+  kind: account.kind,
+  realmId: account.realmId,
+  state: account.state,
+  revision: account.revision + 1,
+  credentialState: account.credentialState,
+  credentialEpoch: account.credentialEpoch + 1,
+  setHeaderNames: account.setHeaderNames,
+  deleteHeaderNames: account.deleteHeaderNames,
+  tokenInfo: account.tokenInfo,
+  codexOAuth: account.codexOAuth,
+  settingsRevision: account.settingsRevision,
+  note: account.note,
+  noteRevision: account.noteRevision,
+  automaticRefresh: account.automaticRefresh,
+  cyberAccessProgram: account.cyberAccessProgram,
+  supportsAutomaticRefresh: account.supportsAutomaticRefresh,
+  egressProfile: account.egressProfile,
+);
+
+Future<HttpControlApi> _quotaHttpApi(
+  Future<http.Response> Function(http.Request) handler,
+) => HttpControlApi.connect(
+  DesktopSession(
+    baseUrl: Uri.parse('http://127.0.0.1:54999'),
+    readToken: 'R' * 43,
+    writeToken: 'W' * 43,
+    instanceId: 'synthetic-account-quota',
+    expiresAt: DateTime.now().toUtc().add(const Duration(days: 1)),
+  ),
+  client: MockClient(handler),
+  inspectSession: false,
+);
+
+http.Response _quotaHttpResponse(
+  ProviderAccount account,
+  Map<String, Object> quota,
+) => http.Response(
+  jsonEncode({
+    'accountId': account.id,
+    'credentialEpoch': account.credentialEpoch,
+    'origin': account.credentialOrigin,
+    'adapterId': 'chatgpt-codex',
+    'adapterRevision': 1,
+    'observedAt': '2026-10-20T00:00:00Z',
+    'state': 'known',
+    'limits': <Object>[],
+    ...quota,
+  }),
+  200,
+  headers: {'content-type': 'application/json'},
+);
+
+Future<void> _reviewReset(
+  WidgetTester tester,
+  GlobalKey key,
+  String? directory,
+  String name,
+) async {
+  if (directory == null) return;
+  await tester.runAsync(() async {
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(directory).create(recursive: true);
+    await File(
+      '$directory/$name.png',
+    ).writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 Future<_Fixture> _fixture(
   _FactsApi api, {
   String id = 'account.facts',
   bool codexOAuth = false,
   bool withInventory = false,
+  ControlApi? controlApi,
 }) async {
   final preview = PreviewControlApi(seedCaptures: false);
   final claims = base64Url
@@ -964,7 +1447,7 @@ Future<_Fixture> _fixture(
   );
   api.account = account;
   final controller = WorkbenchController(
-    api: api,
+    api: controlApi ?? api,
     terminalCommands: PreviewTerminalCommandService(),
     previewMode: !codexOAuth,
     closeRuntime: preview.close,
