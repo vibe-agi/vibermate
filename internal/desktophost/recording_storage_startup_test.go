@@ -9,6 +9,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/recording"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,7 +72,38 @@ func TestMissingControlPreservesPendingRootResetBytes(t *testing.T) {
 func TestHostBootstrapAndControlDashboardIgnoreUnavailableInspection(t *testing.T) {
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
-	host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	data := options.Runtime.Paths.DataDirectory()
+	// Establish legitimate required storage before making the optional role
+	// deterministically unavailable. Fresh-root residual-state refusal remains intact.
+	layout, err := func() (layout runtimedata.StorageLayout, result error) {
+		if err := os.MkdirAll(data, 0700); err != nil {
+			return layout, err
+		}
+		owner, err := runtimedata.Acquire(data)
+		if err != nil {
+			return layout, err
+		}
+		defer func() { result = errors.Join(result, owner.Release()) }()
+		hostGuard, err := instanceguard.Acquire(filepath.Join(data, "server.lock"))
+		if err != nil {
+			return layout, err
+		}
+		defer func() { result = errors.Join(result, hostGuard.Release()) }()
+		return runtimedata.PrepareStorageOwned(t.Context(), runtimedata.OwnedStorage{Directory: data, Runtime: owner, Host: hostGuard}, time.Now().UTC(), nil)
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailableRole := filepath.Join(data, layout.Observation.RelativePath)
+	if err := os.Mkdir(unavailableRole, 0700); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(unavailableRole)
+	if err != nil || !before.IsDir() {
+		t.Fatalf("optional role fault was not established: %v", err)
+	}
+	host := startHost(t, options)
 	defer shutdownHost(t, host)
 	app := exchangeBootstrap(t, host.Bootstrap())
 	grant, err := host.Runtime().ManualCaptures().Create(context.Background(), manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "Control survives", ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeUntilRevoked})
@@ -95,6 +127,10 @@ func TestHostBootstrapAndControlDashboardIgnoreUnavailableInspection(t *testing.
 	}
 	if !host.Status().Ready {
 		t.Fatal("optional inspection refusal disabled host")
+	}
+	after, err := os.Lstat(unavailableRole)
+	if err != nil || !after.IsDir() || !os.SameFile(before, after) {
+		t.Fatalf("optional role fault changed during required control work: %v", err)
 	}
 }
 
