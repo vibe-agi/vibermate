@@ -255,23 +255,23 @@ final class _ProviderAccountCyberAccessState
         ),
       ],
     );
-    final refresh = TextButton.icon(
+    final refresh = IconButton.outlined(
       key: Key('account-cyber-refresh-${account.id}'),
       onPressed: !_manuallyRefreshing && _endpoint != null && account.usable
           ? () => unawaited(_refreshSupport())
           : null,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+      padding: const EdgeInsets.all(6),
       icon: _manuallyRefreshing
           ? const SizedBox.square(
               dimension: 14,
               child: CircularProgressIndicator(strokeWidth: 1.5),
             )
           : const Icon(Icons.refresh, size: 16),
-      label: Text(
-        copy(
-          _failed
-              ? 'provider_accounts.cyber_access.retry'
-              : 'provider_accounts.cyber_access.refresh',
-        ),
+      tooltip: copy(
+        _failed
+            ? 'provider_accounts.cyber_access.retry'
+            : 'provider_accounts.cyber_access.refresh',
       ),
     );
     return Column(
@@ -320,24 +320,31 @@ final class _ProviderAccountCyberAccessState
               ),
             );
             if (constraints.maxWidth >= 560) {
-              return Wrap(
-                spacing: 12,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [heading, select, refresh],
+              return ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: Row(
+                  children: [
+                    Expanded(child: heading),
+                    const SizedBox(width: 12),
+                    select,
+                    const SizedBox(width: 8),
+                    refresh,
+                  ],
+                ),
               );
             }
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 4,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [heading, refresh],
+                heading,
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(child: select),
+                    const SizedBox(width: 8),
+                    refresh,
+                  ],
                 ),
-                const SizedBox(height: 4),
-                select,
               ],
             );
           },
@@ -368,28 +375,138 @@ final class _ProviderAccountCyberAccessState
               ),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Text(status, style: style),
-        ),
-        if (supported.isNotEmpty)
+        if (supported.isEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: SelectableText(supported.join(' · '), style: style),
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(status, style: style),
+          )
+        else
+          _CyberModelGroup(
+            key: Key('account-cyber-supported-${account.id}'),
+            title: selected == 'standard'
+                ? copy('provider_accounts.cyber_access.uses_standard')
+                : copy.format('provider_accounts.cyber_access.supports_mode', {
+                    'mode': option(selected),
+                  }),
+            countHint: status,
+            models: supported,
+            preferred: selected != 'standard',
           ),
         if (standardFallback.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              key: Key('account-cyber-standard-fallback-${account.id}'),
-              copy.format('provider_accounts.cyber_access.standard_fallback', {
-                'models': standardFallback.join(' · '),
-              }),
-              style: style,
-              softWrap: true,
+          _CyberModelGroup(
+            key: Key('account-cyber-standard-fallback-${account.id}'),
+            title: copy('provider_accounts.cyber_access.uses_standard'),
+            countHint: copy.format(
+              standardFallback.length == 1
+                  ? 'provider_accounts.cyber_access.supported_one'
+                  : 'provider_accounts.cyber_access.supported',
+              {'mode': option('standard'), 'count': standardFallback.length},
             ),
+            models: standardFallback,
           ),
       ],
+    );
+  }
+}
+
+final class _CyberModelGroup extends StatelessWidget {
+  const _CyberModelGroup({
+    required this.title,
+    required this.countHint,
+    required this.models,
+    this.preferred = false,
+    super.key,
+  });
+
+  final String title;
+  final String countHint;
+  final List<String> models;
+  final bool preferred;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: title,
+      child: Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+        decoration: BoxDecoration(
+          color: colors.canvas.withValues(alpha: .45),
+          border: Border.all(color: colors.dividerSoft),
+          borderRadius: ViberMetrics.controlRadius,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  preferred ? Icons.shield_outlined : Icons.tune_rounded,
+                  size: 14,
+                  color: preferred ? colors.route : colors.textFaint,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: ExcludeSemantics(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: preferred ? colors.route : colors.textMuted,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: countHint,
+                  child: Text(
+                    '${models.length}',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: colors.textFaint),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            LayoutBuilder(
+              builder: (context, constraints) => Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final model in models)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: constraints.maxWidth,
+                      ),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.panel,
+                          borderRadius: ViberMetrics.controlRadius,
+                          border: Border.all(color: colors.dividerSoft),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 4,
+                          ),
+                          child: SelectableText(
+                            model,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colors.textMuted),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

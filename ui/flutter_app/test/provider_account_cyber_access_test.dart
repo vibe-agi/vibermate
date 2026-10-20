@@ -1,5 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,11 +18,150 @@ import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/control_failure_notice.dart';
 import 'package:vibermate_app/features/workbench/provider_accounts_view.dart';
+import 'package:vibermate_app/features/workbench/provider_account_cyber_access.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  final reviewDirectory = kIsWeb
+      ? null
+      : Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
+  if (reviewDirectory != null && Platform.isMacOS) {
+    setUpAll(() async {
+      for (final font in {
+        viberSystemFontFamily: '/System/Library/Fonts/Supplemental/Arial.ttf',
+        'Ahem': '/System/Library/Fonts/Supplemental/Arial.ttf',
+        'Roboto': '/System/Library/Fonts/Supplemental/Arial.ttf',
+        'Menlo': '/System/Library/Fonts/Supplemental/Courier New.ttf',
+        'Hiragino Sans GB': '/System/Library/Fonts/Hiragino Sans GB.ttc',
+      }.entries) {
+        final loader = FontLoader(font.key)
+          ..addFont(File(font.value).readAsBytes().then(ByteData.sublistView));
+        await loader.load();
+      }
+      final icons = FontLoader('MaterialIcons')
+        ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+      await icons.load();
+    });
+  }
+  for (final width in [390.0, 1180.0]) {
+    for (final dark in [true, false]) {
+      testWidgets('model groups wrap at $width dark=$dark text scale 2', (
+        tester,
+      ) async {
+        final api = _CyberApi()
+          ..modelPrograms = {
+            for (final model in [
+              'codex-auto-review',
+              'gpt-5.6-luna',
+              'gpt-5.6-sol',
+              'gpt-5.6-terra',
+              'gpt-6-luna',
+              'gpt-6-sol',
+              'gpt-daybreak-blue-latest',
+              'gpt-reserve',
+            ])
+              model: ['standard', 'daybreak_blue'],
+            'gpt-6-astra': ['standard'],
+            'gpt-6.1-sol': ['standard'],
+          };
+        final boundary = GlobalKey();
+        await _mount(
+          tester,
+          api,
+          size: Size(width, 1100),
+          language: AppLanguage.simplifiedChinese,
+          dark: dark,
+          textScale: 2,
+          cyberOnly: true,
+          boundary: boundary,
+        );
+        await _choose(tester, 'daybreak_blue');
+        final group = find.byKey(
+          const Key('account-cyber-supported-account.blue'),
+        );
+        final fallback = find.byKey(
+          const Key('account-cyber-standard-fallback-account.blue'),
+        );
+        expect(group, findsOneWidget);
+        expect(fallback, findsOneWidget);
+        for (final id in api.modelPrograms!.keys) {
+          final rect = tester.getRect(find.text(id));
+          expect(rect.left, greaterThanOrEqualTo(16));
+          expect(rect.right, lessThanOrEqualTo(width - 16));
+        }
+        expect(tester.takeException(), isNull);
+        if (reviewDirectory != null) {
+          await tester.runAsync(() async {
+            final render =
+                boundary.currentContext!.findRenderObject()!
+                    as RenderRepaintBoundary;
+            final image = await render.toImage(pixelRatio: 2);
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            await File(
+              '$reviewDirectory/cyber-${width.toInt()}-${dark ? 'dark' : 'light'}-2x.png',
+            ).writeAsBytes(bytes!.buffer.asUint8List());
+            image.dispose();
+          });
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  testWidgets(
+    'verified model groups keep the preference and Standard distinct',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final api = _CyberApi()
+        ..modelPrograms = {
+          'blue-model': ['standard', 'daybreak_blue'],
+          'ordinary-model': ['standard'],
+          'unknown-model': null,
+          'unverified-model': ['daybreak_blue'],
+        }
+        ..unverifiedModels = {'unverified-model'};
+      final controller = await _mount(tester, api, size: const Size(390, 900));
+      await _expand(tester);
+      await tester.pumpAndSettle();
+      await _choose(tester, 'daybreak_blue');
+      final supported = find.byKey(
+        const Key('account-cyber-supported-account.blue'),
+      );
+      final standard = find.byKey(
+        const Key('account-cyber-standard-fallback-account.blue'),
+      );
+      expect(supported, findsOneWidget);
+      expect(standard, findsOneWidget);
+      expect(tester.getSemantics(supported).label, 'Supports Daybreak Blue');
+      expect(tester.getSemantics(standard).label, 'Uses Standard');
+      expect(
+        find.descendant(of: supported, matching: find.text('blue-model')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: supported, matching: find.text('ordinary-model')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: standard, matching: find.text('ordinary-model')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: standard, matching: find.text('blue-model')),
+        findsNothing,
+      );
+      expect(find.text('unknown-model'), findsNothing);
+      expect(find.text('unverified-model'), findsNothing);
+      expect(_account(controller).cyberAccessProgram, 'daybreak_blue');
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
+
   testWidgets('support refresh joins initial discovery and stops on failure', (
     tester,
   ) async {
@@ -29,7 +174,7 @@ void main() {
       matching: find.byType(CircularProgressIndicator),
     );
     expect(spinner, findsNothing);
-    expect(tester.widget<TextButton>(refresh).onPressed, isNotNull);
+    expect(tester.widget<IconButton>(refresh).onPressed, isNotNull);
     await tester.tap(refresh);
     await tester.pump();
     expect(spinner, findsOneWidget);
@@ -41,11 +186,11 @@ void main() {
     api.pending = null;
     await tester.pumpAndSettle();
     expect(spinner, findsNothing);
-    expect(tester.widget<TextButton>(refresh).onPressed, isNotNull);
+    expect(tester.widget<IconButton>(refresh).onPressed, isNotNull);
     await tester.tap(refresh);
     await tester.pumpAndSettle();
     expect(api.requests.last, ('target.codex.official', 'account.blue', true));
-    expect(find.text('Standard: supported by 1 model'), findsOneWidget);
+    expect(find.byTooltip('Standard: supported by 1 model'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -73,7 +218,7 @@ void main() {
       expect(api.requests, hasLength(1));
       api.pending!.complete(await api.catalog(['standard', 'daybreak_blue']));
       await tester.pumpAndSettle();
-      expect(find.text('Standard: supported by 1 model'), findsOneWidget);
+      expect(find.byTooltip('Standard: supported by 1 model'), findsOneWidget);
       expect(find.text('gpt-blue'), findsOneWidget);
       expect(
         _select(
@@ -98,13 +243,15 @@ void main() {
         await _expand(tester);
         await tester.pumpAndSettle();
         expect(
-          find.text(
-            programs == null
-                ? 'Daybreak support unknown: this service did not provide complete model capabilities.'
-                : programs.isEmpty
-                ? 'Standard is available. No verified Daybreak capabilities were reported.'
-                : 'Standard: supported by 1 model',
-          ),
+          (programs?.isNotEmpty ?? false)
+              ? find.byTooltip('Standard: supported by 1 model')
+              : find.text(
+                  programs == null
+                      ? 'Daybreak support unknown: this service did not provide complete model capabilities.'
+                      : programs.isEmpty
+                      ? 'Standard is available. No verified Daybreak capabilities were reported.'
+                      : 'Standard: supported by 1 model',
+                ),
           findsOneWidget,
         );
         expect(
@@ -162,16 +309,18 @@ void main() {
       await _expand(tester);
       await tester.pumpAndSettle();
       for (final (program, label, model) in [
-        ('daybreak_blue', 'Daybreak Blue', 'blue-model'),
-        ('daybreak_red', 'Daybreak Red', 'red-model'),
-        ('standard', 'Standard', 'standard-model · blue-model'),
+        ('daybreak_blue', 'Daybreak Blue', ['blue-model']),
+        ('daybreak_red', 'Daybreak Red', ['red-model']),
+        ('standard', 'Standard', ['standard-model', 'blue-model']),
       ]) {
         await _choose(tester, program);
         expect(_account(controller).cyberAccessProgram, program);
         expect(_select(tester).initialValue, program);
-        expect(find.text(model), findsOneWidget);
+        for (final id in model) {
+          expect(find.text(id), findsOneWidget);
+        }
         expect(
-          find.text(
+          find.byTooltip(
             '$label: supported by ${program == 'standard' ? '2 models' : '1 model'}',
           ),
           findsOneWidget,
@@ -253,9 +402,9 @@ void main() {
         final fallback = find.byKey(
           const Key('account-cyber-standard-fallback-account.blue'),
         );
-        final prefix = language == AppLanguage.english
-            ? 'Uses Standard: '
-            : '以下模型使用 Standard：';
+        final title = language == AppLanguage.english
+            ? 'Uses Standard'
+            : '使用 Standard';
         expect(fallback, findsNothing);
 
         for (final (program, models) in [
@@ -266,7 +415,16 @@ void main() {
           expect(_account(controller).cyberAccessProgram, program);
           expect(_select(tester).initialValue, program);
           expect(fallback, findsOneWidget);
-          expect(tester.widget<Text>(fallback).data, '$prefix$models');
+          expect(
+            find.descendant(of: fallback, matching: find.text(title)),
+            findsOneWidget,
+          );
+          for (final id in models.split(' · ')) {
+            expect(
+              find.descendant(of: fallback, matching: find.text(id)),
+              findsOneWidget,
+            );
+          }
           await tester.ensureVisible(fallback);
           expect(tester.takeException(), isNull);
         }
@@ -301,8 +459,12 @@ void main() {
         await tester.tap(refresh);
         await tester.pumpAndSettle();
         expect(
-          tester.widget<Text>(fallback).data,
-          '${prefix}ordinary-model · red-model',
+          find.descendant(of: fallback, matching: find.text('ordinary-model')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: fallback, matching: find.text('red-model')),
+          findsOneWidget,
         );
         api.failure = StateError('offline');
         await tester.tap(refresh);
@@ -341,7 +503,19 @@ void main() {
       findsOneWidget,
     );
     expect(_select(tester).initialValue, 'daybreak_blue');
-    expect(find.text('gpt-blue'), findsNothing);
+    expect(
+      find.byKey(const Key('account-cyber-supported-account.blue')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(
+          const Key('account-cyber-standard-fallback-account.blue'),
+        ),
+        matching: find.text('gpt-blue'),
+      ),
+      findsOneWidget,
+    );
     expect(
       _select(
         tester,
@@ -489,7 +663,7 @@ void main() {
       api.pending!.complete(await api.catalog(['standard']));
       await tester.pumpAndSettle();
       expect(spinner, findsNothing);
-      expect(find.text('Standard: supported by 1 model'), findsOneWidget);
+      expect(find.byTooltip('Standard: supported by 1 model'), findsOneWidget);
       expect(
         _select(
           tester,
@@ -619,6 +793,10 @@ Future<WorkbenchController> _mount(
   _CyberApi api, {
   Size size = const Size(1180, 900),
   AppLanguage language = AppLanguage.english,
+  bool dark = true,
+  double textScale = 1,
+  bool cyberOnly = false,
+  GlobalKey? boundary,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -649,26 +827,59 @@ Future<WorkbenchController> _mount(
   );
   addTearDown(controller.dispose);
   controller.data = await api.preview.loadDashboard();
+  final baseTheme = dark ? ViberTheme.dark() : ViberTheme.light();
+  final theme =
+      (!kIsWeb && Platform.environment['VIBERMATE_UI_REVIEW_DIR'] != null)
+      ? baseTheme.copyWith(
+          textTheme: baseTheme.textTheme.apply(
+            fontFamily: viberSystemFontFamily,
+          ),
+        )
+      : baseTheme;
   await tester.pumpWidget(
     MaterialApp(
-      theme: ViberTheme.dark(),
+      theme: theme,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Scaffold(
         body: AnimatedBuilder(
           animation: controller,
-          builder: (context, _) => ProviderAccountsView(
-            controller: controller,
-            copy: AppCopy.forLanguage(language),
-          ),
+          builder: (context, _) => cyberOnly
+              ? RepaintBoundary(
+                  key: boundary,
+                  child: ColoredBox(
+                    color: context.viberColors.panel,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: ProviderAccountCyberAccess(
+                        account: _account(controller),
+                        linkedEndpoints: controller.data!.endpoints,
+                        controller: controller,
+                        copy: AppCopy.forLanguage(language),
+                      ),
+                    ),
+                  ),
+                )
+              : ProviderAccountsView(
+                  controller: controller,
+                  copy: AppCopy.forLanguage(language),
+                ),
         ),
       ),
     ),
   );
   await tester.pumpAndSettle();
-  await tester.enterText(
-    find.byKey(const Key('provider-accounts-search')),
-    'Blue fixture',
-  );
-  await tester.pumpAndSettle();
+  if (!cyberOnly) {
+    await tester.enterText(
+      find.byKey(const Key('provider-accounts-search')),
+      'Blue fixture',
+    );
+    await tester.pumpAndSettle();
+  }
   return controller;
 }
 
