@@ -887,6 +887,9 @@ final class WorkbenchController extends ChangeNotifier
   CaptureAssignment? selectedAssignment;
   bool selectedCaptureLaunchIncomplete = false;
   String? captureDetailError;
+  ControlFailure? captureInspectionFailure;
+  Object? _captureAssignmentRequest;
+  String? _captureAssignmentError;
   ACPRecord? selectedACP;
   TerminalCommandStatus? terminalCommand;
   RuntimeServerAccess? serverAccess;
@@ -3845,6 +3848,9 @@ final class WorkbenchController extends ChangeNotifier
     selectedCaptureLaunchIncomplete = false;
     if (errorMessage == captureDetailError) errorMessage = null;
     captureDetailError = null;
+    captureInspectionFailure = null;
+    _captureAssignmentRequest = null;
+    _captureAssignmentError = null;
     selectedACP = null;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
@@ -3859,6 +3865,7 @@ final class WorkbenchController extends ChangeNotifier
 
   Future<T> _inspectionRead<T>(Future<T> Function() read) async {
     final generation = _activityInspectionGeneration;
+    final selection = _selectionGeneration;
     try {
       final result = await read();
       if (_disposed || generation != _activityInspectionGeneration) {
@@ -3870,20 +3877,44 @@ final class WorkbenchController extends ChangeNotifier
       }
       return result;
     } catch (error) {
-      _invalidateActivityInspection(error);
+      // A source/visibility conflict still invalidates retained evidence.
+      // An old selection's operational failure cannot describe a newer one.
+      final unavailableInOldSelection =
+          selection != _selectionGeneration &&
+          error is ControlProblem &&
+          error.status == 503 &&
+          error.reasonCode == 'inspection_unavailable';
+      if (!unavailableInOldSelection) {
+        _invalidateActivityInspection(error);
+      }
       rethrow;
     }
   }
 
-  void _invalidateActivityInspection(Object error) {
-    if (_disposed) return;
+  bool _invalidateActivityInspection(Object error) {
+    if (_disposed) return false;
     if (error is! ControlProblem ||
-        (error.status != 409 && error.status != 422)) {
-      return;
+        (error.status != 409 &&
+            error.status != 422 &&
+            !(error.status == 503 &&
+                error.reasonCode == 'inspection_unavailable'))) {
+      return false;
     }
     _clearActivityInspection();
-    errorMessage = _describeError(error);
+    final previous = captureDetailError;
+    captureDetailError = _describeError(error);
+    if ((error.status == 409 && error.reasonCode == 'inspection_changed') ||
+        (error.status == 503 && error.reasonCode == 'inspection_unavailable')) {
+      captureInspectionFailure = ControlFailure.from(error);
+      if (errorMessage == previous && errorMessage != _captureAssignmentError) {
+        errorMessage = null;
+      }
+    } else {
+      captureInspectionFailure = null;
+      errorMessage = captureDetailError;
+    }
     notifyListeners();
+    return true;
   }
 
   void _clearActivityInspection() {
@@ -3897,11 +3928,9 @@ final class WorkbenchController extends ChangeNotifier
     _exchangeLoadGenerations.clear();
     _exchangeErrors.clear();
     _captureConversationPages.clear();
-    selectedCapturePage = const ActivityPage(items: [], nextCursor: null);
-    selectedCaptureConversations = const ConversationPage(
-      items: [],
-      nextCursor: null,
-    );
+    // Invalidated evidence is unknown, not a successfully read empty page.
+    selectedCapturePage = null;
+    selectedCaptureConversations = null;
     _summaryBodiesAbsent = false;
     captureActivitiesLoading = false;
     detailLoading = false;
@@ -4394,6 +4423,8 @@ final class WorkbenchController extends ChangeNotifier
     if (quiet && (captureActivitiesLoading || _captureDetailLoads != 0)) return;
     _captureDetailLoads += 1;
     final generation = ++_selectionGeneration;
+    final assignmentRequest = Object();
+    _captureAssignmentRequest = assignmentRequest;
     final currentPage = selectedCapturePage;
     final currentConversationKey = selectedCaptureConversationKey;
     final previousConversation = selectedCaptureConversation;
@@ -4409,21 +4440,38 @@ final class WorkbenchController extends ChangeNotifier
       // Future.wait keeps every sibling error handled. Starting assignment
       // first and then throwing synchronously from a later sibling would
       // orphan that Future and surface it as an uncaught zone error.
-      final assignmentFuture = _loadCaptureAssignment(capture).then((
-        assignment,
-      ) {
-        // Assignment and evidence are independent reads. A failed index
-        // must not turn a confirmed assignment into an unassigned run.
-        if (!_disposed &&
-            generation == _selectionGeneration &&
-            selectedCaptureKey == capture.key &&
-            selectedCapture?.manualCapture?.credentialRevision ==
-                capture.manualCapture?.credentialRevision) {
-          selectedAssignment = assignment;
-          selectedCaptureLaunchIncomplete = assignment == null;
-        }
-        return assignment;
-      });
+      bool ownsAssignmentRequest() =>
+          !_disposed &&
+          identical(_captureAssignmentRequest, assignmentRequest) &&
+          selectedCaptureKey == capture.key &&
+          selectedCapture?.manualCapture?.credentialRevision ==
+              capture.manualCapture?.credentialRevision;
+      final assignmentFuture = _loadCaptureAssignment(capture)
+          .then<CaptureAssignment?>(
+            (assignment) {
+              // Assignment and evidence are independent reads. A failed index
+              // must not turn a confirmed assignment into an unassigned run.
+              if (ownsAssignmentRequest()) {
+                selectedAssignment = assignment;
+                selectedCaptureLaunchIncomplete = assignment == null;
+                if (errorMessage == _captureAssignmentError) {
+                  errorMessage = null;
+                }
+                _captureAssignmentError = null;
+              }
+              return assignment;
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              // This is required control state, so preserve its failure even when
+              // a sibling optional inspection already invalidated that generation.
+              if (ownsAssignmentRequest()) {
+                _captureAssignmentError = _describeError(error);
+                errorMessage = _captureAssignmentError;
+                notifyListeners();
+              }
+              Error.throwWithStackTrace(error, stackTrace);
+            },
+          );
       // Launch summary carries an EXISTS for retained full bodies. When the
       // Server proves absence, skip conversations(200) identity enrichment.
       final summaryFuture = _futureOrError(
@@ -4466,6 +4514,7 @@ final class WorkbenchController extends ChangeNotifier
         detailLoading = false;
         if (errorMessage == captureDetailError) errorMessage = null;
         captureDetailError = null;
+        captureInspectionFailure = null;
         notifyListeners();
         return;
       }
@@ -4567,6 +4616,7 @@ final class WorkbenchController extends ChangeNotifier
       detailLoading = false;
       if (errorMessage == captureDetailError) errorMessage = null;
       captureDetailError = null;
+      captureInspectionFailure = null;
       notifyListeners();
     } catch (error) {
       if (_disposed || generation != _selectionGeneration) return;
@@ -4574,7 +4624,15 @@ final class WorkbenchController extends ChangeNotifier
       detailLoading = false;
       _invalidateActivityInspection(error);
       captureDetailError = _describeError(error);
-      errorMessage = captureDetailError;
+      if (error is ControlProblem &&
+          ((error.status == 409 && error.reasonCode == 'inspection_changed') ||
+              (error.status == 503 &&
+                  error.reasonCode == 'inspection_unavailable'))) {
+        captureInspectionFailure = ControlFailure.from(error);
+      } else {
+        captureInspectionFailure = null;
+        errorMessage = captureDetailError;
+      }
       notifyListeners();
     } finally {
       _captureDetailLoads -= 1;
@@ -4687,8 +4745,9 @@ final class WorkbenchController extends ChangeNotifier
     } catch (error) {
       if (_disposed || generation != _selectionGeneration) return;
       captureActivitiesLoading = false;
-      _invalidateActivityInspection(error);
-      errorMessage = _describeError(error);
+      if (!_invalidateActivityInspection(error)) {
+        errorMessage = _describeError(error);
+      }
       notifyListeners();
     }
   }
@@ -4747,8 +4806,9 @@ final class WorkbenchController extends ChangeNotifier
         return;
       }
       captureActivitiesLoading = false;
-      _invalidateActivityInspection(error);
-      errorMessage = _describeError(error);
+      if (!_invalidateActivityInspection(error)) {
+        errorMessage = _describeError(error);
+      }
       notifyListeners();
     }
   }

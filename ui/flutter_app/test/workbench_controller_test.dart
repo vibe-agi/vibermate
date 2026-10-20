@@ -417,7 +417,7 @@ void main() {
     },
   );
 
-  for (final status in [409, 422]) {
+  for (final status in [409, 422, 503]) {
     for (final domain in ['activities', 'content', 'tool']) {
       test(
         'Activity inspection clears stale pages and nested caches $domain $status',
@@ -454,13 +454,26 @@ void main() {
               throwsA(isA<ControlProblem>()),
             );
           }
-          expect(controller.selectedCapturePage?.items, isEmpty);
-          expect(controller.selectedCapturePage?.nextCursor, isNull);
-          expect(controller.selectedCaptureConversations?.items, isEmpty);
+          expect(controller.selectedCapturePage, isNull);
+          expect(controller.selectedCaptureConversations, isNull);
           expect(controller.exchangeDetail(id), isNull);
           expect(controller.selectedCapture, same(capture));
           expect(controller.selectedAssignment, same(assignment));
           expect(controller.pendingApprovals, same(approvals));
+          if (status == 409 || status == 503) {
+            expect(
+              controller.errorMessage,
+              isNull,
+              reason:
+                  'Optional history failures stay scoped to Capture records',
+            );
+            expect(
+              controller.captureInspectionFailure?.messageKey,
+              status == 503
+                  ? 'error.inspection_unavailable'
+                  : 'error.inspection_changed',
+            );
+          }
         },
       );
     }
@@ -615,6 +628,301 @@ void main() {
       controller.dispose();
     });
   }
+
+  testWidgets(
+    'history invalidation preserves a late confirmed Capture assignment',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1420, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final fixture = PreviewControlApi();
+      final api = _SummaryInspectionFailureApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.selectCapture('manual_capture:manual-figma');
+      final approvals = controller.pendingApprovals;
+      final assignment = await fixture.captureAssignment('managed_run:run-2');
+      api.assignmentGate = Completer<CaptureAssignment>();
+      api.failSummary = true;
+      final selected = controller.selectCapture('managed_run:run-2');
+      await tester.pump();
+      api.assignmentGate!.complete(assignment);
+      await selected;
+
+      expect(controller.selectedCaptureKey, 'managed_run:run-2');
+      expect(
+        controller.selectedAssignment?.environmentId,
+        assignment.environmentId,
+      );
+      expect(controller.selectedCaptureLaunchIncomplete, isFalse);
+      expect(controller.pendingApprovals, same(approvals));
+      expect(controller.selectedCaptureConversations, isNull);
+      expect(controller.selectedCapturePage, isNull);
+      expect(controller.captureDetailError, isNotNull);
+      expect(controller.errorMessage, isNull);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Saved history changed. Refresh this view.'),
+        findsOneWidget,
+      );
+      expect(find.text('inspection_changed (409)'), findsNothing);
+      expect(find.textContaining('0 turns'), findsNothing);
+      expect(
+        find.text('Traffic policy information is temporarily unavailable'),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    },
+  );
+
+  testWidgets('unavailable history stays scoped to Capture records', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1420, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = PreviewControlApi();
+    final api = _SummaryInspectionFailureApi(fixture)
+      ..failure = const ControlProblem(
+        status: 503,
+        reasonCode: 'inspection_unavailable',
+        messageKey: 'error.inspection_unavailable',
+      );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.selectCapture('managed_run:run-2');
+    expect(controller.selectedCapturePage!.items, isNotEmpty);
+    expect(controller.selectedCaptureConversations!.items, isNotEmpty);
+    final id = controller.selectedCapturePage!.items.first.id;
+    await controller.loadExchangeDetail(id);
+    expect(controller.exchangeDetail(id), isNotNull);
+    final assignment = controller.selectedAssignment!;
+    final approvals = controller.pendingApprovals;
+    api.failSummary = true;
+    await controller.refresh();
+    expect(controller.selectedAssignment, isNotNull);
+    expect(
+      controller.selectedAssignment?.environmentId,
+      assignment.environmentId,
+    );
+    expect(controller.pendingApprovals, equals(approvals));
+    expect(controller.errorMessage, isNull);
+    expect(controller.captureDetailError, isNotNull);
+    expect(controller.selectedCaptureConversations, isNull);
+    expect(controller.selectedCapturePage, isNull);
+    expect(controller.exchangeDetail(id), isNull);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final copy = AppCopy.forLanguage(AppLanguage.english);
+    expect(find.text(copy('error.inspection_unavailable')), findsOneWidget);
+    expect(find.text('inspection_unavailable (503)'), findsNothing);
+    expect(find.textContaining('0 turns'), findsNothing);
+    api.failSummary = false;
+    await tester.tap(find.byKey(const Key('capture-detail-retry')));
+    await tester.pumpAndSettle();
+    expect(controller.captureDetailError, isNull);
+    expect(controller.selectedCaptureConversations, isNotNull);
+    expect(find.text(copy('error.inspection_unavailable')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
+  test('Capture control rejection remains a control failure', () async {
+    final fixture = PreviewControlApi();
+    final api = _SummaryInspectionFailureApi(fixture)
+      ..failure = const ControlProblem(
+        status: 403,
+        reasonCode: 'control_unauthorized',
+        messageKey: 'error.control_unauthorized',
+      );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await controller.selectCapture('manual_capture:manual-figma');
+    api.failSummary = true;
+    await controller.selectCapture('managed_run:run-2');
+    expect(controller.errorMessage, 'control_unauthorized (403)');
+    expect(controller.captureDetailError, isNotNull);
+    expect(controller.selectedCapturePage, isNull);
+  });
+
+  for (final assignmentFirst in [true, false]) {
+    test(
+      'Capture assignment rejection survives ${assignmentFirst ? 'later' : 'earlier'} history invalidation',
+      () async {
+        final fixture = PreviewControlApi();
+        final api = _SummaryInspectionFailureApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        await controller.selectCapture('manual_capture:manual-figma');
+        final approvals = controller.pendingApprovals;
+        api.assignmentGate = Completer<CaptureAssignment>();
+        api.summaryGate = Completer<ExchangeSummary>();
+        final selected = controller.selectCapture('managed_run:run-2');
+        const rejection = ControlProblem(
+          status: 403,
+          reasonCode: 'control_unauthorized',
+          messageKey: 'error.control_unauthorized',
+        );
+        const unavailable = ControlProblem(
+          status: 503,
+          reasonCode: 'inspection_unavailable',
+          messageKey: 'error.inspection_unavailable',
+        );
+        if (assignmentFirst) {
+          api.assignmentGate!.completeError(rejection);
+          await Future<void>.delayed(Duration.zero);
+          api.summaryGate!.completeError(unavailable);
+        } else {
+          api.summaryGate!.completeError(unavailable);
+          await Future<void>.delayed(Duration.zero);
+          api.assignmentGate!.completeError(rejection);
+        }
+        await selected;
+        expect(
+          controller.errorMessage,
+          'control_unauthorized (403)',
+          reason:
+              'An optional records failure must never hide a rejected control read',
+        );
+        expect(controller.selectedAssignment, isNull);
+        expect(controller.selectedCapturePage, isNull);
+        expect(controller.selectedCaptureLaunchIncomplete, isFalse);
+        expect(controller.pendingApprovals, same(approvals));
+      },
+    );
+  }
+
+  for (final next in ['capture', 'request', 'dispose']) {
+    test(
+      'late Capture assignment cannot replace newer $next ownership',
+      () async {
+        final fixture = PreviewControlApi();
+        final api = _SummaryInspectionFailureApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        addTearDown(controller.dispose);
+        await controller.initialize();
+        await controller.selectCapture('manual_capture:manual-figma');
+        final original = await fixture.captureAssignment('managed_run:run-2');
+        final stale = CaptureAssignment(
+          captureKey: original.captureKey,
+          captureId: original.captureId,
+          captureKind: original.captureKind,
+          environmentId: original.environmentId,
+          environmentRevision: original.environmentRevision,
+          environmentDigest: original.environmentDigest,
+          launchEnvironmentRevision: original.launchEnvironmentRevision,
+          launchEnvironmentDigest: original.launchEnvironmentDigest,
+          revision: 99,
+          source: original.source,
+          updatedAt: original.updatedAt,
+        );
+        final gate = Completer<CaptureAssignment>();
+        api.assignmentGate = gate;
+        api.failSummary = true;
+        final selected = controller.selectCapture('managed_run:run-2');
+        await Future<void>.delayed(Duration.zero);
+        api.assignmentGate = null;
+        api.failSummary = false;
+        if (next == 'dispose') {
+          controller.dispose();
+        } else {
+          await controller.selectCapture(
+            next == 'capture' ? 'managed_run:run-1' : 'managed_run:run-2',
+          );
+        }
+        final retained = controller.selectedAssignment;
+        gate.complete(stale);
+        await selected;
+        expect(controller.selectedAssignment, same(retained));
+        if (next != 'dispose') {
+          expect(controller.captureDetailError, isNull);
+          expect(controller.captureInspectionFailure, isNull);
+          expect(controller.errorMessage, isNull);
+          expect(controller.selectedCapturePage!.items, isNotEmpty);
+        }
+      },
+    );
+  }
+
+  test(
+    'old Capture history unavailability cannot clear a newer selection',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _SummaryInspectionFailureApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await controller.selectCapture('manual_capture:manual-figma');
+      api.summaryGate = Completer<ExchangeSummary>();
+      final oldRead = controller.selectCapture('managed_run:run-2');
+      await Future<void>.delayed(Duration.zero);
+      await controller.selectCapture('managed_run:run-1');
+      final current = controller.selectedCapturePage;
+      final assignment = controller.selectedAssignment;
+      final approvals = controller.pendingApprovals;
+      expect(current!.items, isNotEmpty);
+      api.summaryGate!.completeError(
+        const ControlProblem(
+          status: 503,
+          reasonCode: 'inspection_unavailable',
+          messageKey: 'error.inspection_unavailable',
+        ),
+      );
+      await oldRead;
+      expect(controller.selectedCaptureKey, 'managed_run:run-1');
+      expect(controller.selectedCapturePage, same(current));
+      expect(controller.selectedAssignment, same(assignment));
+      expect(controller.pendingApprovals, same(approvals));
+      expect(controller.captureInspectionFailure, isNull);
+      expect(controller.captureDetailError, isNull);
+      expect(controller.errorMessage, isNull);
+    },
+  );
 
   testWidgets('Capture detail failure is not an empty or unassigned run', (
     tester,
@@ -2705,6 +3013,44 @@ final class _AssignmentFailureApi extends _UsageTrackingApi {
   }
 }
 
+final class _SummaryInspectionFailureApi extends _UsageTrackingApi {
+  _SummaryInspectionFailureApi(super.delegate);
+
+  bool failSummary = false;
+  ControlProblem failure = const ControlProblem(
+    status: 409,
+    reasonCode: 'inspection_changed',
+    messageKey: 'error.inspection_changed',
+  );
+  Completer<CaptureAssignment>? assignmentGate;
+  Completer<ExchangeSummary>? summaryGate;
+
+  @override
+  Future<ExchangeDetail> exchange(
+    String id, {
+    String contentView = 'incremental',
+  }) => delegate.exchange(id, contentView: contentView);
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) {
+    if (captureKey == 'managed_run:run-2' && assignmentGate != null) {
+      return assignmentGate!.future;
+    }
+    return super.captureAssignment(captureKey);
+  }
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) {
+    if (scope.captureRunId == 'run-2' && summaryGate != null) {
+      return summaryGate!.future;
+    }
+    if (failSummary && scope.captureRunId == 'run-2') {
+      return Future.error(failure);
+    }
+    return super.activitySummary(scope);
+  }
+}
+
 final class _ConversationFailureApi extends _UsageTrackingApi {
   _ConversationFailureApi(super.delegate);
   bool fails = true;
@@ -3027,8 +3373,12 @@ final class _ActivityInspectionApi extends _UsageTrackingApi {
     status: status,
     reasonCode: status == 409
         ? 'inspection_changed'
+        : status == 503
+        ? 'inspection_unavailable'
         : 'invalid_control_request',
-    messageKey: 'error.inspection_changed',
+    messageKey: status == 503
+        ? 'error.inspection_unavailable'
+        : 'error.inspection_changed',
   );
   @override
   Future<ActivityPage> activities({

@@ -66,6 +66,151 @@ void main() {
     });
   }
 
+  for (final width in [390.0, 1180.0]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'expanded safe metadata and settings stay accessible at $width scale=$scale',
+        (tester) async {
+          await tester.binding.setSurfaceSize(Size(width, 1000));
+          addTearDown(() => tester.binding.setSurfaceSize(null));
+          final api = PreviewControlApi(seedCaptures: false);
+          final login = await api.startCodexLogin(
+            accountId: 'account.detail-layout',
+            upstreamEndpointId: 'target.codex.official',
+            displayName: 'Team · Research',
+            callbackMode: 'manual',
+          );
+          await api.completeCodexLogin(
+            login.id,
+            'http://localhost:1455/auth/callback?state=${login.id}&code=synthetic',
+          );
+          final base = await api.loadDashboard();
+          final original = base.accounts.singleWhere(
+            (account) => account.id == 'account.detail-layout',
+          );
+          final account = _withSafeMetadata(original);
+          final controller = WorkbenchController(
+            api: api,
+            terminalCommands: PreviewTerminalCommandService(),
+            previewMode: true,
+            closeRuntime: api.close,
+          );
+          addTearDown(controller.dispose);
+          controller.data = DashboardData(
+            status: base.status,
+            captures: const [],
+            captureNextCursor: '',
+            environments: base.environments,
+            endpoints: base.endpoints,
+            accounts: [account],
+          );
+          final language = scale == 1
+              ? AppLanguage.simplifiedChinese
+              : AppLanguage.english;
+          final copy = AppCopy.forLanguage(language);
+          final boundary = GlobalKey();
+          final baseTheme = ViberTheme.dark();
+          final theme = reviewDirectory == null
+              ? baseTheme
+              : baseTheme.copyWith(
+                  textTheme: baseTheme.textTheme
+                      .apply(fontFamily: viberSystemFontFamily)
+                      .copyWith(
+                        labelSmall: baseTheme.textTheme.labelSmall?.copyWith(
+                          fontFamily: viberSystemFontFamily,
+                          fontFamilyFallback: viberFontFallback,
+                        ),
+                      ),
+                  dialogTheme: baseTheme.dialogTheme.copyWith(
+                    contentTextStyle: baseTheme.dialogTheme.contentTextStyle
+                        ?.copyWith(fontFamily: viberSystemFontFamily),
+                  ),
+                );
+          await tester.pumpWidget(
+            RepaintBoundary(
+              key: boundary,
+              child: MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: theme,
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(scale)),
+                  child: child!,
+                ),
+                home: Scaffold(
+                  body: AnimatedBuilder(
+                    animation: controller,
+                    builder: (_, _) => ProviderAccountsView(
+                      controller: controller,
+                      copy: copy,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(
+              const Key(
+                'provider-account-details-toggle-account.detail-layout',
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final details = find.byKey(
+            const Key('provider-account-details-account.detail-layout'),
+          );
+          for (final value in [
+            'research@example.com',
+            'workspace-research',
+            'user-research',
+          ]) {
+            expect(
+              find.descendant(
+                of: details,
+                matching: find.byWidgetPredicate(
+                  (widget) => widget is SelectableText && widget.data == value,
+                ),
+              ),
+              findsOneWidget,
+            );
+          }
+          expect(
+            find.text(copy('provider_accounts.token.unverified')),
+            findsOneWidget,
+          );
+          await tester.ensureVisible(
+            find.text(copy('provider_accounts.details.identity')),
+          );
+          await tester.pumpAndSettle();
+          await _review(
+            tester,
+            boundary,
+            reviewDirectory,
+            'expanded-metadata-${width.toInt()}-scale$scale',
+          );
+          final exit = find.byKey(
+            const Key('account-egress-account.detail-layout'),
+          );
+          await tester.ensureVisible(exit);
+          await tester.pumpAndSettle();
+          expect(tester.widget<OutlinedButton>(exit).onPressed, isNotNull);
+          await _focusAccountControl(tester, exit);
+          await _review(
+            tester,
+            boundary,
+            reviewDirectory,
+            'expanded-settings-${width.toInt()}-scale$scale',
+          );
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+      );
+    }
+  }
+
   testWidgets('remote account settings appear before the next local edit', (
     tester,
   ) async {
@@ -684,6 +829,37 @@ void main() {
     controller.dispose();
   });
 }
+
+ProviderAccount _withSafeMetadata(ProviderAccount account) => ProviderAccount(
+  id: account.id,
+  displayName: account.displayName,
+  credentialOrigin: account.credentialOrigin,
+  linkedEndpointIds: account.linkedEndpointIds,
+  associationRevision: account.associationRevision,
+  kind: account.kind,
+  realmId: account.realmId,
+  state: account.state,
+  revision: account.revision,
+  credentialState: account.credentialState,
+  credentialEpoch: account.credentialEpoch,
+  setHeaderNames: account.setHeaderNames,
+  deleteHeaderNames: account.deleteHeaderNames,
+  settingsRevision: account.settingsRevision,
+  automaticRefresh: account.automaticRefresh,
+  supportsAutomaticRefresh: account.supportsAutomaticRefresh,
+  cyberAccessProgram: account.cyberAccessProgram,
+  egressProfile: account.egressProfile,
+  codexOAuth: account.codexOAuth,
+  tokenInfo: ProviderTokenInfo(
+    email: 'research@example.com',
+    planType: 'pro',
+    chatgptAccountId: 'workspace-research',
+    userId: 'user-research',
+    authenticatedAt: DateTime.utc(2026, 10, 16, 5, 12, 6),
+    issuedAt: DateTime.utc(2026, 10, 16, 5, 12, 36),
+    expiresAt: DateTime.utc(2031, 10, 26, 5, 12, 36),
+  ),
+);
 
 // Optional local review artifacts, never a required golden baseline or secret.
 Future<void> _review(

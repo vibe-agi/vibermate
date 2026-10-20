@@ -17,6 +17,38 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets('support refresh joins initial discovery and stops on failure', (
+    tester,
+  ) async {
+    final api = _CyberApi()..pending = Completer<UpstreamModelCatalog>();
+    await _mount(tester, api);
+    await _expand(tester);
+    final refresh = find.byKey(const Key('account-cyber-refresh-account.blue'));
+    final spinner = find.descendant(
+      of: refresh,
+      matching: find.byType(CircularProgressIndicator),
+    );
+    expect(spinner, findsNothing);
+    expect(tester.widget<TextButton>(refresh).onPressed, isNotNull);
+    await tester.tap(refresh);
+    await tester.pump();
+    expect(spinner, findsOneWidget);
+    await tester.tap(refresh);
+    await tester.pump(const Duration(seconds: 1));
+    expect(spinner, findsOneWidget);
+    expect(api.requests, [('target.codex.official', 'account.blue', false)]);
+    api.pending!.completeError(StateError('synthetic discovery failure'));
+    api.pending = null;
+    await tester.pumpAndSettle();
+    expect(spinner, findsNothing);
+    expect(tester.widget<TextButton>(refresh).onPressed, isNotNull);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(api.requests.last, ('target.codex.official', 'account.blue', true));
+    expect(find.text('Standard: supported by 1 model'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'expanded account discovers modes once and defaults to Standard',
     (tester) async {
@@ -418,6 +450,16 @@ void main() {
       await _expand(tester);
       final oldRequest = api.pending!;
       final oldCatalog = await api.catalog(['daybreak_blue']);
+      final refresh = find.byKey(
+        const Key('account-cyber-refresh-account.blue'),
+      );
+      final spinner = find.descendant(
+        of: refresh,
+        matching: find.byType(CircularProgressIndicator),
+      );
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(spinner, findsOneWidget);
       final account = _account(controller);
       await api.preview.refreshProviderAccountCredential(account);
       api.pending = Completer<UpstreamModelCatalog>();
@@ -428,10 +470,25 @@ void main() {
       );
       await tester.pump();
       expect(api.requests, hasLength(2));
+      expect(
+        spinner,
+        findsNothing,
+        reason: 'The replacement account starts with a quiet background read',
+      );
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(spinner, findsOneWidget);
+      oldRequest.complete(oldCatalog);
+      await tester.pump();
+      expect(
+        spinner,
+        findsOneWidget,
+        reason: 'Old completion cannot clear the new account wait',
+      );
+      expect(api.requests, hasLength(2));
       api.pending!.complete(await api.catalog(['standard']));
       await tester.pumpAndSettle();
-      oldRequest.complete(oldCatalog);
-      await tester.pumpAndSettle();
+      expect(spinner, findsNothing);
       expect(find.text('Standard: supported by 1 model'), findsOneWidget);
       expect(
         _select(

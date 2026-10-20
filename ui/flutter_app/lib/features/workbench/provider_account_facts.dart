@@ -39,18 +39,21 @@ final class _Observation {
 final class _ProviderAccountFactsPanelState
     extends State<ProviderAccountFactsPanel> {
   var _history = _Observation();
+  Object? _manualQuotaWait;
   int _generation = 0;
   AppCopy get copy => widget.copy;
 
   @override
   void didUpdateWidget(covariant ProviderAccountFactsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.account.id != widget.account.id ||
+    if (!identical(oldWidget.controller, widget.controller) ||
+        oldWidget.account.id != widget.account.id ||
         oldWidget.account.credentialEpoch != widget.account.credentialEpoch ||
         oldWidget.account.settingsRevision != widget.account.settingsRevision ||
         oldWidget.account.credentialOrigin != widget.account.credentialOrigin) {
       _generation++;
       _history = _Observation();
+      _manualQuotaWait = null;
     }
   }
 
@@ -80,12 +83,19 @@ final class _ProviderAccountFactsPanelState
   }
 
   Future<void> _refreshQuota() async {
-    final request = widget.controller.refreshProviderAccountQuota(
-      widget.account,
-    );
-    if (mounted) setState(() {});
-    await request;
-    if (mounted) setState(() {});
+    if (_manualQuotaWait != null || !widget.account.usable) return;
+    final wait = Object();
+    final generation = _generation;
+    setState(() => _manualQuotaWait = wait);
+    try {
+      await widget.controller.refreshProviderAccountQuota(widget.account);
+    } finally {
+      if (mounted &&
+          generation == _generation &&
+          identical(_manualQuotaWait, wait)) {
+        setState(() => _manualQuotaWait = null);
+      }
+    }
   }
 
   @override
@@ -115,9 +125,7 @@ final class _ProviderAccountFactsPanelState
 
   Widget _quotaAction() {
     final facts = widget.controller.providerAccountQuota(widget.account);
-    final loading = widget.controller.providerAccountQuotaLoading(
-      widget.account,
-    );
+    final loading = _manualQuotaWait != null;
     final label = copy(
       facts == null
           ? 'account_facts.query_quota'
@@ -262,6 +270,7 @@ final class _ProviderAccountFactsPanelState
                     _caption(context, copy('account_facts.loading')),
                   ],
                 ),
+                _quotaAction(),
                 _historyAction(),
               ],
             )
@@ -686,6 +695,35 @@ bool resetCreditExpiresSoon(AccountResetCredit credit, DateTime now) =>
     credit.expiresAt != null &&
     !credit.expiresAt!.isAfter(now.add(const Duration(days: 3)));
 
+String _resetCreditExpiration(DateTime expiresAt, DateTime now, AppCopy copy) {
+  final remaining = expiresAt.difference(now);
+  if (remaining <= Duration.zero) {
+    return copy('account_facts.reset.expiry_reached');
+  }
+  if (remaining < const Duration(minutes: 1)) {
+    return copy('account_facts.reset.expiry_under_minute');
+  }
+  String unit(int count, String name) => copy.format(
+    count == 1 ? 'account_facts.reset.${name}_one' : 'account_facts.${name}s',
+    {'count': count},
+  );
+  final parts = remaining.inDays > 0
+      ? [
+          unit(remaining.inDays, 'day'),
+          if (remaining.inHours % 24 > 0) unit(remaining.inHours % 24, 'hour'),
+        ]
+      : remaining.inHours > 0
+      ? [
+          unit(remaining.inHours, 'hour'),
+          if (remaining.inMinutes % 60 > 0)
+            unit(remaining.inMinutes % 60, 'minute'),
+        ]
+      : [unit(remaining.inMinutes, 'minute')];
+  return copy.format('account_facts.reset.expiry_remaining', {
+    'time': parts.join(' '),
+  });
+}
+
 /// The same voucher entry is used in the account table and quota panel.
 /// Selecting a voucher never redeems it: one explicit confirmation owns all warnings.
 final class ProviderAccountResetCreditsButton extends StatefulWidget {
@@ -707,18 +745,35 @@ final class ProviderAccountResetCreditsButton extends StatefulWidget {
 }
 
 final class _ProviderAccountResetCreditsButtonState
-    extends State<ProviderAccountResetCreditsButton> {
+    extends State<ProviderAccountResetCreditsButton>
+    with WidgetsBindingObserver {
   bool _busy = false;
   int _generation = 0;
   late final Timer _tick;
+  Timer? _dialogTick;
+  final _dialogClock = ValueNotifier(0);
   DateTime get _now => (widget.clock ?? DateTime.now)().toUtc();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tick = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        _dialogClock.value++;
+      }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (mounted &&
+        (state == AppLifecycleState.resumed ||
+            state == AppLifecycleState.inactive)) {
+      setState(() {});
+      _dialogClock.value++;
+    }
   }
 
   @override
@@ -735,6 +790,9 @@ final class _ProviderAccountResetCreditsButtonState
   @override
   void dispose() {
     _tick.cancel();
+    _dialogTick?.cancel();
+    _dialogClock.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -808,197 +866,223 @@ final class _ProviderAccountResetCreditsButtonState
         return compared == 0 ? a.id.compareTo(b.id) : compared;
       });
     AccountResetCredit? selected;
+    // While the chooser is visible, expiry and redemption eligibility cross
+    // boundaries together without issuing another account read.
+    _dialogTick = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _dialogClock.value++,
+    );
     final credit = await showDialog<AccountResetCredit>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, change) {
-          final now = _now;
-          final usable = details
-              .where((item) => item.availableAt(now))
-              .toList();
-          final firstExpiry = usable
-              .map((item) => item.expiresAt)
-              .whereType<DateTime>()
-              .firstOrNull;
-          final warnings = <String>[];
-          if (selected != null) {
-            final windows = accountQuotaWindows(observed);
-            final weekly = windows
-                .where((window) => window.windowSeconds == 7 * 86400)
+      builder: (dialogContext) => ValueListenableBuilder(
+        valueListenable: _dialogClock,
+        builder: (dialogContext, _, _) => StatefulBuilder(
+          builder: (dialogContext, change) {
+            final now = _now;
+            final usable = details
+                .where((item) => item.availableAt(now))
+                .toList();
+            final firstExpiry = usable
+                .map((item) => item.expiresAt)
+                .whereType<DateTime>()
                 .firstOrNull;
-            if (weekly != null && weekly.usedPercent > 0) {
-              warnings.add(
-                copy.format('account_facts.reset.weekly_used', {
-                  'percent': weekly.usedPercent,
-                }),
-              );
+            final warnings = <String>[];
+            if (selected != null) {
+              final windows = accountQuotaWindows(observed);
+              final weekly = windows
+                  .where((window) => window.windowSeconds == 7 * 86400)
+                  .firstOrNull;
+              if (weekly != null && weekly.usedPercent > 0) {
+                warnings.add(
+                  copy.format('account_facts.reset.weekly_used', {
+                    'percent': weekly.usedPercent,
+                  }),
+                );
+              }
+              if (firstExpiry != null &&
+                  (selected!.expiresAt == null ||
+                      selected!.expiresAt!.isAfter(firstExpiry))) {
+                warnings.add(
+                  copy.format('account_facts.reset.not_earliest', {
+                    'time': _fullTime(firstExpiry),
+                  }),
+                );
+              }
+              final soon =
+                  windows
+                      .where(
+                        (window) =>
+                            window.resetAt.isAfter(now) &&
+                            !window.resetAt.isAfter(
+                              now.add(const Duration(hours: 3)),
+                            ),
+                      )
+                      .toList()
+                    ..sort((a, b) => a.resetAt.compareTo(b.resetAt));
+              if (soon.isNotEmpty) {
+                warnings.add(
+                  copy.format('account_facts.reset.natural_soon', {
+                    'window': _quotaDuration(soon.first.windowSeconds, copy),
+                    'time': _fullTime(soon.first.resetAt),
+                  }),
+                );
+              }
             }
-            if (firstExpiry != null &&
-                (selected!.expiresAt == null ||
-                    selected!.expiresAt!.isAfter(firstExpiry))) {
-              warnings.add(
-                copy.format('account_facts.reset.not_earliest', {
-                  'time': _fullTime(firstExpiry),
-                }),
-              );
-            }
-            final soon =
-                windows
-                    .where(
-                      (window) =>
-                          window.resetAt.isAfter(now) &&
-                          !window.resetAt.isAfter(
-                            now.add(const Duration(hours: 3)),
-                          ),
-                    )
-                    .toList()
-                  ..sort((a, b) => a.resetAt.compareTo(b.resetAt));
-            if (soon.isNotEmpty) {
-              warnings.add(
-                copy.format('account_facts.reset.natural_soon', {
-                  'window': _quotaDuration(soon.first.windowSeconds, copy),
-                  'time': _fullTime(soon.first.resetAt),
-                }),
-              );
-            }
-          }
-          final canRedeem =
-              selected?.availableAt(now) == true &&
-              account.kind == 'codex_oauth' &&
-              account.usable &&
-              !widget.controller.previewMode &&
-              observed.state == 'known' &&
-              !widget.controller.providerAccountQuotaFailed(account) &&
-              !widget.controller.providerAccountQuotaLoading(account) &&
-              resets?.applicableAvailableCount != 0 &&
-              generation == _generation;
-          return AlertDialog(
-            key: const Key('account-reset-dialog'),
-            title: Text(copy('account_facts.reset.choose_title')),
-            content: SizedBox(
-              width: 520,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(dialogContext).height * .62,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        account.displayName,
-                        style: Theme.of(dialogContext).textTheme.titleSmall,
-                      ),
-                      if (resets?.details == null)
-                        Text(copy('account_facts.reset.details_unavailable'))
-                      else if (details.isEmpty)
-                        Text(copy('account_facts.reset.none')),
-                      for (final item in details)
-                        ListTile(
-                          key: Key('account-reset-credit-${item.id}'),
-                          contentPadding: EdgeInsets.zero,
-                          selected: identical(selected, item),
-                          leading: Icon(
-                            identical(selected, item)
-                                ? Icons.radio_button_checked
-                                : Icons.radio_button_off,
-                            color: item.availableAt(now)
-                                ? context.viberColors.route
-                                : context.viberColors.textFaint,
-                          ),
-                          title: Text(item.title ?? 'Codex'),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (item.description case final description?)
-                                Text(description),
-                              Text(
-                                item.expiresAt == null
-                                    ? copy('account_facts.reset.no_expiry')
-                                    : copy.format(
-                                        'account_facts.reset.expires',
-                                        {'time': _fullTime(item.expiresAt!)},
-                                      ),
-                                style: TextStyle(
-                                  color: resetCreditExpiresSoon(item, now)
-                                      ? context.viberColors.danger
-                                      : null,
-                                ),
-                              ),
-                              Text(
-                                copy.format('account_facts.reset.granted', {
-                                  'time': _fullTime(item.grantedAt),
-                                }),
-                              ),
-                              Text(
-                                item.status == 'available' &&
-                                        item.expiresAt != null &&
-                                        !item.expiresAt!.isAfter(now)
-                                    ? copy('account_facts.reset.status_expired')
-                                    : copy.maybe(
-                                            'account_facts.reset.status_${item.status}',
-                                          ) ??
-                                          item.status,
-                              ),
-                              if (item.resetType != 'codex_rate_limits')
-                                Text(item.resetType),
-                              Text(
-                                'ID: ${item.id}',
-                                style: Theme.of(
-                                  dialogContext,
-                                ).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                          onTap: item.availableAt(now)
-                              ? () => change(() => selected = item)
-                              : null,
-                        ),
-                      if (selected != null) ...[
-                        const Divider(),
+            final canRedeem =
+                selected?.availableAt(now) == true &&
+                account.kind == 'codex_oauth' &&
+                account.usable &&
+                !widget.controller.previewMode &&
+                observed.state == 'known' &&
+                !widget.controller.providerAccountQuotaFailed(account) &&
+                !widget.controller.providerAccountQuotaLoading(account) &&
+                resets?.applicableAvailableCount != 0 &&
+                generation == _generation;
+            return AlertDialog(
+              key: const Key('account-reset-dialog'),
+              title: Text(copy('account_facts.reset.choose_title')),
+              content: SizedBox(
+                width: 520,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(dialogContext).height * .62,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          copy('account_facts.reset.confirm_title'),
+                          account.displayName,
                           style: Theme.of(dialogContext).textTheme.titleSmall,
                         ),
-                        const SizedBox(height: 8),
-                        Text(copy('account_facts.reset.confirm_detail')),
-                        if (warnings.isNotEmpty)
-                          Container(
-                            key: const Key('account-reset-warnings'),
-                            margin: const EdgeInsets.only(top: 10),
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: context.viberColors.warning.withValues(
-                                alpha: .10,
-                              ),
-                              borderRadius: BorderRadius.circular(6),
+                        if (resets?.details == null)
+                          Text(copy('account_facts.reset.details_unavailable'))
+                        else if (details.isEmpty)
+                          Text(copy('account_facts.reset.none')),
+                        for (final item in details)
+                          ListTile(
+                            key: Key('account-reset-credit-${item.id}'),
+                            contentPadding: EdgeInsets.zero,
+                            selected: identical(selected, item),
+                            leading: Icon(
+                              identical(selected, item)
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_off,
+                              color: item.availableAt(now)
+                                  ? context.viberColors.route
+                                  : context.viberColors.textFaint,
                             ),
-                            child: Text(warnings.join('\n\n')),
+                            title: Text(item.title ?? 'Codex'),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (item.description case final description?)
+                                  Text(description),
+                                if (item.expiresAt case final expiry?)
+                                  Text(
+                                    _resetCreditExpiration(expiry, now, copy),
+                                    style: Theme.of(dialogContext)
+                                        .textTheme
+                                        .labelMedium
+                                        ?.copyWith(
+                                          color:
+                                              resetCreditExpiresSoon(item, now)
+                                              ? context.viberColors.danger
+                                              : null,
+                                        ),
+                                  ),
+                                Text(
+                                  item.expiresAt == null
+                                      ? copy('account_facts.reset.no_expiry')
+                                      : copy.format(
+                                          'account_facts.reset.expires',
+                                          {'time': _fullTime(item.expiresAt!)},
+                                        ),
+                                  style: TextStyle(
+                                    color: resetCreditExpiresSoon(item, now)
+                                        ? context.viberColors.danger
+                                        : null,
+                                  ),
+                                ),
+                                Text(
+                                  copy.format('account_facts.reset.granted', {
+                                    'time': _fullTime(item.grantedAt),
+                                  }),
+                                ),
+                                Text(
+                                  item.status == 'available' &&
+                                          item.expiresAt != null &&
+                                          !item.expiresAt!.isAfter(now)
+                                      ? copy(
+                                          'account_facts.reset.status_expired',
+                                        )
+                                      : copy.maybe(
+                                              'account_facts.reset.status_${item.status}',
+                                            ) ??
+                                            item.status,
+                                ),
+                                if (item.resetType != 'codex_rate_limits')
+                                  Text(item.resetType),
+                                Text(
+                                  'ID: ${item.id}',
+                                  style: Theme.of(
+                                    dialogContext,
+                                  ).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                            onTap: item.availableAt(now)
+                                ? () => change(() => selected = item)
+                                : null,
                           ),
+                        if (selected != null) ...[
+                          const Divider(),
+                          Text(
+                            copy('account_facts.reset.confirm_title'),
+                            style: Theme.of(dialogContext).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(copy('account_facts.reset.confirm_detail')),
+                          if (warnings.isNotEmpty)
+                            Container(
+                              key: const Key('account-reset-warnings'),
+                              margin: const EdgeInsets.only(top: 10),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: context.viberColors.warning.withValues(
+                                  alpha: .10,
+                                ),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(warnings.join('\n\n')),
+                            ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: Text(copy('common.cancel')),
-              ),
-              FilledButton(
-                key: const Key('account-reset-confirm'),
-                onPressed: canRedeem
-                    ? () => Navigator.pop(dialogContext, selected)
-                    : null,
-                child: Text(copy('account_facts.reset.confirm')),
-              ),
-            ],
-          );
-        },
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: Text(copy('common.cancel')),
+                ),
+                FilledButton(
+                  key: const Key('account-reset-confirm'),
+                  onPressed: canRedeem
+                      ? () => Navigator.pop(dialogContext, selected)
+                      : null,
+                  child: Text(copy('account_facts.reset.confirm')),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
+    _dialogTick?.cancel();
+    _dialogTick = null;
     if (!mounted ||
         credit == null ||
         generation != _generation ||

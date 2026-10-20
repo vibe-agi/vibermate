@@ -1012,6 +1012,26 @@ final class _RouteAccountActivationGroupState
   String _quotaSignature = '';
   List<String> _accountOrder = const [];
   bool _refreshing = false;
+  int _refreshGeneration = 0;
+
+  String _refreshScope(_RouteAccountActivationGroup value) => value.accounts
+      .map(
+        (account) =>
+            '${account.id}:${account.credentialEpoch}:${account.settingsRevision}:'
+            '${account.credentialOrigin}:${account.usable}',
+      )
+      .join('|');
+
+  @override
+  void didUpdateWidget(covariant _RouteAccountActivationGroup oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller) ||
+        _refreshScope(oldWidget) != _refreshScope(widget)) {
+      _refreshGeneration++;
+      _refreshing = false;
+      _quotaSignature = '';
+    }
+  }
 
   bool _supportsQuota(ProviderAccount account) =>
       account.usable &&
@@ -1093,6 +1113,7 @@ final class _RouteAccountActivationGroupState
 
   Future<void> _refreshQuota() async {
     if (_refreshing || widget.controller == null) return;
+    final generation = _refreshGeneration;
     setState(() => _refreshing = true);
     try {
       await widget.controller!.ensureProviderAccountQuotas(
@@ -1100,7 +1121,9 @@ final class _RouteAccountActivationGroupState
         refresh: true,
       );
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted && generation == _refreshGeneration) {
+        setState(() => _refreshing = false);
+      }
     }
   }
 
@@ -1155,14 +1178,8 @@ final class _RouteAccountActivationGroupState
                 IconButton(
                   key: Key('environment-account-refresh-${route.id}'),
                   tooltip: copy('environment.account.refresh'),
-                  onPressed:
-                      _refreshing ||
-                          accounts.any(controller.providerAccountQuotaLoading)
-                      ? null
-                      : _refreshQuota,
-                  icon:
-                      _refreshing ||
-                          accounts.any(controller.providerAccountQuotaLoading)
+                  onPressed: _refreshing ? null : _refreshQuota,
+                  icon: _refreshing
                       ? const SizedBox.square(
                           dimension: 15,
                           child: CircularProgressIndicator(strokeWidth: 1.5),
@@ -1177,26 +1194,17 @@ final class _RouteAccountActivationGroupState
               dense: true,
               leading: const Icon(Icons.person_outline, size: 18),
               title: Text(copy('environment.account.original')),
-              trailing: OutlinedButton(
-                key: Key('environment-account-original-${route.id}'),
-                onPressed:
-                    !enabled ||
-                        route.accountPolicy.mode == 'original' ||
-                        controller == null ||
-                        environment == null
-                    ? null
-                    : () => unawaited(
-                        controller.activateEnvironmentAccount(
-                          environment,
-                          route.id,
-                          '',
-                        ),
-                      ),
-                child: Text(
-                  copy(
-                    route.accountPolicy.mode == 'original'
-                        ? 'environment.account.active'
-                        : 'environment.account.activate',
+              trailing: _AccountActivationControl(
+                controlKey: Key('environment-account-original-${route.id}'),
+                name: copy('environment.account.original'),
+                active: route.accountPolicy.mode == 'original',
+                enabled: enabled && controller != null && environment != null,
+                copy: copy,
+                onActivate: () => unawaited(
+                  controller!.activateEnvironmentAccount(
+                    environment!,
+                    route.id,
+                    '',
                   ),
                 ),
               ),
@@ -1303,61 +1311,6 @@ final class _RouteAccountActivationRow extends StatelessWidget {
     final identity = account.note.isNotEmpty
         ? account.note
         : account.codexOAuth?.email ?? account.tokenInfo?.email;
-    final scaler = MediaQuery.textScalerOf(context);
-    final stackAction = scaler.scale(12) > 18;
-    final actionStyle =
-        Theme.of(
-          context,
-        ).outlinedButtonTheme.style?.textStyle?.resolve(const {}) ??
-        Theme.of(context).textTheme.labelLarge;
-    var actionWidth = 96.0;
-    var actionHeight = ViberMetrics.controlHeight;
-    for (final key in [
-      'environment.account.active',
-      'environment.account.activate',
-    ]) {
-      final painter = TextPainter(
-        text: TextSpan(text: copy(key), style: actionStyle),
-        textDirection: Directionality.of(context),
-        textScaler: scaler,
-      )..layout();
-      actionWidth = math.max(actionWidth, painter.width + 36);
-      actionHeight = math.max(actionHeight, painter.height + 12);
-      painter.dispose();
-    }
-    final action = Semantics(
-      selected: active,
-      child: SizedBox(
-        width: actionWidth,
-        height: actionHeight,
-        child: OutlinedButton.icon(
-          key: Key('environment-account-activate-${account.id}'),
-          onPressed: enabled && !active ? onActivate : null,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            disabledForegroundColor: active
-                ? context.viberColors.verified
-                : null,
-            side: active
-                ? BorderSide(
-                    color: context.viberColors.verified.withValues(alpha: .5),
-                  )
-                : null,
-          ),
-          icon: Icon(
-            active ? Icons.check : Icons.radio_button_unchecked,
-            size: 14,
-          ),
-          label: Text(
-            copy(
-              active
-                  ? 'environment.account.active'
-                  : 'environment.account.activate',
-            ),
-          ),
-        ),
-      ),
-    );
     return Container(
       key: Key('environment-account-option-${account.id}'),
       padding: const EdgeInsets.fromLTRB(7, 6, 6, 6),
@@ -1395,22 +1348,71 @@ final class _RouteAccountActivationRow extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ?quota,
-                if (stackAction)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: action,
-                    ),
-                  ),
               ],
             ),
           ),
-          if (!stackAction) ...[const SizedBox(width: 6), action],
+          const SizedBox(width: 6),
+          _AccountActivationControl(
+            controlKey: Key('environment-account-activate-${account.id}'),
+            name: account.displayName,
+            active: active,
+            enabled: enabled,
+            copy: copy,
+            onActivate: onActivate,
+          ),
         ],
       ),
     );
   }
+}
+
+final class _AccountActivationControl extends StatelessWidget {
+  const _AccountActivationControl({
+    required this.controlKey,
+    required this.name,
+    required this.active,
+    required this.enabled,
+    required this.copy,
+    required this.onActivate,
+  });
+
+  final Key controlKey;
+  final String name;
+  final bool active;
+  final bool enabled;
+  final AppCopy copy;
+  final VoidCallback onActivate;
+
+  @override
+  Widget build(BuildContext context) => MergeSemantics(
+    child: Semantics(
+      selected: active,
+      child: IconButton.outlined(
+        key: controlKey,
+        tooltip: copy.format(
+          active
+              ? 'environment.account.active_named'
+              : 'environment.account.activate_named',
+          {'name': name},
+        ),
+        onPressed: enabled && !active ? onActivate : null,
+        constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        padding: const EdgeInsets.all(4),
+        style: IconButton.styleFrom(
+          disabledForegroundColor: active ? context.viberColors.verified : null,
+          side: active
+              ? BorderSide(
+                  color: context.viberColors.verified.withValues(alpha: .5),
+                )
+              : null,
+        ),
+        icon: Icon(
+          active ? Icons.check : Icons.radio_button_unchecked,
+          size: 16,
+        ),
+      ),
+    ),
+  );
 }
 
 final class _EnvironmentEditorPageFrame extends StatelessWidget {

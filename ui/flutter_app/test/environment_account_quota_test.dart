@@ -480,21 +480,28 @@ void main() {
               const Key('environment-account-activate-b-soon'),
             );
             expect(tester.getSize(active), tester.getSize(inactive));
-            final actionLabel = tester.renderObject<RenderParagraph>(
-              find.descendant(
-                of: inactive,
-                matching: find.text(copy('environment.account.activate')),
-              ),
+            expect(tester.getSize(inactive).width, lessThanOrEqualTo(40));
+            expect(tester.getSize(inactive).height, greaterThanOrEqualTo(32));
+            expect(tester.widget<IconButton>(active).onPressed, isNull);
+            expect(tester.widget<IconButton>(inactive).onPressed, isNotNull);
+            expect(
+              tester.widget<IconButton>(inactive).tooltip,
+              contains(accounts[1].displayName),
             );
             expect(
-              actionLabel.size.width,
-              greaterThanOrEqualTo(
-                actionLabel.getMaxIntrinsicWidth(double.infinity) - 0.1,
-              ),
-              reason:
-                  'The whole activation label stays readable at the chosen text scale',
+              tester.widget<IconButton>(active).tooltip,
+              contains(accounts[0].displayName),
             );
-            expect(tester.widget<OutlinedButton>(active).onPressed, isNull);
+            final semantics = tester.ensureSemantics();
+            expect(
+              tester.getSemantics(active).flagsCollection.isSelected,
+              ui.Tristate.isTrue,
+            );
+            expect(
+              tester.getSemantics(inactive).flagsCollection.isSelected,
+              ui.Tristate.isFalse,
+            );
+            semantics.dispose();
             expect(
               find.descendant(
                 of: card('b-soon'),
@@ -540,10 +547,30 @@ void main() {
             final refresh = find.byKey(
               const Key('environment-account-refresh-quota-route'),
             );
+            final background = controller.ensureProviderAccountQuotas(
+              accounts,
+              refresh: true,
+            );
+            await tester.pump();
+            expect(tester.widget<IconButton>(refresh).onPressed, isNotNull);
+            expect(
+              find.descendant(
+                of: refresh,
+                matching: find.byType(CircularProgressIndicator),
+              ),
+              findsNothing,
+            );
             await tester.ensureVisible(refresh);
             await tester.tap(refresh);
             await tester.pump();
             expect(api.pending.length, 4);
+            expect(
+              find.descendant(
+                of: refresh,
+                matching: find.byType(CircularProgressIndicator),
+              ),
+              findsOneWidget,
+            );
             if (exercisePeriodic) {
               // Actual mounted views, manual refresh and controller timer all
               // converge on these same four held account-facts requests.
@@ -563,6 +590,7 @@ void main() {
             for (final id in ['b-soon', 'c-unknown', 'd-expired']) {
               api.pending[id]!.complete(api.facts(id));
             }
+            await background;
             await tester.pumpAndSettle();
             expect(api.calls, [
               'a-far',
