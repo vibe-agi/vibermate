@@ -2435,7 +2435,7 @@ final class AppCopy {
         'Root CA export requested. Importing and trusting it is a separate client step.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
-        'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
+        'Publish reusable VLESS, SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
     'settings.egress.add': 'New network exit profile',
     'settings.egress.create': 'New network exit profile',
     'settings.egress.edit': 'Edit network exit',
@@ -2456,6 +2456,10 @@ final class AppCopy {
     'settings.egress.unconfirmed':
         'The change was not confirmed. The current state shown was read again; no write was retried.',
     'settings.egress.set_default': 'Set as default',
+    'settings.egress.latest_revision': 'Latest saved · Revision {revision}',
+    'settings.egress.latest_unapplied':
+        'Revision {latest} is saved but not applied. The current default still uses revision {current}.',
+    'settings.egress.apply_revision': 'Use revision {revision} as default',
     'settings.egress.default_unavailable':
         'The current default is unavailable.',
     'settings.egress.validation.name': 'Enter a network exit profile name.',
@@ -5150,7 +5154,7 @@ final class AppCopy {
     'settings.runtime_ca.save_error': 'Root CA 下载或保存失败，请刷新后重试。',
     'settings.runtime_ca.saved': '已发起 Root CA 导出；仍需在客户端导入并设置信任。',
     'settings.egress.title': '网络出口方案',
-    'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
+    'settings.egress.detail': '统一发布可复用的 VLESS、SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
     'settings.egress.add': '新建网络出口方案',
     'settings.egress.create': '新建网络出口方案',
     'settings.egress.edit': '编辑网络出口方案',
@@ -5168,6 +5172,10 @@ final class AppCopy {
     'settings.egress.unset': '未选择默认方案，使用直连 · 系统 DNS。',
     'settings.egress.unconfirmed': '未能确认更改。已重新读取当前状态，没有重试写入。',
     'settings.egress.set_default': '设为默认',
+    'settings.egress.latest_revision': '最新保存 · 版本 {revision}',
+    'settings.egress.latest_unapplied':
+        '版本 {latest} 已保存但尚未应用，当前默认仍使用版本 {current}。',
+    'settings.egress.apply_revision': '将版本 {revision} 设为默认',
     'settings.egress.default_unavailable': '暂时无法读取当前默认。',
     'settings.egress.validation.name': '请输入方案名称。',
     'settings.language': '语言',
