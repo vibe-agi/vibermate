@@ -43,7 +43,7 @@ function fakeGoMain() {
     process.exit(config.listExit);
   }
   if (args[0] === 'env') {
-    const defaults = { GOOS: 'linux', GOARCH: 'amd64', GOVERSION: 'go1.26.9', CGO_ENABLED: '1', GOFLAGS: process.env.GOFLAGS };
+    const defaults = { GOOS: 'linux', GOARCH: 'amd64', GOVERSION: 'go1.26.10', CGO_ENABLED: '1', GOFLAGS: process.env.GOFLAGS };
     process.stdout.write(JSON.stringify(Object.fromEntries(args.slice(2).map(k => [k, (config.build || {})[k] ?? defaults[k] ?? '']))));
     process.exit(config.envExit || 0);
   }

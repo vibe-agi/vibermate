@@ -239,7 +239,7 @@ def _notices(go, dependencies, check, env, snapshots, directories):
     observed = _remember(license_path, snapshots, "Go license")
     copies.append((license_path, Path("licenses") / "go" / "LICENSE"))
     return {"schema": "vibermate.vless-kernel-licenses/v1", "modules": modules,
-            "go": {"version": "go1.26.9", "sourceURL": "https://go.dev/dl/go1.26.9.src.tar.gz",
+            "go": {"version": "go1.26.10", "sourceURL": "https://go.dev/dl/go1.26.10.src.tar.gz",
                    "files": [{"path": "licenses/go/LICENSE", "sourcePath": "LICENSE",
                               "size": observed["size"], "SHA256": observed["SHA256"]}]},
             "notice": "Verbatim materials; no legal certification is claimed."}, copies
@@ -428,7 +428,7 @@ def package_kernel(*, go_binary: str, target: str,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.9 executable")
+    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.10 executable")
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--input", required=True, action="append", dest="build_directories",
                         help="completed matching locked producer output (repeat for Universal)")

@@ -172,11 +172,11 @@ def _compiler(go_binary, env, cwd):
              "compiler", "requires absolute existing executable")
     version = _run([str(go), "version"], cwd=cwd, env=env, phase="compiler").decode().strip()
     parts = version.split()
-    _require(len(parts) == 4 and parts[:3] == ["go", "version", "go1.26.9"]
+    _require(len(parts) == 4 and parts[:3] == ["go", "version", "go1.26.10"]
              and re.fullmatch(r"[a-z0-9]+/[a-z0-9]+", parts[3]) is not None,
-             "compiler", "requires go1.26.9")
+             "compiler", "requires go1.26.10")
     goversion = _run([str(go), "env", "GOVERSION"], cwd=cwd, env=env, phase="compiler").decode().strip()
-    _require(goversion == "go1.26.9", "compiler", "GOVERSION mismatch")
+    _require(goversion == "go1.26.10", "compiler", "GOVERSION mismatch")
     return {"version": goversion, "host": parts[3], "SHA256": _sha(go)}
 
 
@@ -187,7 +187,7 @@ def _read_build_info(go, binary, source, env, target, lock):
     settings = {item["Key"]: item["Value"] for item in info.get("Settings", [])}
     deps = info.get("Deps", [])
     versions = {item["Path"]: item["Version"] for item in deps}
-    _require(info.get("GoVersion") == "go1.26.9" and
+    _require(info.get("GoVersion") == "go1.26.10" and
              settings.get("GOOS", "") + "/" + settings.get("GOARCH", "") == target and
              settings.get("vcs.revision") == lock["commit"] and
              settings.get("vcs.modified") == "true" and
@@ -331,7 +331,7 @@ def build_kernel(*, go_binary: str, target: str, output_dir: str,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.9 executable")
+    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.10 executable")
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--output", required=True, dest="output_dir", help="fresh child of an existing real parent")
     parser.add_argument("--archive", dest="archive_path", help="optional exact locked source archive")

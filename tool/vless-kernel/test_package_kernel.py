@@ -122,7 +122,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         settings = {"GOOS": target.split("/")[0], "GOARCH": target.split("/")[1],
                     "vcs.revision": self.lock["commit"], "vcs.modified": "true",
                     "CGO_ENABLED": "0", "-trimpath": "true"}
-        info = {"GoVersion": "go1.26.9", "Deps": copy.deepcopy(self.dependencies),
+        info = {"GoVersion": "go1.26.10", "Deps": copy.deepcopy(self.dependencies),
                 "Settings": [{"Key": key, "Value": value} for key, value in settings.items()],
                 "Main": {"Path": "github.com/xtls/xray-core", "Version": "v0.0.0-20260327174540-d2758a023cd7+dirty"},
                 "Path": "github.com/xtls/xray-core/main"}
@@ -132,14 +132,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             "schema": "vibermate.vless-kernel-build/v1", "target": target,
             "upstream": {key: self.lock[key] for key in ("repository", "ref", "commit", "tree", "archiveSHA256")},
             "patchSHA256": self.lock["patchSHA256"], "moduleSHA256": self.lock["moduleSHA256"],
-            "compiler": {"version": "go1.26.9", "host": "darwin/arm64", "SHA256": hashlib.sha256(self.go.read_bytes()).hexdigest()},
+            "compiler": {"version": "go1.26.10", "host": "darwin/arm64", "SHA256": hashlib.sha256(self.go.read_bytes()).hexdigest()},
             "build": {"environment": controlled, "argv": [str(self.go), "build", "-buildvcs=true", "-trimpath",
                 "-ldflags=-X github.com/xtls/xray-core/core.build=" + self.lock["sourceMarker"],
                 "-o", str(directory / ".work" / "vibermate-xray"), "./main"]},
             "binary": {"name": "vibermate-xray", "size": binary.stat().st_size,
                        "SHA256": hashlib.sha256(binary.read_bytes()).hexdigest()},
             "licenseSHA256": self.lock["licenseSHA256"],
-            "buildInfo": {"GoVersion": "go1.26.9", "GOOS": settings["GOOS"], "GOARCH": settings["GOARCH"],
+            "buildInfo": {"GoVersion": "go1.26.10", "GOOS": settings["GOOS"], "GOARCH": settings["GOARCH"],
                 "vcs.revision": self.lock["commit"], "vcs.modified": True, "dependencies": info["Deps"],
                 "settings": settings, "main": info["Main"], "path": info["Path"]}}
         self.manifests[str(directory)] = manifest
@@ -153,9 +153,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         if argv[0] == "/usr/bin/lipo":
             raise KernelError("lipo: command failed")
         if argv[1:] == ["version"]:
-            return b"go version go1.26.9 darwin/arm64\n"
+            return b"go version go1.26.10 darwin/arm64\n"
         if argv[1:3] == ["env", "GOVERSION"]:
-            return b"go1.26.9\n"
+            return b"go1.26.10\n"
         if argv[1:3] == ["env", "GOROOT"]:
             return str(self.goroot).encode() + b"\n"
         if argv[1:4] == ["version", "-m", "-json"]:
@@ -399,7 +399,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         def wrong_version(argv, **kwargs):
             return b"go version go1.26.8 darwin/arm64\n" if argv[1:] == ["version"] else original(argv, **kwargs)
         with patch.object(producer, "_run", side_effect=wrong_version):
-            self.reject("compiler.*go1.26.9")
+            self.reject("compiler.*go1.26.10")
         self.assertFalse(self.output.exists())
 
     def test_output_beneath_input_cannot_modify_producer(self):

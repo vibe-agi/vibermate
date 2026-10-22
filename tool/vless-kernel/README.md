@@ -2,14 +2,14 @@
 
 This tool builds the exact pinned Xray source with the reviewed dependency patch.
 It requires Python 3.9 or newer (standard library only), local Git, and an absolute
-Go 1.26.9 executable. It does not install Go or modify global Git/Go settings.
+Go 1.26.10 executable. It does not install Go or modify global Git/Go settings.
 
 Create an owned temporary parent, then build into a new child:
 
 ```sh
 kernel_fixture_dir="$(mktemp -d /tmp/vibermate-kernel-producer.XXXXXX)"
 python3 tool/vless-kernel/build_kernel.py \
-  --go /absolute/path/to/go1.26.9/bin/go \
+  --go /absolute/path/to/go1.26.10/bin/go \
   --target darwin/arm64 \
   --archive /absolute/path/to/locked-upstream-source.tar.gz \
   --output "${kernel_fixture_dir}/native-a"
@@ -62,7 +62,7 @@ license alone is not a complete notice/license audit of linked modules.
 ## Verified package assembly
 
 `package_kernel.py` consumes completed outputs from this fixed producer. It
-requires the same absolute Go 1.26.9 compiler and verifies its byte identity,
+requires the same absolute Go 1.26.10 compiler and verifies its byte identity,
 the adjacent lock/assets, producer manifests, source module files, executable
 bytes, and actual Go build metadata/dependencies before claiming success.
 Inputs are read-only real directories; the fresh output must be outside them.
@@ -75,7 +75,7 @@ outputs, then assemble them with Apple's `/usr/bin/lipo`:
 
 ```sh
 python3 tool/vless-kernel/package_kernel.py \
-  --go /absolute/path/to/go1.26.9/bin/go \
+  --go /absolute/path/to/go1.26.10/bin/go \
   --target darwin/universal \
   --input /absolute/producer-arm64 \
   --input /absolute/producer-amd64 \
@@ -86,11 +86,11 @@ Thin assembly copies the verified executable without changing its bytes:
 
 ```sh
 python3 tool/vless-kernel/package_kernel.py \
-  --go /absolute/path/to/go1.26.9/bin/go \
+  --go /absolute/path/to/go1.26.10/bin/go \
   --target linux/amd64 --input /absolute/producer-linux-amd64 \
   --output /absolute/existing-parent/new-linux-amd64-package
 python3 tool/vless-kernel/package_kernel.py \
-  --go /absolute/path/to/go1.26.9/bin/go \
+  --go /absolute/path/to/go1.26.10/bin/go \
   --target linux/arm64 --input /absolute/producer-linux-arm64 \
   --output /absolute/existing-parent/new-linux-arm64-package
 ```
