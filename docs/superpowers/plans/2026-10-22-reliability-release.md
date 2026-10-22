@@ -15,7 +15,7 @@
 - Work in `/Users/null/.codex/worktrees/fbde/vibermate`, branch `codex/reliability-release-0.1.36`; preserve the user's original checkout and unrelated `.superpowers/diagnostics/`.
 - Respect every invariant in the spec. Do not weaken privacy/credential/egress checks to make tests green.
 - Use production public seams and synthetic temporary state. Never read real credentials or send synthetic tokens to real providers.
-- One implementation subagent at a time; independent source review, fixture research and parent-owned toolchain work can overlap. Only one Go-heavy test/build runs at a time; coordinate with the parent.
+- One implementation subagent at a time; independent source review, fixture research and parent-owned work in disjoint files can overlap. Only one Go-heavy test/build runs at a time; coordinate with the parent.
 - Parent owns Git staging/commits/integration on the shared worktree. Agents edit only assigned files and report exact paths; no Git index or branch mutation by agents.
 - Current native baseline is Codex 0.163.0. Keep Claude and generic transport coverage. Go release floor is 1.26.10, with matching kernel build receipts.
 - Existing audit fixtures live in `/Users/null/Downloads/vibermate-codebase-review-20261022` and `/Users/null/Downloads/vibermate-web-detail-review-20261022`.
@@ -65,7 +65,7 @@ final pattern = RegExp(r'^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$');
 - [ ] Reproduce summary 409 across fresh and upgraded archives, capture observations, source changes, expiry and concurrent routine cleanup. Fix a demonstrated false conflict at its source; keep real visibility conflicts fail-closed. Add bounded safe phase diagnostics where a conflict cannot otherwise be attributed.
 - [ ] Verify required control remains usable during optional recording failure, real deletion removes bytes, no-op cycles do not rewrite archives, and source-conflict tests still reject stale evidence. Report unresolved deployment-only facts explicitly.
 
-### Task 4: Generic network recovery boundaries
+### Task 4: Generic network recovery boundaries (parent-owned)
 
 **Files:** `internal/egressnetwork/doh.go`, `dialer.go`, `internal/vlessprofile/profile.go`, `internal/vlesscore` and isolated fixture tests only as justified; existing network recovery review.
 
@@ -104,6 +104,7 @@ final pattern = RegExp(r'^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?$');
 **Files:** Final changed-source set, release notes/version metadata, established macOS/Linux workflows and distribution repository metadata.
 
 - [ ] Produce task-scoped diff packages and independent spec/code-quality review; resolve important findings with covering tests. Record commits and remaining concerns in the plan ledger.
+- [ ] Activate a small repository-owned production Runtime HTTP fixture → Flutter decoder/continuation CI lane; static fixture snapshots alone do not catch future producer drift.
 - [ ] Run appropriate integrated Go/Flutter/contracts/race/native checks once on the final source. Broad whole-branch review includes the repaired signed-cursor producer/consumer boundary and authority/recording separation.
 - [ ] Create/update the integration PR, wait for exact-head CI, and merge using the established protected-branch flow. User explicitly authorized merge and release.
 - [ ] Build signed/notarized macOS Desktop/CLI and both Linux Runtime/Web distributions from the exact release source, verify checksums/provenance and packaged acceptance, then publish the coherent release and distribution metadata.

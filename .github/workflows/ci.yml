@@ -152,6 +152,20 @@ jobs:
           VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}" \
             go test -count=1 -run '^TestInstalledCodexReadsManagedAccount$' ./internal/productruntime
 
+
+      - name: Verify Codex 0.163.0 scoped configuration and workspace bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-codex-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" @openai/codex@0.163.0
+          codex_binary="$(rg --files --hidden --no-ignore "${prefix}/node_modules" | rg '/vendor/[^/]+/bin/codex$')"
+          test -f "${codex_binary}"
+          test "$("${codex_binary}" --version)" = 'codex-cli 0.163.0'
+          export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
+          go test -count=1 -run '^TestInstalledCodex(ConfigOverridesSurviveCommandScopes|CaptureOwnsOrdinaryProxyFeatures|CaptureStrictConfiguration|StableExecCyberSyntax|ProxyGuardPreservesUnknownFeatureErrors|BootstrapProxyFallbackStaysCaptureOwned|CaptureIsolationStartupContract|ManagedAuthEmptyHomeAndCaptureIsolation|ManagedAuthResumesOpenAIHistoryWithoutLogin|ManagedAuthOverridesInheritedStaticBearer|ManagedAuthRejectsInheritedCommandAuthBeforeExecution|RecoversTransientHTTPFailureThroughLauncher)$' ./internal/runlauncher
+          go test -count=1 -run '^TestInstalledCodex(ReadsManagedAccount|ReadsEnterpriseWorkspaceRequirements|OfficialAPIModelCatalog)$' ./internal/productruntime
+
   race:
     needs: generated-structural
     strategy:
@@ -340,6 +354,11 @@ jobs:
           flutter analyze
           flutter test
           flutter pub deps --no-dev --style=compact
+      - name: Verify current Runtime HTTP content with Flutter
+        timeout-minutes: 5
+        env:
+          VIBERMATE_RUN_FLUTTER_CONTRACT: '1'
+        run: go test -count=1 -timeout=4m -run '^TestLiveRuntimeFlutterContentContract$' -v ./internal/desktopcontrol
       - name: Verify native macOS preference boundary
         timeout-minutes: 5
         shell: bash
