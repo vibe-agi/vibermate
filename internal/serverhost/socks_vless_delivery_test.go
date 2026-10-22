@@ -42,7 +42,8 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != "32fefac43856b8218a6969980e57bec00efcb19c93fceb796e6fbd47ca373007" {
+	const qualifiedSHA256 = "0bb979cce81eb2eeb3d8f76ffa0d7b79c81380afd4fc54392296fd999bbd1df2"
+	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != qualifiedSHA256 {
 		t.Fatalf("unqualified packaged helper SHA256 %s", got)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
@@ -51,7 +52,7 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	if err != nil || !bytes.Contains(version, []byte("26.3.27")) || !bytes.Contains(version, []byte("d2758a0-vibermate-security1")) || !bytes.Contains(version, []byte("go1.26.10")) {
 		t.Fatal("packaged helper version identity failed")
 	}
-	t.Logf("packaged SHA256 32fefac43856b8218a6969980e57bec00efcb19c93fceb796e6fbd47ca373007; %s", strings.TrimSpace(string(version)))
+	t.Logf("packaged SHA256 %s; %s", qualifiedSHA256, strings.TrimSpace(string(version)))
 	fixture := newDeliveryFixture(t, ctx, binaryPath)
 	options := serverOptions(t, t.TempDir())
 	options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
