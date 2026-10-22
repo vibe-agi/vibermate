@@ -8,6 +8,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
@@ -34,6 +35,8 @@ type Read struct {
 	path     string
 	origin   originidentity.ProviderOrigin
 	rawQuery string
+	source   originidentity.ProviderOrigin
+	driver   providerauth.DriverRef
 }
 
 func (read Read) ID() string                            { return read.id }
@@ -51,7 +54,10 @@ func (read Read) AdapterID() string       { return "chatgpt-codex" }
 func (read Read) AdapterRevision() uint64 { return 1 }
 func (read Read) Validate() error {
 	resolved, err := ResolveRead(read.origin, read.id)
-	if err != nil || resolved.path != read.path || validateReadQuery(read.id, read.rawQuery) != nil {
+	if read.source != (originidentity.ProviderOrigin{}) {
+		resolved, err = ResolveAccountRead(read.source, read.driver, read.id)
+	}
+	if err != nil || resolved.path != read.path || resolved.origin != read.origin || validateReadQuery(read.id, read.rawQuery) != nil {
 		return ErrUnsupported
 	}
 	return nil
@@ -122,4 +128,26 @@ func ResolveRead(origin originidentity.ProviderOrigin, id string) (Read, error) 
 		}
 	}
 	return Read{}, ErrUnsupported
+}
+
+// ResolveAccountRead binds an explicit account/inference source to the service
+// destination. Only the official static API-key models read crosses origins;
+// quota, history and workspace policy retain their existing authority.
+func ResolveAccountRead(source originidentity.ProviderOrigin, driver providerauth.DriverRef, id string) (Read, error) {
+	if upstreamendpoint.IsOfficialAPIOrigin(source) {
+		if id != CodexModels || !upstreamendpoint.SupportsCodexCatalog(source, driver) {
+			return Read{}, ErrUnsupported
+		}
+		destination, _ := originidentity.ParseProviderOrigin("https://chatgpt.com/backend-api/codex")
+		return Read{id: id, path: "/backend-api/codex/models", origin: destination, source: source, driver: driver}, nil
+	}
+	return ResolveRead(source, id)
+}
+
+// SourceOrigin remains the account's inference origin, never its metadata host.
+func (read Read) SourceOrigin() originidentity.ProviderOrigin {
+	if read.source != (originidentity.ProviderOrigin{}) {
+		return read.source
+	}
+	return read.origin
 }

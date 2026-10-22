@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 )
 
 const cyberCatalogTTL = 45 * time.Second
@@ -42,7 +43,7 @@ func (client *Client) AccountCyberPrograms(ctx context.Context, request Request)
 	}
 	account, ok := request.AccountRef()
 	if !ok || account.Validate() != nil || account.CyberAccessProgram == cyberaccess.Standard ||
-		!upstreamendpoint.IsChatGPTCodexOrigin(request.Target().Origin()) || request.targetRef == "" ||
+		!upstreamendpoint.SupportsCodexCatalog(request.Target().Origin(), request.authDriverRef) || request.targetRef == "" ||
 		request.secretReference.String() == "" || request.authDriverRef.String() == "" {
 		return nil, errors.New("cyber program discovery scope is invalid")
 	}
@@ -61,10 +62,18 @@ func (client *Client) AccountCyberPrograms(ctx context.Context, request Request)
 	client.mu.Unlock()
 	readContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	read, err := upstreamservice.ResolveAccountRead(request.target.Origin(), request.authDriverRef, upstreamservice.CodexModels)
+	if err != nil {
+		return nil, err
+	}
+	target, err := NewTarget(read.Origin())
+	if err != nil {
+		return nil, err
+	}
 	response, err := client.fetchRuntimeJSON(readContext, runtimeFetchSpec{
-		purpose: egressaudit.PurposeUpstreamModelDiscovery, targetRef: request.targetRef, target: request.target,
-		relativePath: upstreamendpoint.ModelsPath(request.target.Origin()),
-		credential:   requestModelCredential{account: account, secret: request.secretReference, driver: request.authDriverRef},
+		purpose: egressaudit.PurposeUpstreamModelDiscovery, targetRef: request.targetRef, target: target,
+		relativePath: read.Path(), catalogRead: &read,
+		credential: requestModelCredential{account: account, secret: request.secretReference, driver: request.authDriverRef},
 	})
 	if err != nil {
 		return nil, err

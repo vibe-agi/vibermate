@@ -2,6 +2,37 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/provider_origin.dart';
 
 void main() {
+  test('capability scope is exact official API bearer only', () {
+    for (final origin in [
+      'https://api.openai.com',
+      'https://api.openai.com/v1',
+    ]) {
+      expect(
+        supportsCodexCapabilities(Uri.parse(origin), 'bearer_token'),
+        isTrue,
+      );
+      expect(
+        supportsCodexCapabilities(Uri.parse(origin), 'codex_oauth'),
+        isFalse,
+      );
+      expect(
+        upstreamModelsUrl(Uri.parse(origin), accountKind: 'bearer_token'),
+        'https://chatgpt.com/backend-api/codex/models?client_version=0.163.0',
+      );
+    }
+    for (final origin in [
+      'https://api.openai.com:8443',
+      'https://api.openai.com/custom',
+      'https://api.openai.com.example',
+      'https://custom.example',
+    ]) {
+      expect(
+        supportsCodexCapabilities(Uri.parse(origin), 'bearer_token'),
+        isFalse,
+      );
+    }
+  });
+
   test(
     'model discovery URL follows the selected service, not just Responses',
     () {
@@ -13,7 +44,7 @@ void main() {
         expect(isChatGPTCodexOrigin(Uri.parse(origin)), isTrue);
         expect(
           upstreamModelsUrl(Uri.parse(origin)),
-          'https://chatgpt.com/backend-api/codex/models?client_version=0.147.0',
+          'https://chatgpt.com/backend-api/codex/models?client_version=0.163.0',
         );
       }
       for (final entry in {

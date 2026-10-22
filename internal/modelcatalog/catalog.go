@@ -245,7 +245,7 @@ func (service *Service) discoverEndpoint(
 		// Codex's ChatGPT catalog advertises the request model as "slug";
 		// standard OpenAI-compatible catalogs advertise "id". Do not apply this
 		// provider-specific interpretation to unrelated endpoint catalogs.
-		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) && item.ID == "" {
+		if upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) && item.ID == "" {
 			if err := json.Unmarshal(item.Slug, &item.ID); err != nil {
 				return nil, ErrInvalidCatalog
 			}
@@ -267,7 +267,7 @@ func (service *Service) discoverEndpoint(
 			contextLimit = item.MaxContextWindow
 		}
 		var cyberPrograms []string
-		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) {
+		if upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
 			var err error
 			cyberPrograms, err = cyberaccess.ParsePrograms(item.AvailableAccessPrograms)
 			if err != nil {

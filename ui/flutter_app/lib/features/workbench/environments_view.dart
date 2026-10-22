@@ -4259,7 +4259,10 @@ final class _ModelMappingsDialogState extends State<_ModelMappingsDialog> {
     final endpointName = widget.endpoint?.displayName ?? widget.endpointId;
     final endpointModelsUrl = widget.endpoint == null
         ? widget.endpointId
-        : upstreamModelsUrl(widget.endpoint!.origin);
+        : upstreamModelsUrl(
+            widget.endpoint!.origin,
+            accountKind: widget.account?.kind,
+          );
     final authHintKey =
         widget.endpoint != null &&
             isChatGPTCodexOrigin(widget.endpoint!.origin) &&

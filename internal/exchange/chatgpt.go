@@ -128,3 +128,29 @@ func headerValuesFold(headers http.Header, wanted string) []string {
 	}
 	return values
 }
+
+// Official API-key Guardian requests carry the same role markers, but do not
+// inherit ChatGPT session, routing or turn-state ownership. Run before scripts.
+func managedNativeProtocolHeaders(request ClientRequest, selection frozenSelection) http.Header {
+	headers := nativeChatGPTProtocolHeaders(request, selection)
+	if request.operation.id.String() != operationcatalog.OpenAIResponsesCreateID ||
+		selection.codecPlan.ProviderDialect() != protocolspec.DialectOpenAIResponses ||
+		!upstreamendpoint.IsOfficialAPIOrigin(selection.target.Origin()) {
+		return headers
+	}
+	source, _ := request.OriginalHeaders()
+	hop := make(map[string]bool)
+	for _, value := range headerValuesFold(source, "Connection") {
+		for _, token := range strings.Split(value, ",") {
+			hop[strings.ToLower(strings.TrimSpace(token))] = true
+		}
+	}
+	for _, name := range []string{"X-Codex-Guardian", "X-Openai-Subagent"} {
+		if !hop[strings.ToLower(name)] {
+			if values := headerValuesFold(source, name); len(values) != 0 {
+				headers[name] = slices.Clone(values)
+			}
+		}
+	}
+	return headers
+}

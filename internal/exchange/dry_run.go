@@ -135,7 +135,7 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	}
 	headers := providerRequest.Headers()
 	if candidate.mode == providerauth.CredentialManaged {
-		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
+		for name, values := range managedNativeProtocolHeaders(request, selection) {
 			headers[name] = values
 		}
 		refreshChatGPTRoutingHint(headers, logicalBody, providerRequest.Body())

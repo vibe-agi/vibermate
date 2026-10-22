@@ -46,3 +46,51 @@ func TestAccountReadUsesManagedAuthenticationAndBodyFreeAudit(t *testing.T) {
 		t.Fatal("account read bypassed the runtime audit boundary")
 	}
 }
+
+func TestOfficialAPIAccountReadUsesOnlyFixedModelCatalog(t *testing.T) {
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	const body = `{"models":[{"slug":"m","future":{"preserve":true}}],"future":true}`
+	transport := &runtimeTransportStub{audit: audit, response: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}}
+	client := newRuntimeFetchClient(t, gate, transport, audit)
+	endpoint := testDiscoveryEndpoint(t, "https://api.openai.com/v1")
+	credential := testRuntimeDiscoveryCredential(t, endpoint.RealmID)
+	read, err := NewOwnedAccountRead(endpoint.Origin, upstreamservice.CodexModels, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ReadAccount(t.Context(), read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || string(got) != body {
+		t.Fatalf("catalog bytes changed: %s %v", got, err)
+	}
+	request := transport.lastRequest()
+	if request.URL.String() != "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0" || request.Header.Get("Authorization") != "Bearer catalog-test-token" {
+		t.Fatalf("wrong catalog authority: %s", request.URL)
+	}
+	for _, operation := range []string{upstreamservice.CodexRateLimits, upstreamservice.CodexUsageHistory, upstreamservice.CodexResetCreditDetails} {
+		if _, err := NewOwnedAccountRead(endpoint.Origin, operation, credential); err == nil {
+			t.Fatalf("API account admitted %s", operation)
+		}
+	}
+}
+
+func TestOfficialAPIEndpointDiscoveryUsesCodexCapabilityCatalog(t *testing.T) {
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	transport := &runtimeTransportStub{audit: audit, response: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"models":[]}`))}}
+	client := newRuntimeFetchClient(t, gate, transport, audit)
+	endpoint := testDiscoveryEndpoint(t, "https://api.openai.com")
+	response, err := client.FetchEndpointModels(t.Context(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if got := transport.lastRequest().URL.String(); got != "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0" {
+		t.Fatalf("official capability catalog=%s", got)
+	}
+}

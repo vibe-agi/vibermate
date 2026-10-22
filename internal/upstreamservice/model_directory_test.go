@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
 func TestModelDirectoryIsAClosedBoundedAccountRead(t *testing.T) {
@@ -41,6 +42,40 @@ func TestModelDirectoryIsAClosedBoundedAccountRead(t *testing.T) {
 	for _, invalid := range []string{`null`, `{"models":null}`, `{"models":[null]}`, `{"models":{}}`, `{"models":[],"Models":[]}`, `{"models":[{"slug":"m","slug":"other"}]}`, strings.Repeat(" ", MaxCodexModelsBodyBytes+1)} {
 		if _, err := read.Project([]byte(invalid)); err == nil {
 			t.Fatal("accepted invalid catalog")
+		}
+	}
+}
+
+func TestOfficialAPIModelDirectoryDescriptorKeepsSourceScope(t *testing.T) {
+	for _, raw := range []string{"https://api.openai.com", "https://api.openai.com/v1"} {
+		source, _ := originidentity.ParseProviderOrigin(raw)
+		read, err := ResolveAccountRead(source, providerauth.StaticHeaderDriverRef(), CodexModels)
+		if err != nil || read.Validate() != nil || read.SourceOrigin() != source || read.Origin().String() != "https://chatgpt.com/backend-api/codex" || read.Path() != "/backend-api/codex/models" {
+			t.Fatalf("invalid sealed catalog: %+v %v", read, err)
+		}
+		for _, operation := range []string{CodexRateLimits, CodexUsageHistory, CodexResetCreditDetails} {
+			if _, err := ResolveAccountRead(source, providerauth.StaticHeaderDriverRef(), operation); err == nil {
+				t.Fatalf("cross-origin %s admitted", operation)
+			}
+		}
+		if _, err := ResolveAccountRead(source, providerauth.CodexOAuthDriverRef(), CodexModels); err == nil {
+			t.Fatal("API OAuth admitted")
+		}
+		tampered := read
+		tampered.origin = source
+		if tampered.Validate() == nil {
+			t.Fatal("metadata destination changed")
+		}
+		tampered = read
+		tampered.path = "/backend-api/wham/usage"
+		if tampered.Validate() == nil {
+			t.Fatal("metadata path changed")
+		}
+	}
+	for _, raw := range []string{"https://api.openai.com:8443", "https://api.openai.com/custom", "https://api.openai.com.example", "https://relay.example/v1"} {
+		source, _ := originidentity.ParseProviderOrigin(raw)
+		if _, err := ResolveAccountRead(source, providerauth.StaticHeaderDriverRef(), CodexModels); err == nil {
+			t.Fatalf("custom origin admitted: %s", raw)
 		}
 	}
 }

@@ -578,7 +578,11 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
         ),
       ),
     );
-    final cyber = isChatGPTCodexOrigin(Uri.parse(account.credentialOrigin))
+    final cyber =
+        supportsCodexCapabilities(
+          Uri.parse(account.credentialOrigin),
+          account.kind,
+        )
         ? ProviderAccountCyberAccess(
             account: account,
             linkedEndpoints: linkedEndpoints,

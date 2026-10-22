@@ -39,7 +39,7 @@ func (reader *Reader) ReadOwned(ctx context.Context, id provideraccount.ID, oper
 	if err != nil {
 		return Result{}, err
 	}
-	read, err := upstreamservice.ResolveRead(view.Account.Origin, operation)
+	read, err := upstreamservice.ResolveAccountRead(view.Account.Origin, view.Account.Driver, operation)
 	if err != nil {
 		return Result{}, err
 	}
@@ -51,7 +51,7 @@ func (reader *Reader) ReadOwned(ctx context.Context, id provideraccount.ID, oper
 		return Result{}, ErrUnavailable
 	}
 	defer lease.Release()
-	if origin != read.Origin() {
+	if origin != read.SourceOrigin() {
 		return Result{}, ErrUnavailable
 	}
 	request, err := providertransport.NewOwnedAccountRead(origin, operation, lease)
@@ -133,15 +133,8 @@ func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.Request
 	if err != nil {
 		return Result{}, err
 	}
-	read, err := upstreamservice.ResolveRead(route.ProviderTarget().Origin, plan.Operation().ID().String())
-	if err != nil {
-		return Result{}, err
-	}
-	read, err = read.WithRawQuery(source.RawQuery)
-	if err != nil {
-		return Result{}, err
-	}
-	if read.RequiresHistoryPermission() && !route.AllowsAccountHistory() {
+	// History requires route permission before acquiring a credential.
+	if plan.Operation().ID().String() == upstreamservice.CodexUsageHistory && !route.AllowsAccountHistory() {
 		return Result{}, upstreamservice.ErrHistoryDenied
 	}
 	lease, err := reader.accounts.AcquireReadCredential(ctx, plan)
@@ -152,6 +145,14 @@ func (reader *Reader) ReadCaptured(ctx context.Context, plan environment.Request
 		return Result{}, ErrUnavailable
 	}
 	defer lease.Release()
+	read, err := upstreamservice.ResolveAccountRead(route.ProviderTarget().Origin, lease.Driver(), plan.Operation().ID().String())
+	if err != nil {
+		return Result{}, err
+	}
+	read, err = read.WithRawQuery(source.RawQuery)
+	if err != nil {
+		return Result{}, err
+	}
 	request, err := providertransport.NewCapturedAccountRead(plan, lease, source.ConnectionID, source.OperationID, read.RawQuery(), source.ObservationStamp)
 	if err != nil {
 		return Result{}, err

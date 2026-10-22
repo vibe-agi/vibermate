@@ -17,7 +17,13 @@ import (
 // Dropping the server's per-model programs must not make an entitled account
 // indistinguishable from an account whose capabilities are unknown.
 func TestDiscoverPreservesAccountCyberPrograms(t *testing.T) {
-	origin, _ := originidentity.ParseProviderOrigin("https://chatgpt.com")
+	testDiscoverCyberPrograms(t, "https://chatgpt.com")
+}
+func TestOfficialAPIDiscoverPreservesAccountCyberPrograms(t *testing.T) {
+	testDiscoverCyberPrograms(t, "https://api.openai.com/v1")
+}
+func testDiscoverCyberPrograms(t *testing.T, raw string) {
+	origin, _ := originidentity.ParseProviderOrigin(raw)
 	endpoint := testEndpoint(origin)
 	catalog, err := New(Options{
 		Endpoints: endpointReaderStub{endpoint: endpoint}, Credentials: credentialAuthorityStub{settingsRevision: 1},

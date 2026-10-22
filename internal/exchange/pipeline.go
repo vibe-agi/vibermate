@@ -668,7 +668,7 @@ func (pipeline *Pipeline) executeCandidate(
 	}
 	headers := encodedProvider.Headers()
 	if credential.mode == providerauth.CredentialManaged {
-		for name, values := range nativeChatGPTProtocolHeaders(request, selection) {
+		for name, values := range managedNativeProtocolHeaders(request, selection) {
 			headers[name] = values
 		}
 		pipeline.replayCodexTurnState(request, selection, credential.account, decoded, headers)
