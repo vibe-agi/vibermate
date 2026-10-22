@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           prefix="${RUNNER_TEMP}/vibermate-codex-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           npm install --ignore-scripts --prefix "${prefix}" @openai/codex@0.163.0
-          codex_binary="$(rg --files --hidden --no-ignore "${prefix}/node_modules" | rg '/vendor/[^/]+/bin/codex$')"
+          codex_binary="$(find "${prefix}/node_modules" -type f -path '*/vendor/*/bin/codex')"
           test -f "${codex_binary}"
           test "$("${codex_binary}" --version)" = 'codex-cli 0.163.0'
           export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
