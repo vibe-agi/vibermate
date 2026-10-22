@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'conversation_reader_test.dart' as support;
+import 'fixtures/server_inspection_samples.dart';
 
 const problemWire = <String, Object?>{
   'type': 'urn:vibermate:error:inspection-changed',
@@ -18,26 +18,14 @@ const problemWire = <String, Object?>{
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  final samples =
-      jsonDecode(
-            File(
-              'test/fixtures/server-host-summary-samples.json',
-            ).readAsStringSync(),
-          )
-          as List;
+  final samples = jsonDecode(serverHostSummarySamples) as List;
   test('exact reported summary code maps to inspection_changed', () {
     final error = ControlProblem.fromJson(problemWire, status: 409);
     expect(error.reasonCode, 'inspection_changed');
     expect(error.messageKey, 'error.inspection_changed');
   });
   test('public continuation accepts the actual server issued cursor', () async {
-    final wire =
-        jsonDecode(
-              File(
-                'test/fixtures/server-cursor-samples.json',
-              ).readAsStringSync(),
-            )
-            as List;
+    final wire = jsonDecode(serverCursorSamples) as List;
     final detail =
         (wire.firstWhere((sample) => sample['label'] == 'with_content_detail')
                 as Map)['body']
@@ -94,13 +82,7 @@ void main() {
   test(
     'public exchange decodes a recorded production detail before continuation',
     () async {
-      final wire =
-          jsonDecode(
-                File(
-                  'test/fixtures/server-cursor-samples.json',
-                ).readAsStringSync(),
-              )
-              as List;
+      final wire = jsonDecode(serverCursorSamples) as List;
       final body =
           (wire.firstWhere((sample) => sample['label'] == 'with_content_detail')
                   as Map)['body']
@@ -150,13 +132,7 @@ void main() {
     test(
       'cursor request and DTO share bounded syntax ${cursor.length} ${cursor.substring(0, cursor.length.clamp(0, 12))}',
       () async {
-        final wire =
-            jsonDecode(
-                  File(
-                    'test/fixtures/server-cursor-samples.json',
-                  ).readAsStringSync(),
-                )
-                as List;
+        final wire = jsonDecode(serverCursorSamples) as List;
         final body =
             (wire.firstWhere(
                       (sample) => sample['label'] == 'with_content_detail',

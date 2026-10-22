@@ -1,6 +1,7 @@
 # Synthetic production inspection wire samples
 
-`server-host-summary-samples.json` and `server-cursor-samples.json` are unchanged
+`server_inspection_samples.dart` embeds the original JSON payloads as raw
+strings, allowing the same assertions on VM and Chrome. The payloads are unchanged
 outputs from the 2026-10-22 Web detail review's temporary synthetic HostServer
 probe. The probe used production HostServer/control composition and production
 storage-role inspection readers; it did not read user captures or credentials.

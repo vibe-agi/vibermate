@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +11,7 @@ import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'conversation_reader_test.dart' as support;
+import 'fixtures/server_inspection_samples.dart';
 
 final class _ReaderApi extends Fake implements ControlApi {
   final fixture = PreviewControlApi();
@@ -190,13 +190,7 @@ void main() {
   testWidgets(
     'reopening terminal request-only content rechecks the response without new Activity evidence',
     (tester) async {
-      final wire =
-          jsonDecode(
-                File(
-                  'test/fixtures/server-cursor-samples.json',
-                ).readAsStringSync(),
-              )
-              as List;
+      final wire = jsonDecode(serverCursorSamples) as List;
       final body =
           (wire.firstWhere((sample) => sample['label'] == 'with_content_detail')
                   as Map)['body']
@@ -238,13 +232,7 @@ void main() {
   testWidgets('recorded production HTTP detail renders in the reader', (
     tester,
   ) async {
-    final wire =
-        jsonDecode(
-              File(
-                'test/fixtures/server-cursor-samples.json',
-              ).readAsStringSync(),
-            )
-            as List;
+    final wire = jsonDecode(serverCursorSamples) as List;
     final body =
         (wire.firstWhere((sample) => sample['label'] == 'with_content_detail')
                 as Map)['body']
