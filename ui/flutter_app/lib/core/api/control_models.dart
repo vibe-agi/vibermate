@@ -1802,6 +1802,64 @@ final class RuntimePersistenceFailure {
   int get hashCode => Object.hash(operation, reason, at);
 }
 
+final class RecordingMaintenanceFailure {
+  const RecordingMaintenanceFailure({
+    required this.phase,
+    required this.reason,
+    required this.recovery,
+    required this.at,
+  });
+
+  factory RecordingMaintenanceFailure.fromJson(Object? json) {
+    const path = 'runtime.recordingMaintenanceFailure';
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'phase', 'reason', 'recovery', 'at'},
+    );
+    final phase = requireString(value, 'phase', path);
+    final reason = requireString(value, 'reason', path);
+    final recovery = requireString(value, 'recovery', path);
+    if (!const {
+          'drain',
+          'select',
+          'delete',
+          'verify',
+          'compact',
+          'certify',
+          'complete',
+          'mirror',
+        }.contains(phase) ||
+        !const {'busy', 'timeout', 'canceled', 'failed'}.contains(reason) ||
+        recovery != 'restart_required') {
+      throw const ControlContractException(
+        'recording maintenance diagnostic is invalid',
+      );
+    }
+    return RecordingMaintenanceFailure(
+      phase: phase,
+      reason: reason,
+      recovery: recovery,
+      at: requireTimestamp(value, 'at', path),
+    );
+  }
+
+  final String phase, reason, recovery;
+  final DateTime at;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RecordingMaintenanceFailure &&
+      phase == other.phase &&
+      reason == other.reason &&
+      recovery == other.recovery &&
+      at == other.at;
+
+  @override
+  int get hashCode => Object.hash(phase, reason, recovery, at);
+}
+
 final class HostNetworkAccess {
   const HostNetworkAccess({
     required this.socksAddress,
@@ -1843,6 +1901,7 @@ final class RuntimeStatus {
     required this.stopReasonCode,
     this.storageFailure,
     this.recordingFailure,
+    this.recordingMaintenanceFailure,
     this.recording,
     this.networkAccess,
   });
@@ -1891,6 +1950,7 @@ final class RuntimeStatus {
         'stopReasonCode',
         'storageFailure',
         'recordingFailure',
+        'recordingMaintenanceFailure',
         'recording',
       },
     );
@@ -1926,6 +1986,12 @@ final class RuntimeStatus {
         : null;
     final recordingFailure = runtime.containsKey('recordingFailure')
         ? RuntimePersistenceFailure.fromJson(runtime['recordingFailure'])
+        : null;
+    final recordingMaintenanceFailure =
+        runtime.containsKey('recordingMaintenanceFailure')
+        ? RecordingMaintenanceFailure.fromJson(
+            runtime['recordingMaintenanceFailure'],
+          )
         : null;
     if ((storageFailure != null &&
             (!storageFailure.coreAudit || storage != 'unavailable')) ||
@@ -2006,6 +2072,7 @@ final class RuntimeStatus {
       storage: storage,
       storageFailure: storageFailure,
       recordingFailure: recordingFailure,
+      recordingMaintenanceFailure: recordingMaintenanceFailure,
       recording: runtime.containsKey('recording')
           ? RuntimeRecordingStatus.fromJson(runtime['recording'])
           : null,
@@ -2038,6 +2105,7 @@ final class RuntimeStatus {
   final int schemaRevision;
   final String storage;
   final RuntimePersistenceFailure? storageFailure, recordingFailure;
+  final RecordingMaintenanceFailure? recordingMaintenanceFailure;
   final RuntimeRecordingStatus? recording;
   final String environmentProjection;
   final List<String>? unavailableEnvironments;

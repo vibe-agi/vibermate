@@ -40,6 +40,9 @@ func TestActivitySummaryHTTPClassifiesMissingMirrorAfterBoundary(t *testing.T) {
 	}
 	response := doRequest(t, fixture.router, fixture.authority, http.MethodGet, path, fixture.readToken, nil)
 	assertSummaryInspectionProblem(t, response, http.StatusServiceUnavailable, "inspection_unavailable")
+	if phase := response.Header().Get("X-Vibermate-Inspection-Phase"); phase != "aggregate" {
+		t.Fatalf("summary failure phase = %q, want aggregate", phase)
+	}
 	if reader.calls != 0 {
 		t.Fatalf("Capture observation read after failed request summary: %d", reader.calls)
 	}
@@ -74,6 +77,9 @@ func TestActivitySummaryHTTPClassifiesVisibilityChangeDuringRead(t *testing.T) {
 	})
 	response := doRequest(t, fixture.router, fixture.authority, http.MethodGet, "/api/v1/activities/summary?manualCaptureId="+ref.ID, fixture.readToken, nil)
 	assertSummaryInspectionProblem(t, response, http.StatusConflict, "inspection_changed")
+	if phase := response.Header().Get("X-Vibermate-Inspection-Phase"); phase != "aggregate" {
+		t.Fatalf("summary conflict phase = %q, want aggregate", phase)
+	}
 	if !checked || reader.calls != 0 {
 		t.Fatalf("summary did not fail at its actual visibility recheck: checked=%v Capture reads=%d", checked, reader.calls)
 	}

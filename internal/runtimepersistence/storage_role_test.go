@@ -146,7 +146,7 @@ func TestStorageRoleNativeMetadataRetiresIndependentOfFullRetention(t *testing.T
 	}
 }
 
-func TestStorageRoleObservationRawGraphCollectsWithoutControlTables(t *testing.T) {
+func TestStorageRoleRawStartupRetainsExpiryForMaintenance(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenObservations(ctx, ObservationOptions{DatabasePath: filepath.Join(t.TempDir(), "observations.db"), LayoutID: "raw-layout", ArchiveID: "archive", BusyTimeout: time.Second, CommitReconcileTimeout: time.Second})
 	if err != nil {
@@ -171,12 +171,12 @@ func TestStorageRoleObservationRawGraphCollectsWithoutControlTables(t *testing.T
 		t.Fatal("optional graph lost original scope or was not published", err)
 	}
 	recovery, err := repo.BeginWriterSession(ctx, rawevidence.WriterSession{WriterID: "next", StartedAt: now.Add(time.Hour), MaximumUnflushedTime: time.Millisecond})
-	if err != nil || recovery.PurgedExpiredEnvelopes != 1 {
-		t.Fatalf("independent graph GC: %+v %v", recovery, err)
+	if err != nil || recovery.PurgedExpiredEnvelopes != 0 {
+		t.Fatalf("scoped startup erased proof before durable maintenance: %+v %v", recovery, err)
 	}
 	got, err = repo.ListExchange(ctx, record.ExchangeID)
-	if err != nil || len(got) != 0 {
-		t.Fatal("expired graph remains", err)
+	if err != nil || len(got) != 1 {
+		t.Fatal("scoped cleanup owner lost its expired graph root", err)
 	}
 }
 

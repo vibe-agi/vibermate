@@ -153,8 +153,7 @@ func (s *ObservationStore) certifyRecordingAuditClosure(ctx context.Context, con
 	for _, source := range sources {
 		if !source.Current && publishedNativeRevision(source.Database.Revision) {
 			_, err := s.certifyCleanupQuery(ctx, control, m, source, "attempt", func(mirror string) string {
-				hidden := cleanupHiddenScope(mirror, "r.capture_kind", "r.capture_id", "1", "1")
-				return `SELECT CASE WHEN r.claimed_at_unix_ms>0 AND r.authority_revision>0 THEN r.attempt_id END FROM main.native_tool_once r WHERE ` + hidden + ` AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='attempt' AND d.identity=r.attempt_id) LIMIT 256`
+				return `SELECT CASE WHEN r.claimed_at_unix_ms>0 AND r.authority_revision>0 THEN r.attempt_id END FROM main.native_tool_once r WHERE ` + cleanupLegacyOncePredicate(mirror) + ` LIMIT 256`
 			})
 			if err != nil {
 				return err
@@ -185,7 +184,7 @@ func (s *ObservationStore) certifyRecordingAuditClosure(ctx context.Context, con
 			for _, kind := range []string{"attempt", "connection", "exchange"} {
 				column := map[string]string{"attempt": "r.attempt_id", "connection": "r.connection_id", "exchange": "r.parent_exchange_id"}[kind]
 				added, err := s.certifyCleanupQuery(ctx, control, m, source, kind, func(mirror string) string {
-					linked := `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE (d.kind='attempt' AND d.identity=r.attempt_id) OR (d.kind='connection' AND d.identity=r.connection_id) OR (d.kind='exchange' AND d.identity=r.parent_exchange_id))`
+					linked := cleanupAuditLinkPredicate(mirror)
 					return `SELECT DISTINCT ` + column + ` FROM main.runtime_egress_attempts r WHERE ` + linked + ` AND ` + column + `<>'' AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='` + kind + `' AND d.identity=` + column + `) LIMIT 256`
 				})
 				if err != nil {
@@ -198,6 +197,14 @@ func (s *ObservationStore) certifyRecordingAuditClosure(ctx context.Context, con
 			return nil
 		}
 	}
+}
+
+func cleanupLegacyOncePredicate(mirror string) string {
+	return cleanupHiddenScope(mirror, "r.capture_kind", "r.capture_id", "1", "1") + ` AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='attempt' AND d.identity=r.attempt_id)`
+}
+
+func cleanupAuditLinkPredicate(mirror string) string {
+	return `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE (d.kind='attempt' AND d.identity=r.attempt_id) OR (d.kind='connection' AND d.identity=r.connection_id) OR (d.kind='exchange' AND d.identity=r.parent_exchange_id))`
 }
 
 // PurgeRecordingEvidence is the graph portion of an owned cleanup pass; the
@@ -316,10 +323,7 @@ func (s *ObservationStore) VerifyRecordingCleanup(ctx context.Context, m *Inspec
 	}
 	for _, source := range sources {
 		err = s.withCleanupSource(ctx, m, source, func(conn *sql.Conn, mirror string) error {
-			roots := recordingCleanupRoots(source, mirror, cutoff)
-			for _, entry := range []struct{ table, key, kind string }{{"runtime_usage_observations", "exchange_id", "usage"}, {"runtime_egress_attempts", "attempt_id", "attempt"}, {"runtime_connection_events", "connection_id", "connection"}} {
-				roots = append(roots, recordingCleanupRoot{table: entry.table, where: `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='` + entry.kind + `' AND d.identity=r.` + entry.key + `)`})
-			}
+			roots := recordingCleanupVerificationRoots(source, mirror, cutoff)
 			for _, root := range roots {
 				var remaining bool
 				if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM main.`+root.table+` r WHERE `+root.where+`)`).Scan(&remaining); err != nil {
@@ -336,6 +340,14 @@ func (s *ObservationStore) VerifyRecordingCleanup(ctx context.Context, m *Inspec
 		}
 	}
 	return nil
+}
+
+func recordingCleanupVerificationRoots(source InspectionSource, mirror string, cutoff time.Time) []recordingCleanupRoot {
+	roots := recordingCleanupRoots(source, mirror, cutoff)
+	for _, entry := range []struct{ table, key, kind string }{{"runtime_usage_observations", "exchange_id", "usage"}, {"runtime_egress_attempts", "attempt_id", "attempt"}, {"runtime_connection_events", "connection_id", "connection"}} {
+		roots = append(roots, recordingCleanupRoot{table: entry.table, where: `EXISTS(SELECT 1 FROM ` + mirror + `.recording_denials d WHERE d.kind='` + entry.kind + `' AND d.identity=r.` + entry.key + `)`})
+	}
+	return roots
 }
 
 // requestedRevision covers every predicate-broadening live mutation: delete,

@@ -185,6 +185,10 @@ func TestRuntimeCleanupRestartBlocksOptionalAdmissionAndPreservesActiveClaim(t *
 				if err != nil || state.ActiveRevision != target {
 					t.Fatalf("mismatched claim acknowledged: %+v %v", state, err)
 				}
+				failure := maintenanceFailureProjection(t, second.Status())
+				if failure["phase"] != "select" || failure["reason"] != "failed" || failure["recovery"] != "restart_required" {
+					t.Fatalf("startup receipt failure lost safe diagnosis: %+v", failure)
+				}
 				return
 			}
 			waitOwnedRecordingCleanup(t, second)
@@ -218,7 +222,7 @@ func TestRuntimeCleanupRetainedWALFailureRecoversWithoutPrematureCompletion(t *t
 	}()
 	waitRecording(t, first)
 	root := first.paths.DataDirectory()
-	event := connectionevent.Event{ConnectionID: "retained-wal", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
+	event := connectionevent.Event{ConnectionID: "retained-wal", SourceConfidence: connectionevent.SourceConfidenceUnknown, RequestedHost: "restart-purge.example.test", Port: 443, Decryption: connectionevent.DecryptionNone, Phase: connectionevent.PhaseAttempted, StartedAt: time.Now().UTC()}
 	if err = first.recordingStorage.PutConnection(t.Context(), recording.Scope{Fence: recording.Fence{ArchiveEpoch: 1}}, event); err != nil {
 		t.Fatal(err)
 	}
@@ -253,12 +257,24 @@ func TestRuntimeCleanupRetainedWALFailureRecoversWithoutPrematureCompletion(t *t
 	if _, exists, err := runtimedata.ReadRecordingCleanupReceipt(root); err != nil || !exists {
 		t.Fatal("failed physical pass lost recovery receipt", err)
 	}
+	status := first.Status()
+	failure := maintenanceFailureProjection(t, status)
+	if failure["phase"] != "compact" || failure["reason"] != "busy" || failure["recovery"] != "restart_required" {
+		t.Fatalf("typed maintenance failure: %+v", failure)
+	}
+	if status.State != RuntimeStateInitialized || status.Storage != StorageStateHealthy {
+		t.Fatalf("optional cleanup failure disabled required control: %+v", status)
+	}
 	if _, err := first.ManualCaptures().Create(t.Context(), manualcapture.CreateCommand{Owner: manualcapture.NewLocalOwnerScope(), DisplayName: "control after optional failure", ClientClass: manualcapture.ClientCLI, Lifetime: manualcapture.LifetimeUntilRevoked}); err != nil {
 		t.Fatal(err)
 	}
 	if err = held.Rollback(); err != nil {
 		t.Fatal(err)
 	}
+	if !first.recordingStorage.unsafeMaintenance.Load() || first.recordingStorage.available() {
+		t.Fatal("releasing SQLite reader reopened uncertified recording")
+	}
+	beforeRecovery := maintenanceArchiveCookie(t, filepath.Join(root, "observations.db"))
 	shutdownRuntime(t, first)
 	stopped = true
 	second := startTestRuntime(t, options)
@@ -272,6 +288,16 @@ func TestRuntimeCleanupRetainedWALFailureRecoversWithoutPrematureCompletion(t *t
 	certificate, exists, err := runtimedata.ReadRecordingMaintenanceCertificate(root)
 	if err != nil || !exists || certificate.CountsExact || !certificate.Released.CountsIncomplete {
 		t.Fatalf("unknown crash counts certified exact: %+v %v", certificate, err)
+	}
+	if after := maintenanceArchiveCookie(t, filepath.Join(root, "observations.db")); after <= beforeRecovery {
+		t.Fatalf("resumed claim skipped physical purge after SQL rows disappeared: %d -> %d", beforeRecovery, after)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "observations.db"))
+	if err != nil || strings.Contains(string(data), event.RequestedHost) {
+		t.Fatalf("verified restart retained deleted payload bytes: %v", err)
+	}
+	if second.Status().RecordingMaintenanceFailure != nil {
+		t.Fatal("verified new Runtime retained old maintenance latch")
 	}
 }
 

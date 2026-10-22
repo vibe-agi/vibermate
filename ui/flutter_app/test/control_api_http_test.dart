@@ -283,6 +283,8 @@ void main() {
         await request.drain<void>();
         request.response.headers.contentType = ContentType.json;
         if (request.uri.path == '/api/v1/status') {
+          expect(request.uri.queryParameters, {'recordingDiagnostics': '1'});
+          // Older servers ignore this opt-in and return the baseline shape.
           await Future<void>.delayed(const Duration(milliseconds: 20));
           request.response.write(
             jsonEncode({
@@ -360,6 +362,11 @@ void main() {
                 (error) => error.status.storageFailure?.reason,
                 'first reason',
                 'timeout',
+              )
+              .having(
+                (error) => error.status.recordingMaintenanceFailure,
+                'old-server maintenance fallback',
+                isNull,
               )
               .having(
                 (error) => error.cause,

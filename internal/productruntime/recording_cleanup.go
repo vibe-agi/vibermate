@@ -52,7 +52,13 @@ func (s *recordingStorage) performPendingCleanup(sinks *recordingSinks) {
 	claim := recordingCleanupClaim{target: target, generation: generation, cutoff: cutoff, resumed: state.ActiveRevision != 0}
 	s.maintain(sinks, recordingMaintenanceRequest{ctx: s.ctx, generation: generation, cleanup: &claim})
 }
-func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.ObservationStore, token *runtimepersistence.InspectionMaintenance, claim recordingCleanupClaim) error {
+func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.ObservationStore, token *runtimepersistence.InspectionMaintenance, claim recordingCleanupClaim) (result error) {
+	phase := "select"
+	defer func() {
+		if result != nil {
+			result = &recordingMaintenanceError{phase: phase, cause: result}
+		}
+	}()
 	if token == nil || claim.target == 0 || claim.generation != s.catalog.Version().Generation {
 		return recording.ErrInspectionUnavailable
 	}
@@ -80,6 +86,7 @@ func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.Obs
 		return err
 	}
 	receipt.Phase = "delete"
+	phase = "delete"
 	if err = runtimedata.WriteRecordingCleanupReceipt(s.ctx, s.root, s.dataGuard, receipt); err != nil {
 		return err
 	}
@@ -103,20 +110,32 @@ func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.Obs
 		return err
 	}
 	s.publishedMirror = stamp
+	phase = "verify"
 	if err = store.VerifyRecordingCleanup(s.ctx, token, cutoff); err != nil {
 		return err
 	}
 	receipt.Phase = "compact"
+	phase = "compact"
 	for i := range s.sources {
 		receipt.SourceIndex = i
 		if err = runtimedata.WriteRecordingCleanupReceipt(s.ctx, s.root, s.dataGuard, receipt); err != nil {
 			return err
 		}
-		if err = store.CompactRecordingSource(s.ctx, token, i); err != nil {
+		changed, inspectErr := token.RecordingSourceMutated(i)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if claim.resumed || exists || changed {
+			err = store.CompactRecordingSource(s.ctx, token, i)
+		} else {
+			err = store.VerifyUnchangedRecordingSource(s.ctx, token, i)
+		}
+		if err != nil {
 			return err
 		}
 	}
 	receipt.Phase = "verify"
+	phase = "certify"
 	receipt.SourceIndex = len(s.sources)
 	if err = runtimedata.WriteRecordingCleanupReceipt(s.ctx, s.root, s.dataGuard, receipt); err != nil {
 		return err
@@ -134,6 +153,7 @@ func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.Obs
 		return err
 	}
 	receipt.Phase = "complete"
+	phase = "complete"
 	if err = runtimedata.WriteRecordingCleanupReceipt(s.ctx, s.root, s.dataGuard, receipt); err != nil {
 		return err
 	}
@@ -155,14 +175,28 @@ func (s *recordingStorage) executeRecordingCleanup(store *runtimepersistence.Obs
 	return nil
 }
 
-// The fixed optional owner publishes routine expiry no more than once a minute.
-// This short durable intent never opens history and coalesces with user work.
+// The fixed optional owner checks routine expiry no more than once a minute.
+// A bounded read can avoid a proven no-work pass. Existing obligations and
+// uncertain inspection always retain the durable physical cleanup protocol.
 func (s *recordingStorage) requestRoutineRecordingCleanup(ctx context.Context, now time.Time) error {
 	s.mu.Lock()
 	next := s.nextExpiry
 	s.mu.Unlock()
 	if now.Before(next) {
 		return nil
+	}
+	state, stateErr := s.control.RecordingCleanupState(ctx)
+	if stateErr == nil && state.ActiveRevision == 0 && state.RequestedRevision == state.CompletedRevision && s.available() {
+		needed, err := runtimepersistence.RecordingCleanupNeeded(ctx, s.control, s.catalog, now)
+		if err == nil && !needed {
+			s.mu.Lock()
+			s.nextExpiry = now.Add(time.Minute)
+			s.mu.Unlock()
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
 	if err := s.control.RequestRecordingCleanup(ctx, now); err != nil {
 		return err

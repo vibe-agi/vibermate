@@ -133,7 +133,17 @@ func TestNativeObservationBodyGraphSharesRawRoots(t *testing.T) {
 			}
 			purgeRaw := func() {
 				t.Helper()
-				if _, err := store.RawEvidenceRepository().BeginWriterSession(ctx, rawevidence.WriterSession{WriterID: "content-next", StartedAt: now.Add(2 * time.Hour), MaximumUnflushedTime: time.Millisecond}); err != nil {
+				// Exercise the explicit graph deletion used by owned maintenance;
+				// scoped writer startup must retain these roots until that boundary.
+				tx, err := store.store.database.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				if _, err := purgeExpiredRawEvidence(ctx, tx, now.Add(2*time.Hour).UnixMilli(), 100); err != nil {
+					t.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
 					t.Fatal(err)
 				}
 			}

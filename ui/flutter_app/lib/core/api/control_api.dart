@@ -835,7 +835,7 @@ final class HttpControlApi
 
   @override
   Future<RuntimeStatus> loadRuntimeStatus() async => RuntimeStatus.fromJson(
-    await _read('/api/v1/status'),
+    await _read('/api/v1/status?recordingDiagnostics=1'),
     expectedInstanceId: _session.instanceId,
   );
 

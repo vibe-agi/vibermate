@@ -38,6 +38,9 @@ func TestRecordingPhysicalUsageCleanupPreservesLiveCopiesAndDeniesExpiredIdentit
 			if err := f.current.PublishInspectionMirror(t.Context(), f.control); err != nil {
 				t.Fatal(err)
 			}
+			if needed, err := RecordingCleanupNeeded(t.Context(), f.control, f.reader.catalog, f.now); err != nil || !needed {
+				t.Fatalf("routine eligibility ignored effective legacy Usage cap: needed=%v err=%v", needed, err)
+			}
 			token, err := f.reader.catalog.BeginMaintenance(t.Context(), 2)
 			if err != nil {
 				t.Fatal(err)
@@ -66,6 +69,9 @@ func TestRecordingPhysicalUsageCleanupPreservesLiveCopiesAndDeniesExpiredIdentit
 			}
 			if err := token.Close(); err != nil {
 				t.Fatal(err)
+			}
+			if needed, err := RecordingCleanupNeeded(t.Context(), f.control, f.reader.catalog, f.now); err != nil || needed {
+				t.Fatalf("live Usage copies require no routine purge: needed=%v err=%v", needed, err)
 			}
 			if _, calls, err := f.scan(t); err != nil || calls != 1 {
 				t.Fatalf("after physical purge: calls=%d %v", calls, err)
@@ -104,8 +110,8 @@ func TestRecordingPhysicalCompactionRefusesRetainedWAL(t *testing.T) {
 	if !ok {
 		t.Fatal("verified physical compaction unavailable")
 	}
-	if err = compactor.CompactRecordingSource(t.Context(), token, 1); err == nil {
-		t.Fatal("retained WAL reader was called physical completion")
+	if err = compactor.CompactRecordingSource(t.Context(), token, 1); !errors.Is(err, ErrRecordingCheckpointBusy) || !errors.Is(err, ErrInspectionUnavailable) {
+		t.Fatalf("retained WAL lost typed pending checkpoint cause: %v", err)
 	}
 	if err = held.Rollback(); err != nil {
 		t.Fatal(err)

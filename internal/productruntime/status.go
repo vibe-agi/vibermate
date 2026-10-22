@@ -69,19 +69,20 @@ func persistenceFailure(operation string, err error, at time.Time) *PersistenceF
 // InstanceID intentionally uses the existing instanceId wire field. It is a
 // process incarnation, not an installation identity or durable revision.
 type RuntimeStatus struct {
-	Recording             RecordingStatus              `json:"recording"`
-	State                 RuntimeState                 `json:"state"`
-	InstanceID            string                       `json:"instanceId"`
-	Host                  hostcontract.Kind            `json:"host"`
-	SchemaRevision        int64                        `json:"schemaRevision"`
-	Storage               StorageState                 `json:"storage"`
-	StorageFailure        *PersistenceFailure          `json:"storageFailure,omitempty"`
-	RecordingFailure      *PersistenceFailure          `json:"recordingFailure,omitempty"`
-	EnvironmentProjection environment.ProjectionHealth `json:"environmentProjection"`
-	OfflineHold           offlinehold.Snapshot         `json:"offlineHold"`
-	StartedAt             time.Time                    `json:"startedAt"`
-	StoppedAt             *time.Time                   `json:"stoppedAt,omitempty"`
-	StopReasonCode        string                       `json:"stopReasonCode,omitempty"`
+	Recording                   RecordingStatus              `json:"recording"`
+	State                       RuntimeState                 `json:"state"`
+	InstanceID                  string                       `json:"instanceId"`
+	Host                        hostcontract.Kind            `json:"host"`
+	SchemaRevision              int64                        `json:"schemaRevision"`
+	Storage                     StorageState                 `json:"storage"`
+	StorageFailure              *PersistenceFailure          `json:"storageFailure,omitempty"`
+	RecordingFailure            *PersistenceFailure          `json:"recordingFailure,omitempty"`
+	RecordingMaintenanceFailure *RecordingMaintenanceFailure `json:"recordingMaintenanceFailure,omitempty"`
+	EnvironmentProjection       environment.ProjectionHealth `json:"environmentProjection"`
+	OfflineHold                 offlinehold.Snapshot         `json:"offlineHold"`
+	StartedAt                   time.Time                    `json:"startedAt"`
+	StoppedAt                   *time.Time                   `json:"stoppedAt,omitempty"`
+	StopReasonCode              string                       `json:"stopReasonCode,omitempty"`
 }
 
 type statusTracker struct {
@@ -116,6 +117,10 @@ func (t *statusTracker) snapshot() RuntimeStatus {
 	if status.RecordingFailure != nil {
 		failure := *status.RecordingFailure
 		status.RecordingFailure = &failure
+	}
+	if status.RecordingMaintenanceFailure != nil {
+		failure := *status.RecordingMaintenanceFailure
+		status.RecordingMaintenanceFailure = &failure
 	}
 	return status
 }

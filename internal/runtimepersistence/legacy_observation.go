@@ -80,6 +80,7 @@ type InspectionMaintenance struct {
 	catalog    *InspectionCatalog
 	generation uint64
 	once       sync.Once
+	mutated    map[string]bool // catalog.mu; actual optional SQL changes, including cascades
 }
 
 // Construction performs no filesystem access, SQLite opening or history work.
@@ -272,7 +273,7 @@ func (c *InspectionCatalog) acquire(ctx context.Context) (lease *inspectionLease
 			return lease, ErrInspectionUnavailable
 		}
 
-		before, err := inspectionSourceFiles(path)
+		before, err := inspectionSourceFiles(path, source.Current)
 		if err != nil {
 			return lease, err
 		}
@@ -292,7 +293,7 @@ func (c *InspectionCatalog) acquire(ctx context.Context) (lease *inspectionLease
 			return lease, errors.Join(ErrInspectionUnavailable, err)
 		}
 
-		after, err := inspectionSourceFiles(path)
+		after, err := inspectionSourceFiles(path, source.Current)
 		if err != nil || !sameInspectionSourceFiles(before, after, source.Current) {
 			return lease, ErrInspectionChanged
 		}
@@ -432,9 +433,12 @@ func inspectAttachedObservation(ctx context.Context, conn *sql.Conn, alias, layo
 	return ErrUnsupportedSchema
 }
 
-type inspectionFiles struct{ database, wal os.FileInfo }
+type inspectionFiles struct {
+	database, wal os.FileInfo
+	frameFreeWAL  bool
+}
 
-func inspectionSourceFiles(path string) (inspectionFiles, error) {
+func inspectionSourceFiles(path string, current bool) (inspectionFiles, error) {
 	var result inspectionFiles
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
@@ -451,6 +455,12 @@ func inspectionSourceFiles(path string) (inspectionFiles, error) {
 		}
 		if suffix == "-wal" {
 			result.wal = info
+			if !current && info.Size() == 32 {
+				result.frameFreeWAL, err = validFrameFreeInspectionWAL(path, result.database, info)
+				if err != nil {
+					return result, err
+				}
+			}
 		}
 	}
 	return result, nil
@@ -465,11 +475,10 @@ func sameInspectionSourceFiles(a, b inspectionFiles, current bool) bool {
 	if a.database.Size() != b.database.Size() || !a.database.ModTime().Equal(b.database.ModTime()) {
 		return false
 	}
-	// SQLite may create or remove an empty WAL while attaching a checkpointed
-	// WAL-mode archive read-only. Neither absent nor zero-byte WAL carries
-	// committed frames, so that sidecar transition does not change the source.
+	// SQLite may create/remove empty sidecars or retire a validated header-only
+	// WAL. None carries frame bytes, so those transitions preserve the source.
 	// Retained nonempty WAL still requires exact identity, size and mtime.
-	aEmpty, bEmpty := a.wal == nil || a.wal.Size() == 0, b.wal == nil || b.wal.Size() == 0
+	aEmpty, bEmpty := a.wal == nil || a.wal.Size() == 0 || a.frameFreeWAL, b.wal == nil || b.wal.Size() == 0 || b.frameFreeWAL
 	if aEmpty || bEmpty {
 		return aEmpty && bEmpty
 	}

@@ -5146,6 +5146,7 @@ final class WorkbenchController extends ChangeNotifier
         left.storage == right.storage &&
         left.storageFailure == right.storageFailure &&
         left.recordingFailure == right.recordingFailure &&
+        left.recordingMaintenanceFailure == right.recordingMaintenanceFailure &&
         left.recording == right.recording &&
         left.environmentProjection == right.environmentProjection &&
         listEquals(

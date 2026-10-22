@@ -212,9 +212,15 @@ func (repository *rawEvidenceRepository) BeginWriterSession(
 	); err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("mark unclean raw evidence writers: %w", err)
 	}
-	purged, err := purgeExpiredRawEvidence(operation, transaction, toUnixMillis(now), expiredCleanupBatchSize)
-	if err != nil {
-		return rawevidence.Recovery{}, fmt.Errorf("recover expired raw evidence: %w", err)
+	var purged int64
+	if !repository.requireScope {
+		// Scoped observations retain their proof roots until the durable owner
+		// closes denial coverage and certifies physical removal. Startup cannot
+		// turn remaining free-page/WAL bytes into an apparent no-work pass.
+		purged, err = purgeExpiredRawEvidence(operation, transaction, toUnixMillis(now), expiredCleanupBatchSize)
+		if err != nil {
+			return rawevidence.Recovery{}, fmt.Errorf("recover expired raw evidence: %w", err)
+		}
 	}
 	if _, err := transaction.ExecContext(
 		operation,

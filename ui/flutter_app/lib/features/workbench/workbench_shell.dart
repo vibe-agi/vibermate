@@ -111,6 +111,16 @@ final class WorkbenchShell extends StatelessWidget {
                 'unconfirmed': '${recording.unconfirmed}',
               }),
             ),
+        if (controller.runtimeStatus?.recordingMaintenanceFailure
+            case final failure?)
+          InlineNotice(
+            key: const Key('runtime-recording-maintenance-failure'),
+            message: copy.format('status.maintenance.failure', {
+              'phase': copy('status.maintenance.phase.${failure.phase}'),
+              'reason': copy('status.maintenance.reason.${failure.reason}'),
+              'at': failure.at.toUtc().toIso8601String(),
+            }),
+          ),
         if (controller.runtimeStatus?.recordingFailure case final failure?)
           InlineNotice(
             key: const Key('runtime-recording-failure'),

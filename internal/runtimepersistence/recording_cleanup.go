@@ -17,6 +17,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 )
 
+var ErrRecordingCheckpointBusy = errors.New("recording checkpoint remains busy")
+
 // cleanupInventory is available only to the actual catalog maintenance owner.
 // It includes every declared source, independently of the read ATTACH limit.
 func (m *InspectionMaintenance) cleanupInventory() ([]InspectionSource, error) {
@@ -48,7 +50,7 @@ func (s *ObservationStore) withCleanupSource(ctx context.Context, m *InspectionM
 	if err != nil || physical != path {
 		return ErrInspectionUnavailable
 	}
-	if _, err = inspectionSourceFiles(path); err != nil {
+	if _, err = inspectionSourceFiles(path, source.Current); err != nil {
 		return err
 	}
 	db := s.store.database
@@ -82,7 +84,38 @@ func (s *ObservationStore) withCleanupSource(ctx context.Context, m *InspectionM
 		}
 		mirror = "cleanup_current"
 	}
-	return work(conn, mirror)
+	var before, after int64
+	if err = conn.QueryRowContext(ctx, `SELECT total_changes()`).Scan(&before); err != nil {
+		return err
+	}
+	result = work(conn, mirror)
+	if err = conn.QueryRowContext(ctx, `SELECT total_changes()`).Scan(&after); err != nil {
+		return errors.Join(result, err)
+	}
+	if after != before {
+		m.catalog.mu.Lock()
+		if m.mutated == nil {
+			m.mutated = make(map[string]bool)
+		}
+		m.mutated[source.ID] = true
+		m.catalog.mu.Unlock()
+	}
+	return result
+}
+
+// RecordingSourceMutated reports actual SQL work under this exclusive lease.
+// It is not a crash-recovery proof: resumed claims must compact every source.
+func (m *InspectionMaintenance) RecordingSourceMutated(index int) (bool, error) {
+	sources, err := m.cleanupInventory()
+	if err != nil {
+		return false, err
+	}
+	if index < 0 || index >= len(sources) {
+		return false, ErrInspectionSourceLimit
+	}
+	m.catalog.mu.Lock()
+	defer m.catalog.mu.Unlock()
+	return m.mutated[sources[index].ID], nil
 }
 
 // PurgeExpiredRecordingUsage is only the Usage portion of a full maintenance
@@ -105,23 +138,7 @@ func (s *ObservationStore) PurgeExpiredRecordingUsage(ctx context.Context, contr
 		for {
 			var ids []string
 			err = s.withCleanupSource(ctx, m, source, func(conn *sql.Conn, mirror string) error {
-				revision, epoch, kind, id, generation := "0", "1", `CASE WHEN u.capture_run_id<>'' THEN 'managed_run' WHEN u.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END`, `CASE WHEN u.capture_run_id<>'' THEN u.capture_run_id ELSE u.manual_capture_id END`, `CASE WHEN u.capture_run_id<>'' OR u.manual_capture_id<>'' THEN 1 ELSE 0 END`
-				if source.Current {
-					revision = "u.policy_revision"
-					epoch = "u.recording_archive_epoch"
-					kind = "u.recording_scope_kind"
-					id = "u.recording_scope_id"
-					generation = "u.recording_capture_generation"
-				}
-				cap := `min(u.expires_at_unix_ms,coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM ` + mirror + `.inspection_mirror_usage_caps c WHERE c.mirror_generation=g.generation AND ` + revision + `<=c.through_policy_revision),9223372036854775807)`
-				args := []any{}
-				if !source.Current {
-					cap += `,coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM ` + mirror + `.inspection_mirror_legacy_caps c WHERE c.mirror_generation=g.generation AND c.archive_id=? AND u.sequence>c.after_sequence AND u.sequence<=c.through_sequence),9223372036854775807),coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM main.runtime_usage_retention_caps c WHERE u.sequence>c.after_sequence AND u.sequence<=c.through_sequence),9223372036854775807)`
-					args = append(args, source.ID)
-				}
-				cap += `)`
-				query := `SELECT CASE WHEN length(CAST(u.exchange_id AS BLOB)) BETWEEN 1 AND 512 THEN u.exchange_id END FROM main.runtime_usage_observations u CROSS JOIN ` + mirror + `.inspection_mirror_active a JOIN ` + mirror + `.inspection_mirror_generations g ON g.generation=a.generation WHERE a.singleton=1 AND g.complete=1 AND (` + cap + `<=? OR ` + epoch + `<>g.archive_epoch OR (` + kind + `<>'' AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.inspection_mirror_fences f WHERE f.mirror_generation=g.generation AND f.capture_kind=` + kind + ` AND f.capture_id=` + id + ` AND f.capture_generation=` + generation + ` AND f.deleted=0))) AND u.exchange_id>? ORDER BY u.exchange_id LIMIT 256`
-				args = append(args, cutoff.UnixMilli(), after)
+				query, args := cleanupUsageSelection(source, mirror, cutoff, after)
 				rows, err := conn.QueryContext(ctx, query, args...)
 				if err != nil {
 					return err
@@ -198,6 +215,23 @@ func (s *ObservationStore) PurgeExpiredRecordingUsage(ctx context.Context, contr
 // source. A busy checkpoint is pending work, even when SQLite returned no error.
 // This is deliberately separate from visibility/SQL deletion and its counts.
 func (s *ObservationStore) CompactRecordingSource(ctx context.Context, m *InspectionMaintenance, index int) error {
+	return s.verifyRecordingSource(ctx, m, index, true)
+}
+
+// VerifyUnchangedRecordingSource retains every certification prerequisite but
+// avoids a full database rewrite when this fresh owner made no SQL changes.
+func (s *ObservationStore) VerifyUnchangedRecordingSource(ctx context.Context, m *InspectionMaintenance, index int) error {
+	changed, err := m.RecordingSourceMutated(index)
+	if err != nil {
+		return err
+	}
+	if changed {
+		return ErrInspectionUnavailable
+	}
+	return s.verifyRecordingSource(ctx, m, index, false)
+}
+
+func (s *ObservationStore) verifyRecordingSource(ctx context.Context, m *InspectionMaintenance, index int, compact bool) error {
 	sources, err := m.cleanupInventory()
 	if err != nil {
 		return err
@@ -213,7 +247,7 @@ func (s *ObservationStore) CompactRecordingSource(ctx context.Context, m *Inspec
 				return err
 			}
 			if busy != 0 || (log >= 0 && (log != 0 || done != 0)) {
-				return fmt.Errorf("%w: retained recording WAL", ErrInspectionUnavailable)
+				return errors.Join(ErrInspectionUnavailable, ErrRecordingCheckpointBusy)
 			}
 			return nil
 		}
@@ -223,8 +257,10 @@ func (s *ObservationStore) CompactRecordingSource(ctx context.Context, m *Inspec
 		if _, err := conn.ExecContext(ctx, `PRAGMA main.synchronous=FULL`); err != nil {
 			return err
 		}
-		if _, err := conn.ExecContext(ctx, `VACUUM main`); err != nil {
-			return err
+		if compact {
+			if _, err := conn.ExecContext(ctx, `VACUUM main`); err != nil {
+				return err
+			}
 		}
 		if err := checkpoint(); err != nil {
 			return err
@@ -325,4 +361,27 @@ func (s *ObservationStore) validateCleanupUsageCopies(ctx context.Context, m *In
 		}
 	}
 	return nil
+}
+
+// cleanupUsageSelection is shared by read-only routine eligibility and the
+// destructive owner so retention caps cannot drift between those decisions.
+func cleanupUsageSelection(source InspectionSource, mirror string, cutoff time.Time, after string) (string, []any) {
+	revision, epoch, kind, id, generation := "0", "1", `CASE WHEN u.capture_run_id<>'' THEN 'managed_run' WHEN u.manual_capture_id<>'' THEN 'manual_capture' ELSE '' END`, `CASE WHEN u.capture_run_id<>'' THEN u.capture_run_id ELSE u.manual_capture_id END`, `CASE WHEN u.capture_run_id<>'' OR u.manual_capture_id<>'' THEN 1 ELSE 0 END`
+	if source.Current {
+		revision = "u.policy_revision"
+		epoch = "u.recording_archive_epoch"
+		kind = "u.recording_scope_kind"
+		id = "u.recording_scope_id"
+		generation = "u.recording_capture_generation"
+	}
+	cap := `min(u.expires_at_unix_ms,coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM ` + mirror + `.inspection_mirror_usage_caps c WHERE c.mirror_generation=g.generation AND ` + revision + `<=c.through_policy_revision),9223372036854775807)`
+	args := []any{}
+	if !source.Current {
+		cap += `,coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM ` + mirror + `.inspection_mirror_legacy_caps c WHERE c.mirror_generation=g.generation AND c.archive_id=? AND u.sequence>c.after_sequence AND u.sequence<=c.through_sequence),9223372036854775807),coalesce((SELECT min(CASE WHEN u.occurred_at_unix_ms>9223372036854775807-c.retention_days*86400000 THEN 9223372036854775807 ELSE u.occurred_at_unix_ms+c.retention_days*86400000 END) FROM main.runtime_usage_retention_caps c WHERE u.sequence>c.after_sequence AND u.sequence<=c.through_sequence),9223372036854775807)`
+		args = append(args, source.ID)
+	}
+	cap += `)`
+	query := `SELECT CASE WHEN length(CAST(u.exchange_id AS BLOB)) BETWEEN 1 AND 512 THEN u.exchange_id END FROM main.runtime_usage_observations u CROSS JOIN ` + mirror + `.inspection_mirror_active a JOIN ` + mirror + `.inspection_mirror_generations g ON g.generation=a.generation WHERE a.singleton=1 AND g.complete=1 AND (` + cap + `<=? OR ` + epoch + `<>g.archive_epoch OR (` + kind + `<>'' AND NOT EXISTS(SELECT 1 FROM ` + mirror + `.inspection_mirror_fences f WHERE f.mirror_generation=g.generation AND f.capture_kind=` + kind + ` AND f.capture_id=` + id + ` AND f.capture_generation=` + generation + ` AND f.deleted=0))) AND u.exchange_id>? ORDER BY u.exchange_id LIMIT 256`
+	args = append(args, cutoff.UnixMilli(), after)
+	return query, args
 }
