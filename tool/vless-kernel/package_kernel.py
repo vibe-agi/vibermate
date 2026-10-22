@@ -81,7 +81,7 @@ def _source_note(lock):
             f"Source archive: {lock['archiveURL']}\nArchive SHA256: {lock['archiveSHA256']}\n"
             "Apply the adjacent dependency.patch to that exact source.\n"
             "upstream.commit preserves the public Git identity; no independent GPG trust certification is claimed.\n"
-            "vcs.modified=true records the exact dependency patch. LICENSE.upstream covers upstream;\n"
+            "vcs.modified=true records the exact dependency and connection-lifetime patch. LICENSE.upstream covers upstream;\n"
             "complete linked-module notices and native/package qualification remain separate requirements.\n")
 
 
@@ -124,6 +124,11 @@ def _input(path, lock, assets, snapshots, directories):
     producer._modules(source, lock["moduleSHA256"])
     for name, field in (("go.mod", "goMod"), ("go.sum", "goSum")):
         _remember(source / name, snapshots, "module", lock["moduleSHA256"][field])
+    for name, record in lock["patchedFiles"].items():
+        material = source / name
+        _remember(material, snapshots, "patched source", record["sha256"])
+        producer._require(oct(material.stat().st_mode & 0o777)[2:] == record["mode"][3:],
+                          "patched source", "file mode mismatch")
     binary_data = manifest.get("binary", {})
     producer._require(binary_data.get("name") == "vibermate-xray"
                       and type(binary_data.get("size")) is int and binary_data["size"] > 0

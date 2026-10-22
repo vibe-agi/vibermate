@@ -1,6 +1,6 @@
 # Locked VLESS kernel producer
 
-This tool builds the exact pinned Xray source with the reviewed dependency patch.
+This tool builds the exact pinned Xray source with the reviewed dependency and connection-lifetime patch.
 It requires Python 3.9 or newer (standard library only), local Git, and an absolute
 Go 1.26.10 executable. It does not install Go or modify global Git/Go settings.
 
@@ -44,7 +44,13 @@ preserves the existing public signature bytes; these content checks do not claim
 independent GPG trust verification. Local Git uses isolated configuration and
 hooks, indexes tracked-but-ignored files, establishes exact detached shallow HEAD
 without a tag, and verifies clean source before applying `dependency.patch`.
-Only the locked module patch is permitted. `vcs.modified=true` honestly records it.
+The closed `patchedFiles` inventory verifies every changed or new file's hash and
+mode before and after building; additional files or altered content are rejected.
+`vcs.modified=true` honestly records this exact patch. The patch gives supported
+VLESS outer establishment one 30-second budget across attempts, retires failed
+TLS/REALITY setup resources, and leaves established streams on their original
+session lifetime. Graceful local close may take until this setup budget expires;
+there is no helper restart or alternate exit fallback.
 
 The build uses `./main`, `-buildvcs=true`, `-trimpath`, and the exact locked source
 marker. Modules are read-only; Go uses the public proxy/checksum service and empty
@@ -63,7 +69,7 @@ license alone is not a complete notice/license audit of linked modules.
 
 `package_kernel.py` consumes completed outputs from this fixed producer. It
 requires the same absolute Go 1.26.10 compiler and verifies its byte identity,
-the adjacent lock/assets, producer manifests, source module files, executable
+the adjacent lock/assets, producer manifests, source module and patched runtime files, executable
 bytes, and actual Go build metadata/dependencies before claiming success.
 Inputs are read-only real directories; the fresh output must be outside them.
 Existing outputs, duplicate architectures, symlinks, duplicate JSON keys,

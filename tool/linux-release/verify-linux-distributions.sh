@@ -110,7 +110,7 @@ esac
 host_root="${verification_root}/ViberMate_${version}_linux_${host_arch}"
 "${host_root}/vibermate" --help >/dev/null
 kernel_version="$("${host_root}/vibermate-xray" version)"
-if [[ "${kernel_version}" != *"d2758a0-vibermate-security1"* || "${kernel_version}" != *"go1.26.10"* ]]; then
+if [[ "${kernel_version}" != *"d2758a0-vibermate-reliability2"* || "${kernel_version}" != *"go1.26.10"* ]]; then
   echo "host-native kernel version differs from fixed source/compiler" >&2
   exit 70
 fi

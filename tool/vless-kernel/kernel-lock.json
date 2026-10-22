@@ -7,7 +7,7 @@
   "archiveSize": 822765,
   "archiveSHA256": "14fa566ee0a801d3d51144c67018b449f5dcf462ddfacadd032da069787e61f9",
   "rawCommitSHA256": "8af835cea3015efd4442433d745d4a33dec51acb802b528ca3cb95ee6f1ff71c",
-  "patchSHA256": "5e73b85a73c3659f6357b1776f5ced0711dddd6247842e39256eab3f32324a47",
+  "patchSHA256": "aafe6f41a2e19627d829247509ca1729d597b109f35e66a2480aa80e22988620",
   "pristineModuleSHA256": {
     "goMod": "59b6bcc54671552945b07780021177a137a1e85d4c32b374e9a49a68ae018749",
     "goSum": "73b6160af7e1cc8769d5a5911fb931e8f0659e967314e2748c83fe315c922d14"
@@ -18,5 +18,39 @@
   },
   "licenseSHA256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
   "goVersion": "go1.26.10",
-  "sourceMarker": "d2758a0-vibermate-security1"
+  "sourceMarker": "d2758a0-vibermate-reliability2",
+  "patchedFiles": {
+    "go.mod": {
+      "sha256": "60e103fc90c37672198b63a7c45c9040b62f1146b4d7e6ec9bedc03611ccdc77",
+      "mode": "100644"
+    },
+    "go.sum": {
+      "sha256": "43b0206e7eda56da8a120182b5ba4ec9cea4267d3896791fdf182a9b10e487f1",
+      "mode": "100644"
+    },
+    "proxy/vless/outbound/outbound.go": {
+      "sha256": "2001e8f5e226a2ae1071d20528fc6711bc420841b78bca7c5de3c0858230978d",
+      "mode": "100644"
+    },
+    "proxy/vless/outbound/setup_test.go": {
+      "sha256": "7d88936e7f9a8ea69f310ae0707787bd6b59f362b2388fb69d1a46bf2ea0214b",
+      "mode": "100644"
+    },
+    "transport/internet/reality/reality.go": {
+      "sha256": "03b92e6582510905f8ec8a86ea54250573a63f8160ffc865103e53f88b287519",
+      "mode": "100644"
+    },
+    "transport/internet/reality/setup_test.go": {
+      "sha256": "4daec411ed7a0bb291eae52d263057403dd43b71165e2a9493c518735e6f0f78",
+      "mode": "100644"
+    },
+    "transport/internet/setup.go": {
+      "sha256": "506021f354e8e37c52d2fa4c5755e75c673326336dc156a269eb3766471178ce",
+      "mode": "100644"
+    },
+    "transport/internet/tcp/dialer.go": {
+      "sha256": "d097af89c0be77561827b2669d160495d976360fabb8e99dff2d988cba040751",
+      "mode": "100644"
+    }
+  }
 }

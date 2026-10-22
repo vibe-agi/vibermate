@@ -143,3 +143,670 @@ index 1385e72..efabbf1 100644
  google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
  google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
  gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+diff --git a/proxy/vless/outbound/outbound.go b/proxy/vless/outbound/outbound.go
+index 75e74fe..3899da5 100644
+--- a/proxy/vless/outbound/outbound.go
++++ b/proxy/vless/outbound/outbound.go
+@@ -21,7 +21,6 @@ import (
+ 	"github.com/xtls/xray-core/common/mux"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/protocol"
+-	"github.com/xtls/xray-core/common/retry"
+ 	"github.com/xtls/xray-core/common/session"
+ 	"github.com/xtls/xray-core/common/signal"
+ 	"github.com/xtls/xray-core/common/task"
+@@ -189,14 +188,11 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
+ 	}
+ 
+ 	if conn == nil {
+-		if err := retry.ExponentialBackoff(5, 200).On(func() error {
+-			var err error
+-			conn, err = dialer.Dial(ctx, rec.Destination)
+-			if err != nil {
+-				return err
+-			}
+-			return nil
+-		}); err != nil {
++		var err error
++		conn, err = dialWithSetup(ctx, 30*time.Second, func(setup context.Context) (stat.Connection, error) {
++			return dialer.Dial(setup, rec.Destination)
++		})
++		if err != nil {
+ 			return errors.New("failed to find an available destination").Base(err).AtWarning()
+ 		}
+ 	}
+@@ -487,3 +483,43 @@ func (r *Reverse) Start() error {
+ func (r *Reverse) Close() error {
+ 	return r.monitorTask.Close()
+ }
++
++// One budget covers all outer dial/handshake attempts. The original Process
++// context remains the owner of established traffic, including long streams.
++func dialWithSetup(parent context.Context, budget time.Duration, dial func(context.Context) (stat.Connection, error)) (stat.Connection, error) {
++	ctx, finish := internet.NewConnectionSetup(parent, budget)
++	defer finish()
++	var last error
++	for attempt := 0; attempt < 5; attempt++ {
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		if attempt > 1 {
++			timer := time.NewTimer(time.Duration(attempt-1) * 200 * time.Millisecond)
++			select {
++			case <-ctx.Done():
++				timer.Stop()
++				return nil, ctx.Err()
++			case <-timer.C:
++			}
++		}
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		conn, err := dial(ctx)
++		if ctx.Err() != nil {
++			if conn != nil {
++				conn.Close()
++			}
++			return nil, ctx.Err()
++		}
++		if err == nil {
++			return conn, nil
++		}
++		if conn != nil {
++			conn.Close()
++		}
++		last = err
++	}
++	return nil, last
++}
+diff --git a/proxy/vless/outbound/setup_test.go b/proxy/vless/outbound/setup_test.go
+new file mode 100644
+index 0000000..e83e28f
+--- /dev/null
++++ b/proxy/vless/outbound/setup_test.go
+@@ -0,0 +1,102 @@
++package outbound
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"sync/atomic"
++	"testing"
++	"testing/synctest"
++	"time"
++
++	"github.com/xtls/xray-core/transport/internet"
++	"github.com/xtls/xray-core/transport/internet/stat"
++)
++
++func TestSetupRetriesShareBudget(t *testing.T) {
++	var calls int
++	start := time.Now()
++	_, err := dialWithSetup(t.Context(), 80*time.Millisecond, func(ctx context.Context) (stat.Connection, error) {
++		calls++
++		if calls == 1 {
++			return nil, errors.New("first attempt failed")
++		}
++		<-ctx.Done()
++		return nil, ctx.Err()
++	})
++	if !errors.Is(err, context.DeadlineExceeded) || calls != 2 || time.Since(start) > time.Second {
++		t.Fatalf("setup budget/retries: calls=%d, elapsed=%s, error=%v", calls, time.Since(start), err)
++	}
++}
++
++func TestSetupCancellationJoinsFailedTasksAndRejectsLateConnection(t *testing.T) {
++	parent, cancel := context.WithCancel(t.Context())
++	client, peer := net.Pipe()
++	defer peer.Close()
++	var joined atomic.Bool
++	conn, err := dialWithSetup(parent, time.Second, func(ctx context.Context) (stat.Connection, error) {
++		internet.RunSetupTask(ctx, func(ctx context.Context) { <-ctx.Done(); joined.Store(true) })
++		cancel()
++		return client, nil
++	})
++	if conn != nil || !errors.Is(err, context.Canceled) || !joined.Load() {
++		t.Fatalf("canceled setup retained ownership: %v", err)
++	}
++	if _, err := peer.Read(make([]byte, 1)); err != io.EOF {
++		t.Fatalf("late socket still open: %v", err)
++	}
++}
++
++func TestSuccessfulSetupDetachesTrafficAndJoinsEarlierFailure(t *testing.T) {
++	client, peer := net.Pipe()
++	defer client.Close()
++	defer peer.Close()
++	var calls int
++	var joined atomic.Bool
++	conn, err := dialWithSetup(t.Context(), 40*time.Millisecond, func(ctx context.Context) (stat.Connection, error) {
++		calls++
++		if calls == 1 {
++			internet.RunSetupTask(ctx, func(ctx context.Context) { <-ctx.Done(); joined.Store(true) })
++			return nil, errors.New("failed setup has cleanup work")
++		}
++		return client, nil
++	})
++	if err != nil || !joined.Load() {
++		t.Fatalf("setup did not join prior failure: %v", err)
++	}
++	time.Sleep(60 * time.Millisecond)
++	_ = peer.SetDeadline(time.Now().Add(time.Second))
++	go conn.Write([]byte("alive"))
++	data := make([]byte, 5)
++	if _, err := io.ReadFull(peer, data); err != nil || string(data) != "alive" {
++		t.Fatalf("successful traffic inherited setup deadline: %v", err)
++	}
++}
++
++func TestSetupCancellationInterruptsRetryWait(t *testing.T) {
++	synctest.Test(t, func(t *testing.T) {
++		parent, cancel := context.WithCancel(t.Context())
++		var calls int
++		finished := make(chan error, 1)
++		go func() {
++			_, err := dialWithSetup(parent, time.Second, func(context.Context) (stat.Connection, error) {
++				calls++
++				return nil, errors.New("failed")
++			})
++			finished <- err
++		}()
++		synctest.Wait() // Both immediate attempts returned; the retry timer is waiting.
++		if calls != 2 {
++			t.Fatalf("did not reach retry wait: %d", calls)
++		}
++		before := time.Now()
++		cancel()
++		if err := <-finished; !errors.Is(err, context.Canceled) {
++			t.Fatal(err)
++		}
++		if calls != 2 || time.Since(before) != 0 {
++			t.Fatal("cancellation waited for retry timer or dialed again")
++		}
++	})
++}
+diff --git a/transport/internet/reality/reality.go b/transport/internet/reality/reality.go
+index 50b2e02..10d2d01 100644
+--- a/transport/internet/reality/reality.go
++++ b/transport/internet/reality/reality.go
+@@ -29,6 +29,7 @@ import (
+ 	"github.com/xtls/xray-core/common/net"
+ 	"github.com/xtls/xray-core/common/utils"
+ 	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/transport/internet"
+ 	"github.com/xtls/xray-core/transport/internet/tls"
+ 	"golang.org/x/crypto/hkdf"
+ 	"golang.org/x/net/http2"
+@@ -115,6 +116,12 @@ func (c *UConn) VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x50
+ }
+ 
+ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destination) (net.Conn, error) {
++	transferred := false
++	defer func() {
++		if !transferred {
++			c.Close()
++		}
++	}()
+ 	localAddr := c.LocalAddr().String()
+ 	uConn := &UConn{
+ 		Config: config,
+@@ -182,97 +189,12 @@ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destinati
+ 	}
+ 	if !uConn.Verified {
+ 		errors.LogError(ctx, "REALITY: received real certificate (potential MITM or redirection)")
+-		go func() {
+-			client := &http.Client{
+-				Transport: &http2.Transport{
+-					DialTLSContext: func(ctx context.Context, network, addr string, cfg *gotls.Config) (net.Conn, error) {
+-						if config.Show {
+-							fmt.Printf("REALITY localAddr: %v\tDialTLSContext\n", localAddr)
+-						}
+-						return uConn, nil
+-					},
+-				},
+-			}
+-			prefix := []byte("https://" + uConn.ServerName)
+-			maps.Lock()
+-			if maps.maps == nil {
+-				maps.maps = make(map[string]map[string]struct{})
+-			}
+-			paths := maps.maps[uConn.ServerName]
+-			if paths == nil {
+-				paths = make(map[string]struct{})
+-				paths[config.SpiderX] = struct{}{}
+-				maps.maps[uConn.ServerName] = paths
+-			}
+-			firstURL := string(prefix) + getPathLocked(paths)
+-			maps.Unlock()
+-			get := func(first bool) {
+-				var (
+-					req  *http.Request
+-					resp *http.Response
+-					err  error
+-					body []byte
+-				)
+-				if first {
+-					req, _ = http.NewRequest("GET", firstURL, nil)
+-				} else {
+-					maps.Lock()
+-					req, _ = http.NewRequest("GET", string(prefix)+getPathLocked(paths), nil)
+-					maps.Unlock()
+-				}
+-				if req == nil {
+-					return
+-				}
+-				utils.TryDefaultHeadersWith(req.Header, "nav")
+-				if first && config.Show {
+-					fmt.Printf("REALITY localAddr: %v\treq.UserAgent(): %v\n", localAddr, req.UserAgent())
+-				}
+-				times := 1
+-				if !first {
+-					times = int(crypto.RandBetween(config.SpiderY[4], config.SpiderY[5]))
+-				}
+-				for j := 0; j < times; j++ {
+-					if !first && j == 0 {
+-						req.Header.Set("Referer", firstURL)
+-					}
+-					req.AddCookie(&http.Cookie{Name: "padding", Value: strings.Repeat("0", int(crypto.RandBetween(config.SpiderY[0], config.SpiderY[1])))})
+-					if resp, err = client.Do(req); err != nil {
+-						break
+-					}
+-					defer resp.Body.Close()
+-					req.Header.Set("Referer", req.URL.String())
+-					if body, err = io.ReadAll(resp.Body); err != nil {
+-						break
+-					}
+-					maps.Lock()
+-					for _, m := range href.FindAllSubmatch(body, -1) {
+-						m[1] = bytes.TrimPrefix(m[1], prefix)
+-						if !bytes.Contains(m[1], dot) {
+-							paths[string(m[1])] = struct{}{}
+-						}
+-					}
+-					req.URL.Path = getPathLocked(paths)
+-					if config.Show {
+-						fmt.Printf("REALITY localAddr: %v\treq.Referer(): %v\n", localAddr, req.Referer())
+-						fmt.Printf("REALITY localAddr: %v\tlen(body): %v\n", localAddr, len(body))
+-						fmt.Printf("REALITY localAddr: %v\tlen(paths): %v\n", localAddr, len(paths))
+-					}
+-					maps.Unlock()
+-					if !first {
+-						time.Sleep(time.Duration(crypto.RandBetween(config.SpiderY[6], config.SpiderY[7])) * time.Millisecond) // interval
+-					}
+-				}
+-			}
+-			get(true)
+-			concurrency := int(crypto.RandBetween(config.SpiderY[2], config.SpiderY[3]))
+-			for i := 0; i < concurrency; i++ {
+-				go get(false)
+-			}
+-			// Do not close the connection
+-		}()
+-		time.Sleep(time.Duration(crypto.RandBetween(config.SpiderY[8], config.SpiderY[9])) * time.Millisecond) // return
++		transferred = true
++		startSpider(ctx, c, uConn, uConn.ServerName, config)
++		waitSpider(ctx, time.Duration(crypto.RandBetween(config.SpiderY[8], config.SpiderY[9]))*time.Millisecond) // return
+ 		return nil, errors.New("REALITY: processed invalid connection").AtWarning()
+ 	}
++	transferred = true
+ 	return uConn, nil
+ }
+ 
+@@ -297,3 +219,161 @@ func getPathLocked(paths map[string]struct{}) string {
+ 	}
+ 	return "/"
+ }
++
++// Only the already conventionally verified, REALITY-rejected connection enters
++// this path. Setup owns all existing requests and closes raw transport on cancel.
++func startSpider(ctx context.Context, raw, secure net.Conn, serverName string, config *Config) {
++	internet.RunSetupTask(ctx, func(ctx context.Context) {
++		ctx, cancel := context.WithCancel(ctx)
++		defer cancel()
++		closed := make(chan struct{})
++		stop := context.AfterFunc(ctx, func() { raw.Close(); close(closed) })
++		defer func() {
++			raw.Close()
++			if !stop() {
++				<-closed
++			}
++		}()
++		spider(ctx, cancel, raw, secure, serverName, config)
++	})
++}
++
++func spider(ctx context.Context, cancel context.CancelFunc, raw, secure net.Conn, serverName string, config *Config) {
++	localAddr := raw.LocalAddr().String()
++
++	client := &http.Client{
++		Transport: &http2.Transport{
++			DialTLSContext: func(ctx context.Context, network, addr string, cfg *gotls.Config) (net.Conn, error) {
++				if config.Show {
++					fmt.Printf("REALITY localAddr: %v\tDialTLSContext\n", localAddr)
++				}
++				if err := ctx.Err(); err != nil {
++					return nil, err
++				}
++				return secure, nil
++			},
++		},
++	}
++	defer func() {
++		raw.Close()
++		client.CloseIdleConnections()
++	}()
++	prefix := []byte("https://" + serverName)
++	maps.Lock()
++	if maps.maps == nil {
++		maps.maps = make(map[string]map[string]struct{})
++	}
++	paths := maps.maps[serverName]
++	if paths == nil {
++		paths = make(map[string]struct{})
++		paths[config.SpiderX] = struct{}{}
++		maps.maps[serverName] = paths
++	}
++	firstURL := string(prefix) + getPathLocked(paths)
++	maps.Unlock()
++	get := func(first bool) {
++		var (
++			req  *http.Request
++			resp *http.Response
++			err  error
++			body []byte
++		)
++		if first {
++			req, _ = http.NewRequestWithContext(ctx, "GET", firstURL, nil)
++		} else {
++			maps.Lock()
++			req, _ = http.NewRequestWithContext(ctx, "GET", string(prefix)+getPathLocked(paths), nil)
++			maps.Unlock()
++		}
++		if req == nil {
++			return
++		}
++		utils.TryDefaultHeadersWith(req.Header, "nav")
++		if first && config.Show {
++			fmt.Printf("REALITY localAddr: %v\treq.UserAgent(): %v\n", localAddr, req.UserAgent())
++		}
++		times := 1
++		if !first {
++			times = int(crypto.RandBetween(config.SpiderY[4], config.SpiderY[5]))
++		}
++		for j := 0; j < times; j++ {
++			if !first && j == 0 {
++				req.Header.Set("Referer", firstURL)
++			}
++			req.AddCookie(&http.Cookie{Name: "padding", Value: strings.Repeat("0", int(crypto.RandBetween(config.SpiderY[0], config.SpiderY[1])))})
++			if resp, err = client.Do(req); err != nil {
++				cancel()
++				break
++			}
++			req.Header.Set("Referer", req.URL.String())
++			body, err = readSpiderBody(resp.Body)
++			resp.Body.Close()
++			if err != nil {
++				cancel()
++				break
++			}
++			maps.Lock()
++			retainSpiderPaths(paths, prefix, body)
++			req.URL.Path = getPathLocked(paths)
++			if config.Show {
++				fmt.Printf("REALITY localAddr: %v\treq.Referer(): %v\n", localAddr, req.Referer())
++				fmt.Printf("REALITY localAddr: %v\tlen(body): %v\n", localAddr, len(body))
++				fmt.Printf("REALITY localAddr: %v\tlen(paths): %v\n", localAddr, len(paths))
++			}
++			maps.Unlock()
++			if !first {
++				if !waitSpider(ctx, time.Duration(crypto.RandBetween(config.SpiderY[6], config.SpiderY[7]))*time.Millisecond) {
++					return
++				}
++			}
++		}
++	}
++	get(true)
++	if ctx.Err() != nil {
++		return
++	}
++	concurrency := int(crypto.RandBetween(config.SpiderY[2], config.SpiderY[3]))
++	var workers sync.WaitGroup
++	for i := 0; i < concurrency; i++ {
++		workers.Add(1)
++		go func() { defer workers.Done(); get(false) }()
++	}
++	workers.Wait()
++}
++
++const maxSpiderBody = 1 << 20
++const maxSpiderPaths = 256
++
++func readSpiderBody(body io.Reader) ([]byte, error) {
++	data, err := io.ReadAll(io.LimitReader(body, maxSpiderBody+1))
++	if err != nil {
++		return nil, err
++	}
++	if len(data) > maxSpiderBody {
++		return nil, errors.New("REALITY: response exceeds setup resource bound")
++	}
++	return data, nil
++}
++
++func retainSpiderPaths(paths map[string]struct{}, prefix, body []byte) {
++	for _, match := range href.FindAllSubmatch(body, maxSpiderPaths) {
++		if len(paths) >= maxSpiderPaths {
++			return
++		}
++		path := bytes.TrimPrefix(match[1], prefix)
++		if !bytes.Contains(path, dot) {
++			paths[string(path)] = struct{}{}
++		}
++	}
++}
++
++func waitSpider(ctx context.Context, delay time.Duration) bool {
++	timer := time.NewTimer(delay)
++	defer timer.Stop()
++	select {
++	case <-ctx.Done():
++		return false
++	case <-timer.C:
++		return ctx.Err() == nil
++	}
++}
+diff --git a/transport/internet/reality/setup_test.go b/transport/internet/reality/setup_test.go
+new file mode 100644
+index 0000000..e8e46eb
+--- /dev/null
++++ b/transport/internet/reality/setup_test.go
+@@ -0,0 +1,123 @@
++package reality
++
++import (
++	"bytes"
++	"context"
++	gotls "crypto/tls"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/transport/internet"
++)
++
++// This exercises the resource owner after certificate verification, not the
++// authentication decision. The peer and its trust roots are process-local.
++func TestRejectedSetupOwnsHTTP2Requests(t *testing.T) {
++	for _, mode := range []string{"headers", "body", "idle", "overflow"} {
++		t.Run(mode, func(t *testing.T) {
++			entered := make(chan struct{}, 1)
++			var calls atomic.Int32
++			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				calls.Add(1)
++				if r.URL.Path != "/" || r.Method != "GET" || r.UserAgent() == "" {
++					t.Error("existing request contract lost")
++				}
++				entered <- struct{}{}
++				switch mode {
++				case "headers":
++					<-r.Context().Done()
++				case "body":
++					w.WriteHeader(200)
++					w.(http.Flusher).Flush()
++					<-r.Context().Done()
++				case "idle":
++					io.WriteString(w, `<a href="/retained">ok</a>`)
++				case "overflow":
++					w.Write(bytes.Repeat([]byte("x"), maxSpiderBody+1))
++				}
++			}))
++			server.EnableHTTP2 = true
++			server.StartTLS()
++			defer server.Close()
++			raw, err := net.Dial("tcp", server.Listener.Addr().String())
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer raw.Close()
++			config := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
++			config.ServerName = "example.com"
++			config.NextProtos = []string{"h2"}
++			secure := gotls.Client(raw, config)
++			if err := secure.HandshakeContext(t.Context()); err != nil {
++				t.Fatal(err)
++			}
++			maps.Lock()
++			delete(maps.maps, "example.com")
++			maps.Unlock()
++			ctx, finish := internet.NewConnectionSetup(t.Context(), time.Second)
++			defer finish()
++			startSpider(ctx, raw, secure, "example.com", &Config{SpiderX: "/", SpiderY: make([]int64, 10)})
++			select {
++			case <-entered:
++			case <-time.After(time.Second):
++				t.Fatal("existing request did not start")
++			}
++			// Idle/oversize task completion must close its socket independently.
++			if mode == "idle" || mode == "overflow" {
++				deadline := time.Now().Add(500 * time.Millisecond)
++				for {
++					err := raw.SetReadDeadline(time.Now().Add(time.Second))
++					if err != nil {
++						break
++					}
++					if time.Now().After(deadline) {
++						t.Fatal("completed setup retained raw socket")
++					}
++					time.Sleep(time.Millisecond)
++				}
++			}
++			finished := make(chan struct{})
++			go func() { finish(); close(finished) }()
++			select {
++			case <-finished:
++			case <-time.After(time.Second):
++				t.Fatal("setup did not join HTTP2 cleanup")
++			}
++			if calls.Load() != 1 {
++				t.Fatalf("unexpected replacement requests: %d", calls.Load())
++			}
++		})
++	}
++}
++
++func TestRejectedSetupResourceCaps(t *testing.T) {
++	if _, err := readSpiderBody(bytes.NewReader(make([]byte, maxSpiderBody))); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := readSpiderBody(bytes.NewReader(make([]byte, maxSpiderBody+1))); err == nil {
++		t.Fatal("body cap not enforced")
++	}
++	paths := map[string]struct{}{"/": {}}
++	var body bytes.Buffer
++	for i := 0; i < 1000; i++ {
++		fmt.Fprintf(&body, `<a href="/path%d">x</a>`, i)
++	}
++	retainSpiderPaths(paths, []byte("https://example.com"), body.Bytes())
++	if len(paths) != maxSpiderPaths {
++		t.Fatalf("path cap: %d", len(paths))
++	}
++	if _, ok := paths["/"]; !ok {
++		t.Fatal("initial path removed")
++	}
++	ctx, cancel := context.WithCancel(t.Context())
++	cancel()
++	if waitSpider(ctx, time.Hour) {
++		t.Fatal("canceled wait succeeded")
++	}
++}
+diff --git a/transport/internet/setup.go b/transport/internet/setup.go
+new file mode 100644
+index 0000000..389cbf5
+--- /dev/null
++++ b/transport/internet/setup.go
+@@ -0,0 +1,34 @@
++package internet
++
++import (
++	"context"
++	"sync"
++	"time"
++)
++
++type setupKey struct{}
++type setupTasks struct{ sync.WaitGroup }
++
++// NewConnectionSetup owns only connection establishment and failed-attempt
++// cleanup. Call finish after the final Dial returns, before transferring the
++// accepted connection to traffic. No successful connection belongs to the group.
++func NewConnectionSetup(parent context.Context, budget time.Duration) (context.Context, func()) {
++	ctx, cancel := context.WithTimeout(parent, budget)
++	tasks := &setupTasks{}
++	ctx = context.WithValue(ctx, setupKey{}, tasks)
++	return ctx, func() { cancel(); tasks.Wait() }
++}
++
++// RunSetupTask registers synchronously before starting work, so the final dial
++// cannot race registration with finish. Tasks must observe ctx and join their
++// own children. Non-VLESS callers get a bounded independent owner as well.
++func RunSetupTask(ctx context.Context, task func(context.Context)) {
++	tasks, owned := ctx.Value(setupKey{}).(*setupTasks)
++	if owned {
++		tasks.Add(1)
++		go func() { defer tasks.Done(); task(ctx) }()
++		return
++	}
++	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
++	go func() { defer cancel(); task(ctx) }()
++}
+diff --git a/transport/internet/tcp/dialer.go b/transport/internet/tcp/dialer.go
+index 92fa755..7500b92 100644
+--- a/transport/internet/tcp/dialer.go
++++ b/transport/internet/tcp/dialer.go
+@@ -85,6 +85,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+ 			err = conn.(*tls.Conn).HandshakeContext(ctx)
+ 		}
+ 		if err != nil {
++			conn.Close()
+ 			if isFromMitmVerify {
+ 				return nil, errors.New("MITM freedom RAW TLS: failed to verify Domain Fronting certificate from " + mitmServerName).Base(err).AtWarning()
+ 			}
+@@ -105,10 +106,12 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
+ 	if tcpSettings.HeaderSettings != nil {
+ 		headerConfig, err := tcpSettings.HeaderSettings.GetInstance()
+ 		if err != nil {
++			conn.Close()
+ 			return nil, errors.New("failed to get header settings").Base(err).AtError()
+ 		}
+ 		auth, err := internet.CreateConnectionAuthenticator(headerConfig)
+ 		if err != nil {
++			conn.Close()
+ 			return nil, errors.New("failed to create header authenticator").Base(err).AtError()
+ 		}
+ 		conn = auth.Client(conn)

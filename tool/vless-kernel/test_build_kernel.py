@@ -68,6 +68,7 @@ class Contracts(unittest.TestCase):
                 "patchSHA256": digest(delta), "licenseSHA256": digest(b"fixture license\n"),
                 "pristineModuleSHA256": {"goMod": digest(files["go.mod"]), "goSum": digest(b"old\n")},
                 "moduleSHA256": {"goMod": digest(files["go.mod"]), "goSum": digest(b"new\n")}}
+        lock["patchedFiles"] = {"go.sum": {"sha256": digest(b"new\n"), "mode": "100644"}}
         lock.update(repository="https://example.invalid/fixture.git", ref="fixture", archiveURL="https://example.invalid/fixture.tar.gz", sourceMarker="d2758a0-vibermate-security1")
         (assets / "kernel-lock.json").write_text(json.dumps(lock))
         source = self.root / "source"
@@ -85,6 +86,44 @@ class Contracts(unittest.TestCase):
         self.assertEqual((f[1] / "run").stat().st_mode & 0o777, 0o755)
         self.assertEqual((f[1] / "go.sum").read_bytes(), b"new\n")
         self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=f[1]).decode().strip(), f[2]["commit"])
+
+    def runtime_fixture(self):
+        f = self.fixture()
+        original = self.root / "original"
+        runtime = original / "setup.go"
+        runtime.write_bytes(b"package fixture\n")
+        subprocess.check_call(["git", "add", "-N", "setup.go"], cwd=original)
+        delta = subprocess.check_output(["git", "diff"], cwd=original)
+        (f[3] / "dependency.patch").write_bytes(delta)
+        f[2]["patchSHA256"] = hashlib.sha256(delta).hexdigest()
+        f[2]["patchedFiles"] = {
+            "go.sum": {"sha256": hashlib.sha256(b"new\n").hexdigest(), "mode": "100644"},
+            "setup.go": {"sha256": hashlib.sha256(b"package fixture\n").hexdigest(), "mode": "100644"},
+        }
+        return f
+
+    def test_locked_runtime_patch_admits_exact_new_file(self):
+        f = self.runtime_fixture()
+        self.prepare(f)
+        self.assertEqual((f[1] / "setup.go").read_bytes(), b"package fixture\n")
+
+    def test_locked_runtime_patch_rejects_wrong_hash(self):
+        f = self.runtime_fixture()
+        f[2]["patchedFiles"]["setup.go"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(producer.KernelError, "SHA256"):
+            self.prepare(f)
+
+    def test_locked_runtime_patch_rejects_wrong_mode(self):
+        f = self.runtime_fixture()
+        f[2]["patchedFiles"]["setup.go"]["mode"] = "100755"
+        with self.assertRaisesRegex(producer.KernelError, "mode"):
+            self.prepare(f)
+
+    def test_locked_runtime_patch_rejects_unlisted_file(self):
+        f = self.runtime_fixture()
+        del f[2]["patchedFiles"]["setup.go"]
+        with self.assertRaisesRegex(producer.KernelError, "patch"):
+            self.prepare(f)
 
     def test_bad_archive_size_and_hash_are_rejected_before_extraction(self):
         f = self.fixture()
