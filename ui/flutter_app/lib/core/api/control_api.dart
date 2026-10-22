@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'acp_models.dart';
+import 'content_cursor.dart';
 import 'control_models.dart';
 import 'native_tool_models.dart';
 import 'account_facts_models.dart';
@@ -1683,10 +1684,7 @@ final class HttpControlApi
     String exchangeId,
     String cursor,
   ) async {
-    if (!_validResourceId(exchangeId) ||
-        cursor.isEmpty ||
-        cursor.length > 2048 ||
-        !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) {
+    if (!_validResourceId(exchangeId) || !isValidContentCursor(cursor)) {
       throw const ControlContractException(
         'Exchange content cursor is invalid',
       );

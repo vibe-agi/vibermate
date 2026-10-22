@@ -1,0 +1,602 @@
+[
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": false,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.237693Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "without_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "state": "not_recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "without_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": false,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.262986Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "without_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "state": "not_recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "without_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": false,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.286086Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "without_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "state": "not_recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "without_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": true,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.315672Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "with_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "expiresAt": "2026-11-21T06:12:55.306613Z",
+        "mode": "full",
+        "page": {
+          "inputAnchor": "f3df1f3344fccf63e80dd633a2b6be4d38aa98321a591ed079bfe68f365d9e9d",
+          "requestNextCursor": "AXdtfyP9IDVENxIDGmAIW0Z8php61OOttONQtZ3_L4O5AAAAAAAAAAF_dKlkioyQYxaB11QVCQIsDiG5FR_ye7-_TfTFqWMpigAAAAAAAAAAAAAAAEDKubKYugayXRWdBUOHIeQjCwYPcpUjl8haenTq9ljP.eyJleGNoYW5nZSI6ImF1ZGl0LXNoYXJlZC1zdW1tYXJ5Iiwicm9vdCI6ImYzZGYxZjMzNDRmY2NmNjNlODBkZDYzM2EyYjZiZTRkMzhhYTk4MzIxYTU5MWVkMDc5YmZlNjhmMzY1ZDllOWQiLCJsb2NhdGlvbiI6InJlcXVlc3QiLCJraW5kIjoicmVxdWVzdCIsImRlcHRoIjoxLCJsb3dlciI6MCwiYmxvY2siOjAsIm9mZnNldCI6MH0",
+          "requestOffset": 0
+        },
+        "recordedAt": "2026-10-22T06:12:55.306613Z",
+        "request": {
+          "effectiveModel": "synthetic-model",
+          "maxOutputTokens": 0,
+          "messages": [
+            {
+              "blocks": [
+                {
+                  "availability": "recorded",
+                  "kind": "text",
+                  "originalSize": 18,
+                  "text": "synthetic question"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "protocolEvidence": [],
+          "requestedModel": "synthetic-model",
+          "stream": false,
+          "system": [],
+          "tools": []
+        },
+        "requestProjection": {
+          "fullSnapshotAvailable": false,
+          "inheritedMessageCount": 0,
+          "relationship": "checkpoint",
+          "totalMessageCount": 1,
+          "view": "reading"
+        },
+        "response": {
+          "blocks": [
+            {
+              "availability": "recorded",
+              "kind": "text",
+              "originalSize": 18,
+              "text": "synthetic response"
+            }
+          ],
+          "effectiveModel": "synthetic-model",
+          "id": "synthetic-response",
+          "protocolEvidence": [],
+          "reportedModel": "synthetic-model",
+          "requestedModel": "synthetic-model",
+          "stopReason": "end_turn",
+          "usage": {
+            "cacheRead": {
+              "known": false
+            },
+            "cacheWrite": {
+              "known": false
+            },
+            "inputUncached": {
+              "known": false
+            },
+            "output": {
+              "known": false
+            },
+            "reasoning": {
+              "known": false
+            }
+          }
+        },
+        "state": "recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "with_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": true,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.346241Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "with_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "expiresAt": "2026-11-21T06:12:55.306613Z",
+        "mode": "full",
+        "page": {
+          "inputAnchor": "f3df1f3344fccf63e80dd633a2b6be4d38aa98321a591ed079bfe68f365d9e9d",
+          "requestNextCursor": "AXdtfyP9IDVENxIDGmAIW0Z8php61OOttONQtZ3_L4O5AAAAAAAAAAF_dKlkioyQYxaB11QVCQIsDiG5FR_ye7-_TfTFqWMpigAAAAAAAAAAAAAAAEDKubKYugayXRWdBUOHIeQjCwYPcpUjl8haenTq9ljP.eyJleGNoYW5nZSI6ImF1ZGl0LXNoYXJlZC1zdW1tYXJ5Iiwicm9vdCI6ImYzZGYxZjMzNDRmY2NmNjNlODBkZDYzM2EyYjZiZTRkMzhhYTk4MzIxYTU5MWVkMDc5YmZlNjhmMzY1ZDllOWQiLCJsb2NhdGlvbiI6InJlcXVlc3QiLCJraW5kIjoicmVxdWVzdCIsImRlcHRoIjoxLCJsb3dlciI6MCwiYmxvY2siOjAsIm9mZnNldCI6MH0",
+          "requestOffset": 0
+        },
+        "recordedAt": "2026-10-22T06:12:55.306613Z",
+        "request": {
+          "effectiveModel": "synthetic-model",
+          "maxOutputTokens": 0,
+          "messages": [
+            {
+              "blocks": [
+                {
+                  "availability": "recorded",
+                  "kind": "text",
+                  "originalSize": 18,
+                  "text": "synthetic question"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "protocolEvidence": [],
+          "requestedModel": "synthetic-model",
+          "stream": false,
+          "system": [],
+          "tools": []
+        },
+        "requestProjection": {
+          "fullSnapshotAvailable": false,
+          "inheritedMessageCount": 0,
+          "relationship": "checkpoint",
+          "totalMessageCount": 1,
+          "view": "reading"
+        },
+        "response": {
+          "blocks": [
+            {
+              "availability": "recorded",
+              "kind": "text",
+              "originalSize": 18,
+              "text": "synthetic response"
+            }
+          ],
+          "effectiveModel": "synthetic-model",
+          "id": "synthetic-response",
+          "protocolEvidence": [],
+          "reportedModel": "synthetic-model",
+          "requestedModel": "synthetic-model",
+          "stopReason": "end_turn",
+          "usage": {
+            "cacheRead": {
+              "known": false
+            },
+            "cacheWrite": {
+              "known": false
+            },
+            "inputUncached": {
+              "known": false
+            },
+            "output": {
+              "known": false
+            },
+            "reasoning": {
+              "known": false
+            }
+          }
+        },
+        "state": "recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "with_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "canceled": 0,
+      "captureObservation": {
+        "archiveEpoch": 1,
+        "captureGeneration": 1,
+        "captureId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "captureKind": "managed_run",
+        "credentialRevision": 0,
+        "firstObservedAt": null,
+        "lastObservedAt": null
+      },
+      "contentBodiesAvailable": true,
+      "failed": 0,
+      "failures": [],
+      "firstObservedAt": "2026-10-22T06:12:55.232Z",
+      "generatedAt": "2026-10-22T06:12:55.370961Z",
+      "lastObservedAt": "2026-10-22T06:12:55.232Z",
+      "otherFailures": 0,
+      "pending": 0,
+      "requests": 1,
+      "scope": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI"
+      },
+      "succeeded": 1
+    },
+    "label": "with_content_summary",
+    "status": 200
+  },
+  {
+    "body": {
+      "content": {
+        "expiresAt": "2026-11-21T06:12:55.306613Z",
+        "mode": "full",
+        "page": {
+          "inputAnchor": "f3df1f3344fccf63e80dd633a2b6be4d38aa98321a591ed079bfe68f365d9e9d",
+          "requestNextCursor": "AXdtfyP9IDVENxIDGmAIW0Z8php61OOttONQtZ3_L4O5AAAAAAAAAAF_dKlkioyQYxaB11QVCQIsDiG5FR_ye7-_TfTFqWMpigAAAAAAAAAAAAAAAEDKubKYugayXRWdBUOHIeQjCwYPcpUjl8haenTq9ljP.eyJleGNoYW5nZSI6ImF1ZGl0LXNoYXJlZC1zdW1tYXJ5Iiwicm9vdCI6ImYzZGYxZjMzNDRmY2NmNjNlODBkZDYzM2EyYjZiZTRkMzhhYTk4MzIxYTU5MWVkMDc5YmZlNjhmMzY1ZDllOWQiLCJsb2NhdGlvbiI6InJlcXVlc3QiLCJraW5kIjoicmVxdWVzdCIsImRlcHRoIjoxLCJsb3dlciI6MCwiYmxvY2siOjAsIm9mZnNldCI6MH0",
+          "requestOffset": 0
+        },
+        "recordedAt": "2026-10-22T06:12:55.306613Z",
+        "request": {
+          "effectiveModel": "synthetic-model",
+          "maxOutputTokens": 0,
+          "messages": [
+            {
+              "blocks": [
+                {
+                  "availability": "recorded",
+                  "kind": "text",
+                  "originalSize": 18,
+                  "text": "synthetic question"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "protocolEvidence": [],
+          "requestedModel": "synthetic-model",
+          "stream": false,
+          "system": [],
+          "tools": []
+        },
+        "requestProjection": {
+          "fullSnapshotAvailable": false,
+          "inheritedMessageCount": 0,
+          "relationship": "checkpoint",
+          "totalMessageCount": 1,
+          "view": "reading"
+        },
+        "response": {
+          "blocks": [
+            {
+              "availability": "recorded",
+              "kind": "text",
+              "originalSize": 18,
+              "text": "synthetic response"
+            }
+          ],
+          "effectiveModel": "synthetic-model",
+          "id": "synthetic-response",
+          "protocolEvidence": [],
+          "reportedModel": "synthetic-model",
+          "requestedModel": "synthetic-model",
+          "stopReason": "end_turn",
+          "usage": {
+            "cacheRead": {
+              "known": false
+            },
+            "cacheWrite": {
+              "known": false
+            },
+            "inputUncached": {
+              "known": false
+            },
+            "output": {
+              "known": false
+            },
+            "reasoning": {
+              "known": false
+            }
+          }
+        },
+        "state": "recorded"
+      },
+      "environment": {
+        "clientEndpointId": "client",
+        "clientEndpointRevision": 1,
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "id": "work",
+        "protocolPlanId": "plan",
+        "protocolPlanRevision": 1,
+        "revision": 1,
+        "routeId": "route",
+        "routeRevision": 1
+      },
+      "id": "audit-shared-summary",
+      "parentRefs": {
+        "captureRunId": "run.z_t3eT0VCtCS2Mc7EhMUnwGOcBI",
+        "connectionId": "synthetic-connection",
+        "exchangeId": "audit-shared-summary"
+      },
+      "processingTrace": {
+        "attempts": [],
+        "pluginRunIds": [],
+        "result": "succeeded"
+      },
+      "status": "succeeded"
+    },
+    "label": "with_content_detail",
+    "status": 200
+  },
+  {
+    "body": {
+      "blocks": [],
+      "exchangeId": "audit-shared-summary",
+      "kind": "request",
+      "messages": [
+        {
+          "blocks": [
+            {
+              "availability": "recorded",
+              "kind": "text",
+              "originalSize": 18,
+              "text": "synthetic question"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "offset": 0,
+      "total": 1
+    },
+    "label": "issued_cursor_page",
+    "status": 200
+  }
+]

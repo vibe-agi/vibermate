@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import 'provider_origin.dart';
+import 'content_cursor.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
@@ -9429,10 +9430,7 @@ final class ExchangeContentBlock {
 
 String? _contentPageCursor(JsonObject value, String field, String path) {
   final cursor = optionalString(value, field, path);
-  if (cursor != null &&
-      (cursor.isEmpty ||
-          cursor.length > 2048 ||
-          !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor))) {
+  if (cursor != null && !isValidContentCursor(cursor)) {
     throw ControlContractException('$path.$field content cursor is invalid');
   }
   return cursor;

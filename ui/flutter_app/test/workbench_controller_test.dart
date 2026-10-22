@@ -1419,6 +1419,37 @@ void main() {
     },
   );
 
+  for (final captureKey in [
+    'managed_run:run-1',
+    'manual_capture:manual-figma',
+  ]) {
+    testWidgets(
+      'evidence poll propagates content availability alone for $captureKey',
+      (tester) async {
+        final fixture = PreviewControlApi();
+        final api = _AvailabilityEvidenceApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+          terminalManagement: false,
+        );
+        await controller.initialize();
+        await controller.selectCapture(captureKey);
+        final before = controller.selectedActivities.first;
+        expect(before.contentAvailable, isTrue);
+        api.available = false;
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        expect(controller.selectedActivities.first.id, before.id);
+        expect(controller.selectedActivities.first.status, before.status);
+        expect(controller.selectedActivities.first.contentAvailable, isFalse);
+        controller.dispose();
+      },
+    );
+  }
+
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,
   ) async {
@@ -3563,5 +3594,46 @@ final class _QueuedCleanupStatisticsApi extends _PendingCleanupApi {
     final read = Completer<RuntimeStorageLocation>();
     reads.add(read);
     return read.future;
+  }
+}
+
+final class _AvailabilityEvidenceApi extends _UsageTrackingApi {
+  _AvailabilityEvidenceApi(super.delegate);
+  bool available = true;
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    final page = await super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    return ActivityPage(
+      items: [
+        for (final item in page.items)
+          ActivityRecord(
+            id: item.id,
+            occurredAt: item.occurredAt,
+            title: item.title,
+            status: item.status,
+            reasonCode: item.reasonCode,
+            source: item.source,
+            conversation: item.conversation,
+            environment: item.environment,
+            parentRefs: item.parentRefs,
+            contentAvailable: available,
+          ),
+      ],
+      nextCursor: page.nextCursor,
+    );
   }
 }
