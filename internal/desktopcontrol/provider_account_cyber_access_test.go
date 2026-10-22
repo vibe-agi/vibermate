@@ -79,15 +79,19 @@ func TestAccountCyberAccessSettingsRejectUnsupportedOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	endpoint := environmentRequest(t, application, http.MethodPost, "/api/v1/upstream-endpoints", 0, "cyber-custom-endpoint", []byte(`{"id":"target.cyber.custom","displayName":"Custom Responses","origin":"https://custom.example/v1","backendProtocols":["openai_responses"]}`))
+	if endpoint.Code != http.StatusCreated {
+		t.Fatalf("custom endpoint: %d %s", endpoint.Code, endpoint.Body.String())
+	}
 	created := environmentRequest(t, application, http.MethodPost, "/api/v1/provider-accounts", 0,
-		"cyber-api-create", []byte(`{"id":"api-account","displayName":"API account","upstreamEndpointId":"target.openai.official","kind":"bearer_token","secret":"synthetic-api-bearer"}`))
+		"cyber-api-create", []byte(`{"id":"api-account","displayName":"API account","upstreamEndpointId":"target.cyber.custom","kind":"bearer_token","secret":"synthetic-api-bearer"}`))
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", created.Code, created.Body.String())
 	}
 	for _, preference := range []string{"daybreak_blue", "daybreak_red"} {
 		enabled := environmentRequest(t, application, http.MethodPut, "/api/v1/provider-accounts/api-account/settings", 1, "cyber-api-"+preference, []byte(`{"automaticRefresh":false,"egressProfile":null,"cyberAccessProgram":"`+preference+`"}`))
 		if enabled.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("API origin accepted %s: %d %s", preference, enabled.Code, enabled.Body.String())
+			t.Fatalf("custom origin accepted %s: %d %s", preference, enabled.Code, enabled.Body.String())
 		}
 	}
 	standard := environmentRequest(t, application, http.MethodPut, "/api/v1/provider-accounts/api-account/settings", 1, "cyber-api-standard", []byte(`{"automaticRefresh":false,"egressProfile":null,"cyberAccessProgram":"standard"}`))

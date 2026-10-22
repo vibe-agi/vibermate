@@ -126,6 +126,7 @@ final class _ProviderAccountCyberAccessState
         endpoint.id,
         accountId: account.id,
         refresh: refresh,
+        codexCapabilities: true,
       );
       if (!mounted || generation != _generation) return;
       if (!catalog.verifiedFromEndpoint ||

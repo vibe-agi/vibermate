@@ -40,6 +40,7 @@ void main() {
         contains(('target.openai.official', 'account.blue', false)),
       );
       expect(_account(controller).credentialOrigin, 'https://api.openai.com');
+      expect(api.capabilityRequests, everyElement(isTrue));
     },
   );
   final reviewDirectory = kIsWeb
@@ -690,7 +691,11 @@ void main() {
       );
       expect(
         controller
-            .upstreamModelCatalog('target.codex.official', 'account.blue')!
+            .upstreamModelCatalog(
+              'target.codex.official',
+              'account.blue',
+              codexCapabilities: true,
+            )!
             .credentialEpoch,
         account.credentialEpoch + 1,
       );
@@ -916,6 +921,7 @@ Future<void> _expand(WidgetTester tester) async {
 final class _CyberApi extends Fake implements ControlApi {
   final preview = PreviewControlApi(seedCaptures: false);
   final requests = <(String, String, bool)>[];
+  final capabilityRequests = <bool>[];
   List<String>? programs = const ['standard', 'daybreak_blue', 'daybreak_red'];
   Completer<UpstreamModelCatalog>? pending;
   Object? failure;
@@ -961,8 +967,10 @@ final class _CyberApi extends Fake implements ControlApi {
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) {
     requests.add((endpointId, accountId, refresh));
+    capabilityRequests.add(codexCapabilities);
     if (failure != null) return Future.error(failure!);
     return pending?.future ?? catalog(programs, endpointId: endpointId);
   }

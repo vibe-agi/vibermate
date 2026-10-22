@@ -76,9 +76,8 @@ bool supportsCodexCapabilities(Uri origin, String accountKind) =>
         const {'', '/v1'}.contains(origin.path));
 
 /// The actual discovery address used by the runtime, not an inferred /v1 API.
-String upstreamModelsUrl(Uri origin, {String? accountKind}) {
-  if (isChatGPTCodexOrigin(origin) ||
-      supportsCodexCapabilities(origin, accountKind ?? '')) {
+String upstreamModelsUrl(Uri origin) {
+  if (isChatGPTCodexOrigin(origin)) {
     return Uri.parse('https://chatgpt.com')
         .replace(
           path: '/backend-api/codex/models',

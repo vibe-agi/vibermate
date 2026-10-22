@@ -16,8 +16,8 @@ void main() {
         isFalse,
       );
       expect(
-        upstreamModelsUrl(Uri.parse(origin), accountKind: 'bearer_token'),
-        'https://chatgpt.com/backend-api/codex/models?client_version=0.163.0',
+        upstreamModelsUrl(Uri.parse(origin)),
+        'https://api.openai.com/v1/models',
       );
     }
     for (final origin in [

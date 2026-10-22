@@ -1094,8 +1094,11 @@ final class WorkbenchController extends ChangeNotifier
     return data?.endpoints.where((endpoint) => endpoint.id == id).firstOrNull;
   }
 
-  String _upstreamModelCatalogKey(String endpointId, String accountId) =>
-      '$endpointId\u0000$accountId';
+  String _upstreamModelCatalogKey(
+    String endpointId,
+    String accountId, {
+    bool codexCapabilities = false,
+  }) => '$endpointId\u0000$accountId${codexCapabilities ? '\u0000codex' : ''}';
 
   String _upstreamModelScope(String endpointId, String accountId) {
     final endpoint = data?.endpoints
@@ -1113,9 +1116,14 @@ final class WorkbenchController extends ChangeNotifier
 
   UpstreamModelCatalog? upstreamModelCatalog(
     String endpointId,
-    String accountId,
-  ) {
-    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    String accountId, {
+    bool codexCapabilities = false,
+  }) {
+    final key = _upstreamModelCatalogKey(
+      endpointId,
+      accountId,
+      codexCapabilities: codexCapabilities,
+    );
     return _upstreamModelCatalogScopes[key] ==
             _upstreamModelScope(endpointId, accountId)
         ? _upstreamModelCatalogs[key]
@@ -1126,8 +1134,13 @@ final class WorkbenchController extends ChangeNotifier
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) async {
-    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    final key = _upstreamModelCatalogKey(
+      endpointId,
+      accountId,
+      codexCapabilities: codexCapabilities,
+    );
     final scope = _upstreamModelScope(endpointId, accountId);
     final generation = (_upstreamModelCatalogLoads[key] ?? 0) + 1;
     _upstreamModelCatalogLoads[key] = generation;
@@ -1138,6 +1151,7 @@ final class WorkbenchController extends ChangeNotifier
       endpointId,
       accountId: accountId,
       refresh: refresh,
+      codexCapabilities: codexCapabilities,
     );
     if (!_disposed &&
         _upstreamModelCatalogLoads[key] == generation &&

@@ -49,8 +49,9 @@ type Service struct {
 }
 
 type cacheKey struct {
-	endpointID upstreamendpoint.ID
-	accountID  provideraccount.ID
+	endpointID        upstreamendpoint.ID
+	accountID         provideraccount.ID
+	codexCapabilities bool
 }
 
 type cachedSnapshot struct {
@@ -97,8 +98,9 @@ func (service *Service) Discover(
 	endpointID upstreamendpoint.ID,
 	accountID provideraccount.ID,
 	refresh bool,
+	codexCapabilities ...bool,
 ) (Snapshot, error) {
-	if service == nil || ctx == nil || endpointID == "" || accountID == "" {
+	if service == nil || ctx == nil || endpointID == "" || accountID == "" || len(codexCapabilities) > 1 {
 		return Snapshot{}, ErrInvalidCatalog
 	}
 	if err := ctx.Err(); err != nil {
@@ -131,7 +133,11 @@ func (service *Service) Discover(
 		accountRef.ID != accountID.String() {
 		return Snapshot{}, ErrInvalidCatalog
 	}
-	key := cacheKey{endpointID: endpointID, accountID: accountID}
+	capabilities := len(codexCapabilities) == 1 && codexCapabilities[0]
+	if capabilities && !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+		return Snapshot{}, ErrInvalidCatalog
+	}
+	key := cacheKey{endpointID: endpointID, accountID: accountID, codexCapabilities: capabilities}
 	now := service.clock.Now().UTC()
 	if !refresh {
 		service.mu.Lock()
@@ -151,6 +157,7 @@ func (service *Service) Discover(
 		discoveryContext,
 		endpoint,
 		credential,
+		capabilities,
 	)
 	cancelDiscovery()
 	snapshot := Snapshot{
@@ -213,8 +220,9 @@ func (service *Service) discoverEndpoint(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	credential providerauth.Lease,
+	codexCapabilities bool,
 ) ([]Model, error) {
-	response, err := service.transport.FetchEndpointModels(ctx, endpoint, credential)
+	response, err := service.transport.FetchEndpointModels(ctx, endpoint, credential, codexCapabilities)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +253,7 @@ func (service *Service) discoverEndpoint(
 		// Codex's ChatGPT catalog advertises the request model as "slug";
 		// standard OpenAI-compatible catalogs advertise "id". Do not apply this
 		// provider-specific interpretation to unrelated endpoint catalogs.
-		if upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) && item.ID == "" {
+		if (upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) || codexCapabilities) && item.ID == "" {
 			if err := json.Unmarshal(item.Slug, &item.ID); err != nil {
 				return nil, ErrInvalidCatalog
 			}
@@ -267,7 +275,7 @@ func (service *Service) discoverEndpoint(
 			contextLimit = item.MaxContextWindow
 		}
 		var cyberPrograms []string
-		if upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+		if upstreamendpoint.IsChatGPTCodexOrigin(endpoint.Origin) || codexCapabilities {
 			var err error
 			cyberPrograms, err = cyberaccess.ParsePrograms(item.AvailableAccessPrograms)
 			if err != nil {

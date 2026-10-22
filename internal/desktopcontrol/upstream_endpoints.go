@@ -99,7 +99,7 @@ func (handler *Handler) getUpstreamEndpoint(writer http.ResponseWriter, request 
 
 func (handler *Handler) getUpstreamEndpointModels(writer http.ResponseWriter, request *http.Request) {
 	values := request.URL.Query()
-	if len(values) < 1 || len(values) > 2 {
+	if len(values) < 1 || len(values) > 3 {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -121,8 +121,16 @@ func (handler *Handler) getUpstreamEndpointModels(writer http.ResponseWriter, re
 		}
 		refresh = true
 	}
+	codexCapabilities := false
+	if entries, found := values["codexCapabilities"]; found {
+		if len(entries) != 1 || entries[0] != "1" {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
+		codexCapabilities = true
+	}
 	for key := range values {
-		if key != "accountId" && key != "refresh" {
+		if key != "accountId" && key != "refresh" && key != "codexCapabilities" {
 			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 			return
 		}
@@ -132,7 +140,7 @@ func (handler *Handler) getUpstreamEndpointModels(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	snapshot, err := handler.models.Discover(request.Context(), id, accountID, refresh)
+	snapshot, err := handler.models.Discover(request.Context(), id, accountID, refresh, codexCapabilities)
 	if err != nil {
 		spec := classifyModelCatalogError(err)
 		writeProblem(writer, spec.status, spec.reason)

@@ -105,15 +105,18 @@ func (body *clearingRequestBody) Close() error {
 
 var _ io.ReadCloser = (*clearingRequestBody)(nil)
 
-// FetchEndpointModels reads this account/Endpoint's model directory. Exact
-// official Codex scopes use the sealed account capability catalog; other
-// endpoints retain their own models URL. Unauthenticated enrichment catalogs
-// cannot prove account availability and are not consulted here.
+// FetchEndpointModels defaults to the Endpoint's own complete model directory.
+// The explicit Codex capability option selects the sealed account catalog;
+// generic model selection must never silently inherit that narrower directory.
 func (client *Client) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	credential providerauth.Lease,
+	codexCapabilities ...bool,
 ) (*http.Response, error) {
+	if len(codexCapabilities) > 1 {
+		return nil, upstreamservice.ErrUnsupported
+	}
 	if err := endpoint.Validate(); err != nil {
 		return nil, fmt.Errorf("discover Endpoint models: %w", err)
 	}
@@ -129,7 +132,10 @@ func (client *Client) FetchEndpointModels(
 	}
 	// Official Codex-capable accounts use the service-owned capability
 	// directory. Generic endpoint discovery still uses its ordinary models URL.
-	if upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+	if len(codexCapabilities) == 1 && codexCapabilities[0] {
+		if !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+			return nil, upstreamservice.ErrUnsupported
+		}
 		read, err := upstreamservice.ResolveAccountRead(endpoint.Origin, credential.Driver(), upstreamservice.CodexModels)
 		if err != nil {
 			return nil, err

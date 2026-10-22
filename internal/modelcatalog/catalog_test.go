@@ -231,6 +231,7 @@ func TestDiscoverEndpointRejectsInvalidUTF8BeforeJSONReplacement(t *testing.T) {
 		context.Background(),
 		upstreamendpoint.Endpoint{},
 		nil,
+		false,
 	)
 	if !errors.Is(err, ErrInvalidCatalog) {
 		t.Fatalf("invalid UTF-8 must be rejected before JSON replacement, got %v", err)
@@ -325,6 +326,7 @@ func (function endpointTransportFunc) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	_ providerauth.Lease,
+	_ ...bool,
 ) (*http.Response, error) {
 	return function(ctx, endpoint)
 }
@@ -335,6 +337,7 @@ func (transport endpointTransportClient) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	_ providerauth.Lease,
+	_ ...bool,
 ) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(
 		ctx,

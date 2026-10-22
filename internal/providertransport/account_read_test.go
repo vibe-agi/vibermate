@@ -80,17 +80,24 @@ func TestOfficialAPIAccountReadUsesOnlyFixedModelCatalog(t *testing.T) {
 }
 
 func TestOfficialAPIEndpointDiscoveryUsesCodexCapabilityCatalog(t *testing.T) {
-	gate := newStartedGate(t)
-	audit := &runtimeAuditRecorder{}
-	transport := &runtimeTransportStub{audit: audit, response: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"models":[]}`))}}
-	client := newRuntimeFetchClient(t, gate, transport, audit)
-	endpoint := testDiscoveryEndpoint(t, "https://api.openai.com")
-	response, err := client.FetchEndpointModels(t.Context(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
-	if err != nil {
-		t.Fatal(err)
+	for _, capabilities := range []bool{false, true} {
+		gate := newStartedGate(t)
+		audit := &runtimeAuditRecorder{}
+		transport := &runtimeTransportStub{audit: audit, response: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"models":[]}`))}}
+		client := newRuntimeFetchClient(t, gate, transport, audit)
+		endpoint := testDiscoveryEndpoint(t, "https://api.openai.com")
+		response, err := client.FetchEndpointModels(t.Context(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID), capabilities)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		want := "https://api.openai.com/v1/models"
+		if capabilities {
+			want = "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0"
+		}
+		if got := transport.lastRequest().URL.String(); got != want {
+			t.Fatalf("official capability catalog=%s", got)
+		}
 	}
-	response.Body.Close()
-	if got := transport.lastRequest().URL.String(); got != "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0" {
-		t.Fatalf("official capability catalog=%s", got)
-	}
+
 }

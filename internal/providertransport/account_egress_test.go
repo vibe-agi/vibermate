@@ -81,7 +81,7 @@ func TestRuntimeAccountOperationsUseAccountEgressAndNeverFallback(t *testing.T) 
 					request.Header.Set("Content-Type", "application/json")
 					response, err = client.DoCodexOAuthTokenRequest(request, credential.account)
 				case "models", "official-api-models":
-					response, err = client.FetchEndpointModels(context.Background(), endpoint, credential)
+					response, err = client.FetchEndpointModels(context.Background(), endpoint, credential, operation == "official-api-models")
 				default:
 					op := upstreamservice.CodexRateLimits
 					if operation == "history" {

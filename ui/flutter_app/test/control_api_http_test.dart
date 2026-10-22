@@ -1634,122 +1634,127 @@ void main() {
     expect(requests, hasLength(requestCount));
   });
 
-  test(
-    'HTTP API reads and explicitly refreshes an Endpoint model catalog',
-    () async {
-      final requests = <Uri>[];
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      server.listen((request) async {
-        requests.add(request.uri);
-        await request.drain<void>();
-        request.response.headers.contentType = ContentType.json;
-        if (request.uri.path == '/api/v1/auth/sessions/current') {
-          request.response.write(
-            jsonEncode({
-              'schema': 'vibermate-app-session-state-v1',
-              'revision': 1,
-              'expiresAt': DateTime.now()
-                  .toUtc()
-                  .add(const Duration(hours: 1))
-                  .toIso8601String(),
-            }),
-          );
-        } else if (request.uri.path == '/api/v1/client-models') {
-          request.response.write(
-            jsonEncode({
-              'protocol': 'anthropic_messages',
-              'providerId': 'anthropic',
-              'metadataSource': 'models.dev',
-              'models': [
-                {
-                  'id': 'claude-opus-4-1',
-                  'canonicalId': 'anthropic/claude-opus-4-1',
-                  'displayName': 'Claude Opus 4.1',
-                  'description': '',
-                  'family': 'claude-opus',
-                  'reasoning': true,
-                  'toolCalls': true,
-                  'structuredOutput': true,
-                  'attachments': true,
-                  'openWeights': false,
-                  'contextLimit': 200000,
-                  'outputLimit': 32000,
-                  'inputModalities': ['text', 'image'],
-                  'outputModalities': ['text'],
-                  'knowledgeCutoff': '',
-                  'releaseDate': '2025-08-05',
-                },
-              ],
-            }),
-          );
-        } else if (request.uri.path ==
-            '/api/v1/upstream-endpoints/target.spark.local/models') {
-          request.response.write(
-            jsonEncode({
-              'endpointId': 'target.spark.local',
-              'endpointRevision': 2,
-              'accountId': 'account.spark.models',
-              'accountRevision': 4,
-              'credentialEpoch': 7,
-              'observedAt': '2026-08-20T03:04:05.000Z',
-              'availabilitySource': 'endpoint',
-              'models': [
-                {
-                  'id': 'dashscope:deepseek-v4-flash-0731',
-                  'displayName': '',
-                  'ownedBy': '',
-                  'verifiedAvailable': true,
-                  'contextLimit': 0,
-                  'outputLimit': 0,
-                },
-              ],
-            }),
-          );
-        } else {
-          request.response.statusCode = HttpStatus.notFound;
-        }
-        await request.response.close();
-      });
+  test('HTTP API reads and explicitly refreshes an Endpoint model catalog', () async {
+    final requests = <Uri>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      requests.add(request.uri);
+      await request.drain<void>();
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/api/v1/auth/sessions/current') {
+        request.response.write(
+          jsonEncode({
+            'schema': 'vibermate-app-session-state-v1',
+            'revision': 1,
+            'expiresAt': DateTime.now()
+                .toUtc()
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+          }),
+        );
+      } else if (request.uri.path == '/api/v1/client-models') {
+        request.response.write(
+          jsonEncode({
+            'protocol': 'anthropic_messages',
+            'providerId': 'anthropic',
+            'metadataSource': 'models.dev',
+            'models': [
+              {
+                'id': 'claude-opus-4-1',
+                'canonicalId': 'anthropic/claude-opus-4-1',
+                'displayName': 'Claude Opus 4.1',
+                'description': '',
+                'family': 'claude-opus',
+                'reasoning': true,
+                'toolCalls': true,
+                'structuredOutput': true,
+                'attachments': true,
+                'openWeights': false,
+                'contextLimit': 200000,
+                'outputLimit': 32000,
+                'inputModalities': ['text', 'image'],
+                'outputModalities': ['text'],
+                'knowledgeCutoff': '',
+                'releaseDate': '2025-08-05',
+              },
+            ],
+          }),
+        );
+      } else if (request.uri.path ==
+          '/api/v1/upstream-endpoints/target.spark.local/models') {
+        request.response.write(
+          jsonEncode({
+            'endpointId': 'target.spark.local',
+            'endpointRevision': 2,
+            'accountId': 'account.spark.models',
+            'accountRevision': 4,
+            'credentialEpoch': 7,
+            'observedAt': '2026-08-20T03:04:05.000Z',
+            'availabilitySource': 'endpoint',
+            'models': [
+              {
+                'id': 'dashscope:deepseek-v4-flash-0731',
+                'displayName': '',
+                'ownedBy': '',
+                'verifiedAvailable': true,
+                'contextLimit': 0,
+                'outputLimit': 0,
+              },
+            ],
+          }),
+        );
+      } else {
+        request.response.statusCode = HttpStatus.notFound;
+      }
+      await request.response.close();
+    });
 
-      final api = await HttpControlApi.connect(
-        DesktopSession(
-          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
-          readToken: List.filled(43, 'R').join(),
-          writeToken: List.filled(43, 'W').join(),
-          instanceId: 'instance-test',
-          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
-        ),
-      );
-      addTearDown(api.close);
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+    );
+    addTearDown(api.close);
 
-      final cached = await api.upstreamModels(
-        'target.spark.local',
-        accountId: 'account.spark.models',
-      );
-      final refreshed = await api.upstreamModels(
-        'target.spark.local',
-        accountId: 'account.spark.models',
-        refresh: true,
-      );
-      final client = await api.clientModels('anthropic_messages');
-      expect(cached.models.single.id, 'dashscope:deepseek-v4-flash-0731');
-      expect(refreshed.endpointRevision, 2);
-      expect(client.models.single.id, 'claude-opus-4-1');
-      expect(
-        requests.singleWhere((uri) => uri.path == '/api/v1/client-models'),
-        Uri.parse('/api/v1/client-models?protocol=anthropic_messages'),
-      );
-      expect(requests.where((uri) => uri.path.endsWith('/models')).toList(), [
-        Uri.parse(
-          '/api/v1/upstream-endpoints/target.spark.local/models?accountId=account.spark.models',
-        ),
-        Uri.parse(
-          '/api/v1/upstream-endpoints/target.spark.local/models?accountId=account.spark.models&refresh=1',
-        ),
-      ]);
-    },
-  );
+    final cached = await api.upstreamModels(
+      'target.spark.local',
+      accountId: 'account.spark.models',
+    );
+    final refreshed = await api.upstreamModels(
+      'target.spark.local',
+      accountId: 'account.spark.models',
+      refresh: true,
+    );
+    await api.upstreamModels(
+      'target.spark.local',
+      accountId: 'account.spark.models',
+      codexCapabilities: true,
+    );
+    final client = await api.clientModels('anthropic_messages');
+    expect(cached.models.single.id, 'dashscope:deepseek-v4-flash-0731');
+    expect(refreshed.endpointRevision, 2);
+    expect(client.models.single.id, 'claude-opus-4-1');
+    expect(
+      requests.singleWhere((uri) => uri.path == '/api/v1/client-models'),
+      Uri.parse('/api/v1/client-models?protocol=anthropic_messages'),
+    );
+    expect(requests.where((uri) => uri.path.endsWith('/models')).toList(), [
+      Uri.parse(
+        '/api/v1/upstream-endpoints/target.spark.local/models?accountId=account.spark.models',
+      ),
+      Uri.parse(
+        '/api/v1/upstream-endpoints/target.spark.local/models?accountId=account.spark.models&refresh=1',
+      ),
+      Uri.parse(
+        '/api/v1/upstream-endpoints/target.spark.local/models?accountId=account.spark.models&codexCapabilities=1',
+      ),
+    ]);
+  });
 
   test(
     'HTTP API sends one canonical mapped client tool permission draft before preview and publish',
