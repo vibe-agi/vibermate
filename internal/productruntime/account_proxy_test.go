@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
@@ -30,6 +31,10 @@ import (
 // Use the launcher's ClientProfile too: a bare Capture omits the client's model
 // API base-path scope and cannot catch failures in native /status or /usage.
 func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
+	return f.serveProxyWithOriginal(t, accountFixtureOriginal{})
+}
+
+func (f accountReadFixture) serveProxyWithOriginal(t *testing.T, original loopbackproxy.OriginalClient) *url.URL {
 	t.Helper()
 	ctx := context.Background()
 	draft, err := f.runtime.environments.SaveDraft(ctx, environment.DraftCommand{Candidate: f.aggregate})
@@ -86,7 +91,7 @@ func (f accountReadFixture) serveProxy(t *testing.T) *url.URL {
 		bodyAdmission: f.runtime.bodyAdmission,
 		rawEvidence:   f.runtime.rawEvidence,
 		ownerContext:  ctx, admissions: admissions, assignments: f.runtime.assignments,
-		exchanges: f.runtime.exchanges, original: accountFixtureOriginal{}, accountReads: f.reader,
+		exchanges: f.runtime.exchanges, original: original, accountReads: f.reader,
 		certificates: f.runtime.localCA, connections: f.runtime.connections,
 		policy: connectionpolicy.NewLive(policy), approvals: f.runtime.approvals, blindTunnels: blind,
 		egressDefaults: f.runtime.egressDefaults,

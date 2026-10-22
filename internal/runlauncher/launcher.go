@@ -339,6 +339,24 @@ func (launcher *Launcher) Run(
 		childArguments = append(providerArguments, childArguments...)
 		launcher.announceManagedAuth()
 	}
+	if grant.LaunchRecipe == clientadapter.LaunchCodexResponsesHTTP {
+		childArguments, err = prepareCodexProxyArguments(ctx, grant.ExecutablePath, childArguments, launcher.config.BaseEnvironment)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			if errors.Is(err, context.Canceled) {
+				return 130, err
+			}
+			return 1, err
+		}
+		childArguments, err = replayCodexConfiguration(command[1:], childArguments)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
 	if recovery != nil {
 		recovery.childEnvironment = append([]string(nil), environment...)

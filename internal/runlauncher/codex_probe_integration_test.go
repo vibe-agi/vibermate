@@ -27,6 +27,8 @@ func codexProbeLauncher(t *testing.T, script string, beforeFinish ...func()) (*r
 	}
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "codex")
+	// This fixture models help failures, not the separate feature inventory.
+	script = strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\nif [ \"$1\" = features ] && [ \"$2\" = list ]; then exit 0; fi\n", 1)
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

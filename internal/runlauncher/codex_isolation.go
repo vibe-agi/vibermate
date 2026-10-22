@@ -56,11 +56,18 @@ func parseCodexInvocation(args []string) (codexInvocationKind, bool, error) {
 // visit receives only parsed options, never positional prompts or option values
 // interpreted as options. Policy consumers share this fail-closed grammar.
 func walkCodexInvocation(args []string, visit func(name, value string) error) (codexInvocationKind, bool, error) {
+	return walkCodexInvocationWithLiteral(args, visit, nil)
+}
+
+func walkCodexInvocationWithLiteral(args []string, visit func(name, value string) error, literal *int) (codexInvocationKind, bool, error) {
 	kind, noDaemon := codexInteractive, false
 	scope := "root"
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
+			if literal != nil {
+				*literal = i
+			}
 			if scope == "app-server" && i+1 < len(args) {
 				return 0, false, ErrCodexIsolationUnsupported
 			}
@@ -134,6 +141,9 @@ func walkCodexInvocation(args []string, visit func(name, value string) error) (c
 			if value == "" {
 				return 0, false, ErrCodexIsolationUnsupported
 			}
+			if name == "--cyber-access-program" && value != "standard" && value != "daybreak_blue" && value != "daybreak_red" {
+				return 0, false, ErrCodexIsolationUnsupported
+			}
 			if visit != nil {
 				if err := visit(name, value); err != nil {
 					return 0, false, err
@@ -162,6 +172,9 @@ func walkCodexInvocation(args []string, visit func(name, value string) error) (c
 				kind = codexSeparateProcess
 			}
 			scope = "exec"
+			if arg == "review" {
+				scope = "review"
+			}
 		case "app-server":
 			if kind != codexRemote {
 				kind = codexSeparateProcess
@@ -191,9 +204,9 @@ func codexFlag(name, scope string) bool {
 	case "--worktree":
 		return scope != "app-server"
 	case "--last", "--all", "--include-non-interactive":
-		return scope == "session" || scope == "exec"
+		return scope == "session" || scope == "exec" || scope == "review"
 	case "--json", "--experimental-json", "--ephemeral", "--skip-git-repo-check", "--uncommitted", "--ignore-user-config", "--ignore-rules":
-		return scope == "exec"
+		return scope == "exec" || scope == "review"
 	case "--stdio", "--analytics-default-enabled":
 		return scope == "app-server"
 	}
@@ -207,6 +220,8 @@ func codexValueOption(name, scope string) bool {
 	case "--image", "--model", "--profile", "--sandbox", "--cd", "--add-dir", "--ask-for-approval", "--local-provider":
 		return scope != "app-server"
 	case "--output-last-message", "--output-schema", "--color", "--base", "--commit", "--title", "--thread-source":
+		return scope == "exec" || scope == "review"
+	case "--cyber-access-program":
 		return scope == "exec"
 	case "--listen", "--code-mode-host", "--ws-auth", "--ws-token-file", "--ws-token-sha256", "--ws-shared-secret-file",
 		"--ws-issuer", "--ws-audience", "--ws-max-clock-skew-seconds":
@@ -292,17 +307,7 @@ func (output *codexHelpOutput) Write(data []byte) (int, error) {
 }
 
 func codexSupportsNoDaemon(ctx context.Context, executable string, environment []string) (bool, error) {
-	if ctx == nil || executable == "" {
-		return false, &CodexProbeFailure{Reason: "start_failed"}
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	output := &codexHelpOutput{cancel: cancel}
-	command := exec.CommandContext(probeContext, executable, "--help")
-	command.Env = make([]string, 0, len(environment))
+	probeEnvironment := make([]string, 0, len(environment))
 	for _, entry := range environment {
 		key, _, ok := strings.Cut(entry, "=")
 		if !ok {
@@ -313,9 +318,35 @@ func codexSupportsNoDaemon(ctx context.Context, executable string, environment [
 		_, codex := codexManagedEnvironment[key]
 		_, claude := claudeManagedEnvironment[key]
 		if !managed && !codex && !claude && !strings.HasPrefix(key, "VIBERMATE_") {
-			command.Env = append(command.Env, entry)
+			probeEnvironment = append(probeEnvironment, entry)
 		}
 	}
+	data, err := probeCodex(ctx, executable, []string{"--help"}, probeEnvironment, "", 30*time.Second)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "--no-daemon" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func probeCodex(ctx context.Context, executable string, arguments, environment []string, directory string, timeout time.Duration) ([]byte, error) {
+	if ctx == nil || executable == "" {
+		return nil, &CodexProbeFailure{Reason: "start_failed"}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	output := &codexHelpOutput{cancel: cancel}
+	command := exec.CommandContext(probeContext, executable, arguments...)
+	command.Env = environment
+	command.Dir = directory
 	command.Stdout, command.Stderr = output, output
 	// nil stdin is the closed /dev/null input. The probe owns its group and
 	// bounded pipe draining, so grandchildren cannot hold help open forever.
@@ -323,30 +354,24 @@ func codexSupportsNoDaemon(ctx context.Context, executable string, environment [
 	defer restore()
 	if err := command.Start(); err != nil {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return nil, err
 		}
-		return false, &CodexProbeFailure{Reason: "start_failed"}
+		return nil, &CodexProbeFailure{Reason: "start_failed"}
 	}
 	err := waitChild(command, 100*time.Millisecond)
 	// Caller cancellation wins even if overflow or the internal deadline also
 	// canceled the probe while its owned process group was being cleaned up.
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return nil, err
 	}
 	if output.overflow {
-		return false, &CodexProbeFailure{Reason: "output_limit"}
+		return nil, &CodexProbeFailure{Reason: "output_limit"}
 	}
 	if errors.Is(probeContext.Err(), context.DeadlineExceeded) {
-		return false, &CodexProbeFailure{Reason: "timed_out"}
+		return nil, &CodexProbeFailure{Reason: "timed_out"}
 	}
 	if err != nil {
-		return false, &CodexProbeFailure{Reason: "exit_failed"}
+		return nil, &CodexProbeFailure{Reason: "exit_failed"}
 	}
-	for _, line := range strings.Split(string(output.data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 0 && fields[0] == "--no-daemon" {
-			return true, nil
-		}
-	}
-	return false, nil
+	return output.data, nil
 }

@@ -35,6 +35,7 @@ func TestLauncherRelaysSIGINTAndFinishesFixedCodexCaptureRun(
 	}
 	executable := filepath.Join(directory, "codex")
 	script := `#!/bin/sh
+if [ "$1" = features ] && [ "$2" = list ]; then exit 0; fi
 {
   printf 'ca=%s\n' "$CODEX_CA_CERTIFICATE"
   printf 'ssl=%s\n' "$SSL_CERT_FILE"

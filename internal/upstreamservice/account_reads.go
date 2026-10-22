@@ -19,6 +19,7 @@ const CodexUsageHistory = "codex-account-usage-history"
 const CodexModels = "openai-codex-models-probe"
 const MaxCodexModelsBodyBytes = 4 << 20
 const CodexWorkspaceRoutingPath = "/backend-api/wham/accounts/check"
+const CodexWorkspaceBundlePath = "/backend-api/wham/config/bundle"
 
 // CodexResetCreditDetails is owner-only. It is not a client operation and is
 // deliberately absent from AccountOperations and AllowsClientRead.
@@ -92,7 +93,7 @@ func AllowsClientRead(base originidentity.ProviderOrigin, canonical originidenti
 		return false
 	}
 	if request.Validate() == nil && request.Method == http.MethodGet &&
-		request.Path == CodexWorkspaceRoutingPath && request.RawQuery == "" &&
+		(request.Path == CodexWorkspaceRoutingPath || request.Path == CodexWorkspaceBundlePath) && request.RawQuery == "" &&
 		request.Transport == protocolspec.ClientOperationTransportHTTP {
 		return true
 	}
