@@ -241,7 +241,7 @@ func TestTLSCoreIntegration(t *testing.T) {
 	}
 }
 
-func tlsCoreFixture(t *testing.T, ctx context.Context, binary string) (Config, netip.AddrPort, netip.AddrPort, <-chan []byte) {
+func tlsCoreFixture(t *testing.T, ctx context.Context, binary string, targetLifetime ...time.Duration) (Config, netip.AddrPort, netip.AddrPort, <-chan []byte) {
 	t.Helper()
 	version, err := exec.CommandContext(ctx, binary, "version").Output()
 	if err != nil || !bytes.Contains(version, []byte("26.3.27")) || !bytes.Contains(version, []byte("d2758a0")) {
@@ -275,7 +275,7 @@ func tlsCoreFixture(t *testing.T, ctx context.Context, binary string) (Config, n
 				defer workers.Done()
 				defer connections.Delete(c)
 				defer c.Close()
-				c.SetDeadline(time.Now().Add(10 * time.Second))
+				c.SetDeadline(time.Now().Add(coreFixtureLifetime(10*time.Second, targetLifetime)))
 				b := make([]byte, 8000)
 				for {
 					n, e := c.Read(b)
@@ -390,11 +390,11 @@ func echo(t *testing.T, conn net.Conn, payload []byte) {
 	}
 }
 
-func coreFixture(t *testing.T, ctx context.Context, binary string) (Config, netip.AddrPort, netip.AddrPort, netip.AddrPort, *x509.CertPool) {
-	return coreFixtureObserved(t, ctx, binary, nil)
+func coreFixture(t *testing.T, ctx context.Context, binary string, targetLifetime ...time.Duration) (Config, netip.AddrPort, netip.AddrPort, netip.AddrPort, *x509.CertPool) {
+	return coreFixtureObserved(t, ctx, binary, nil, targetLifetime...)
 }
 
-func coreFixtureObserved(t *testing.T, ctx context.Context, binary string, observeUDP func([]byte)) (Config, netip.AddrPort, netip.AddrPort, netip.AddrPort, *x509.CertPool) {
+func coreFixtureObserved(t *testing.T, ctx context.Context, binary string, observeUDP func([]byte), targetLifetime ...time.Duration) (Config, netip.AddrPort, netip.AddrPort, netip.AddrPort, *x509.CertPool) {
 	t.Helper()
 	version, err := exec.CommandContext(ctx, binary, "version").Output()
 	if err != nil || !bytes.Contains(version, []byte("26.3.27")) || !bytes.Contains(version, []byte("d2758a0")) {
@@ -445,7 +445,7 @@ func coreFixtureObserved(t *testing.T, ctx context.Context, binary string, obser
 					defer workers.Done()
 					defer connections.Delete(c)
 					defer c.Close()
-					c.SetDeadline(time.Now().Add(15 * time.Second))
+					c.SetDeadline(time.Now().Add(coreFixtureLifetime(15*time.Second, targetLifetime)))
 					io.Copy(c, c)
 				}()
 			}
@@ -536,4 +536,12 @@ func coreFixtureObserved(t *testing.T, ctx context.Context, binary string, obser
 		}
 	}
 	return config, netip.MustParseAddrPort(tcp.Addr().String()), netip.MustParseAddrPort(secure.Addr().String()), udp.LocalAddr().(*net.UDPAddr).AddrPort(), roots
+}
+
+// Long-lived setup qualification must outlive the existing short echo fixtures.
+func coreFixtureLifetime(fallback time.Duration, selected []time.Duration) time.Duration {
+	if len(selected) != 0 {
+		return selected[0]
+	}
+	return fallback
 }

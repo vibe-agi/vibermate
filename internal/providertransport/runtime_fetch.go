@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
+	"github.com/vibe-agi/vibermate/internal/upstreamservice"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -59,6 +60,7 @@ type runtimeFetchSpec struct {
 	relativePath string
 	rawQuery     string
 	modelCatalog bool
+	catalogRead  *upstreamservice.Read
 	credential   providerauth.Lease
 	method       string
 	body         []byte
@@ -103,14 +105,18 @@ func (body *clearingRequestBody) Close() error {
 
 var _ io.ReadCloser = (*clearingRequestBody)(nil)
 
-// FetchEndpointModels discovers the models that this exact Endpoint says are
-// available. Metadata catalogs are deliberately not consulted here: they can
-// describe a provider family but cannot prove availability at an Endpoint.
+// FetchEndpointModels defaults to the Endpoint's own complete model directory.
+// The explicit Codex capability option selects the sealed account catalog;
+// generic model selection must never silently inherit that narrower directory.
 func (client *Client) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	credential providerauth.Lease,
+	codexCapabilities ...bool,
 ) (*http.Response, error) {
+	if len(codexCapabilities) > 1 {
+		return nil, upstreamservice.ErrUnsupported
+	}
 	if err := endpoint.Validate(); err != nil {
 		return nil, fmt.Errorf("discover Endpoint models: %w", err)
 	}
@@ -123,6 +129,22 @@ func (client *Client) FetchEndpointModels(
 	account, hasAccount := credential.Account()
 	if !hasAccount || account.Validate() != nil {
 		return nil, errors.New("discover Endpoint models: account evidence is invalid")
+	}
+	// Official Codex-capable accounts use the service-owned capability
+	// directory. Generic endpoint discovery still uses its ordinary models URL.
+	if len(codexCapabilities) == 1 && codexCapabilities[0] {
+		if !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+			return nil, upstreamservice.ErrUnsupported
+		}
+		read, err := upstreamservice.ResolveAccountRead(endpoint.Origin, credential.Driver(), upstreamservice.CodexModels)
+		if err != nil {
+			return nil, err
+		}
+		target, err := NewTarget(read.Origin())
+		if err != nil {
+			return nil, err
+		}
+		return client.fetchRuntimeJSON(ctx, runtimeFetchSpec{purpose: egressaudit.PurposeUpstreamModelDiscovery, targetRef: endpoint.ID.String(), target: target, relativePath: read.Path(), credential: credential, catalogRead: &read})
 	}
 	target, err := NewTarget(endpoint.Origin)
 	if err != nil {
@@ -237,6 +259,15 @@ func (client *Client) fetchRuntimeJSON(
 	}
 	if err := spec.target.validate(); err != nil {
 		return nil, err
+	}
+	// Catalog headers come exclusively from the selected account's HeaderPolicy
+	// and authenticator, just like inference. No inbound native headers/cookies
+	// or client content enter this closed producer.
+	if spec.catalogRead != nil {
+		read := *spec.catalogRead
+		if read.Validate() != nil || !read.IsModelDirectory() || read.Origin() != spec.target.Origin() || read.Path() != spec.relativePath || spec.credential == nil || !upstreamendpoint.SupportsCodexCatalog(read.SourceOrigin(), spec.credential.Driver()) {
+			return nil, upstreamservice.ErrUnsupported
+		}
 	}
 	if spec.credential != nil {
 		var ok bool

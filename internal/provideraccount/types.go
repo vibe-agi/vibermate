@@ -158,8 +158,7 @@ func (account Account) SupportsAutomaticRefresh() bool {
 // SupportsCyberAccessPrograms identifies the account scope for cyber program selection.
 // It does not establish the account's entitlement for any request model.
 func (account Account) SupportsCyberAccessPrograms() bool {
-	return upstreamendpoint.IsChatGPTCodexOrigin(account.Origin) &&
-		(account.Driver == providerauth.CodexOAuthDriverRef() || account.Driver == providerauth.StaticHeaderDriverRef())
+	return upstreamendpoint.SupportsCodexCatalog(account.Origin, account.Driver)
 }
 
 func (account Account) CompatibleEndpoint(endpoint upstreamendpoint.Endpoint) bool {

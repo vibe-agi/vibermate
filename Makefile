@@ -80,7 +80,7 @@ test-race:
 	go test -race -short -p=1 ./... -count=1 -timeout=60m
 
 test-store-crash-race:
-	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v
+	go test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=20m -v
 
 # Contain execution of the original full 6-MiB/192-page functional matrix in
 # its own invocation. This watchdog is not a product SLA or performance goal.

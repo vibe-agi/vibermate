@@ -691,9 +691,15 @@ func (handler *Handler) RequiredScope(request *http.Request) Scope {
 
 func (handler *Handler) getStatus(
 	writer http.ResponseWriter,
-	_ *http.Request,
+	request *http.Request,
 ) {
 	status := handler.status.Status()
+	// Older clients use a closed status DTO. Diagnostics are explicit opt-in;
+	// newer clients talking to older servers safely receive the baseline shape.
+	values, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil || len(values["recordingDiagnostics"]) != 1 || values.Get("recordingDiagnostics") != "1" {
+		status.RecordingMaintenanceFailure = nil
+	}
 	writeJSON(writer, http.StatusOK, StatusResponse{
 		NetworkAccess: handler.networkAccess,
 		Generation:    status.InstanceID,

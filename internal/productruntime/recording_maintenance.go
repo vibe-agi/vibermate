@@ -98,7 +98,8 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 	}
 	usable := true
 	if err == nil && request.cleanup != nil {
-		usable = s.executeRecordingCleanup(sinks.store, token, *request.cleanup) == nil
+		err = s.executeRecordingCleanup(sinks.store, token, *request.cleanup)
+		usable = err == nil
 	} else if err == nil {
 		lease := &recordingMaintenance{store: sinks.store, catalog: token, completed: make(chan bool, 1)}
 		request.ready <- recordingMaintenanceResult{lease: lease}
@@ -127,6 +128,7 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 			err = sinks.store.PublishInspectionMirror(s.ctx, s.control)
 		}
 		if err != nil {
+			err = &recordingMaintenanceError{phase: "mirror", cause: err}
 			usable = false
 		}
 	}
@@ -134,6 +136,7 @@ func (s *recordingStorage) maintain(sinks *recordingSinks, request recordingMain
 		usable = false
 	}
 	if !usable {
+		s.tracker.failRecordingMaintenance(err)
 		s.unsafeMaintenance.Store(true)
 		// Unknown/post-mutation failure must never reopen this catalog or writer.
 		// Mark closed before releasing the maintenance token, retaining handles.

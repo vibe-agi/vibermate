@@ -18,12 +18,14 @@ func TestPersistenceDiagnosticsPreserveFirstCauseWithoutSecrets(t *testing.T) {
 	tracker.commitInitialized(1)
 	tracker.failRecording("usage", errors.New("secret-body credential account@example.com"))
 	tracker.failStorage("egress_complete", fmt.Errorf("secret-path: %w", context.DeadlineExceeded))
+	tracker.failRecordingMaintenance(&recordingMaintenanceError{phase: "compact", cause: fmt.Errorf("secret-path: %w", context.DeadlineExceeded)})
 	first := tracker.snapshot()
 	var concurrent sync.WaitGroup
 	for range 20 {
 		concurrent.Go(func() {
 			tracker.failStorage("egress_drain", context.Canceled)
 			tracker.failRecording("raw_evidence", context.Canceled)
+			tracker.failRecordingMaintenance(&recordingMaintenanceError{phase: "delete", cause: context.Canceled})
 			tracker.observeStorage(1, nil)
 		})
 	}
@@ -40,6 +42,13 @@ func TestPersistenceDiagnosticsPreserveFirstCauseWithoutSecrets(t *testing.T) {
 	}
 	status.StorageFailure.Operation = "mutated"
 	status.RecordingFailure.Operation = "mutated"
+	if status.RecordingMaintenanceFailure == nil || !status.RecordingMaintenanceFailure.Valid() || status.RecordingMaintenanceFailure.Phase != "compact" || status.RecordingMaintenanceFailure.Reason != "timeout" {
+		t.Fatalf("maintenance cause hidden by first generic gap: %+v", status.RecordingMaintenanceFailure)
+	}
+	status.RecordingMaintenanceFailure.Phase = "mutated"
+	if !tracker.snapshot().RecordingMaintenanceFailure.Valid() {
+		t.Fatal("status caller mutated maintenance diagnosis")
+	}
 	if !tracker.snapshot().StorageFailure.Valid() || !tracker.snapshot().RecordingFailure.Valid() {
 		t.Fatal("status caller mutated runtime diagnostics")
 	}

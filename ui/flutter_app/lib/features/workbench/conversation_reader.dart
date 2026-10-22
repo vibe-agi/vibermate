@@ -1388,7 +1388,9 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
   @override
   void didUpdateWidget(covariant _ReadingRequest oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.activity.status != widget.activity.status) {
+    if (oldWidget.activity.status != widget.activity.status ||
+        oldWidget.activity.contentAvailable !=
+            widget.activity.contentAvailable) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_load(refresh: true));
       });
@@ -1450,6 +1452,17 @@ final class _ReadingRequestState extends State<_ReadingRequest> {
         child: Column(
           children: [
             InlineNotice(message: copy('reader.unavailable'), error: true),
+            if (widget.controller
+                    .exchangeFailure(widget.activity.id, contentView: 'reading')
+                    ?.diagnostic
+                case final diagnostic?)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  diagnostic,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             TextButton(
               onPressed: () => _load(refresh: true),
               child: Text(copy('common.retry')),

@@ -68,6 +68,7 @@ class Contracts(unittest.TestCase):
                 "patchSHA256": digest(delta), "licenseSHA256": digest(b"fixture license\n"),
                 "pristineModuleSHA256": {"goMod": digest(files["go.mod"]), "goSum": digest(b"old\n")},
                 "moduleSHA256": {"goMod": digest(files["go.mod"]), "goSum": digest(b"new\n")}}
+        lock["patchedFiles"] = {"go.sum": {"sha256": digest(b"new\n"), "mode": "100644"}}
         lock.update(repository="https://example.invalid/fixture.git", ref="fixture", archiveURL="https://example.invalid/fixture.tar.gz", sourceMarker="d2758a0-vibermate-security1")
         (assets / "kernel-lock.json").write_text(json.dumps(lock))
         source = self.root / "source"
@@ -85,6 +86,44 @@ class Contracts(unittest.TestCase):
         self.assertEqual((f[1] / "run").stat().st_mode & 0o777, 0o755)
         self.assertEqual((f[1] / "go.sum").read_bytes(), b"new\n")
         self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=f[1]).decode().strip(), f[2]["commit"])
+
+    def runtime_fixture(self):
+        f = self.fixture()
+        original = self.root / "original"
+        runtime = original / "setup.go"
+        runtime.write_bytes(b"package fixture\n")
+        subprocess.check_call(["git", "add", "-N", "setup.go"], cwd=original)
+        delta = subprocess.check_output(["git", "diff"], cwd=original)
+        (f[3] / "dependency.patch").write_bytes(delta)
+        f[2]["patchSHA256"] = hashlib.sha256(delta).hexdigest()
+        f[2]["patchedFiles"] = {
+            "go.sum": {"sha256": hashlib.sha256(b"new\n").hexdigest(), "mode": "100644"},
+            "setup.go": {"sha256": hashlib.sha256(b"package fixture\n").hexdigest(), "mode": "100644"},
+        }
+        return f
+
+    def test_locked_runtime_patch_admits_exact_new_file(self):
+        f = self.runtime_fixture()
+        self.prepare(f)
+        self.assertEqual((f[1] / "setup.go").read_bytes(), b"package fixture\n")
+
+    def test_locked_runtime_patch_rejects_wrong_hash(self):
+        f = self.runtime_fixture()
+        f[2]["patchedFiles"]["setup.go"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(producer.KernelError, "SHA256"):
+            self.prepare(f)
+
+    def test_locked_runtime_patch_rejects_wrong_mode(self):
+        f = self.runtime_fixture()
+        f[2]["patchedFiles"]["setup.go"]["mode"] = "100755"
+        with self.assertRaisesRegex(producer.KernelError, "mode"):
+            self.prepare(f)
+
+    def test_locked_runtime_patch_rejects_unlisted_file(self):
+        f = self.runtime_fixture()
+        del f[2]["patchedFiles"]["setup.go"]
+        with self.assertRaisesRegex(producer.KernelError, "patch"):
+            self.prepare(f)
 
     def test_bad_archive_size_and_hash_are_rejected_before_extraction(self):
         f = self.fixture()
@@ -193,7 +232,7 @@ class Contracts(unittest.TestCase):
 
     def test_failed_build_leaves_no_binary_or_manifest(self):
         go = self.root / "go"
-        go.write_text("#!/bin/sh\ncase \"$1\" in\nversion) printf 'go version go1.26.9 darwin/arm64\\n';;\nenv) printf 'go1.26.9\\n';;\nbuild) exit 3;;\nesac\n")
+        go.write_text("#!/bin/sh\ncase \"$1\" in\nversion) printf 'go version go1.26.10 darwin/arm64\\n';;\nenv) printf 'go1.26.10\\n';;\nbuild) exit 3;;\nesac\n")
         go.chmod(0o755)
         f = self.fixture()
         output = self.root / "out"
@@ -210,8 +249,8 @@ class Contracts(unittest.TestCase):
         trace = self.root / "trace.json"
         go.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
                       "args=sys.argv[1:]\n"
-                      "if args==['version']: print('go version go1.26.9 darwin/arm64')\n"
-                      "elif args==['env','GOVERSION']: print('go1.26.9')\n"
+                      "if args==['version']: print('go version go1.26.10 darwin/arm64')\n"
+                      "elif args==['env','GOVERSION']: print('go1.26.10')\n"
                       "elif args[0]=='build':\n"
                       f" Path({str(trace)!r}).write_text(json.dumps(args))\n"
                       " Path(args[args.index('-o')+1]).write_bytes(b'rejected output')\n"
@@ -303,10 +342,10 @@ class SetupFailures(unittest.TestCase):
             "args=sys.argv[1:]\n"
             f"bad={malformed!r}\n"
             "if args==['version']:\n"
-            " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='version' else b'go version go1.26.9 darwin/arm64\\n')\n"
+            " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='version' else b'go version go1.26.10 darwin/arm64\\n')\n"
             "elif args==['env','GOVERSION']:\n"
             + (f" Path({str(self.output)!r}).mkdir()\n Path({str(self.output / 'sentinel')!r}).write_bytes(b'competitor-owned')\n" if competing else "")
-            + " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='goversion' else b'go1.26.9\\n')\n"
+            + " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='goversion' else b'go1.26.10\\n')\n"
         )
         go.chmod(0o755)
         return go

@@ -35,7 +35,7 @@ func TestInstalledCodexCaptureIsolationStartupContract(t *testing.T) {
 	// This selects the pinned fixture expectation, not authorization. Actual
 	// Launcher eligibility is tested through validated grants below.
 	legacy := strings.TrimSpace(string(version)) == "codex-cli 0.145.0"
-	if !legacy && strings.TrimSpace(string(version)) != "codex-cli 0.159.2" && strings.TrimSpace(string(version)) != "codex-cli 0.160.0" {
+	if !legacy && strings.TrimSpace(string(version)) != "codex-cli 0.159.2" && strings.TrimSpace(string(version)) != "codex-cli 0.160.0" && strings.TrimSpace(string(version)) != "codex-cli 0.163.0" {
 		t.Fatal("startup-contract fixture must be an approved exact test version")
 	}
 	for _, original := range [][]string{nil, {"resume", "fixture-thread"}, {"fork", "--last"}, {"--model", "exec", "resume", "fixture-thread"},
@@ -151,6 +151,28 @@ func TestCodexInvocationClass(t *testing.T) {
 	} {
 		if _, err := classifyCodexInvocation(args); !errors.Is(err, ErrCodexIsolationUnsupported) {
 			t.Errorf("unproven %v: %v", args, err)
+		}
+	}
+}
+
+func TestCodexExecCyberAccessProgramScope(t *testing.T) {
+	for _, command := range [][]string{{"exec"}, {"e"}, {"exec", "resume", "--last"}, {"exec", "fork", "thread", "prompt"}} {
+		for _, value := range []string{"standard", "daybreak_blue", "daybreak_red"} {
+			for _, option := range [][]string{{"--cyber-access-program", value}, {"--cyber-access-program=" + value}} {
+				args := append(slices.Clone(command), option...)
+				if kind, err := classifyCodexInvocation(args); err != nil || kind != codexSeparateProcess {
+					t.Errorf("supported exec option %v: kind=%v err=%v", args, kind, err)
+				}
+			}
+		}
+	}
+	for _, args := range [][]string{
+		{"--cyber-access-program", "daybreak_blue"}, {"review", "--cyber-access-program", "daybreak_blue"},
+		{"resume", "--cyber-access-program=daybreak_red"}, {"app-server", "--cyber-access-program=standard"},
+		{"exec", "--cyber-access-program"}, {"exec", "--cyber-access-program="}, {"exec", "--cyber-access-program=other"},
+	} {
+		if _, err := classifyCodexInvocation(args); !errors.Is(err, ErrCodexIsolationUnsupported) {
+			t.Errorf("unsupported Cyber scope/value admitted: %v err=%v", args, err)
 		}
 	}
 }

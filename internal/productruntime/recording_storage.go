@@ -293,6 +293,7 @@ func (s *recordingStorage) run() {
 }
 func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 	if s.startupErr != nil {
+		s.tracker.failRecordingMaintenance(&recordingMaintenanceError{phase: "select", cause: s.startupErr})
 		return nil, s.startupErr
 	}
 	if s.provisioning != "unprovisioned" && s.provisioning != "provisioned" {
@@ -352,11 +353,13 @@ func (s *recordingStorage) initialize() (_ *recordingSinks, result error) {
 			return nil, err
 		}
 		if err = s.executeRecordingCleanup(store, s.startupToken, *s.startupClaim); err != nil {
+			s.tracker.failRecordingMaintenance(err)
 			s.startupErr = err
 			s.invalidateRecordingSource()
 			return nil, err
 		}
 		if err = s.refreshMirror(store); err != nil {
+			s.tracker.failRecordingMaintenance(&recordingMaintenanceError{phase: "mirror", cause: err})
 			s.startupErr = err
 			s.invalidateRecordingSource()
 			return nil, err

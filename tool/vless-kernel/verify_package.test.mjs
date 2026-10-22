@@ -37,7 +37,7 @@ test("real macOS materials remain immutable while local signed code is bound to 
   const desktop = {
     schema: "vibermate.desktop-build/v3", source: { vcs: "git", revision: "b".repeat(40), commitTime: "2026-08-03T00:00:00Z", dirty: true },
     profiles: { desktop: "release", sidecars: "release", toolkit: "flutter", target: "universal-apple-darwin" },
-    toolchains: { go: "go version go1.26.9", flutter: "fixture Flutter", dart: "fixture Dart", xcode: "fixture Xcode" },
+    toolchains: { go: "go version go1.26.10", flutter: "fixture Flutter", dart: "fixture Dart", xcode: "fixture Xcode" },
     configurationSHA256: Object.fromEntries(flutterDesktopBuildConfigurationNames.map((name) => [name, "c".repeat(64)])),
     nestedCodeSHA256: nested,
   };

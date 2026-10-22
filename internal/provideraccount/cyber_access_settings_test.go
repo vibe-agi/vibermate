@@ -13,9 +13,17 @@ import (
 )
 
 func TestCyberAccessSettingsFreezeAtLeaseAndPreserveRouteIdentity(t *testing.T) {
-	for _, driver := range []providerauth.DriverRef{providerauth.CodexOAuthDriverRef(), providerauth.StaticHeaderDriverRef()} {
+	for _, scope := range []struct {
+		driver   providerauth.DriverRef
+		endpoint upstreamendpoint.ID
+	}{
+		{providerauth.CodexOAuthDriverRef(), upstreamendpoint.ChatGPTOfficialID},
+		{providerauth.StaticHeaderDriverRef(), upstreamendpoint.ChatGPTOfficialID},
+		{providerauth.StaticHeaderDriverRef(), upstreamendpoint.OpenAIPlatformID},
+	} {
+		driver := scope.driver
 		for _, preference := range []cyberaccess.Preference{cyberaccess.Blue, cyberaccess.Red} {
-			t.Run(driver.String()+"/"+preference.WireValue(), func(t *testing.T) {
+			t.Run(scope.endpoint.String()+"/"+driver.String()+"/"+preference.WireValue(), func(t *testing.T) {
 				ctx := context.Background()
 				manager, err := newTestAccountManager(ctx, &memoryRepository{accounts: map[ID]Account{}}, newMemorySecrets(), testEndpoints(t), BuiltInRealms(), nil)
 				if err != nil {
@@ -27,11 +35,11 @@ func TestCyberAccessSettingsFreezeAtLeaseAndPreserveRouteIdentity(t *testing.T) 
 					t.Fatal(err)
 				}
 				defer value.Destroy()
-				initial, err := manager.Create(ctx, CreateCommand{ID: "daybreak", DisplayName: "Daybreak", UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID, Driver: driver, Secret: value})
+				initial, err := manager.Create(ctx, CreateCommand{ID: "daybreak", DisplayName: "Daybreak", UpstreamEndpointID: scope.endpoint, Driver: driver, Secret: value})
 				if err != nil || initial.Account.CyberAccessProgram != cyberaccess.Standard {
 					t.Fatalf("account did not default to standard: %+v %v", initial.Account, err)
 				}
-				endpoint, _ := testEndpoints(t).LookupEndpoint(upstreamendpoint.ChatGPTOfficialID.String())
+				endpoint, _ := testEndpoints(t).LookupEndpoint(scope.endpoint.String())
 				previous, err := manager.AcquireEndpointCredential(ctx, initial.Account.ID, endpoint)
 				if err != nil {
 					t.Fatal(err)
@@ -42,7 +50,7 @@ func TestCyberAccessSettingsFreezeAtLeaseAndPreserveRouteIdentity(t *testing.T) 
 				if err != nil || updated.Account.CyberAccessProgram != preference || updated.Account.SettingsRevision != 2 || updated.Account.Revision != 1 || updated.Account.AssociationRevision != 1 {
 					t.Fatalf("selection changed identity or was not stored: %+v %v", updated.Account, err)
 				}
-				descriptor, ok := manager.LookupAccount(initial.Account.ID.String(), upstreamendpoint.ChatGPTOfficialID.String())
+				descriptor, ok := manager.LookupAccount(initial.Account.ID.String(), scope.endpoint.String())
 				if !ok || descriptor.Revision != 1 {
 					t.Fatal("settings invalidated the published route")
 				}
@@ -92,7 +100,12 @@ func TestNonstandardCyberAccessOnlyAcceptsOfficialCodexOriginsAndDrivers(t *test
 		{"https://chatgpt.com/other", providerauth.CodexOAuthDriverRef(), false},
 		{"https://chatgpt.com:8443", providerauth.CodexOAuthDriverRef(), false},
 		{"https://chatgpt.com.example", providerauth.CodexOAuthDriverRef(), false},
-		{"https://api.openai.com", providerauth.StaticHeaderDriverRef(), false},
+		{"https://api.openai.com", providerauth.StaticHeaderDriverRef(), true},
+		{"https://api.openai.com/v1", providerauth.StaticHeaderDriverRef(), true},
+		{"https://api.openai.com:8443", providerauth.StaticHeaderDriverRef(), false},
+		{"https://api.openai.com/custom", providerauth.StaticHeaderDriverRef(), false},
+		{"https://api.openai.com.example", providerauth.StaticHeaderDriverRef(), false},
+		{"https://api.openai.com", providerauth.CodexOAuthDriverRef(), false},
 		{"https://chatgpt.com", providerauth.AnthropicAPIKeyDriverRef(), false},
 	} {
 		t.Run(test.origin+"/"+test.driver.String(), func(t *testing.T) {

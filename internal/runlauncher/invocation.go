@@ -52,6 +52,42 @@ func buildChildArguments(
 	return append(result, arguments...), nil
 }
 
+// replayCodexConfiguration works around native Clap losing global config
+// values across subcommands. Keep the original options in place: removing one
+// can extend a preceding variadic image argument into command-looking words.
+// Native feature toggles retain their own validation and precedence.
+func replayCodexConfiguration(original, prepared []string) ([]string, error) {
+	hasUserConfig := false
+	kind, _, err := walkCodexInvocation(original, func(name, _ string) error {
+		hasUserConfig = hasUserConfig || name == "--config"
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !hasUserConfig {
+		return prepared, nil
+	}
+	end := len(prepared)
+	var settings []string
+	if _, _, err := walkCodexInvocationWithLiteral(prepared, func(name, value string) error {
+		if name == "--config" {
+			settings = append(settings, "--config", value)
+		}
+		return nil
+	}, &end); err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(prepared)+len(settings))
+	result = append(result, prepared[:end]...)
+	result = append(result, settings...)
+	result = append(result, prepared[end:]...)
+	if replayed, _, err := parseCodexInvocation(result); err != nil || replayed != kind {
+		return nil, ErrCodexIsolationUnsupported
+	}
+	return result, nil
+}
+
 // environmentValue reads one variable from a prepared child environment.
 //
 // The match is exact. POSIX environment variables are case-sensitive and each

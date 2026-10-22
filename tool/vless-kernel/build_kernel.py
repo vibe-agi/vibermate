@@ -142,11 +142,28 @@ def _prepare_source(archive, source, lock, assets):
     _git(source, "apply", "--check", str(assets / "dependency.patch"))
     _git(source, "apply", str(assets / "dependency.patch"))
     _modules(source, lock["moduleSHA256"])
-    changed = _git(source, "diff", "--name-only").decode().splitlines()
-    _require(bool(changed) and set(changed) <= {"go.mod", "go.sum"},
-             "patch", "unexpected tracked modifications")
-    _require(_git(source, "ls-files", "--others", "--exclude-standard") == b"",
-             "patch", "unexpected untracked files")
+    _patched_source(source, lock)
+
+
+def _patched_source(source, lock):
+    expected = lock.get("patchedFiles")
+    _require(isinstance(expected, dict) and bool(expected), "patch", "missing closed file inventory")
+    changed = set(_git(source, "diff", "HEAD", "--name-only").decode().splitlines())
+    added = set(_git(source, "ls-files", "--others").decode().splitlines())
+    _require(changed | added == set(expected), "patch", "unexpected source modifications")
+    for name, record in expected.items():
+        path = PurePosixPath(name)
+        _require(isinstance(name, str) and not path.is_absolute() and ".." not in path.parts
+                 and ".git" not in path.parts and "\\" not in name and str(path) == name,
+                 "patch", "unsafe file inventory")
+        _require(isinstance(record, dict) and set(record) == {"sha256", "mode"}
+                 and record["mode"] in ("100644", "100755"), "patch", "invalid file record")
+        item = source / name
+        _check_file(item, record["sha256"], "patch")
+        _require(oct(item.stat().st_mode & 0o777)[2:] == record["mode"][3:],
+                 "patch", "file mode mismatch")
+    if added:
+        _git(source, "add", "--intent-to-add", "--force", "--", *sorted(added))
 
 
 def _build_environment(target):
@@ -172,11 +189,11 @@ def _compiler(go_binary, env, cwd):
              "compiler", "requires absolute existing executable")
     version = _run([str(go), "version"], cwd=cwd, env=env, phase="compiler").decode().strip()
     parts = version.split()
-    _require(len(parts) == 4 and parts[:3] == ["go", "version", "go1.26.9"]
+    _require(len(parts) == 4 and parts[:3] == ["go", "version", "go1.26.10"]
              and re.fullmatch(r"[a-z0-9]+/[a-z0-9]+", parts[3]) is not None,
-             "compiler", "requires go1.26.9")
+             "compiler", "requires go1.26.10")
     goversion = _run([str(go), "env", "GOVERSION"], cwd=cwd, env=env, phase="compiler").decode().strip()
-    _require(goversion == "go1.26.9", "compiler", "GOVERSION mismatch")
+    _require(goversion == "go1.26.10", "compiler", "GOVERSION mismatch")
     return {"version": goversion, "host": parts[3], "SHA256": _sha(go)}
 
 
@@ -187,7 +204,7 @@ def _read_build_info(go, binary, source, env, target, lock):
     settings = {item["Key"]: item["Value"] for item in info.get("Settings", [])}
     deps = info.get("Deps", [])
     versions = {item["Path"]: item["Version"] for item in deps}
-    _require(info.get("GoVersion") == "go1.26.9" and
+    _require(info.get("GoVersion") == "go1.26.10" and
              settings.get("GOOS", "") + "/" + settings.get("GOARCH", "") == target and
              settings.get("vcs.revision") == lock["commit"] and
              settings.get("vcs.modified") == "true" and
@@ -283,6 +300,7 @@ def build_kernel(*, go_binary: str, target: str, output_dir: str,
                 "-o", str(binary), "./main"]
         _run(argv, cwd=source, env=env, phase="build", timeout=900)
         _modules(source, lock["moduleSHA256"])
+        _patched_source(source, lock)
         phase = "build info"
         _require(binary.exists() and stat.S_ISREG(binary.lstat().st_mode)
                  and binary.stat().st_size > 0, "binary", "missing regular output")
@@ -303,7 +321,7 @@ def build_kernel(*, go_binary: str, target: str, output_dir: str,
             f"Source archive: {lock['archiveURL']}\nArchive SHA256: {lock['archiveSHA256']}\n"
             "Apply the adjacent dependency.patch to that exact source.\n"
             "upstream.commit preserves the public Git identity; no independent GPG trust certification is claimed.\n"
-            "vcs.modified=true records the exact dependency patch. LICENSE.upstream covers upstream;\n"
+            "vcs.modified=true records the exact dependency and connection-lifetime patch. LICENSE.upstream covers upstream;\n"
             "complete linked-module notices and native/package qualification remain separate requirements.\n",
             encoding="utf-8")
         binary.rename(output / name)
@@ -331,7 +349,7 @@ def build_kernel(*, go_binary: str, target: str, output_dir: str,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.9 executable")
+    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.10 executable")
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--output", required=True, dest="output_dir", help="fresh child of an existing real parent")
     parser.add_argument("--archive", dest="archive_path", help="optional exact locked source archive")

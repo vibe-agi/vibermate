@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 )
 
 // chatGPTCatalogClientVersion is the catalog compatibility contract used by
@@ -102,4 +103,15 @@ func catalogNumericVersion(value string) string {
 		parts[index] = strconv.FormatUint(number, 10)
 	}
 	return strings.Join(parts, ".")
+}
+
+// IsOfficialAPIOrigin is the exact inference scope supported by the Codex
+// API-key metadata adapter. Compatible servers do not inherit this authority.
+func IsOfficialAPIOrigin(origin originidentity.ProviderOrigin) bool {
+	return origin.Scheme() == "https" && origin.Host() == "api.openai.com" && origin.Port() == 443 && (origin.BasePath() == "" || origin.BasePath() == "/v1")
+}
+
+func SupportsCodexCatalog(origin originidentity.ProviderOrigin, driver providerauth.DriverRef) bool {
+	return (IsChatGPTCodexOrigin(origin) && (driver == providerauth.StaticHeaderDriverRef() || driver == providerauth.CodexOAuthDriverRef())) ||
+		(IsOfficialAPIOrigin(origin) && driver == providerauth.StaticHeaderDriverRef())
 }

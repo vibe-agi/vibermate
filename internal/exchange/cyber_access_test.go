@@ -145,7 +145,7 @@ func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 		{name: "Blue Standard fallback overrides client Red", mode: cyberaccess.Blue, programs: []string{"standard"}, current: "daybreak_red", want: "standard"},
 		{name: "Red Standard fallback overrides client Blue", mode: cyberaccess.Red, programs: []string{"standard"}, current: "daybreak_blue", want: "standard"},
 		{name: "mapped Standard-only model ignores incoming Blue support", mode: cyberaccess.Blue, transform: true, incomingBlue: true, programs: []string{"standard"}, current: "daybreak_blue", want: "standard"},
-		{name: "other upstream", mode: cyberaccess.Blue, programs: []string{"standard", "daybreak_blue"}, origin: "https://api.openai.com", current: "standard", want: "standard"},
+		{name: "other upstream", mode: cyberaccess.Blue, programs: []string{"standard", "daybreak_blue"}, origin: "https://custom.example", current: "standard", want: "standard"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			origin := test.origin
@@ -236,6 +236,12 @@ func TestAccountCyberModeUsesSelectedAccountAndFinalModel(t *testing.T) {
 // program choice. This exercises the real request pipeline and inspects the
 // bytes admitted to the model transport after its account capability read.
 func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T) {
+	testAccountGuardianMode(t, "https://chatgpt.com", true)
+}
+func TestOfficialAPIAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T) {
+	testAccountGuardianMode(t, "https://api.openai.com/v1", false)
+}
+func testAccountGuardianMode(t *testing.T, origin string, chatGPTClient bool) {
 	for _, test := range []struct {
 		name         string
 		mode         cyberaccess.Preference
@@ -286,8 +292,8 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 			}
 			account := testAccount{id: "account.selected", revision: 3, epoch: 7}
 			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-				clientProtocol: environment.ClientProtocolOpenAIResponses, chatGPTClient: true,
-				destination: environment.DestinationKindUpstream, providerOrigin: "https://chatgpt.com",
+				clientProtocol: environment.ClientProtocolOpenAIResponses, chatGPTClient: chatGPTClient,
+				destination: environment.DestinationKindUpstream, providerOrigin: origin,
 				backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModePassthrough,
 				accounts: []testAccount{account}, preferred: account.id,
 			})
@@ -325,6 +331,10 @@ func TestAccountCyberModeDerivesGuardianProgramFromSelectedAccount(t *testing.T)
 			}
 			result, err := pipeline.Execute(context.Background(), mustClientRequestWithOptions(t, "guardian-account-mode", plan, encoded, WithOriginalHeaders(test.headers)), &downstreamRecorder{})
 			requests := provider.requestsSnapshot()
+			if len(requests) > 0 && origin == "https://api.openai.com/v1" && (requests[0].Target().Origin().String() != origin || requests[0].RelativePath() != "responses") {
+				t.Fatal("API inference destination changed")
+			}
+
 			if test.wantFailure != "" {
 				if ReasonOf(err) != test.wantFailure || len(requests) != 0 {
 					t.Fatalf("failure=%s, want %s; model requests=%d; err=%v", ReasonOf(err), test.wantFailure, len(requests), err)

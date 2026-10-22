@@ -59,6 +59,11 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.lock = json.loads((self.assets / "kernel-lock.json").read_bytes())
         self.lock["moduleSHA256"] = {"goMod": hashlib.sha256(b"patched module\n").hexdigest(),
                                     "goSum": hashlib.sha256(b"patched sums\n").hexdigest()}
+        self.lock["patchedFiles"] = {
+            "go.mod": {"sha256": self.lock["moduleSHA256"]["goMod"], "mode":"100644"},
+            "go.sum": {"sha256": self.lock["moduleSHA256"]["goSum"], "mode":"100644"},
+            "setup.go": {"sha256": hashlib.sha256(b"synthetic runtime setup\n").hexdigest(), "mode":"100644"},
+        }
         self.archive = b"synthetic content-bound archive\n"
         self.lock["archiveSHA256"] = hashlib.sha256(self.archive).hexdigest()
         self.lock["archiveSize"] = len(self.archive)
@@ -103,7 +108,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                 f"Source archive: {lock['archiveURL']}\nArchive SHA256: {lock['archiveSHA256']}\n"
                 "Apply the adjacent dependency.patch to that exact source.\n"
                 "upstream.commit preserves the public Git identity; no independent GPG trust certification is claimed.\n"
-                "vcs.modified=true records the exact dependency patch. LICENSE.upstream covers upstream;\n"
+                "vcs.modified=true records the exact dependency and connection-lifetime patch. LICENSE.upstream covers upstream;\n"
                 "complete linked-module notices and native/package qualification remain separate requirements.\n")
 
     def make_input(self, target, name):
@@ -112,6 +117,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         source.mkdir(parents=True)
         (source / "go.mod").write_bytes(b"patched module\n")
         (source / "go.sum").write_bytes(b"patched sums\n")
+        (source / "setup.go").write_bytes(b"synthetic runtime setup\n")
         (directory / ".work" / "upstream-source.tar.gz").write_bytes(self.archive)
         for filename in ("LICENSE.upstream", "dependency.patch", "upstream.commit", "kernel-lock.json"):
             shutil.copyfile(self.assets / filename, directory / filename)
@@ -122,7 +128,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         settings = {"GOOS": target.split("/")[0], "GOARCH": target.split("/")[1],
                     "vcs.revision": self.lock["commit"], "vcs.modified": "true",
                     "CGO_ENABLED": "0", "-trimpath": "true"}
-        info = {"GoVersion": "go1.26.9", "Deps": copy.deepcopy(self.dependencies),
+        info = {"GoVersion": "go1.26.10", "Deps": copy.deepcopy(self.dependencies),
                 "Settings": [{"Key": key, "Value": value} for key, value in settings.items()],
                 "Main": {"Path": "github.com/xtls/xray-core", "Version": "v0.0.0-20260327174540-d2758a023cd7+dirty"},
                 "Path": "github.com/xtls/xray-core/main"}
@@ -132,19 +138,27 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             "schema": "vibermate.vless-kernel-build/v1", "target": target,
             "upstream": {key: self.lock[key] for key in ("repository", "ref", "commit", "tree", "archiveSHA256")},
             "patchSHA256": self.lock["patchSHA256"], "moduleSHA256": self.lock["moduleSHA256"],
-            "compiler": {"version": "go1.26.9", "host": "darwin/arm64", "SHA256": hashlib.sha256(self.go.read_bytes()).hexdigest()},
+            "compiler": {"version": "go1.26.10", "host": "darwin/arm64", "SHA256": hashlib.sha256(self.go.read_bytes()).hexdigest()},
             "build": {"environment": controlled, "argv": [str(self.go), "build", "-buildvcs=true", "-trimpath",
                 "-ldflags=-X github.com/xtls/xray-core/core.build=" + self.lock["sourceMarker"],
                 "-o", str(directory / ".work" / "vibermate-xray"), "./main"]},
             "binary": {"name": "vibermate-xray", "size": binary.stat().st_size,
                        "SHA256": hashlib.sha256(binary.read_bytes()).hexdigest()},
             "licenseSHA256": self.lock["licenseSHA256"],
-            "buildInfo": {"GoVersion": "go1.26.9", "GOOS": settings["GOOS"], "GOARCH": settings["GOARCH"],
+            "buildInfo": {"GoVersion": "go1.26.10", "GOOS": settings["GOOS"], "GOARCH": settings["GOARCH"],
                 "vcs.revision": self.lock["commit"], "vcs.modified": True, "dependencies": info["Deps"],
                 "settings": settings, "main": info["Main"], "path": info["Path"]}}
         self.manifests[str(directory)] = manifest
         self.write_manifest(directory)
         return directory
+
+    def test_changed_runtime_patch_source_is_rejected(self):
+        source = self.arm64 / ".work" / "source" / "setup.go"
+        source.write_bytes(b"changed runtime after producer\n")
+        with self.assertRaisesRegex(producer.KernelError, "SHA256"):
+            snapshots = {}
+            lock, assets = packaging._fixed_inputs(snapshots)
+            packaging._input(self.arm64, lock, assets, snapshots, {})
 
     def write_manifest(self, directory):
         (directory / "kernel-manifest.json").write_text(json.dumps(self.manifests[str(directory)]))
@@ -153,9 +167,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         if argv[0] == "/usr/bin/lipo":
             raise KernelError("lipo: command failed")
         if argv[1:] == ["version"]:
-            return b"go version go1.26.9 darwin/arm64\n"
+            return b"go version go1.26.10 darwin/arm64\n"
         if argv[1:3] == ["env", "GOVERSION"]:
-            return b"go1.26.9\n"
+            return b"go1.26.10\n"
         if argv[1:3] == ["env", "GOROOT"]:
             return str(self.goroot).encode() + b"\n"
         if argv[1:4] == ["version", "-m", "-json"]:
@@ -399,7 +413,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         def wrong_version(argv, **kwargs):
             return b"go version go1.26.8 darwin/arm64\n" if argv[1:] == ["version"] else original(argv, **kwargs)
         with patch.object(producer, "_run", side_effect=wrong_version):
-            self.reject("compiler.*go1.26.9")
+            self.reject("compiler.*go1.26.10")
         self.assertFalse(self.output.exists())
 
     def test_output_beneath_input_cannot_modify_producer(self):

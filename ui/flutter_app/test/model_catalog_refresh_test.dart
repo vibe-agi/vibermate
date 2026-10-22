@@ -41,6 +41,26 @@ void main() {
         refresh: true,
       );
       expect(api.refreshRequests, [false, false, true]);
+      final generic = controller.upstreamModelCatalog(
+        'target.anthropic.official',
+        'anthropic-work',
+      );
+      api.includeNewModel = false;
+      await controller.upstreamModels(
+        'target.anthropic.official',
+        accountId: 'anthropic-work',
+        codexCapabilities: true,
+      );
+      expect(
+        identical(
+          controller.upstreamModelCatalog(
+            'target.anthropic.official',
+            'anthropic-work',
+          ),
+          generic,
+        ),
+        isTrue,
+      );
     },
   );
 
@@ -203,6 +223,7 @@ final class _ModelCatalogApi implements ControlApi {
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) async {
     refreshRequests.add(refresh);
     await waitForCatalog?.future;

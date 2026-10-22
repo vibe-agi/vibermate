@@ -32,7 +32,7 @@ func ownedAccountProbeTarget(spec runtimeFetchSpec) (offlinehold.ProbeTarget, er
 			return offlinehold.ProbeTarget{}, invalid
 		}
 		matched := false
-		for _, operation := range []string{upstreamservice.CodexRateLimits, upstreamservice.CodexUsageHistory, upstreamservice.CodexResetCreditDetails} {
+		for _, operation := range []string{upstreamservice.CodexRateLimits, upstreamservice.CodexUsageHistory, upstreamservice.CodexResetCreditDetails, upstreamservice.CodexModels} {
 			read, err := upstreamservice.ResolveRead(spec.target.Origin(), operation)
 			if err == nil && read.Path() == spec.relativePath {
 				matched = true

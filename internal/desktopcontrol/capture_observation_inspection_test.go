@@ -142,6 +142,9 @@ func TestCaptureObservationHTTPRechecksManualRevisionAfterRead(t *testing.T) {
 	if response.Code != 409 {
 		t.Fatalf("rotated observation escaped: %d %s", response.Code, response.Body)
 	}
+	if phase := response.Header().Get("X-Vibermate-Inspection-Phase"); phase != "final_capture" {
+		t.Fatalf("capture conflict phase = %q, want final_capture", phase)
+	}
 }
 func TestCaptureObservationHTTPDoesNotReadForSessionSummary(t *testing.T) {
 	fixture, reader, _, _ := captureObservationHTTPFixture(t)

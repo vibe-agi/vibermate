@@ -1306,11 +1306,12 @@ func (r *Runtime) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	credential providerauth.Lease,
+	codexCapabilities ...bool,
 ) (*http.Response, error) {
 	if r == nil || r.provider == nil {
 		return nil, errors.New("provider transport is unavailable")
 	}
-	return r.provider.FetchEndpointModels(ctx, endpoint, credential)
+	return r.provider.FetchEndpointModels(ctx, endpoint, credential, codexCapabilities...)
 }
 
 // FetchModelsDev reads the fixed metadata directory through ProductRuntime.

@@ -897,6 +897,7 @@ final class WorkbenchController extends ChangeNotifier
   /// The networks allowed to connect to the Server; null until loaded.
   ServerIpAllowlist? serverIpAllowlist;
   bool serverIpAllowlistSaving = false;
+  int _serverIpAllowlistReadGeneration = 0;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
@@ -1018,7 +1019,8 @@ final class WorkbenchController extends ChangeNotifier
       LinkedHashMap<String, ActivityPage>();
   final Map<String, Future<ExchangeDetail?>> _exchangeLoads = {};
   final Map<String, int> _exchangeLoadGenerations = {};
-  final Map<String, String> _exchangeErrors = {};
+  final Map<String, ({String message, ControlFailure failure})>
+  _exchangeErrors = {};
   int _exchangeLoadGeneration = 0;
   int _activityInspectionGeneration = 0;
   final LinkedHashMap<String, RawEvidencePage> _rawEvidencePages =
@@ -1092,8 +1094,11 @@ final class WorkbenchController extends ChangeNotifier
     return data?.endpoints.where((endpoint) => endpoint.id == id).firstOrNull;
   }
 
-  String _upstreamModelCatalogKey(String endpointId, String accountId) =>
-      '$endpointId\u0000$accountId';
+  String _upstreamModelCatalogKey(
+    String endpointId,
+    String accountId, {
+    bool codexCapabilities = false,
+  }) => '$endpointId\u0000$accountId${codexCapabilities ? '\u0000codex' : ''}';
 
   String _upstreamModelScope(String endpointId, String accountId) {
     final endpoint = data?.endpoints
@@ -1111,9 +1116,14 @@ final class WorkbenchController extends ChangeNotifier
 
   UpstreamModelCatalog? upstreamModelCatalog(
     String endpointId,
-    String accountId,
-  ) {
-    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    String accountId, {
+    bool codexCapabilities = false,
+  }) {
+    final key = _upstreamModelCatalogKey(
+      endpointId,
+      accountId,
+      codexCapabilities: codexCapabilities,
+    );
     return _upstreamModelCatalogScopes[key] ==
             _upstreamModelScope(endpointId, accountId)
         ? _upstreamModelCatalogs[key]
@@ -1124,8 +1134,13 @@ final class WorkbenchController extends ChangeNotifier
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) async {
-    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    final key = _upstreamModelCatalogKey(
+      endpointId,
+      accountId,
+      codexCapabilities: codexCapabilities,
+    );
     final scope = _upstreamModelScope(endpointId, accountId);
     final generation = (_upstreamModelCatalogLoads[key] ?? 0) + 1;
     _upstreamModelCatalogLoads[key] = generation;
@@ -1136,6 +1151,7 @@ final class WorkbenchController extends ChangeNotifier
       endpointId,
       accountId: accountId,
       refresh: refresh,
+      codexCapabilities: codexCapabilities,
     );
     if (!_disposed &&
         _upstreamModelCatalogLoads[key] == generation &&
@@ -1479,7 +1495,12 @@ final class WorkbenchController extends ChangeNotifier
   String? exchangeError(
     String exchangeId, {
     String contentView = 'incremental',
-  }) => _exchangeErrors['$exchangeId:$contentView'];
+  }) => _exchangeErrors['$exchangeId:$contentView']?.message;
+
+  ControlFailure? exchangeFailure(
+    String exchangeId, {
+    String contentView = 'incremental',
+  }) => _exchangeErrors['$exchangeId:$contentView']?.failure;
 
   RawEvidencePage? rawEvidence(String exchangeId) =>
       _rawEvidencePages[exchangeId];
@@ -1963,7 +1984,8 @@ final class WorkbenchController extends ChangeNotifier
                 observed.id != newest.latest.id ||
                 observed.occurredAt != newest.latest.occurredAt ||
                 observed.reasonCode != newest.latest.reasonCode ||
-                observed.status != newest.latest.status)) {
+                observed.status != newest.latest.status ||
+                observed.contentAvailable != newest.latest.contentAvailable)) {
           await _loadCaptureDetail(
             capture,
             quiet: true,
@@ -2002,7 +2024,8 @@ final class WorkbenchController extends ChangeNotifier
             return entry.$2.id == other.id &&
                 entry.$2.occurredAt == other.occurredAt &&
                 entry.$2.reasonCode == other.reasonCode &&
-                entry.$2.status == other.status;
+                entry.$2.status == other.status &&
+                entry.$2.contentAvailable == other.contentAvailable;
           })) {
         return;
       }
@@ -2419,9 +2442,12 @@ final class WorkbenchController extends ChangeNotifier
   // The allowlist is one panel of Server management; failing to read it must
   // not make users, access and the rest unavailable.
   Future<void> _loadServerIpAllowlist() async {
+    final generation = ++_serverIpAllowlistReadGeneration;
     try {
       final loaded = await _api.serverIpAllowlist();
-      if (!_disposed) serverIpAllowlist = loaded;
+      if (!_disposed && generation == _serverIpAllowlistReadGeneration) {
+        serverIpAllowlist = loaded;
+      }
     } catch (_) {}
   }
 
@@ -2444,6 +2470,8 @@ final class WorkbenchController extends ChangeNotifier
         ranges: ranges,
       );
       if (_disposed) return null;
+      // Acknowledged mutations supersede every read started before them.
+      _serverIpAllowlistReadGeneration++;
       serverIpAllowlist = saved;
       serverIpAllowlistSaving = false;
       notifyListeners();
@@ -2789,7 +2817,14 @@ final class WorkbenchController extends ChangeNotifier
     final key = '$exchangeId:$contentView';
     if (!refresh) {
       final cached = exchangeDetail(exchangeId, contentView: contentView);
-      if (cached != null) return Future<ExchangeDetail?>.value(cached);
+      // Pending metadata, absent content and request-only content are snapshots,
+      // not final response publication facts. Reopening rechecks them once.
+      if (cached != null &&
+          cached.status != 'pending' &&
+          cached.content.state == 'recorded' &&
+          cached.content.response != null) {
+        return Future<ExchangeDetail?>.value(cached);
+      }
     }
     if (!refresh) {
       final active = _exchangeLoads[key];
@@ -2833,7 +2868,9 @@ final class WorkbenchController extends ChangeNotifier
     required int inspectionGeneration,
   }) async {
     try {
-      final detail = await _api.exchange(exchangeId, contentView: contentView);
+      final detail = await _inspectionRead(
+        () => _api.exchange(exchangeId, contentView: contentView),
+      );
       if (_disposed || inspectionGeneration != _activityInspectionGeneration) {
         return null;
       }
@@ -2848,8 +2885,13 @@ final class WorkbenchController extends ChangeNotifier
       if (_disposed || _exchangeLoadGenerations[key] != generation) {
         return null;
       }
-      _invalidateActivityInspection(error);
-      _exchangeErrors[key] = _describeError(error);
+      final failure = ControlFailure.from(error);
+      _exchangeErrors[key] = (
+        message: error is TimeoutException
+            ? _describeError(error)
+            : AppCopy.forLanguage(language)(failure.messageKey),
+        failure: failure,
+      );
       return null;
     } finally {
       if (_exchangeLoadGenerations[key] == generation) {
@@ -5118,6 +5160,7 @@ final class WorkbenchController extends ChangeNotifier
         left.storage == right.storage &&
         left.storageFailure == right.storageFailure &&
         left.recordingFailure == right.recordingFailure &&
+        left.recordingMaintenanceFailure == right.recordingMaintenanceFailure &&
         left.recording == right.recording &&
         left.environmentProjection == right.environmentProjection &&
         listEquals(

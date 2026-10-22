@@ -1195,6 +1195,9 @@ func TestLauncherPreservesCodexNativeProviderSelection(t *testing.T) {
 			}
 			want := append(slices.Clone(test.want), "--config", "features.responses_websockets=false", "--disable", "enable_request_compression")
 			want = append(want, command[1:]...)
+			if test.name == "custom provider" {
+				want = append(want, "--config", "features.responses_websockets=false", "--config", `model_provider="custom"`, "--config", `model_providers.custom.base_url="https://custom.invalid/v1"`)
+			}
 			arguments, childEnv, found := strings.Cut(output.String(), "---ENV---\n")
 			if !found {
 				t.Fatal("child environment missing")

@@ -43,6 +43,7 @@ const (
 	OpenAICodexResponsesWebSocketUnsupportedID = "openai-codex-responses-websocket-unsupported"
 	OpenAICodexModelsProbeID                   = upstreamservice.CodexModels
 	OpenAICodexAccountsCheckID                 = "openai-codex-accounts-check"
+	OpenAICodexWorkspaceBundleID               = "openai-codex-workspace-config-bundle"
 	OpenAIPluginsFeaturedProbeID               = "openai-plugins-featured-probe"
 	OpenAIPluginsInstalledID                   = "openai-ps-plugins-installed-probe"
 	OpenAIPluginsListID                        = "openai-ps-plugins-list-probe"
@@ -161,6 +162,12 @@ func BuiltIn() (Catalog, error) {
 		{
 			OpenAICodexAccountsCheckID,
 			upstreamservice.CodexWorkspaceRoutingPath,
+			nil,
+			protocolspec.OperationPayloadNone,
+		},
+		{
+			OpenAICodexWorkspaceBundleID,
+			upstreamservice.CodexWorkspaceBundlePath,
 			nil,
 			protocolspec.OperationPayloadNone,
 		},

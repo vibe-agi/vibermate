@@ -46,7 +46,7 @@ final class _ProviderAccountCyberAccessState
   List<UpstreamEndpoint> get _endpoints => widget.linkedEndpoints
       .where(
         (endpoint) =>
-            isChatGPTCodexOrigin(endpoint.origin) &&
+            supportsCodexCapabilities(endpoint.origin, widget.account.kind) &&
             endpoint.backendProtocols.contains('openai_responses') &&
             widget.account.isLinkedTo(endpoint.id) &&
             widget.account.canLinkTo(endpoint),
@@ -126,6 +126,7 @@ final class _ProviderAccountCyberAccessState
         endpoint.id,
         accountId: account.id,
         refresh: refresh,
+        codexCapabilities: true,
       );
       if (!mounted || generation != _generation) return;
       if (!catalog.verifiedFromEndpoint ||

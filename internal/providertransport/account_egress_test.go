@@ -51,7 +51,7 @@ func TestProviderAccountEgressOverridesRouteAndIsFrozen(t *testing.T) {
 }
 
 func TestRuntimeAccountOperationsUseAccountEgressAndNeverFallback(t *testing.T) {
-	for _, operation := range []string{"oauth", "quota", "history", "models"} {
+	for _, operation := range []string{"oauth", "quota", "history", "models", "official-api-models"} {
 		for _, fail := range []bool{false, true} {
 			name := operation
 			if fail {
@@ -64,7 +64,11 @@ func TestRuntimeAccountOperationsUseAccountEgressAndNeverFallback(t *testing.T) 
 					transport.err = errors.New("synthetic proxy unavailable")
 				}
 				client := newRuntimeFetchClient(t, newStartedGate(t), transport, audit)
-				endpoint := testDiscoveryEndpoint(t, "https://chatgpt.com")
+				origin := "https://chatgpt.com"
+				if operation == "official-api-models" {
+					origin = "https://api.openai.com/v1"
+				}
+				endpoint := testDiscoveryEndpoint(t, origin)
 				credential := testRuntimeDiscoveryCredential(t, endpoint.RealmID).(*runtimeDiscoveryCredential)
 				credential.account.EgressProfile = testAccountEgress()
 				credential.account.ResolvedEgress, _ = egressprofile.RestoreResolved(credential.account.EgressProfile, egressprofile.SelectionAccount, 0)
@@ -76,8 +80,8 @@ func TestRuntimeAccountOperationsUseAccountEgressAndNeverFallback(t *testing.T) 
 					request, _ := http.NewRequest(http.MethodPost, codexoauth.TokenURL, strings.NewReader(`{"grant_type":"refresh_token","refresh_token":"synthetic"}`))
 					request.Header.Set("Content-Type", "application/json")
 					response, err = client.DoCodexOAuthTokenRequest(request, credential.account)
-				case "models":
-					response, err = client.FetchEndpointModels(context.Background(), endpoint, credential)
+				case "models", "official-api-models":
+					response, err = client.FetchEndpointModels(context.Background(), endpoint, credential, operation == "official-api-models")
 				default:
 					op := upstreamservice.CodexRateLimits
 					if operation == "history" {

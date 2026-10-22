@@ -35,7 +35,10 @@ func NewCapturedAccountRead(plan environment.RequestPlan, credential provideraut
 	if err != nil {
 		return AccountReadRequest{}, err
 	}
-	read, err := upstreamservice.ResolveRead(route.ProviderTarget().Origin, plan.Operation().ID().String())
+	if credential == nil || credential.Mode() != providerauth.CredentialManaged {
+		return AccountReadRequest{}, errors.New("managed account credential is required")
+	}
+	read, err := upstreamservice.ResolveAccountRead(route.ProviderTarget().Origin, credential.Driver(), plan.Operation().ID().String())
 	if err != nil {
 		return AccountReadRequest{}, err
 	}
@@ -45,9 +48,6 @@ func NewCapturedAccountRead(plan environment.RequestPlan, credential provideraut
 	}
 	if read.RequiresHistoryPermission() && !route.AllowsAccountHistory() {
 		return AccountReadRequest{}, upstreamservice.ErrHistoryDenied
-	}
-	if credential == nil || credential.Mode() != providerauth.CredentialManaged {
-		return AccountReadRequest{}, errors.New("managed account credential is required")
 	}
 	actual, ok := credential.Account()
 	if !ok || actual.Validate() != nil || actual.ID != selected.ID || actual.Revision != uint64(selected.Revision) || actual.RealmID != selected.RealmID ||
@@ -63,12 +63,12 @@ func NewCapturedAccountRead(plan environment.RequestPlan, credential provideraut
 }
 
 func NewOwnedAccountRead(origin originidentity.ProviderOrigin, operation string, credential providerauth.Lease) (AccountReadRequest, error) {
-	read, err := upstreamservice.ResolveRead(origin, operation)
-	if err != nil {
-		return AccountReadRequest{}, err
-	}
 	if credential == nil || credential.Mode() != providerauth.CredentialManaged {
 		return AccountReadRequest{}, errors.New("managed account credential is required")
+	}
+	read, err := upstreamservice.ResolveAccountRead(origin, credential.Driver(), operation)
+	if err != nil {
+		return AccountReadRequest{}, err
 	}
 	account, ok := credential.Account()
 	if !ok || account.Validate() != nil {
@@ -91,6 +91,9 @@ func (client *Client) ReadAccount(ctx context.Context, request AccountReadReques
 		purpose: egressaudit.PurposeUpstreamAccountRead, targetRef: request.targetRef,
 		target: target, relativePath: request.read.Path(), credential: request.credential,
 		captured: request.captured, rawQuery: request.read.RawQuery(), modelCatalog: request.read.IsModelDirectory(),
+	}
+	if request.read.IsModelDirectory() {
+		spec.catalogRead = &request.read
 	}
 	if request.captured != nil {
 		spec.purpose = egressaudit.PurposeRouteOperation

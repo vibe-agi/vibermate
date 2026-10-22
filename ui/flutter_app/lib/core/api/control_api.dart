@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'acp_models.dart';
+import 'content_cursor.dart';
 import 'control_models.dart';
 import 'native_tool_models.dart';
 import 'account_facts_models.dart';
@@ -292,10 +293,12 @@ abstract interface class ControlApi {
 
   /// Discovers model IDs accepted by exactly one upstream Endpoint. A forced
   /// refresh bypasses the daemon's short-lived Endpoint + Account cache.
+  /// [codexCapabilities] explicitly selects the separate official Codex catalog.
   Future<UpstreamModelCatalog> upstreamModels(
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   });
 
   /// Lists request-side model IDs understood by one Agent protocol. This is
@@ -834,7 +837,7 @@ final class HttpControlApi
 
   @override
   Future<RuntimeStatus> loadRuntimeStatus() async => RuntimeStatus.fromJson(
-    await _read('/api/v1/status'),
+    await _read('/api/v1/status?recordingDiagnostics=1'),
     expectedInstanceId: _session.instanceId,
   );
 
@@ -1683,10 +1686,7 @@ final class HttpControlApi
     String exchangeId,
     String cursor,
   ) async {
-    if (!_validResourceId(exchangeId) ||
-        cursor.isEmpty ||
-        cursor.length > 2048 ||
-        !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) {
+    if (!_validResourceId(exchangeId) || !isValidContentCursor(cursor)) {
       throw const ControlContractException(
         'Exchange content cursor is invalid',
       );
@@ -2134,6 +2134,7 @@ final class HttpControlApi
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) async {
     if (!_validResourceId(endpointId) || !_validResourceId(accountId)) {
       throw const ControlContractException(
@@ -2141,7 +2142,11 @@ final class HttpControlApi
       );
     }
     final query = Uri(
-      queryParameters: {'accountId': accountId, if (refresh) 'refresh': '1'},
+      queryParameters: {
+        'accountId': accountId,
+        if (refresh) 'refresh': '1',
+        if (codexCapabilities) 'codexCapabilities': '1',
+      },
     ).query;
     final payload = await _read(
       '/api/v1/upstream-endpoints/${Uri.encodeComponent(endpointId)}/models?$query',

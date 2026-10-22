@@ -1736,6 +1736,52 @@ void main() {
       'at': '2026-08-11T00:00:01.000Z',
     };
     runtime['recordingFailure'] = warning;
+    // Opted-in maintenance diagnostics remain separate from an earlier gap.
+    runtime['recordingMaintenanceFailure'] = {
+      'phase': 'compact',
+      'reason': 'busy',
+      'recovery': 'restart_required',
+      'at': '2026-08-11T00:00:02.000Z',
+    };
+    expect(
+      () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+      returnsNormally,
+    );
+    for (final malformed in [
+      {
+        'phase': 'private database path',
+        'reason': 'busy',
+        'recovery': 'restart_required',
+        'at': '2026-08-11T00:00:02.000Z',
+      },
+      {
+        'phase': 'compact',
+        'reason': 'private SQL error',
+        'recovery': 'restart_required',
+        'at': '2026-08-11T00:00:02.000Z',
+      },
+      {
+        'phase': 'compact',
+        'reason': 'busy',
+        'recovery': 'ready',
+        'at': '2026-08-11T00:00:02.000Z',
+      },
+      {
+        'phase': 'compact',
+        'reason': 'busy',
+        'recovery': 'restart_required',
+        'at': '2026-08-11T00:00:02.000Z',
+        'message': 'private details',
+      },
+      null,
+    ]) {
+      runtime['recordingMaintenanceFailure'] = malformed;
+      expect(
+        () => RuntimeStatus.fromJson(json, expectedInstanceId: 'instance-test'),
+        throwsA(isA<ControlContractException>()),
+      );
+    }
+    runtime.remove('recordingMaintenanceFailure');
     final recorded = RuntimeStatus.fromJson(
       json,
       expectedInstanceId: 'instance-test',

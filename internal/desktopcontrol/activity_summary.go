@@ -31,12 +31,12 @@ func (handler *Handler) summarizeActivities(writer http.ResponseWriter, request 
 	}
 	check, err := inspectionResponseBoundary(request.Context(), handler.activities)
 	if err != nil {
-		writeInspectionProblem(writer, err)
+		writeInspectionProblem(writer, inspectionPhase("begin", err))
 		return
 	}
 	result, err := handler.activities.SummarizeExchanges(request.Context(), scope)
 	if err != nil {
-		writeInspectionProblem(writer, err)
+		writeInspectionProblem(writer, inspectionPhase("aggregate", err))
 		return
 	}
 	result.CaptureObservation = nil
@@ -48,25 +48,26 @@ func (handler *Handler) summarizeActivities(writer http.ResponseWriter, request 
 		}
 		value, err := handler.captureObservations.ReadCaptureObservation(request.Context(), ref)
 		if err != nil {
-			writeInspectionProblem(writer, err)
+			writeInspectionProblem(writer, inspectionPhase("capture_read", err))
 			return
 		}
 		result.CaptureObservation, err = captureSummaryObservation(ref, value)
 		if err != nil {
-			writeInspectionProblem(writer, err)
+			writeInspectionProblem(writer, inspectionPhase("capture_projection", err))
 			return
 		}
 		observation = &value
 	}
-	writeInspectionJSON(writer, result, handler.activityExpiryCheck(func() error {
+	finalCheck := handler.activityExpiryCheck(func() error {
 		if err := check(); err != nil {
-			return err
+			return inspectionPhase("final_visibility", err)
 		}
 		if observation != nil {
-			return handler.captureObservations.CheckCaptureObservation(request.Context(), *observation)
+			return inspectionPhase("final_capture", handler.captureObservations.CheckCaptureObservation(request.Context(), *observation))
 		}
 		return nil
-	}, result.InspectionExpiresAt))
+	}, result.InspectionExpiresAt)
+	writeInspectionJSON(writer, result, func() error { return inspectionPhase("final_expiry", finalCheck()) })
 }
 
 func captureSummaryObservation(ref captureidentity.Reference, value recording.CaptureObservationView) (*activity.CaptureObservationSummary, error) {

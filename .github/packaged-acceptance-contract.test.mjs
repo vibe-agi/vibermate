@@ -116,11 +116,11 @@ test('full crash race remains mandatory outside short mode', () => {
   assert.match(make, /go test -race \.\/internal\/runtimepersistence -run '\^TestContentSourceProcessCrash'/u);
   const job = ci.match(/^  store-crash-race:\n(?:(?!^  [\w-]+:)[\s\S])*/mu)?.[0];
   assert.ok(job, 'dedicated full crash race job is required');
-  assert.match(job, /^    timeout-minutes: 20$/mu);
+  assert.match(job, /^    timeout-minutes: 25$/mu);
   assert.match(job, /^      - run: make test-store-crash-race$/mu);
   assert.doesNotMatch(job, /\bif:|continue-on-error|\boptional\b|-short/u);
   const target = make.match(/^test-store-crash-race:\n(?:\t[^\n]*\n)+/mu)?.[0];
-  assert.equal(target, "test-store-crash-race:\n\tgo test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=15m -v\n");
+  assert.equal(target, "test-store-crash-race:\n\tgo test -race ./internal/runtimepersistence -run '^TestContentSourceProcessCrash' -count=1 -parallel=1 -timeout=20m -v\n");
 });
 
 test('full response page race remains an unconditional dedicated gate', () => {

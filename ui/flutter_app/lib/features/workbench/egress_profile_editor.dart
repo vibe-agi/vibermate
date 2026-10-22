@@ -136,7 +136,7 @@ String egressPolicySummary(AppCopy copy, TrafficEgressPolicy policy) {
     'system' => copy('environment.egress.resolver.system'),
     'doh' =>
       policy.resolver.transport == 'proxy'
-          ? 'DoH · ${copy('environment.egress.doh.transport.proxy')}'
+          ? 'DoH · ${copy(policy.proxy.isVless ? 'environment.egress.doh.transport.vless' : 'environment.egress.doh.transport.proxy')}'
           : 'DoH · ${copy('environment.egress.doh.transport.direct')}',
     _ => policy.resolver.kind,
   };

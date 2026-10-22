@@ -1870,6 +1870,7 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) async {
     _requireOpen();
     final failure = _upstreamModelFailure;

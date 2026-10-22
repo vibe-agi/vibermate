@@ -41,6 +41,11 @@ func inspectionResponseBoundary(ctx context.Context, readers ...any) (func() err
 	}, nil
 }
 func writeInspectionProblem(w http.ResponseWriter, err error) {
+	var phase *inspectionPhaseError
+	if errors.As(err, &phase) {
+		// Closed codes only; older clients keep the unchanged problem body.
+		w.Header().Set("X-Vibermate-Inspection-Phase", phase.phase)
+	}
 	switch {
 	case errors.Is(err, recording.ErrInspectionChanged):
 		writeProblem(w, http.StatusConflict, ReasonInspectionChanged)
@@ -49,6 +54,24 @@ func writeInspectionProblem(w http.ResponseWriter, err error) {
 	default:
 		writeProblem(w, http.StatusServiceUnavailable, ReasonInspectionUnavailable)
 	}
+}
+
+type inspectionPhaseError struct {
+	phase string
+	cause error
+}
+
+func (e *inspectionPhaseError) Error() string { return "inspection failed during " + e.phase }
+func (e *inspectionPhaseError) Unwrap() error { return e.cause }
+func inspectionPhase(phase string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var existing *inspectionPhaseError
+	if errors.As(err, &existing) {
+		return err
+	}
+	return &inspectionPhaseError{phase: phase, cause: err}
 }
 func writeInspectionJSON(w http.ResponseWriter, value any, check func() error) {
 	data, err := json.Marshal(value)

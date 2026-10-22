@@ -3,12 +3,12 @@
 This matrix states what the current source offers. A passing unit test and a
 published product are not interchangeable evidence.
 
-Published-status snapshot at candidate preparation: **2026-10-20 15:59:23 UTC**.
+Published-status snapshot at candidate preparation: **2026-10-22 UTC**.
 
-Source package version: **0.1.35**. Latest published release: **v0.1.34**.
+Source package version: **0.1.36**. Latest published release: **v0.1.35**.
 
-At that snapshot, [v0.1.34](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.34)
-was the latest published release; v0.1.35 is an unpublished source candidate.
+At that snapshot, [v0.1.35](https://github.com/vibe-agi/vibermate/releases/tag/v0.1.35)
+was the latest published release; v0.1.36 is an unpublished source candidate.
 The historical v0.1.24 [upgrade and rollback boundary](releases/v0.1.24.md#upgrade-and-rollback-boundary)
 and [ADR 0021](adr/0021-one-schema-revision-without-migrations.md) describe
 schema-revision-1 data compatibility. Current source upgrades and private rollback
@@ -46,8 +46,8 @@ the historical boundary does not establish candidate downgrade compatibility.
 | `codex-oauth` | Experimental | OAuth login and `auth.json` import use one managed Codex credential format and explicit manual refresh. Auto refresh defaults off for new imports and on for OAuth-created accounts; replacing credentials preserves the account's setting. When enabled, ViberMate owns refresh for its copy; refreshing the original file can invalidate either copy. This is not an official OpenAI integration or a stable public API contract. |
 | `codex-quota-history` | Experimental | An Owner may explicitly query the selected managed Codex account's upstream quota and, when separately authorized, history. These observations are not ViberMate traffic statistics or billing authority. |
 | `codex-reset-credit` | Experimental | An Owner can inspect and explicitly consume one selected banked reset credit through a confirmed, idempotent management operation. This depends on an upstream compatibility contract and never purchases a paid instant reset. |
-| `codex-cyber-access` | Experimental | Account Standard, Daybreak Blue and Daybreak Red preferences take precedence over the client's mode on exact official ChatGPT Codex routes without changing the final model. Standard needs no capability lookup. Blue/Red use the preferred mode when advertised by that exact final model; otherwise they use Standard only if the same model explicitly advertises it. Missing, empty or failed capability discovery and models with no compatible mode retain the unavailable failure. Exact native Guardian requests derive Blue from a frozen Red preference before compatibility resolution without changing the account. No automatic account retry is introduced. |
-| `codex-native-model-directory` | Experimental | The current source captures bodyless native model reads with a validated client_version query, managed credentials, bounded metadata/alias projection and account/route-scoped ETags. Native HTTP turn-state continuity is bounded in memory; new direct header recordings redact its values while live forwarding remains exact. |
+| `codex-cyber-access` | Experimental | Account Standard, Daybreak Blue and Daybreak Red preferences take precedence over the client's mode on exact official ChatGPT Codex routes and supported official API bearer accounts without changing the final model. Standard needs no capability lookup. Blue/Red use the preferred mode when advertised by that exact final model; otherwise they use Standard only if the same model explicitly advertises it. Missing, empty or failed capability discovery and models with no compatible mode retain the unavailable failure. Exact native Guardian requests derive Blue from a frozen Red preference before compatibility resolution without changing the account. No automatic account retry is introduced. |
+| `codex-native-model-directory` | Experimental | The current source captures bodyless native model reads with a validated client_version query, including the 0.163 official API-key catalog through an explicitly selected ChatGPT metadata route, managed credentials, bounded metadata/alias projection and account/route-scoped ETags. Native HTTP turn-state continuity is bounded in memory; new direct header recordings redact its values while live forwarding remains exact. |
 | `native-cli-identity-rewrite` | Unsupported | Routing an upstream account changes the actual request credentials. It does not rewrite the CLI's local `auth.json`, local profile, or every native `/status` identity field. |
 | `automatic-account-failover` | Unsupported | One request does not silently move between accounts after an authentication or quota failure. |
 | `arbitrary-client-compatibility` | Unsupported | Manual proxy access does not imply semantic parsing, identity attribution, or tested compatibility for every application. |

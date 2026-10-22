@@ -46,7 +46,7 @@ func (pipeline *Pipeline) finalizeAccountCyberMode(ctx context.Context, request 
 		return providertransport.Request{}, err
 	}
 	account, managed := draft.AccountRef()
-	if !managed || !upstreamendpoint.IsChatGPTCodexOrigin(draft.Target().Origin()) ||
+	if !managed || !upstreamendpoint.SupportsCodexCatalog(draft.Target().Origin(), draft.AuthDriverRef()) ||
 		draft.RelativePath() != upstreamendpoint.ProviderRelativePath(draft.Target().Origin(), "v1/responses") {
 		return draft, nil
 	}
@@ -95,7 +95,7 @@ func (pipeline *Pipeline) finalizeAccountCyberMode(ctx context.Context, request 
 // it never grants a program or exempts internal aliases from model capability
 // checks. The frozen account remains unchanged for discovery and transport.
 func nativeGuardianRequest(request ClientRequest, headers http.Header, body []byte) (bool, error) {
-	if request.operation.id.String() != operationcatalog.OpenAICodexResponsesCreateID {
+	if request.operation.id.String() != operationcatalog.OpenAICodexResponsesCreateID && request.operation.id.String() != operationcatalog.OpenAIResponsesCreateID {
 		return false, nil
 	}
 	original, _ := request.OriginalHeaders()

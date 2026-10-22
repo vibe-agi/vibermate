@@ -65,14 +65,24 @@ bool isChatGPTCodexOrigin(Uri origin) =>
     origin.port == 443 &&
     const {'', '/backend-api', '/backend-api/codex'}.contains(origin.path);
 
+/// Official capability service scope, independent from OAuth/quota support.
+bool supportsCodexCapabilities(Uri origin, String accountKind) =>
+    (isChatGPTCodexOrigin(origin) &&
+        const {'bearer_token', 'codex_oauth'}.contains(accountKind)) ||
+    (accountKind == 'bearer_token' &&
+        origin.scheme == 'https' &&
+        origin.host == 'api.openai.com' &&
+        origin.port == 443 &&
+        const {'', '/v1'}.contains(origin.path));
+
 /// The actual discovery address used by the runtime, not an inferred /v1 API.
 String upstreamModelsUrl(Uri origin) {
   if (isChatGPTCodexOrigin(origin)) {
-    return origin
+    return Uri.parse('https://chatgpt.com')
         .replace(
           path: '/backend-api/codex/models',
           // Adapter catalog compatibility, not the installed client version.
-          query: 'client_version=0.147.0',
+          query: 'client_version=0.163.0',
         )
         .toString();
   }

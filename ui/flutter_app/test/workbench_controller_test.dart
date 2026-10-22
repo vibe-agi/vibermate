@@ -587,6 +587,18 @@ void main() {
         find.byKey(const Key('runtime-recording-failure')),
         findsOneWidget,
       );
+      api.maintenanceFailure = RecordingMaintenanceFailure(
+        phase: 'compact',
+        reason: 'busy',
+        recovery: 'restart_required',
+        at: DateTime.utc(2026, 9, 28, 4),
+      );
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('runtime-recording-maintenance-failure')),
+        findsOneWidget,
+      );
       final accounts = controller.data!.accounts;
       api.failInventory = true;
       api.stopProxy = true;
@@ -600,6 +612,10 @@ void main() {
         await controller.refresh();
         await tester.pumpAndSettle();
         final copy = AppCopy.forLanguage(language);
+        expect(
+          find.textContaining(copy('status.maintenance.phase.compact')),
+          findsOneWidget,
+        );
         expect(find.text(copy('status.proxy_stopped')), findsOneWidget);
         expect(
           find.textContaining(copy('status.failure.operation.egress_complete')),
@@ -619,11 +635,16 @@ void main() {
       api.failInventory = false;
       api.stopProxy = false;
       api.recordingFailure = null;
+      api.maintenanceFailure = null;
       await controller.refresh();
       await tester.pumpAndSettle();
       expect(controller.runtimeStatus!.healthy, isTrue);
       expect(find.byKey(const Key('runtime-storage-failure')), findsNothing);
       expect(find.byKey(const Key('runtime-recording-failure')), findsNothing);
+      expect(
+        find.byKey(const Key('runtime-recording-maintenance-failure')),
+        findsNothing,
+      );
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
     });
@@ -1418,6 +1439,37 @@ void main() {
       await tester.pump();
     },
   );
+
+  for (final captureKey in [
+    'managed_run:run-1',
+    'manual_capture:manual-figma',
+  ]) {
+    testWidgets(
+      'evidence poll propagates content availability alone for $captureKey',
+      (tester) async {
+        final fixture = PreviewControlApi();
+        final api = _AvailabilityEvidenceApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+          terminalManagement: false,
+        );
+        await controller.initialize();
+        await controller.selectCapture(captureKey);
+        final before = controller.selectedActivities.first;
+        expect(before.contentAvailable, isTrue);
+        api.available = false;
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+        expect(controller.selectedActivities.first.id, before.id);
+        expect(controller.selectedActivities.first.status, before.status);
+        expect(controller.selectedActivities.first.contentAvailable, isFalse);
+        controller.dispose();
+      },
+    );
+  }
 
   testWidgets('visible evidence refreshes before the inventory poll', (
     tester,
@@ -2795,12 +2847,13 @@ final class _DashboardRevisionApi extends _UsageTrackingApi {
   bool failInventory = false;
   bool stopProxy = false;
   RuntimePersistenceFailure? recordingFailure;
+  RecordingMaintenanceFailure? maintenanceFailure;
 
   @override
   Future<DashboardData> loadDashboard() async {
     dashboardCalls++;
     var dashboard = await super.loadDashboard();
-    if (recordingFailure != null || stopProxy) {
+    if (recordingFailure != null || maintenanceFailure != null || stopProxy) {
       final old = dashboard.status;
       dashboard = DashboardData(
         status: RuntimeStatus(
@@ -2818,6 +2871,7 @@ final class _DashboardRevisionApi extends _UsageTrackingApi {
                 )
               : null,
           recordingFailure: recordingFailure,
+          recordingMaintenanceFailure: maintenanceFailure,
           environmentProjection: old.environmentProjection,
           unavailableEnvironments: old.unavailableEnvironments,
           offlineHold: old.offlineHold,
@@ -3563,5 +3617,46 @@ final class _QueuedCleanupStatisticsApi extends _PendingCleanupApi {
     final read = Completer<RuntimeStorageLocation>();
     reads.add(read);
     return read.future;
+  }
+}
+
+final class _AvailabilityEvidenceApi extends _UsageTrackingApi {
+  _AvailabilityEvidenceApi(super.delegate);
+  bool available = true;
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    final page = await super.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+    return ActivityPage(
+      items: [
+        for (final item in page.items)
+          ActivityRecord(
+            id: item.id,
+            occurredAt: item.occurredAt,
+            title: item.title,
+            status: item.status,
+            reasonCode: item.reasonCode,
+            source: item.source,
+            conversation: item.conversation,
+            environment: item.environment,
+            parentRefs: item.parentRefs,
+            contentAvailable: available,
+          ),
+      ],
+      nextCursor: page.nextCursor,
+    );
   }
 }

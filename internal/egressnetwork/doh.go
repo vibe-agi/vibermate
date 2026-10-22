@@ -72,6 +72,9 @@ func (resolver *dohResolver) LookupNetIP(
 	if resolver == nil || resolver.client == nil || ctx == nil {
 		return nil, errors.New("DoH lookup is incomplete")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	host, err := normalizeHost(host)
 	if err != nil {
 		return nil, fmt.Errorf("DoH hostname: %w", err)
@@ -90,15 +93,49 @@ func (resolver *dohResolver) LookupNetIP(
 	default:
 		return nil, errors.New("DoH lookup network is unsupported")
 	}
+	type answer struct {
+		index     int
+		addresses []netip.Addr
+		err       error
+	}
+	answers := make([]answer, len(types))
+	if len(types) == 1 {
+		answers[0].addresses, answers[0].err = resolver.query(ctx, host, types[0])
+	} else {
+		// One stalled family must not prevent asking the other or consume the
+		// entire connection budget. Still join both bounded queries so every
+		// completed answer participates in the caller's private-target check.
+		budget := defaultDoHRequestTimeout
+		if deadline, bounded := ctx.Deadline(); bounded {
+			if available := time.Until(deadline) / 2; available < budget {
+				budget = available
+			}
+		}
+		lookup, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		completed := make(chan answer, len(types))
+		for index, queryType := range types {
+			go func() {
+				addresses, err := resolver.query(lookup, host, queryType)
+				completed <- answer{index: index, addresses: addresses, err: err}
+			}()
+		}
+		for range types {
+			result := <-completed
+			answers[result.index] = result
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var addresses []netip.Addr
 	var failures []error
-	for _, queryType := range types {
-		resolved, queryErr := resolver.query(ctx, host, queryType)
-		if queryErr != nil {
-			failures = append(failures, queryErr)
+	for _, result := range answers {
+		if result.err != nil {
+			failures = append(failures, result.err)
 			continue
 		}
-		addresses = append(addresses, resolved...)
+		addresses = append(addresses, result.addresses...)
 	}
 	if len(addresses) != 0 {
 		return addresses, nil
@@ -164,7 +201,10 @@ func (resolver *dohResolver) query(
 		return nil, errors.New("DoH response Content-Type is invalid")
 	}
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, maximumDNSMessageBytes+1))
-	if err != nil || len(encoded) > maximumDNSMessageBytes {
+	if err != nil {
+		return nil, fmt.Errorf("read DoH response: %w", err)
+	}
+	if len(encoded) > maximumDNSMessageBytes {
 		return nil, errors.New("DoH response exceeded its bound")
 	}
 	return parseDoHResponse(encoded, id, question)

@@ -24,6 +24,25 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets(
+    'official API bearer account exposes scoped cyber catalog controls',
+    (tester) async {
+      final api = _CyberApi();
+      final controller = await _mount(tester, api, officialAPI: true);
+      await _expand(tester);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('account-cyber-access-account.blue')),
+        findsOneWidget,
+      );
+      expect(
+        api.requests,
+        contains(('target.openai.official', 'account.blue', false)),
+      );
+      expect(_account(controller).credentialOrigin, 'https://api.openai.com');
+      expect(api.capabilityRequests, everyElement(isTrue));
+    },
+  );
   final reviewDirectory = kIsWeb
       ? null
       : Platform.environment['VIBERMATE_UI_REVIEW_DIR'];
@@ -672,7 +691,11 @@ void main() {
       );
       expect(
         controller
-            .upstreamModelCatalog('target.codex.official', 'account.blue')!
+            .upstreamModelCatalog(
+              'target.codex.official',
+              'account.blue',
+              codexCapabilities: true,
+            )!
             .credentialEpoch,
         account.credentialEpoch + 1,
       );
@@ -796,6 +819,7 @@ Future<WorkbenchController> _mount(
   bool dark = true,
   double textScale = 1,
   bool cyberOnly = false,
+  bool officialAPI = false,
   GlobalKey? boundary,
 }) async {
   await tester.binding.setSurfaceSize(size);
@@ -803,19 +827,23 @@ Future<WorkbenchController> _mount(
   await api.preview.createProviderAccount(
     id: 'account.blue',
     displayName: 'Blue fixture',
-    upstreamEndpointId: 'target.codex.official',
-    kind: 'codex_oauth',
-    secret: '',
-    codexAuthJson: jsonEncode({
-      'auth_mode': 'chatgpt',
-      'tokens': {
-        'account_id': 'blue-fixture',
-        'access_token': 'synthetic',
-        'id_token': 'synthetic',
-        'refresh_token': 'synthetic',
-      },
-      'last_refresh': '2026-10-18T00:00:00Z',
-    }),
+    upstreamEndpointId: officialAPI
+        ? 'target.openai.official'
+        : 'target.codex.official',
+    kind: officialAPI ? 'bearer_token' : 'codex_oauth',
+    secret: officialAPI ? 'synthetic-api-key' : '',
+    codexAuthJson: officialAPI
+        ? ''
+        : jsonEncode({
+            'auth_mode': 'chatgpt',
+            'tokens': {
+              'account_id': 'blue-fixture',
+              'access_token': 'synthetic',
+              'id_token': 'synthetic',
+              'refresh_token': 'synthetic',
+            },
+            'last_refresh': '2026-10-18T00:00:00Z',
+          }),
     headerPolicy: const ProviderAccountHeaderPolicy(),
   );
   final controller = WorkbenchController(
@@ -893,6 +921,7 @@ Future<void> _expand(WidgetTester tester) async {
 final class _CyberApi extends Fake implements ControlApi {
   final preview = PreviewControlApi(seedCaptures: false);
   final requests = <(String, String, bool)>[];
+  final capabilityRequests = <bool>[];
   List<String>? programs = const ['standard', 'daybreak_blue', 'daybreak_red'];
   Completer<UpstreamModelCatalog>? pending;
   Object? failure;
@@ -938,8 +967,10 @@ final class _CyberApi extends Fake implements ControlApi {
     String endpointId, {
     required String accountId,
     bool refresh = false,
+    bool codexCapabilities = false,
   }) {
     requests.add((endpointId, accountId, refresh));
+    capabilityRequests.add(codexCapabilities);
     if (failure != null) return Future.error(failure!);
     return pending?.future ?? catalog(programs, endpointId: endpointId);
   }

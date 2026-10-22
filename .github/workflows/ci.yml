@@ -152,6 +152,20 @@ jobs:
           VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}" \
             go test -count=1 -run '^TestInstalledCodexReadsManagedAccount$' ./internal/productruntime
 
+
+      - name: Verify Codex 0.163.0 scoped configuration and workspace bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-codex-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" @openai/codex@0.163.0
+          codex_binary="$(find "${prefix}/node_modules" -type f -path '*/vendor/*/bin/codex')"
+          test -f "${codex_binary}"
+          test "$("${codex_binary}" --version)" = 'codex-cli 0.163.0'
+          export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
+          go test -count=1 -run '^TestInstalledCodex(ConfigOverridesSurviveCommandScopes|CaptureOwnsOrdinaryProxyFeatures|CaptureStrictConfiguration|StableExecCyberSyntax|ProxyGuardPreservesUnknownFeatureErrors|BootstrapProxyFallbackStaysCaptureOwned|CaptureIsolationStartupContract|ManagedAuthEmptyHomeAndCaptureIsolation|ManagedAuthResumesOpenAIHistoryWithoutLogin|ManagedAuthOverridesInheritedStaticBearer|ManagedAuthRejectsInheritedCommandAuthBeforeExecution|RecoversTransientHTTPFailureThroughLauncher)$' ./internal/runlauncher
+          go test -count=1 -run '^TestInstalledCodex(ReadsManagedAccount|ReadsEnterpriseWorkspaceRequirements|OfficialAPIModelCatalog)$' ./internal/productruntime
+
   race:
     needs: generated-structural
     strategy:
@@ -209,7 +223,8 @@ jobs:
   store-crash-race:
     needs: generated-structural
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Include the negative harness controls after the instrumented crash matrix.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -258,7 +273,7 @@ jobs:
           case "$(sw_vers -buildVersion)" in 24*) ;; *) echo "Darwin 24/macOS build24 required" >&2; exit 1 ;; esac
           test "$(xcodebuild -version)" = $'Xcode 16.2\nBuild version 16C5032a'
           test "$(xcrun --sdk macosx --show-sdk-version)" = 15.2
-          test "$(go version)" = 'go version go1.26.9 darwin/arm64'
+          test "$(go version)" = 'go version go1.26.10 darwin/arm64'
           test "$(node --version)" = v22.23.1
       - run: make check-release-build
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags vibermate_native_secrets ./...
@@ -340,6 +355,11 @@ jobs:
           flutter analyze
           flutter test
           flutter pub deps --no-dev --style=compact
+      - name: Verify current Runtime HTTP content with Flutter
+        timeout-minutes: 5
+        env:
+          VIBERMATE_RUN_FLUTTER_CONTRACT: '1'
+        run: go test -count=1 -timeout=4m -run '^TestLiveRuntimeFlutterContentContract$' -v ./internal/desktopcontrol
       - name: Verify native macOS preference boundary
         timeout-minutes: 5
         shell: bash

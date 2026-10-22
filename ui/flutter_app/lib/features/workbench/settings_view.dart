@@ -444,6 +444,20 @@ final class _EgressProfilesSettingsPaneState
                   ? copy('settings.egress.default_unavailable')
                   : '${copy('settings.egress.current')}: ${_default!.effectiveProfile.id == EgressProfileRevision.direct.id ? egressPolicySummary(copy, _default!.effectiveProfile.policy) : _default!.effectiveProfile.displayName}',
             ),
+            if (_default case final current?) ...[
+              Text(
+                key: const Key('egress-default-policy'),
+                '${copy.format('settings.egress.revision', {'revision': current.effectiveProfile.revision})} · ${egressPolicySummary(copy, current.effectiveProfile.policy)}',
+              ),
+              if (current.effectiveProfile.policy.resolver.dohUrl
+                  case final endpoint?)
+                Text(
+                  key: const Key('egress-default-doh-endpoint'),
+                  endpoint,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              const SizedBox(height: 6),
+            ],
             Text(
               copy('settings.egress.default_detail'),
               style: Theme.of(context).textTheme.bodySmall,
@@ -515,6 +529,11 @@ final class _EgressProfilesSettingsPaneState
 
   Widget _profileRow(EgressProfileRevision profile) {
     final builtIn = profile.id == EgressProfileRevision.direct.id;
+    final current = _default?.effectiveProfile;
+    final newerThanDefault =
+        current != null &&
+        current.id == profile.id &&
+        current.revision < profile.revision;
     return Padding(
       key: Key('egress-profile-row-${profile.id}'),
       padding: const EdgeInsets.all(12),
@@ -540,11 +559,28 @@ final class _EgressProfilesSettingsPaneState
             ],
           ),
           const SizedBox(height: 4),
+          if (!builtIn)
+            Text(
+              copy.format('settings.egress.latest_revision', {
+                'revision': profile.revision,
+              }),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           if (_default?.effectiveProfile == profile)
             Text(copy('settings.egress.current')),
           builtIn
               ? Text(copy('settings.egress.builtin'))
               : Text(egressPolicySummary(copy, profile.policy)),
+          if (newerThanDefault)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: InlineNotice(
+                message: copy.format('settings.egress.latest_unapplied', {
+                  'latest': profile.revision,
+                  'current': current.revision,
+                }),
+              ),
+            ),
           if (_owner)
             Wrap(
               spacing: 8,
@@ -556,7 +592,13 @@ final class _EgressProfilesSettingsPaneState
                   onPressed: _saving || _default == null
                       ? null
                       : () => unawaited(_setDefault(profile)),
-                  child: Text(copy('settings.egress.set_default')),
+                  child: Text(
+                    newerThanDefault
+                        ? copy.format('settings.egress.apply_revision', {
+                            'revision': profile.revision,
+                          })
+                        : copy('settings.egress.set_default'),
+                  ),
                 ),
                 if (!builtIn)
                   IconButton(

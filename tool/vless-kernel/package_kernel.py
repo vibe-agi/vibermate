@@ -81,7 +81,7 @@ def _source_note(lock):
             f"Source archive: {lock['archiveURL']}\nArchive SHA256: {lock['archiveSHA256']}\n"
             "Apply the adjacent dependency.patch to that exact source.\n"
             "upstream.commit preserves the public Git identity; no independent GPG trust certification is claimed.\n"
-            "vcs.modified=true records the exact dependency patch. LICENSE.upstream covers upstream;\n"
+            "vcs.modified=true records the exact dependency and connection-lifetime patch. LICENSE.upstream covers upstream;\n"
             "complete linked-module notices and native/package qualification remain separate requirements.\n")
 
 
@@ -124,6 +124,11 @@ def _input(path, lock, assets, snapshots, directories):
     producer._modules(source, lock["moduleSHA256"])
     for name, field in (("go.mod", "goMod"), ("go.sum", "goSum")):
         _remember(source / name, snapshots, "module", lock["moduleSHA256"][field])
+    for name, record in lock["patchedFiles"].items():
+        material = source / name
+        _remember(material, snapshots, "patched source", record["sha256"])
+        producer._require(oct(material.stat().st_mode & 0o777)[2:] == record["mode"][3:],
+                          "patched source", "file mode mismatch")
     binary_data = manifest.get("binary", {})
     producer._require(binary_data.get("name") == "vibermate-xray"
                       and type(binary_data.get("size")) is int and binary_data["size"] > 0
@@ -239,7 +244,7 @@ def _notices(go, dependencies, check, env, snapshots, directories):
     observed = _remember(license_path, snapshots, "Go license")
     copies.append((license_path, Path("licenses") / "go" / "LICENSE"))
     return {"schema": "vibermate.vless-kernel-licenses/v1", "modules": modules,
-            "go": {"version": "go1.26.9", "sourceURL": "https://go.dev/dl/go1.26.9.src.tar.gz",
+            "go": {"version": "go1.26.10", "sourceURL": "https://go.dev/dl/go1.26.10.src.tar.gz",
                    "files": [{"path": "licenses/go/LICENSE", "sourcePath": "LICENSE",
                               "size": observed["size"], "SHA256": observed["SHA256"]}]},
             "notice": "Verbatim materials; no legal certification is claimed."}, copies
@@ -428,7 +433,7 @@ def package_kernel(*, go_binary: str, target: str,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.9 executable")
+    parser.add_argument("--go", required=True, dest="go_binary", help="absolute Go 1.26.10 executable")
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--input", required=True, action="append", dest="build_directories",
                         help="completed matching locked producer output (repeat for Universal)")

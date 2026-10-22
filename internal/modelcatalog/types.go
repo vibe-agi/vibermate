@@ -61,11 +61,14 @@ type EndpointReader interface {
 // EndpointTransport is the only network boundary used for live model
 // discovery. Implementations are responsible for Offline Hold, audit, and the
 // provider transport policy; the catalog only parses the returned document.
+// The optional boolean explicitly selects Codex capabilities; omitted/false
+// preserves the complete Endpoint directory.
 type EndpointTransport interface {
 	FetchEndpointModels(
 		context.Context,
 		upstreamendpoint.Endpoint,
 		providerauth.Lease,
+		...bool,
 	) (*http.Response, error)
 }
 
@@ -128,12 +131,15 @@ type ProviderMetadataReader interface {
 	ListProvider(context.Context, string) ([]Metadata, error)
 }
 
+// Reader defaults to the complete Endpoint directory. Its optional final
+// boolean selects the separately cached, account-scoped Codex capability view.
 type Reader interface {
 	Discover(
 		context.Context,
 		upstreamendpoint.ID,
 		provideraccount.ID,
 		bool,
+		...bool,
 	) (Snapshot, error)
 }
 
