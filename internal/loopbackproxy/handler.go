@@ -2927,7 +2927,7 @@ func (handler *Handler) completeBlindAudit(
 		ErrorClass:  errorClass,
 		BytesOut:    result.BytesOut,
 		BytesIn:     result.BytesIn,
-		CompletedAt: completionTime(attempt, handler.clock()),
+		CompletedAt: attempt.ClampCompletion(handler.clock()),
 	})
 	if err != nil {
 		handler.reportTerminalFailure(fmt.Errorf(
@@ -2944,13 +2944,6 @@ func (handler *Handler) reportTerminalFailure(err error) {
 	if ok {
 		reporter.ReportTerminalFailure(err)
 	}
-}
-
-func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Time {
-	if !completedAt.IsZero() && completedAt.Before(attempt.StartedAt()) {
-		return attempt.StartedAt()
-	}
-	return completedAt
 }
 
 // serveCleartextForward forwards a cleartext proxy request to its own origin.

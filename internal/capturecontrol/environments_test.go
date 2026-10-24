@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -48,7 +49,7 @@ func TestCaptureEnvironmentPermissionFlagIsScoped(t *testing.T) {
 			origin, _ := originidentity.ParseProviderOrigin("https://native.example")
 			value.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{
 				ID: "personal.tools", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath,
-				CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct()),
+				CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()),
 			}}
 		}
 		snapshot, err := compiler.Restore(value)

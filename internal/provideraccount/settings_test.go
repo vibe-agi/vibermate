@@ -7,6 +7,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
@@ -103,7 +104,7 @@ func TestAccountSettingsFreezeAtLeaseWithoutInvalidatingRoutes(t *testing.T) {
 	}
 	// A captured operation inherits its frozen profile only when no override exists.
 	account := view.Account
-	scope := accountLeaseScope{id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin, egressProfile: authoredEgress(t, profile)}
+	scope := accountLeaseScope{id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin, egressProfile: egressprofiletest.Explicit(t, profile)}
 	inherited, err := manager.acquire(ctx, scope)
 	if err != nil {
 		t.Fatal(err)

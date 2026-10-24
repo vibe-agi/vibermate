@@ -413,10 +413,7 @@ func takeWebPrincipal(
 }
 
 func writeWebSession(writer http.ResponseWriter, instanceID string, session serveradmin.Session) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(writer).Encode(WebSession{
+	writeServerJSON(writer, http.StatusCreated, WebSession{
 		Schema: WebSessionSchema, InstanceID: instanceID, APIVersion: "v1",
 		Principal: WebPrincipalView{
 			ID: string(session.Principal.UserID), Username: session.Principal.Username,

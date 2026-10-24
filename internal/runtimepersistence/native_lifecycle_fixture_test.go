@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
@@ -44,7 +45,7 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 	aggregate := environmentFixture(t, "native", 1)
 	aggregate.ContentRecording = recording
 	aggregate.PolicySet = &environment.PolicySet{ToolMode: mode}
-	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, profile), Contract: environment.ClientToolContractCodexLegacy}}
+	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://chatgpt.com"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofiletest.Explicit(t, profile), Contract: environment.ClientToolContractCodexLegacy}}
 	manager := newEnvironmentManager(t, store)
 	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: aggregate})
 	if err != nil {

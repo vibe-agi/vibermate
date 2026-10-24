@@ -3,12 +3,14 @@ package runtimepersistence
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/egressnetwork"
-	"github.com/vibe-agi/vibermate/internal/egressprofile"
-	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
 )
 
 func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(t *testing.T) {
@@ -25,7 +27,7 @@ func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(
 		domains = append(domains, fmt.Sprintf("d%03d.example.com", i))
 	}
 	profile.Policy.DirectDomains = egressnetwork.DirectDomains(strings.Join(domains, "\n"))
-	choice := authoredEgress(t, profile)
+	choice := egressprofiletest.Explicit(t, profile)
 	encoded, err := json.Marshal(profile)
 	if err != nil || len(encoded) > nativetool.MaxEffectiveProfileJSONBytes {
 		t.Fatal("maximum normalized profile exceeds evidence bound", err)
@@ -66,7 +68,7 @@ func TestNativeEffectiveEvidenceBoundCoversMaximumNormalizedAndPublishedProfile(
 		t.Fatal("published profile exceeds native bound", err)
 	}
 	var restored egressprofile.Choice
-	if err = json.Unmarshal(fullJSON, &restored); err != nil || restored != authoredEgress(t, actual) {
+	if err = json.Unmarshal(fullJSON, &restored); err != nil || restored != egressprofiletest.Explicit(t, actual) {
 		t.Fatal("published full profile strict roundtrip failed", err)
 	}
 	policyJSON, _ := json.Marshal(actual.Policy)

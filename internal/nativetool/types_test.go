@@ -7,6 +7,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -45,7 +46,7 @@ func authoredBindingFixture(t *testing.T, mutations ...func(*environment.Environ
 	compiler, _ := environment.NewCompiler(nil, nil, catalog, wires)
 	aggregate := environment.Environment{ID: "native", Name: "Native", State: environment.StateActive, Revision: 1,
 		ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
-		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, egressprofile.Direct()), Contract: environment.ClientToolContractCodexLegacy}}}
+		ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: origin, Path: "/backend-api/ps/mcp", CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()), Contract: environment.ClientToolContractCodexLegacy}}}
 	for _, mutate := range mutations {
 		mutate(&aggregate)
 	}

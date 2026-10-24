@@ -402,7 +402,7 @@ func manualMutationCoordinates(
 	id, err := manualcapture.ParseID(request.PathValue("manualCaptureId"))
 	values := request.Header.Values("If-Match")
 	request.Header.Del("If-Match")
-	if err != nil || len(values) != 1 || !validManualCaptureETag(values[0]) {
+	if err != nil || len(values) != 1 || !ValidManualCaptureETag(values[0]) {
 		return manualcapture.ID{}, "", false
 	}
 	return id, values[0], true
@@ -501,7 +501,9 @@ func manualCaptureETag(view manualcapture.View) string {
 	return `"mc_` + base64.RawURLEncoding.EncodeToString(digest[:]) + `"`
 }
 
-func validManualCaptureETag(value string) bool {
+// ValidManualCaptureETag reports whether value is a quoted manual Capture
+// revision tag: `"mc_` followed by an unpadded base64url SHA-256 digest.
+func ValidManualCaptureETag(value string) bool {
 	const prefix = `"mc_`
 	if len(value) != len(prefix)+base64.RawURLEncoding.EncodedLen(sha256.Size)+1 ||
 		!strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, `"`) {

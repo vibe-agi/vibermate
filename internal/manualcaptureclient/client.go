@@ -126,36 +126,10 @@ func (client *Client) Create(
 	if err == nil {
 		err = validateGrant(output)
 	}
-	if err == nil && !validManualCaptureETag(etag) {
+	if err == nil && !capturecontrol.ValidManualCaptureETag(etag) {
 		err = errors.New("ManualCapture grant ETag is invalid")
 	}
 	return GrantResult{Grant: output, ETag: etag}, err
-}
-
-func (client *Client) List(ctx context.Context) (capturecontrol.ManualCapturePage, error) {
-	var output capturecontrol.ManualCapturePage
-	_, err := client.request(
-		ctx,
-		http.MethodGet,
-		"/api/v1/manual-captures",
-		"",
-		nil,
-		http.StatusOK,
-		&output,
-	)
-	if err == nil {
-		if output.Items == nil {
-			err = errors.New("ManualCapture page is invalid")
-		} else {
-			for _, item := range output.Items {
-				if itemErr := validateManualCaptureView(item); itemErr != nil {
-					err = itemErr
-					break
-				}
-			}
-		}
-	}
-	return output, err
 }
 
 func (client *Client) Get(
@@ -178,7 +152,7 @@ func (client *Client) Get(
 	if err == nil {
 		err = validateManualCaptureView(output)
 	}
-	if err == nil && !validManualCaptureETag(etag) {
+	if err == nil && !capturecontrol.ValidManualCaptureETag(etag) {
 		err = errors.New("ManualCapture resource ETag is invalid")
 	}
 	return Resource{Capture: output, ETag: etag}, err
@@ -189,7 +163,7 @@ func (client *Client) Rotate(
 	id manualcapture.ID,
 	expectedETag string,
 ) (GrantResult, error) {
-	if !id.Valid() || !validManualCaptureETag(expectedETag) {
+	if !id.Valid() || !capturecontrol.ValidManualCaptureETag(expectedETag) {
 		return GrantResult{}, errors.New(
 			"ManualCapture rotation coordinates are invalid",
 		)
@@ -207,7 +181,7 @@ func (client *Client) Rotate(
 	if err == nil {
 		err = validateGrant(output)
 	}
-	if err == nil && !validManualCaptureETag(etag) {
+	if err == nil && !capturecontrol.ValidManualCaptureETag(etag) {
 		err = errors.New("ManualCapture rotation ETag is invalid")
 	}
 	return GrantResult{Grant: output, ETag: etag}, err
@@ -218,7 +192,7 @@ func (client *Client) Revoke(
 	id manualcapture.ID,
 	expectedETag string,
 ) error {
-	if !id.Valid() || !validManualCaptureETag(expectedETag) {
+	if !id.Valid() || !capturecontrol.ValidManualCaptureETag(expectedETag) {
 		return errors.New("ManualCapture revocation coordinates are invalid")
 	}
 	_, err := client.request(
@@ -463,17 +437,6 @@ func validConfirmationToken(value string) bool {
 		return false
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, "ctx_"))
-	return err == nil && len(decoded) == sha256.Size
-}
-
-func validManualCaptureETag(value string) bool {
-	const prefix = `"mc_`
-	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, `"`) {
-		return false
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(
-		strings.TrimSuffix(strings.TrimPrefix(value, prefix), `"`),
-	)
 	return err == nil && len(decoded) == sha256.Size
 }
 

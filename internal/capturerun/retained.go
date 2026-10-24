@@ -16,7 +16,7 @@ func (manager *Manager) ProxyValidity(ctx context.Context, credential ProxyCapab
 	if !ok {
 		return captureauthority.Validity{}, ErrCapabilityRejected
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return captureauthority.Validity{}, err
 	}

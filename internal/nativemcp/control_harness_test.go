@@ -3,13 +3,6 @@ package nativemcp
 import (
 	"context"
 	"database/sql"
-	"github.com/vibe-agi/vibermate/internal/captureidentity"
-	"github.com/vibe-agi/vibermate/internal/egressprofile"
-	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/manualcapture"
-	"github.com/vibe-agi/vibermate/internal/nativetool"
-	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +12,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 // Control authorization/history checks exercise the production decision budget.
@@ -26,7 +28,7 @@ import (
 // it must not race a sequence of authenticated HTTP and SQLite operations.
 func newNativeControlFixture(t *testing.T) *nativeFixture {
 	t.Helper()
-	return newNativeFixtureWithApprovalConfig(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, authoredEgress(t, egressprofile.Direct()), toolapproval.DefaultConfig())
+	return newNativeFixtureWithApprovalConfig(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, egressprofiletest.Explicit(t, egressprofile.Direct()), toolapproval.DefaultConfig())
 }
 
 // Cancellation owns cleanup even if a control assertion fails before answering

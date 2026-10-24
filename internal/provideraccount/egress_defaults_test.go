@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -170,7 +171,7 @@ func TestAccountAdmissionRejectsUnavailableInheritedDefaultButNotExplicitExit(t 
 				account := view.Account
 				scope := accountLeaseScope{egressProfile: egressprofile.Inherit(), id: account.ID, accountRevision: account.Revision, realmID: account.RealmID, ownerOperation: true, upstreamEndpointOrigin: account.Origin}
 				if choice == "flow" {
-					scope.egressProfile = authoredEgress(t, egressprofile.Direct())
+					scope.egressProfile = egressprofiletest.Explicit(t, egressprofile.Direct())
 				}
 				lease, err := manager.acquire(ctx, scope)
 				if choice == "inherit" {

@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -2571,7 +2572,7 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				ClientProtocol:      clientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
 				Destination:         destination,
-				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
+				EgressProfile:       egressprofiletest.Explicit(t, egressprofile.Direct()),
 				Transforms:          transforms,
 			}},
 		}},

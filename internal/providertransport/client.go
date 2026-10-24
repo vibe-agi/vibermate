@@ -1201,7 +1201,7 @@ func (client *Client) completeAudit(
 		ErrorClass:  errorClass,
 		BytesOut:    bytesOut,
 		BytesIn:     bytesIn,
-		CompletedAt: completionTime(attempt, client.clock()),
+		CompletedAt: attempt.ClampCompletion(client.clock()),
 	})
 	if err != nil {
 		client.reportTerminalFailure(fmt.Errorf(
@@ -1218,13 +1218,6 @@ func (client *Client) reportTerminalFailure(err error) {
 	if ok {
 		reporter.ReportTerminalFailure(err)
 	}
-}
-
-func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Time {
-	if !completedAt.IsZero() && completedAt.Before(attempt.StartedAt()) {
-		return attempt.StartedAt()
-	}
-	return completedAt
 }
 
 type countingReader struct {

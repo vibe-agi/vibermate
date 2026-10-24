@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/lifecyclegate"
 )
 
 const (
@@ -54,7 +55,7 @@ type Manager struct {
 	random                io.Reader
 	randomMu              sync.Mutex
 	maxEnrollmentLifetime time.Duration
-	lifecycle             *lifecycleGate
+	lifecycle             *lifecyclegate.Gate
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -67,7 +68,7 @@ func NewManager(options Options) (*Manager, error) {
 		clock:                 options.Clock,
 		random:                options.Random,
 		maxEnrollmentLifetime: options.MaxEnrollmentLifetime,
-		lifecycle:             newLifecycleGate(),
+		lifecycle:             lifecyclegate.New("ProxyClient", ErrInvalidCommand, ErrRuntimeStopping),
 	}, nil
 }
 
@@ -81,7 +82,7 @@ func (manager *Manager) CreateBinding(
 	if !validDisplayName(command.DisplayName) || !command.Policy.Valid() {
 		return BindingView{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return BindingView{}, err
 	}
@@ -125,7 +126,7 @@ func (manager *Manager) CreateEnrollment(
 		command.ExpiresIn > manager.maxEnrollmentLifetime {
 		return EnrollmentGrant{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return EnrollmentGrant{}, err
 	}
@@ -180,7 +181,7 @@ func (manager *Manager) CompleteEnrollment(
 		!command.MachineID.Valid() || !validDisplayName(command.DisplayName) {
 		return CompletionGrant{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return CompletionGrant{}, err
 	}
@@ -257,7 +258,7 @@ func (manager *Manager) Authenticate(
 	if manager == nil || !validCredential(credential.value, "control_") {
 		return controlprincipal.Principal{}, ErrControlRejected
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return controlprincipal.Principal{}, err
 	}
@@ -282,7 +283,7 @@ func (manager *Manager) RevokeBinding(
 	if !command.BindingID.Valid() || !command.ExpectedRevision.Valid() {
 		return BindingView{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return BindingView{}, err
 	}
@@ -301,7 +302,7 @@ func (manager *Manager) RevokeBinding(
 
 func (manager *Manager) BeginShutdown() {
 	if manager != nil {
-		manager.lifecycle.closeAdmission()
+		manager.lifecycle.CloseAdmission()
 	}
 }
 
@@ -309,7 +310,7 @@ func (manager *Manager) Drain(ctx context.Context) error {
 	if manager == nil {
 		return nil
 	}
-	return manager.lifecycle.drain(ctx)
+	return manager.lifecycle.Drain(ctx)
 }
 
 func (manager *Manager) Shutdown(ctx context.Context) error {

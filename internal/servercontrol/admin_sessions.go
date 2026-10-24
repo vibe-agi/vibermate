@@ -94,10 +94,7 @@ func (handler *AdminSessionsHandler) ServeHTTP(writer http.ResponseWriter, reque
 		}
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(writer).Encode(AdminSession{
+	writeServerJSON(writer, http.StatusCreated, AdminSession{
 		Schema: AdminSessionSchema, InstanceID: handler.instanceID, APIVersion: "v1",
 		ReadToken: session.ReadToken.Value(), WriteToken: session.WriteToken.Value(),
 		ExpiresAt: session.ExpiresAt,

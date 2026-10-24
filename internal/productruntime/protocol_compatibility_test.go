@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -143,7 +144,7 @@ func compatibilityEnvironment(
 						}},
 					},
 				},
-				EgressProfile: authoredEgress(t, egressprofile.Direct()),
+				EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()),
 			}},
 		}},
 	}, clientOrigin, path

@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +18,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 
 	"golang.org/x/net/http2"
 
@@ -1862,7 +1864,7 @@ func testEnvironmentForDialectRevision(
 					ID: "adapter-proxy", Revision: adapterRevision,
 				},
 				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile: authoredEgress(t, egressprofile.Direct()),
+				EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()),
 			}},
 		}},
 	}

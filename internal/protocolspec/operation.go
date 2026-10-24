@@ -296,11 +296,11 @@ func (definition ClientOperationDefinition) Validate() error {
 		return ErrInvalidSpecification
 	}
 	for index, method := range definition.methods {
-		if !validMethod(method) || index > 0 && method == definition.methods[index-1] {
+		if !ValidMethod(method) || index > 0 && method == definition.methods[index-1] {
 			return ErrInvalidSpecification
 		}
 	}
-	if !canonicalPath(definition.pathPattern) {
+	if !CanonicalPath(definition.pathPattern) {
 		return ErrInvalidSpecification
 	}
 	switch definition.pathMatch {
@@ -412,7 +412,7 @@ type RequestTarget struct {
 }
 
 func (target RequestTarget) Validate() error {
-	if !validMethod(target.Method) || !canonicalPath(target.Path) || target.RawPath != "" ||
+	if !ValidMethod(target.Method) || !CanonicalPath(target.Path) || target.RawPath != "" ||
 		(target.Transport != ClientOperationTransportHTTP && target.Transport != ClientOperationTransportWebSocket) ||
 		(target.RawQuery != "" && !wellFormedRawQuery(target.RawQuery)) {
 		return ErrInvalidRequestTarget
@@ -563,7 +563,9 @@ func (plan CodecPlan) Valid() bool {
 		plan.providerDialect.Valid() && len(plan.clientOperations) != 0
 }
 
-func canonicalPath(value string) bool {
+// CanonicalPath reports whether value is an absolute, already-clean printable
+// ASCII request path with no escapes, encodings or trailing slash.
+func CanonicalPath(value string) bool {
 	if value == "" || len(value) > MaxOperationPath || !utf8.ValidString(value) || value[0] != '/' ||
 		strings.ContainsAny(value, "\\%\x00\r\n\t") || pathpkg.Clean(value) != value ||
 		value != "/" && strings.HasSuffix(value, "/") {
@@ -577,7 +579,8 @@ func canonicalPath(value string) bool {
 	return true
 }
 
-func validMethod(value string) bool {
+// ValidMethod reports whether value is an upper-case HTTP method token.
+func ValidMethod(value string) bool {
 	if value == "" || strings.ToUpper(value) != value {
 		return false
 	}
