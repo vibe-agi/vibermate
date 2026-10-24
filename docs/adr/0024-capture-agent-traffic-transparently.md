@@ -49,7 +49,10 @@ Capture fails closed and visibly. If the extension is not approved, or the
 namespace or TUN cannot be created, `vibermate run` refuses to start the
 Agent and names the fix. It never silently falls back to proxy variables.
 Proxy-variable launch stays the default; transparent capture is chosen with
-`--transparent`.
+`--transparent`. The Desktop daemon treats the rendezvous as optional: if it
+cannot start one, the reason appears in Host status and the daemon still
+starts. The refusal belongs to the run that asked for transparent capture,
+not to every capture.
 
 On macOS the extension cannot tell an unowned flow from one it could not
 ask about, so it declines both. A capture outage would therefore let new

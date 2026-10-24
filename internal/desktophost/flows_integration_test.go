@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 // a private registration socket and a loopback flow port guarded by a secret.
 // Shutdown ends live registrations so runs stop their Agents.
 func TestHostServesTransparentCaptureRendezvous(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t)
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	options := hostOptions(t, paths, filepath.Join(root, "data"))
 	options.TransparentCapture = true
@@ -98,5 +99,34 @@ func TestHostWithoutTransparentCapturePublishesNoRendezvous(t *testing.T) {
 	}
 	if _, err := os.Lstat(paths.FlowRegistrationSocket()); !os.IsNotExist(err) {
 		t.Fatalf("disabled Host created a registration socket: %v", err)
+	}
+}
+
+// shortSocketDir returns a directory short enough for Unix socket paths:
+// macOS limits them to 104 bytes, and its t.TempDir paths are long.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("/tmp", "vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(directory) })
+	return directory
+}
+
+// An unusable rendezvous disables transparent capture visibly; it must not
+// keep the Desktop Host, and every ordinary capture, from starting.
+func TestHostStartsWithoutAnUnusableTransparentCaptureRendezvous(t *testing.T) {
+	root := filepath.Join(shortSocketDir(t), strings.Repeat("long-cache-directory-", 5))
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	options.TransparentCapture = true
+	host := startHost(t, options)
+	defer shutdownHost(t, host)
+	if status := host.Status(); !status.Ready || status.TransparentCaptureError == "" {
+		t.Fatalf("status = %+v, want a ready Host reporting why capture is unavailable", status)
+	}
+	if bootstrap := host.Bootstrap(); bootstrap.FlowPort != 0 || bootstrap.FlowSecret != "" {
+		t.Fatalf("unusable rendezvous was published: port %d", bootstrap.FlowPort)
 	}
 }

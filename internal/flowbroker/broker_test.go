@@ -20,7 +20,7 @@ func startBroker(t *testing.T, allow func(Peer) bool) (broker *Broker, registrat
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := t.TempDir()
+	directory := shortSocketDir(t)
 	registrations = filepath.Join(directory, "runs.sock")
 	flows = filepath.Join(directory, "flows.sock")
 	for path, serve := range map[string]func(*net.UnixListener) error{
@@ -296,4 +296,16 @@ func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
 	if registerExtension() {
 		t.Fatal("a stale hello still counted")
 	}
+}
+
+// shortSocketDir returns a directory short enough for Unix socket paths:
+// macOS limits them to 104 bytes, and its t.TempDir paths are long.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("/tmp", "vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(directory) })
+	return directory
 }

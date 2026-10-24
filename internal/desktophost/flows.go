@@ -27,7 +27,16 @@ type flowService struct {
 
 type flowBroker = flowbroker.Broker
 
+// maxUnixSocketPath is the shortest sun_path limit among supported platforms
+// (macOS: 104 bytes including the terminator).
+const maxUnixSocketPath = 103
+
+var errFlowSocketPathTooLong = errors.New("flow registration socket path exceeds the Unix socket limit")
+
 func startFlowService(socketPath string, random io.Reader) (*flowService, error) {
+	if len(socketPath) > maxUnixSocketPath {
+		return nil, errFlowSocketPathTooLong
+	}
 	secret, err := randomCapability(random)
 	if err != nil {
 		return nil, err

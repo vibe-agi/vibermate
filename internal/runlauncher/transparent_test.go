@@ -116,7 +116,7 @@ func TestTransparentEnvironmentKeepsTrustAndDropsProxies(t *testing.T) {
 }
 
 func TestTransparentCaptureRefusesWithoutAnActiveExtension(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "flows.sock")
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	if _, err := startTransparentCapture(socket, "run", flowingress.Proxy{}); err == nil {
 		t.Fatal("capture started without the app")
 	}
@@ -129,7 +129,7 @@ func TestTransparentCaptureRefusesWithoutAnActiveExtension(t *testing.T) {
 // A descendant's flow, submitted the way the extension submits it, reaches
 // the Runtime as CONNECT with the run's credential and the sniffed host.
 func TestTransparentCaptureForwardsADescendantsFlow(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "flows.sock")
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	broker := startTestBroker(t, socket, true)
 	backendOrigin, observed := echoConnectBackend(t)
 	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{Origin: backendOrigin, Token: "run-capability"})
@@ -191,7 +191,7 @@ func waitState(t *testing.T, pid int, want byte) {
 }
 
 func TestTransparentCapturePausesTheAgentUntilCaptureReturns(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "flows.sock")
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	first := startTestBroker(t, socket, true)
 	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
 	if err != nil {
@@ -217,7 +217,7 @@ func TestTransparentCapturePausesTheAgentUntilCaptureReturns(t *testing.T) {
 }
 
 func TestTransparentCaptureFailsWhenCaptureDoesNotReturn(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "flows.sock")
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	broker := startTestBroker(t, socket, true)
 	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
 	if err != nil {
@@ -255,4 +255,16 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buffer.String()
+}
+
+// shortSocketDir returns a directory short enough for Unix socket paths:
+// macOS limits them to 104 bytes, and its t.TempDir paths are long.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("/tmp", "vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(directory) })
+	return directory
 }
