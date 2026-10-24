@@ -24,7 +24,6 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
-	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -35,7 +34,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
-	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -862,63 +860,6 @@ func validControlIdentity(value string, maximumBytes int) bool {
 	return true
 }
 
-func (client *controlClient) connections(
-	ctx context.Context,
-	cursor string,
-) (connectionevent.Page, error) {
-	path := "/api/v1/connections?limit=" +
-		strconv.Itoa(connectionevent.MaxPageSize)
-	if cursor != "" {
-		path += "&cursor=" + url.QueryEscape(cursor)
-	}
-	var page connectionevent.Page
-	status, problem, err := client.request(
-		ctx,
-		http.MethodGet,
-		path,
-		false,
-		nil,
-		nil,
-		&page,
-	)
-	if err != nil {
-		return connectionevent.Page{}, err
-	}
-	if status != http.StatusOK {
-		return connectionevent.Page{}, fmt.Errorf(
-			"read ConnectionEvent page: %s",
-			problem.ReasonCode,
-		)
-	}
-	return page, nil
-}
-
-func (client *controlClient) connectionTimeline(
-	ctx context.Context,
-	connectionID string,
-) (connectionevent.Timeline, error) {
-	var timeline connectionevent.Timeline
-	status, problem, err := client.request(
-		ctx,
-		http.MethodGet,
-		"/api/v1/connections/"+url.PathEscape(connectionID),
-		false,
-		nil,
-		nil,
-		&timeline,
-	)
-	if err != nil {
-		return connectionevent.Timeline{}, err
-	}
-	if status != http.StatusOK {
-		return connectionevent.Timeline{}, fmt.Errorf(
-			"read ConnectionEvent timeline: %s",
-			problem.ReasonCode,
-		)
-	}
-	return timeline, nil
-}
-
 func (client *controlClient) offline(
 	ctx context.Context,
 ) (offlinehold.Snapshot, error) {
@@ -942,124 +883,6 @@ func (client *controlClient) offline(
 		)
 	}
 	return snapshot, nil
-}
-
-func (client *controlClient) offlineAction(
-	ctx context.Context,
-	action string,
-	expected uint64,
-) (offlinehold.Snapshot, error) {
-	if action != "enter" && action != "resume" {
-		return offlinehold.Snapshot{}, errors.New("offline action is invalid")
-	}
-	var snapshot offlinehold.Snapshot
-	status, problem, err := client.request(
-		ctx,
-		http.MethodPost,
-		"/api/v1/offline-hold/actions/"+action,
-		true,
-		&expected,
-		nil,
-		&snapshot,
-	)
-	if err != nil {
-		return offlinehold.Snapshot{}, err
-	}
-	if status != http.StatusOK {
-		return offlinehold.Snapshot{}, fmt.Errorf(
-			"offline %s failed: %s",
-			action,
-			problem.ReasonCode,
-		)
-	}
-	return snapshot, nil
-}
-
-func (client *controlClient) pendingApprovals(
-	ctx context.Context,
-) (toolapproval.Page, error) {
-	var page toolapproval.Page
-	status, problem, err := client.request(
-		ctx,
-		http.MethodGet,
-		"/api/v1/approvals?state=pending&limit="+
-			strconv.Itoa(toolapproval.MaxPageSize),
-		false,
-		nil,
-		nil,
-		&page,
-	)
-	if err != nil {
-		return toolapproval.Page{}, err
-	}
-	if status != http.StatusOK {
-		return toolapproval.Page{}, fmt.Errorf(
-			"list approvals failed: %s",
-			problem.ReasonCode,
-		)
-	}
-	return page, nil
-}
-
-func (client *controlClient) allowOnce(
-	ctx context.Context,
-	approval toolapproval.View,
-) (toolapproval.View, error) {
-	expected := approval.Revision
-	var view toolapproval.View
-	status, problem, err := client.request(
-		ctx,
-		http.MethodPost,
-		"/api/v1/approvals/"+approval.ID+"/actions/decide",
-		true,
-		&expected,
-		desktopcontrol.ApprovalDecisionInput{
-			Decision: toolapproval.DecisionAllowOnce,
-			Scope:    toolapproval.ScopeRequest,
-		},
-		&view,
-	)
-	if err != nil {
-		return toolapproval.View{}, err
-	}
-	if status != http.StatusOK {
-		return toolapproval.View{}, fmt.Errorf(
-			"allow approval failed: %s",
-			problem.ReasonCode,
-		)
-	}
-	return view, nil
-}
-
-func (client *controlClient) denyOnce(
-	ctx context.Context,
-	approval toolapproval.View,
-) (toolapproval.View, error) {
-	expected := approval.Revision
-	var view toolapproval.View
-	status, problem, err := client.request(
-		ctx,
-		http.MethodPost,
-		"/api/v1/approvals/"+approval.ID+"/actions/decide",
-		true,
-		&expected,
-		desktopcontrol.ApprovalDecisionInput{
-			Decision:   toolapproval.DecisionDeny,
-			Scope:      toolapproval.ScopeRequest,
-			ReasonCode: "acceptance_followup_denied",
-		},
-		&view,
-	)
-	if err != nil {
-		return toolapproval.View{}, err
-	}
-	if status != http.StatusOK {
-		return toolapproval.View{}, fmt.Errorf(
-			"deny approval failed: %s",
-			problem.ReasonCode,
-		)
-	}
-	return view, nil
 }
 
 func idempotencyKey() (string, error) {

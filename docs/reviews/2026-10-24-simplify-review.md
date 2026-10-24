@@ -95,10 +95,18 @@ touched package.
 | EFF-2/5/6 | On the egress path, each same-dialect request is re-decoded, re-validated and deep-copied 4–6 times, about 100–200 ms per 2.4 MB body. | These passes may be deliberate defence in depth on the egress boundary. The owner should decide before any is removed. |
 | EFF-4 | `openairesponses` re-runs the duplicate-key check on input items cut from a root that was already checked. | The fix threads a "names already validated" mode through the decoder. If that is done wrong, the documented duplicate-key rule silently weakens. Needs its own focused change and tests. |
 | EFF-10 | Content recording hashes and copies the full history twice per exchange. | Medium-risk restructuring of recording. |
-| SIMP-1 | About 2,000 lines of acceptance scenarios in `cmd/vibermate-acceptance` (`runToolApproval`, `runHeldIngressPreflight`, `runCodexResume`, …) have had no callers since `e91ba03e` (2026-08-08). | Unclear whether they were retired deliberately or disconnected by accident. Delete them if retired; otherwise reconnecting them restores coverage. |
 | SIMP-4 | The schema upgrade is copied per revision (1→2, 2→3). | Could become a table-driven runner. Merging `LegacyDigest` and `SourceDigest` would change the receipt format used during an upgrade. |
 | REUSE-3 | Strict JSON decoding is implemented in several places (`protocolcore`, `releasemanifest`, `acceptancereport`, `localca`, `systemtrust`). | Some copies reject only exact duplicate keys, so unifying them changes what is accepted. Error text differs too. |
 | REUSE-5 | Display-name and ASCII-ID validators are repeated in about 15 packages. | Each site needs its own diff, because trimming and limits differ. |
+
+**Acceptance harness**
+
+- SIMP-1: deleted 42 functions and types from `cmd/vibermate-acceptance`
+  (about 2,100 lines), unused in every build including the synthetic tags.
+  They were scenarios such as `runToolApproval`, `runHeldIngressPreflight`,
+  `runCodexResume`, `runHeldStreaming` and `runAgentInterrupt`, plus their
+  helpers, with no callers since `e91ba03e` (2026-08-08). No document,
+  workflow or contract test referenced them; git history keeps them.
 
 **Bug fix found during the review**
 
