@@ -351,25 +351,6 @@ func (generation *daemonGeneration) stopGracefully(
 	}
 }
 
-func (generation *daemonGeneration) kill(ctx context.Context) error {
-	if generation == nil || generation.command == nil {
-		return nil
-	}
-	_ = generation.parentLifetime.Close()
-	if err := generation.command.Process.Kill(); err != nil {
-		return fmt.Errorf("kill packaged daemon: %w", err)
-	}
-	select {
-	case err := <-generation.done:
-		if err == nil {
-			return errors.New("killed packaged daemon exited successfully")
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func normalizeWaitError(err error) error {
 	if err == nil {
 		return nil

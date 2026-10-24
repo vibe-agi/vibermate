@@ -371,14 +371,14 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 		if known != nil && errors.Is(cause, errStreamDelivery) {
 			err := e.dependencies.Store.FinishObservedRPC(ctx, receipt, nativetool.PhysicalFinishInput{Outcome: "failed", Reason: "transport_failed", ObservedAt: e.dependencies.Clock().UTC()}, *known)
 			if err != nil {
-				return e.finishFailure(c.id, s, w, err, true, claim)
+				return e.finishUncertain(c.id, s, w, claim)
 			}
 			e.notePhysicalTerminal(claim)
 			e.retireCompletedParents(ctx, s, c.id)
 			return Terminal{OperationID: c.id, Outcome: Outcome(known.Outcome)}
 		}
 		if cause != nil {
-			return e.finishFailure(c.id, s, w, cause, true, claim)
+			return e.finishUncertain(c.id, s, w, claim)
 		}
 		outcome, reason := "completed", "completed"
 		result := OutcomeCompleted
@@ -387,7 +387,7 @@ func (e *executor) finishStreamAttempt(c CapturedRequest, r rpc, s *session, rec
 			result = OutcomeFailed
 		}
 		if err := e.dependencies.Store.Finish(ctx, c.id, nativetool.TerminalInput{Outcome: outcome, Reason: reason, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw)), ObservedAt: e.dependencies.Clock().UTC()}); err != nil {
-			return e.finishFailure(c.id, s, w, err, true, claim)
+			return e.finishUncertain(c.id, s, w, claim)
 		}
 		e.notePhysicalTerminal(claim)
 		return Terminal{OperationID: c.id, Outcome: result, BytesIn: counted.bytes.Load(), BytesOut: int64(len(r.raw))}

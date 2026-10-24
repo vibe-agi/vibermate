@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	recordingbudget "github.com/vibe-agi/vibermate/internal/recording"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	recordingbudget "github.com/vibe-agi/vibermate/internal/recording"
 
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
@@ -132,7 +134,7 @@ func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recordi
 	return newNativeFixtureStoreLifetime(t, mode, recording, 0, custom...)
 }
 func newNativeFixtureStoreLifetime(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, custom ...Limits) *nativeFixture {
-	return newNativeFixtureWithChoice(t, mode, recording, lifetime, authoredEgress(t, egressprofile.Direct()), custom...)
+	return newNativeFixtureWithChoice(t, mode, recording, lifetime, egressprofiletest.Explicit(t, egressprofile.Direct()), custom...)
 }
 
 func newNativeFixtureWithChoice(t *testing.T, mode environment.ToolPolicyMode, recording environment.ContentRecordingPolicy, lifetime time.Duration, choice egressprofile.Choice, custom ...Limits) *nativeFixture {

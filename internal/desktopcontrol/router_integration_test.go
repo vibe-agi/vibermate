@@ -39,23 +39,6 @@ func (rejectingManualCaptureHandler) ServeHTTP(
 	writer.WriteHeader(http.StatusServiceUnavailable)
 }
 
-type recordingManualCaptureHandler struct {
-	called        bool
-	authorization string
-	principal     controlprincipal.Principal
-}
-
-func (handler *recordingManualCaptureHandler) ServeHTTP(
-	writer http.ResponseWriter,
-	request *http.Request,
-	principal controlprincipal.Principal,
-) {
-	handler.called = true
-	handler.authorization = request.Header.Get("Authorization")
-	handler.principal = principal
-	writer.WriteHeader(http.StatusNoContent)
-}
-
 func desktopManualPrincipal(t *testing.T) controlprincipal.Principal {
 	t.Helper()
 	principal, err := controlprincipal.New(controlprincipal.Attributes{
@@ -506,24 +489,6 @@ func doRequest(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	request := newRequest(method, authority, path, token, body)
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
-	return recorder
-}
-
-func doRevisionedRequest(
-	t *testing.T,
-	handler http.Handler,
-	authority string,
-	method string,
-	path string,
-	token string,
-	revision uint64,
-	body []byte,
-) *httptest.ResponseRecorder {
-	t.Helper()
-	request := newRequest(method, authority, path, token, body)
-	request.Header.Set("If-Match", strconv.FormatUint(revision, 10))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder

@@ -436,6 +436,15 @@ func (attempt Attempt) BytesOut() int64            { return attempt.bytesOut }
 func (attempt Attempt) BytesIn() int64             { return attempt.bytesIn }
 func (attempt Attempt) CompletedAt() time.Time     { return attempt.completedAt }
 
+// ClampCompletion returns completedAt, raised to the attempt's start when it
+// would otherwise precede it. A zero time stays zero.
+func (attempt Attempt) ClampCompletion(completedAt time.Time) time.Time {
+	if !completedAt.IsZero() && completedAt.Before(attempt.startedAt) {
+		return attempt.startedAt
+	}
+	return completedAt
+}
+
 // validatePayloadClass keeps the fail-closed rule at the record boundary too:
 // a record that claims client payload reached the inbound origin is a release
 // blocker, so it cannot be constructed in the first place.

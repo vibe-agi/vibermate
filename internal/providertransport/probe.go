@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"net"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
@@ -26,14 +25,6 @@ type ProviderProber struct {
 var _ offlinehold.Prober = (*ProviderProber)(nil)
 
 const DefaultProviderProbeTargetTimeout = 10 * time.Second
-
-func NewProviderProber() (*ProviderProber, error) {
-	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: &net.Dialer{}})
-	if err != nil {
-		return nil, err
-	}
-	return NewProviderProberWithBuilder(builder, nil)
-}
 
 // Trusted in-process composition only; it grants no target or send authority.
 func NewProviderProberWithBuilder(builder *egressnetwork.Builder, roots *x509.CertPool) (*ProviderProber, error) {

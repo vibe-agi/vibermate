@@ -30,10 +30,10 @@ type SearchQuery struct {
 func (query SearchQuery) Validate() error {
 	if query.BeforeSequence < 0 || len(query.Cursor) > 512 || query.Cursor != "" && query.BeforeSequence != 0 || strings.ContainsAny(query.Cursor, "\r\n\t ") || query.Limit <= 0 || query.Limit > MaxPageSize ||
 		query.OccurredAtOrAfter.IsZero() != query.OccurredBefore.IsZero() ||
-		!validSearchText(query.Text, true) ||
-		!validSearchText(query.Model, true) ||
-		!validSearchText(query.Tool, true) ||
-		!validSearchText(query.Reason, true) {
+		!validSearchText(query.Text) ||
+		!validSearchText(query.Model) ||
+		!validSearchText(query.Tool) ||
+		!validSearchText(query.Reason) {
 		return ErrInvalidEvent
 	}
 	if query.EnvironmentID != "" {
@@ -167,9 +167,9 @@ type SearchPage struct {
 	NextBeforeSequence  int64       `json:"nextBeforeSequence,omitempty"`
 }
 
-func validSearchText(value string, allowEmpty bool) bool {
+func validSearchText(value string) bool {
 	if value == "" {
-		return allowEmpty
+		return true
 	}
 	if len(value) > MaxSearchTextBytes || !utf8.ValidString(value) ||
 		strings.TrimSpace(value) != value {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -290,7 +291,7 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: "plan.anthropic", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 1},
-				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
+				EgressProfile:       egressprofiletest.Explicit(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

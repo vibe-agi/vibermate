@@ -257,7 +257,7 @@ func runEndpointModelsAuxCase(t *testing.T, choice, edge string) {
 			}
 		}
 		fetch := func(ctx context.Context, lease providerauth.Lease) error {
-			response, err := f.runtime.FetchEndpointModels(ctx, endpoint, lease)
+			response, err := f.runtime.FetchEndpointModels(ctx, endpoint, lease, false)
 			if response != nil && response.Body != nil {
 				_, readErr := io.Copy(io.Discard, response.Body)
 				err = errors.Join(err, readErr, response.Body.Close())

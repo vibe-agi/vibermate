@@ -12,7 +12,7 @@
 - **同方言转发**：原始报文是权威；投影只观察它能建模的部分。未建模的历史、工具定义与字段不阻断请求。上游未建模的输出项是"未证实动作"（`provider_action`），由 Environment 工具策略决定：观察放行、审查询问、严格拒绝。在上游已执行完的托管工具结果按不透明数据透传。
 - **审计可用性**：保留"无审计不外发"。终态审计写失败时保留并重试，期间拒绝新外发，写入后自动恢复；关停时仍有未写终态则停止失败。
 - **写事务有界**：共享写连接上的清理、维护按 100 条分批提交。
-- **Schema**：只有一份 `schema.sql` 和整数修订号，不做迁移与离线转换（[ADR 0021](docs/adr/0021-one-schema-revision-without-migrations.md)）。其他修订创建的数据目录会被拒绝打开且不被修改。
+- **Schema**：只有一份 `schema.sql` 和整数修订号，不提供离线转换工具（[ADR 0021](docs/adr/0021-one-schema-revision-without-migrations.md)）。已支持的修订在启动时经过校验的私有快照与事务升级到当前修订（见 [部署指南](docs/deployment.md#private-rollback-snapshots)）；不支持或无法识别的修订被拒绝打开且不被修改。
 - **Server 授权**：Runtime User 只能启动 Owner 显式授予的 Environment，新成员默认没有授权；"全部 Environment"是显式标志；Owner 自己的会话拥有全部。代理只接受 ASCII 规范主机，策略、审计与拨号使用同一个主机。
 
 ## 本分支已完成（`fix/post-016-review`）

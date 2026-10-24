@@ -629,21 +629,9 @@ func decodeCanonicalEnvelope(decoder *json.Decoder, record *Record) error {
 	return nil
 }
 
-func (request Request) validate(mode environment.ContentRecordingMode) error {
-	if len(request.Messages) == 0 {
-		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
-	}
-	return request.validateProjection(mode)
-}
-
 func (request Request) validateProjection(mode environment.ContentRecordingMode) error {
-	return request.validateProjectionWithin(mode, false)
-}
-
-func (request Request) validateProjectionWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if request.RequestedModel == "" || request.EffectiveModel == "" ||
 		request.MaxOutputTokens < 0 ||
-		(legacyCount && len(request.System) > protocolcore.MaxContentBlocks) ||
 		len(request.Tools) > protocolcore.MaxToolCount {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
 	}
@@ -656,7 +644,7 @@ func (request Request) validateProjectionWithin(mode environment.ContentRecordin
 		if err := validateMessageRole(message.Role); err != nil {
 			return err
 		}
-		if len(message.Blocks) == 0 || (legacyCount && len(message.Blocks) > protocolcore.MaxContentBlocks) {
+		if len(message.Blocks) == 0 {
 			return fmt.Errorf("%w: message blocks are invalid", ErrInvalidEvidence)
 		}
 		if err := validateMessageHeader(message); err != nil {
@@ -703,13 +691,8 @@ func validateMessageHeader(message Message) error {
 }
 
 func (response Response) validate(mode environment.ContentRecordingMode) error {
-	return response.validateWithin(mode, true)
-}
-
-func (response Response) validateWithin(mode environment.ContentRecordingMode, legacyCount bool) error {
 	if !validIdentity(response.ID, 512) || response.RequestedModel == "" ||
-		response.EffectiveModel == "" || response.ReportedModel == "" ||
-		(legacyCount && len(response.Blocks) > protocolcore.MaxContentBlocks) {
+		response.EffectiveModel == "" || response.ReportedModel == "" {
 		return fmt.Errorf("%w: response projection is incomplete", ErrInvalidEvidence)
 	}
 	if err := protocolcore.StopReason(response.StopReason).Validate(); err != nil {

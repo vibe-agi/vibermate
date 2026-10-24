@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"unicode/utf8"
 	"unsafe"
@@ -99,7 +100,7 @@ type streamTextState struct {
 	blockIndex  int
 	outputIndex int64
 	itemID      string
-	text        string
+	text        strings.Builder
 }
 
 type StreamEncoder struct {
@@ -319,7 +320,7 @@ func (encoder *StreamEncoder) AppendText(
 	if text == "" {
 		return nil, nil
 	}
-	if len(encoder.openText.text)+len(text) > protocolcore.MaxTextBytes {
+	if encoder.openText.text.Len()+len(text) > protocolcore.MaxTextBytes {
 		return nil, encoder.fail(
 			"$.output",
 			errors.New("text item exceeds the configured byte limit"),
@@ -346,7 +347,7 @@ func (encoder *StreamEncoder) AppendText(
 	if err != nil {
 		return nil, err
 	}
-	encoder.openText.text += text
+	encoder.openText.text.WriteString(text)
 	return encoded, nil
 }
 
@@ -363,14 +364,15 @@ func (encoder *StreamEncoder) StopText(index int) ([]byte, error) {
 			errors.New("text item stop has no matching open item"),
 		)
 	}
-	state := *encoder.openText
-	block, err := protocolcore.NewTextBlock(state.text)
+	state := encoder.openText
+	text := state.text.String()
+	block, err := protocolcore.NewTextBlock(text)
 	if err != nil {
 		return nil, encoder.fail("$.output", err)
 	}
 	content := responseMessageContentWire{
 		Type:        "output_text",
-		Text:        state.text,
+		Text:        text,
 		Annotations: []any{},
 		Logprobs:    []any{},
 	}
@@ -383,7 +385,7 @@ func (encoder *StreamEncoder) StopText(index int) ([]byte, error) {
 	}
 	part := streamOutputTextPartWire{
 		Type:        "output_text",
-		Text:        state.text,
+		Text:        text,
 		Annotations: []any{},
 		Logprobs:    []any{},
 	}
@@ -396,7 +398,7 @@ func (encoder *StreamEncoder) StopText(index int) ([]byte, error) {
 				OutputIndex:    state.outputIndex,
 				ItemID:         state.itemID,
 				ContentIndex:   0,
-				Text:           state.text,
+				Text:           text,
 				Logprobs:       []any{},
 			},
 		},
@@ -779,7 +781,7 @@ func (encoder *StreamEncoder) fail(path string, cause error) error {
 }
 
 func validateStreamStart(start protocolpath.StreamStart) error {
-	if err := validateBoundedString(start.ResponseID, 512, false); err != nil {
+	if err := validateBoundedString(start.ResponseID, 512); err != nil {
 		return fmt.Errorf("response ID: %w", err)
 	}
 	if start.CreatedAtUnix < 0 {
@@ -787,9 +789,7 @@ func validateStreamStart(start protocolpath.StreamStart) error {
 	}
 	if err := validateBoundedString(
 		start.ReportedModel,
-		protocolcore.MaxModelBytes,
-		false,
-	); err != nil {
+		protocolcore.MaxModelBytes); err != nil {
 		return fmt.Errorf("reported model: %w", err)
 	}
 	return nil

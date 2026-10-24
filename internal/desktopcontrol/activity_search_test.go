@@ -27,7 +27,7 @@ func TestActivitySearchQueryBindsCursorToFilters(t *testing.T) {
 		"from": {from.Format(time.RFC3339Nano)}, "until": {until.Format(time.RFC3339Nano)},
 		"limit": {"25"}, "cursor": {cursor},
 	}
-	parsed, err := parseActivitySearchQuery(values.Encode())
+	parsed, err := parseActivitySearchQuery(values.Encode(), false)
 	if err != nil || parsed.BeforeSequence != 42 || parsed.Text != query.Text ||
 		parsed.AccountID != query.AccountID || parsed.Model != query.Model ||
 		parsed.Tool != query.Tool || parsed.Status != query.Status ||
@@ -36,7 +36,7 @@ func TestActivitySearchQueryBindsCursorToFilters(t *testing.T) {
 		t.Fatalf("parseActivitySearchQuery() = %+v, %v", parsed, err)
 	}
 	values.Set("model", "different")
-	if _, err := parseActivitySearchQuery(values.Encode()); err == nil {
+	if _, err := parseActivitySearchQuery(values.Encode(), false); err == nil {
 		t.Fatal("cursor was accepted for different filters")
 	}
 }
@@ -48,7 +48,7 @@ func TestActivitySearchQueryRejectsEmptyAndMalformedFilters(t *testing.T) {
 		"q=ok&from=bad&until=2026-10-01T00:00:00Z", "q=ok&limit=0",
 		"q=ok&q=again", "q=%0Asecret",
 	} {
-		if _, err := parseActivitySearchQuery(raw); err == nil {
+		if _, err := parseActivitySearchQuery(raw, false); err == nil {
 			t.Fatalf("parseActivitySearchQuery(%q) succeeded", raw)
 		}
 	}

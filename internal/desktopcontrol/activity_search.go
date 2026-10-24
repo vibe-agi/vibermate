@@ -94,7 +94,7 @@ func (handler *Handler) enrichSearchActivities(
 	return nil
 }
 
-func parseActivitySearchQuery(rawQuery string, inspection ...bool) (activity.SearchQuery, error) {
+func parseActivitySearchQuery(rawQuery string, inspection bool) (activity.SearchQuery, error) {
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return activity.SearchQuery{}, errInvalidActivityQuery
@@ -140,7 +140,7 @@ func parseActivitySearchQuery(rawQuery string, inspection ...bool) (activity.Sea
 		query.OccurredBefore = query.OccurredBefore.UTC().Truncate(time.Millisecond)
 	}
 	if values.Has("cursor") {
-		if len(inspection) > 0 && inspection[0] {
+		if inspection {
 			query.Cursor = values.Get("cursor")
 			if query.Cursor == "" {
 				err = errInvalidActivityQuery

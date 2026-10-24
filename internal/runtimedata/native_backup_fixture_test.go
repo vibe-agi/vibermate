@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -44,7 +45,7 @@ func populateNativeBackup(t *testing.T, store *runtimepersistence.ControlStore, 
 	aggregate := nativeBackupEnvironment(t)
 	aggregate.ContentRecording = recording
 	aggregate.PolicySet = &environment.PolicySet{ToolMode: mode}
-	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: nativeBackupOrigin(t), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: authoredEgress(t, profile), Contract: environment.ClientToolContractCodexLegacy}}
+	aggregate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.mcp", Revision: 1, TargetOrigin: nativeBackupOrigin(t), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, EgressProfile: egressprofiletest.Explicit(t, profile), Contract: environment.ClientToolContractCodexLegacy}}
 	manager := nativeBackupEnvironmentManager(t, store)
 	draft, err := manager.SaveDraft(ctx, environment.DraftCommand{Candidate: aggregate})
 	if err != nil {
@@ -201,7 +202,7 @@ func nativeBackupEnvironment(t *testing.T) environment.Environment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return environment.Environment{ID: "native-backup-environment", Name: "Native backup", State: environment.StateActive, Revision: 1, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "native-endpoint", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "native-plan", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "native-adapter", Revision: 1}, EgressProfile: authoredEgress(t, egressprofile.Direct()), Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}}}}}}
+	return environment.Environment{ID: "native-backup-environment", Name: "Native backup", State: environment.StateActive, Revision: 1, ContentRecording: environment.DefaultContentRecordingPolicy(), ClientEndpoints: []environment.ClientEndpoint{{ID: "native-endpoint", Revision: 1, ClientOrigin: origin, ProtocolPlans: []environment.ClientProtocolPlan{{ID: "native-plan", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages, ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "native-adapter", Revision: 1}, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()), Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal}}}}}}
 }
 func nativeBackupEnvironmentManager(t *testing.T, store *runtimepersistence.ControlStore) *environment.Manager {
 	t.Helper()

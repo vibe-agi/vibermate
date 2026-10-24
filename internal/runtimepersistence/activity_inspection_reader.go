@@ -43,6 +43,9 @@ type activityInspectionRead struct {
 	token  recording.InspectionToken
 	mirror inspectionMirror
 	cancel context.CancelFunc
+	// visible memoizes fence lookups for this read. The read-only transaction
+	// is one snapshot, so every row of a Capture generation has one answer.
+	visible map[recording.Scope]bool
 }
 
 func (s *activityInspectionRead) endSQL() {
@@ -95,9 +98,19 @@ func (s *activityInspectionRead) allows(scope recording.Scope) (bool, error) {
 	if scope.Capture == (captureidentity.Reference{}) {
 		return true, nil
 	}
+	if visible, ok := s.visible[scope]; ok {
+		return visible, nil
+	}
 	var visible bool
 	err := s.tx.QueryRowContext(s.lease.ctx, fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM s%d.inspection_mirror_fences WHERE mirror_generation=? AND capture_kind=? AND capture_id=? AND capture_generation=? AND deleted=0)`, len(s.lease.sources)-1), s.mirror.Generation, scope.Capture.Kind, scope.Capture.ID, scope.Fence.CaptureGeneration).Scan(&visible)
-	return visible, err
+	if err != nil {
+		return false, err
+	}
+	if s.visible == nil {
+		s.visible = map[recording.Scope]bool{}
+	}
+	s.visible[scope] = visible
+	return visible, nil
 }
 
 // Scalars are guarded before Go materialization. Legacy display joins are

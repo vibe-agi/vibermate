@@ -114,8 +114,8 @@ func TestFetchEndpointModelsHonorsHoldAuditsAndReleasesItsAction(t *testing.T) {
 		response, err := client.FetchEndpointModels(
 			context.Background(),
 			endpoint,
-			testRuntimeDiscoveryCredential(t, endpoint.RealmID),
-		)
+			testRuntimeDiscoveryCredential(t, endpoint.RealmID), false)
+
 		result <- runtimeFetchResult{response: response, err: err}
 	}()
 	waitForGateQueue(t, gate, 1)
@@ -215,8 +215,8 @@ func TestFetchEndpointModelsAppliesTheAccountHeaderPolicy(t *testing.T) {
 	response, err := client.FetchEndpointModels(
 		context.Background(),
 		endpoint,
-		testRuntimeDiscoveryCredential(t, endpoint.RealmID),
-	)
+		testRuntimeDiscoveryCredential(t, endpoint.RealmID), false)
+
 	if err != nil {
 		t.Fatalf("FetchEndpointModels() error = %v", err)
 	}
@@ -316,7 +316,7 @@ func TestFetchChatGPTModelsUsesNativeCatalogAndSelectedAccount(t *testing.T) {
 			secrets := testSecretReader(t, token)
 			client := newRuntimeFetchClientWithSecret(t, gate, transport, audit, secrets.value)
 			endpoint := testDiscoveryEndpoint(t, origin)
-			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
+			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID), false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -355,8 +355,8 @@ func TestRuntimeFetchPersistsClassifiedTransportFailure(t *testing.T) {
 	_, err := client.FetchEndpointModels(
 		context.Background(),
 		endpoint,
-		testRuntimeDiscoveryCredential(t, endpoint.RealmID),
-	)
+		testRuntimeDiscoveryCredential(t, endpoint.RealmID), false)
+
 	if err == nil {
 		t.Fatal("runtime fetch transport failure was not returned")
 	}
@@ -396,7 +396,7 @@ func TestFetchChatGPTModelsNegotiatesAfterAccountOverrides(t *testing.T) {
 			}
 			client := newRuntimeFetchClientWithSecret(t, gate, transport, audit, encoded)
 			endpoint := testDiscoveryEndpoint(t, "https://chatgpt.com")
-			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID))
+			response, err := client.FetchEndpointModels(context.Background(), endpoint, testRuntimeDiscoveryCredential(t, endpoint.RealmID), false)
 			if err != nil {
 				t.Fatal(err)
 			}

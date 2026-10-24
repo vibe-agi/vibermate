@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -783,7 +784,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.claude", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
+				EgressProfile:       egressprofiletest.Explicit(t, egressprofile.Direct()),
 			}},
 		}},
 	})

@@ -1617,15 +1617,6 @@ func waitServerRecordingSettled(t *testing.T, r *productruntime.Runtime) {
 	waitServerRecording(t, r)
 }
 
-func mustServerAddress(t *testing.T, value string) serverconnection.Address {
-	t.Helper()
-	address, err := serverconnection.ParseAddress(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
-
 func mustServerTarget(t *testing.T, value string) serverconnection.Target {
 	t.Helper()
 	target, err := serverconnection.ParseTarget(value)

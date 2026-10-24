@@ -466,13 +466,6 @@ func attachEvidenceBody(
 	return record, nil
 }
 
-func boolToSQLite(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
-}
-
 func (r *rawEvidenceRepository) columns() string {
 	if r.coordinates {
 		return rawEvidenceColumns + ",recording_archive_epoch,recording_capture_generation"

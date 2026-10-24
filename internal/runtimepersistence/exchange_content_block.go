@@ -465,26 +465,11 @@ func putStoredBlock(
 	digest string,
 	encoded []byte,
 ) error {
-	codec := chunkCodecZstd
-	stored := bodyEncoder.EncodeAll(encoded, nil)
-	if len(stored) >= len(encoded) {
-		codec = chunkCodecIdentity
-		stored = encoded
-	}
-	result, err := transaction.ExecContext(
-		ctx,
-		`INSERT INTO runtime_exchange_content_blocks(
-		   digest, plain_bytes, codec, payload
-		 ) VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET plain_bytes = excluded.plain_bytes
-		 WHERE runtime_exchange_content_blocks.plain_bytes = excluded.plain_bytes`,
-		digest, len(encoded), codec, stored,
-	)
+	written, err := putCompressedRow(ctx, transaction, "runtime_exchange_content_blocks", digest, encoded)
 	if err != nil {
 		return fmt.Errorf("persist Exchange content block: %w", err)
 	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
+	if !written {
 		return errors.New("stored Exchange content block disagrees with its digest")
 	}
 	return nil

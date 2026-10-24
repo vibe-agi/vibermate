@@ -2,14 +2,16 @@ package productruntime
 
 import (
 	"context"
+	"reflect"
+	"time"
+
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
-	"reflect"
-	"time"
 )
 
 // This wrapper publishes only successful required-setting commits. It does not
@@ -80,6 +82,6 @@ func (o activityAttemptObserver) collectUsage(observation exchange.AttemptObserv
 	if v.Validate() != nil {
 		return nil
 	}
-	cloneSnapshot(reflect.ValueOf(&v).Elem())
+	exchangecontent.CloneOwned(reflect.ValueOf(&v).Elem())
 	return &runtimeusage.CollectedObservation{Value: v, PolicyRevision: policy.Revision, ExpiresAt: v.OccurredAt.Add(time.Duration(policy.RetentionDays) * 24 * time.Hour), Stamp: observation.ObservationStamp}
 }

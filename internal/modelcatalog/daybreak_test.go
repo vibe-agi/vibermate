@@ -103,6 +103,6 @@ func TestOfficialAPICatalogOptInKeepsGenericModelsAndCacheSeparate(t *testing.T)
 
 type catalogModeTransport func(bool) (*http.Response, error)
 
-func (f catalogModeTransport) FetchEndpointModels(_ context.Context, _ upstreamendpoint.Endpoint, _ providerauth.Lease, capabilities ...bool) (*http.Response, error) {
-	return f(len(capabilities) == 1 && capabilities[0])
+func (f catalogModeTransport) FetchEndpointModels(_ context.Context, _ upstreamendpoint.Endpoint, _ providerauth.Lease, capabilities bool) (*http.Response, error) {
+	return f(capabilities)
 }

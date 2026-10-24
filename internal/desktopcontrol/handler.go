@@ -1393,30 +1393,6 @@ func (handler *Handler) recordActivity(
 	}
 }
 
-func (runtime *RuntimeOfflineAdapter) OfflineHoldSnapshot() offlinehold.Snapshot {
-	return runtime.Runtime.Status().OfflineHold
-}
-
-// RuntimeOfflineAdapter keeps the control handler on the safe ProductRuntime
-// resume method rather than exposing a caller-selected Prober.
-type RuntimeOfflineAdapter struct {
-	Runtime *productruntime.Runtime
-}
-
-func (runtime *RuntimeOfflineAdapter) EnterOfflineHold(
-	ctx context.Context,
-	expected uint64,
-) (offlinehold.Snapshot, error) {
-	return runtime.Runtime.EnterOfflineHold(ctx, expected)
-}
-
-func (runtime *RuntimeOfflineAdapter) ResumeOfflineHold(
-	ctx context.Context,
-	expected uint64,
-) (offlinehold.Snapshot, error) {
-	return runtime.Runtime.ResumeOfflineHold(ctx, expected)
-}
-
 type problemSpec struct {
 	status int
 	reason ReasonCode

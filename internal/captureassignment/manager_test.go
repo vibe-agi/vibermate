@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -48,7 +49,7 @@ func TestNativeRequestPrecedesModelClientTargetPathRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
+	policy.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct())}}
 	profile, err := clienttarget.NewProfile("claude-code", clienttarget.EnvironmentFacts{AnthropicBaseURL: "https://api.example/restricted"})
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +614,7 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 				ID: "plan.messages", Revision: 1,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: adapterID, Revision: 1},
-				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
+				EgressProfile:       egressprofiletest.Explicit(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

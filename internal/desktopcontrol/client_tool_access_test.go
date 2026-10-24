@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
@@ -275,12 +276,12 @@ func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T
 			for pi := range input.ClientEndpoints[ei].ProtocolPlans {
 				p := &input.ClientEndpoints[ei].ProtocolPlans[pi]
 				p.Revision++
-				p.EgressProfile = authoredEgress(t, profile)
+				p.EgressProfile = egressprofiletest.Explicit(t, profile)
 			}
 		}
 	}
 	changed := save(1, reenabledDraft.DraftRevision, "native-egress-unsaved-001")
-	if changed.Candidate.ClientToolAccess.Route.ID != route.ID || changed.Candidate.ClientToolAccess.Route.Revision != 2 || changed.Candidate.ClientToolAccess.Route.EgressProfile != authoredEgress(t, profile) {
+	if changed.Candidate.ClientToolAccess.Route.ID != route.ID || changed.Candidate.ClientToolAccess.Route.Revision != 2 || changed.Candidate.ClientToolAccess.Route.EgressProfile != egressprofiletest.Explicit(t, profile) {
 		t.Fatal("unsaved egress was ignored or route identity replaced")
 	}
 	publish(changed.DraftRevision, "native-egress-")
@@ -356,7 +357,7 @@ func TestEnvironmentClientToolAccessPreparedCandidateAndFrozenRoute(t *testing.T
 	p.Destination.Upstream.Routes[0].AccountPolicy.FixedAccountID = "account.native.two"
 	p.Destination.Upstream.Routes[0].AccountPolicy.Accounts = []environment.RouteAccountReference{{ID: "account.native.two", Revision: 1, DisplayName: "account.native.two"}}
 	otherAccount := save(3, managed.DraftRevision, "native-model-account-two")
-	if managed.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.TargetOrigin.String() != "https://chatgpt.com" || otherAccount.Candidate.ClientToolAccess.Route.EgressProfile != authoredEgress(t, profile) {
+	if managed.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.CredentialOwner != "original_client" || otherAccount.Candidate.ClientToolAccess.Route.TargetOrigin.String() != "https://chatgpt.com" || otherAccount.Candidate.ClientToolAccess.Route.EgressProfile != egressprofiletest.Explicit(t, profile) {
 		t.Fatal("model account altered native owner/egress")
 	}
 	historical := environmentRequest(t, application, http.MethodGet, "/api/v1/environments/work/revisions/1", 0, "", nil)

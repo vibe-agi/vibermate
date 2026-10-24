@@ -300,7 +300,7 @@ func (record Record) Validate() error {
 	default:
 		return ErrInvalidApproval
 	}
-	if err := validateIdentity("approval ID", record.ID, false); err != nil {
+	if err := validateIdentity("approval ID", record.ID); err != nil {
 		return err
 	}
 	if !record.Kind.valid() {
@@ -314,9 +314,7 @@ func (record Record) Validate() error {
 	}
 	if err := validateIdentity(
 		"approval aggregate key",
-		record.AggregateKey,
-		false,
-	); err != nil {
+		record.AggregateKey); err != nil {
 		return err
 	}
 	if record.RequestCount == 0 ||
@@ -355,9 +353,7 @@ func (record Record) Validate() error {
 		}
 		if err := validateIdentity(
 			"Exchange ID",
-			record.ExchangeID,
-			false,
-		); err != nil {
+			record.ExchangeID); err != nil {
 			return err
 		}
 	}
@@ -381,16 +377,12 @@ func (record Record) Validate() error {
 	for index := range record.SubjectRefs {
 		if err := validateIdentity(
 			"approval subject reference",
-			record.SubjectRefs[index],
-			false,
-		); err != nil {
+			record.SubjectRefs[index]); err != nil {
 			return err
 		}
 		if err := validateIdentity(
 			"approval subject label",
-			record.SubjectLabels[index],
-			false,
-		); err != nil {
+			record.SubjectLabels[index]); err != nil {
 			return err
 		}
 		if len(record.SubjectLabels[index]) > MaxSubjectLabelBytes {
@@ -561,9 +553,9 @@ type DecisionCommand struct {
 }
 
 func (command DecisionCommand) Validate() error {
-	if validateIdentity("approval ID", command.ApprovalID, false) != nil ||
+	if validateIdentity("approval ID", command.ApprovalID) != nil ||
 		command.ExpectedRevision == 0 ||
-		validateIdentity("idempotency key", command.IdempotencyKey, false) != nil ||
+		validateIdentity("idempotency key", command.IdempotencyKey) != nil ||
 		len(command.IdempotencyKey) < 16 ||
 		(command.Scope != ScopeRequest && command.Scope != ScopeHostPort) {
 		return ErrInvalidApproval
@@ -574,7 +566,7 @@ func (command DecisionCommand) Validate() error {
 			return ErrInvalidApproval
 		}
 	case DecisionDeny:
-		if validateIdentity("decision reason code", command.ReasonCode, false) != nil {
+		if validateIdentity("decision reason code", command.ReasonCode) != nil {
 			return ErrInvalidApproval
 		}
 	default:
@@ -608,10 +600,7 @@ type Controller interface {
 	DecideApproval(context.Context, DecisionCommand) (View, error)
 }
 
-func validateIdentity(label string, value string, allowEmpty bool) error {
-	if value == "" && allowEmpty {
-		return nil
-	}
+func validateIdentity(label string, value string) error {
 	if value == "" ||
 		len(value) > MaxIdentityBytes ||
 		!utf8.ValidString(value) ||

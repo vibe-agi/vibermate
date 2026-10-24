@@ -1385,13 +1385,6 @@ func (pipeline *Pipeline) observeContent(
 	_ = pipeline.content.ObserveContent(ctx, observation)
 }
 
-func requestPlanRouteRef(
-	plan environment.RequestPlan,
-) (environment.UpstreamRouteID, environment.Revision) {
-	_, _, _, _, route, revision := plan.ObservationReferences()
-	return route, revision
-}
-
 func classifyClientRequestField(body []byte, failure error) ClientField {
 	pathField := ClientFieldUnknown
 	var protocolFailure *protocolcore.Failure

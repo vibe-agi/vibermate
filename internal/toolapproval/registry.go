@@ -147,14 +147,3 @@ func (registry *waiterRegistry) clearLocked(recordID string) {
 		}
 	}
 }
-
-// pendingRecordIDs lists the entries a shutdown must cancel.
-func (registry *waiterRegistry) pendingRecordIDs() []string {
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	identifiers := make([]string, 0, len(registry.byRecord))
-	for recordID := range registry.byRecord {
-		identifiers = append(identifiers, recordID)
-	}
-	return identifiers
-}

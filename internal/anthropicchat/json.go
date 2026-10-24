@@ -44,21 +44,14 @@ func rawPresent(value json.RawMessage) bool {
 	return len(trimmed) != 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
-// decodeTolerant decodes a wire object, naming the fields it carried that this
-// dialect does not model instead of refusing the whole request over them.
+// decodeTolerantWithin decodes a wire object, naming the fields it carried
+// that this dialect does not model instead of refusing the whole request over
+// them.
 //
 // Design 07 §2.3 requires the wire layer to keep unknown fields rather than let
 // a typed unmarshal make them disappear. The IR cannot carry a field it has no
 // concept of, so what survives is the fact that it was there: one declared
 // notice per field, at its path.
-func decodeTolerant(
-	value []byte,
-	destination any,
-	path string,
-) (protocolcore.TranslationReport, error) {
-	return decodeTolerantWithin(value, destination, path, nil)
-}
-
 func decodeTolerantWithin(value []byte, destination any, path string, budget *protocolcore.ResourceBudget) (protocolcore.TranslationReport, error) {
 	if err := rejectDuplicateJSONNames(value); err != nil {
 		return protocolcore.TranslationReport{}, err

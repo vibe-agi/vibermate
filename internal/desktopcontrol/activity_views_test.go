@@ -580,7 +580,7 @@ func TestActivityCursorIsCanonicalAndCollectionScoped(t *testing.T) {
 func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 	t.Parallel()
 
-	defaults, err := parseActivityListQuery("")
+	defaults, err := parseActivityListQuery("", false)
 	if err != nil || defaults.limit != 50 || defaults.beforeSequence != 0 {
 		t.Fatalf("default Activity query = %+v, %v", defaults, err)
 	}
@@ -589,10 +589,10 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, err := parseActivityListQuery(
-		"limit=200&cursor=" + cursor +
-			"&kind=exchange&captureRunId=run-one&environmentId=work" +
-			"&conversationId=capture_run%3Arun-one%3Amain",
-	)
+		"limit=200&cursor="+cursor+
+			"&kind=exchange&captureRunId=run-one&environmentId=work"+
+			"&conversationId=capture_run%3Arun-one%3Amain", false)
+
 	if err != nil ||
 		parsed.limit != 200 ||
 		parsed.beforeSequence != 91 ||
@@ -602,8 +602,8 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		t.Fatalf("parsed Activity query = %+v, %v", parsed, err)
 	}
 	manual, err := parseActivityListQuery(
-		"kind=exchange&manualCaptureId=manual-one&environmentId=work",
-	)
+		"kind=exchange&manualCaptureId=manual-one&environmentId=work", false)
+
 	if err != nil || manual.manualCaptureID != "manual-one" ||
 		manual.captureRunID != "" || manual.environmentID != "work" {
 		t.Fatalf("parsed ManualCapture Activity query = %+v, %v", manual, err)
@@ -636,7 +636,7 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		"limit=10;cursor=" + cursor,
 		"cursor=%zz",
 	} {
-		if _, err := parseActivityListQuery(invalid); err == nil {
+		if _, err := parseActivityListQuery(invalid, false); err == nil {
 			t.Fatalf("parseActivityListQuery(%q) unexpectedly succeeded", invalid)
 		}
 	}

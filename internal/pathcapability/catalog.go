@@ -5,11 +5,9 @@ package pathcapability
 import (
 	"errors"
 	"fmt"
-	pathpkg "path"
 	"slices"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -275,13 +273,13 @@ func (catalog *Catalog) Classify(
 			err:  errors.New("client dialect is empty"),
 		}
 	}
-	if !validMethod(method) {
+	if !protocolspec.ValidMethod(method) {
 		return Capability{}, &Failure{
 			Code: ReasonUnsupportedMethod,
 			err:  errors.New("HTTP method is not canonical"),
 		}
 	}
-	if rawPath != "" || !canonicalPath(requestPath) {
+	if rawPath != "" || !protocolspec.CanonicalPath(requestPath) {
 		return Capability{}, &Failure{
 			Code: ReasonInvalidRequestTarget,
 			err:  errors.New("request path is not canonical"),
@@ -384,35 +382,4 @@ func pathReplayClass(
 	default:
 		return "", errors.New("PathCapability replay class is invalid")
 	}
-}
-
-func canonicalPath(value string) bool {
-	if value == "" ||
-		len(value) > 2048 ||
-		!utf8.ValidString(value) ||
-		value[0] != '/' ||
-		strings.ContainsAny(value, "\\%\x00\r\n\t") ||
-		pathpkg.Clean(value) != value ||
-		(value != "/" && strings.HasSuffix(value, "/")) {
-		return false
-	}
-	for _, character := range value {
-		if character < 0x20 || character > 0x7e {
-			return false
-		}
-	}
-	return true
-}
-
-func validMethod(value string) bool {
-	if value == "" || strings.ToUpper(value) != value {
-		return false
-	}
-	for _, character := range value {
-		if (character < 'A' || character > 'Z') &&
-			character != '-' {
-			return false
-		}
-	}
-	return true
 }

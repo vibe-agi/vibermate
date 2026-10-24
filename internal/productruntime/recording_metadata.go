@@ -3,17 +3,18 @@ package productruntime
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sync/atomic"
+	"time"
+
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
-	"reflect"
-	"strings"
-	"sync/atomic"
-	"time"
 )
 
 type recordedMetadata struct {
@@ -178,11 +179,11 @@ func (o activityAttemptObserver) offerPrepared(stamp recording.Stamp, reservatio
 		o.queue.budget.RecordOffer(recording.Activity, recording.DroppedInvalid, 0)
 		return nil
 	}
-	cloneSnapshot(reflect.ValueOf(&record).Elem())
+	exchangecontent.CloneOwned(reflect.ValueOf(&record).Elem())
 	usageSink := o.usage
 	bundle := &recordedMetadata{usage: usage, usageSink: usageSink, usageOutcome: recording.Discarded, activity: record, activitySink: sink, identitySink: o.identities}
 	if identity, found := agentconversation.ClientIdentityFromProtocolEvidence(evidence, providerID, record.OccurredAt); found {
-		cloneSnapshot(reflect.ValueOf(&identity).Elem())
+		exchangecontent.CloneOwned(reflect.ValueOf(&identity).Elem())
 		bundle.identity = &identity
 	}
 	bytes := snapshotBytes(reflect.ValueOf(record))
@@ -287,36 +288,4 @@ func snapshotBytes(v reflect.Value) uint64 {
 		}
 	}
 	return n
-}
-
-// Only exported prepared projection values reach this ownership clone.
-func cloneSnapshot(v reflect.Value) {
-	if v.Type() == reflect.TypeOf(time.Time{}) {
-		v.Set(reflect.ValueOf(v.Interface().(time.Time).UTC()))
-		return
-	}
-	switch v.Kind() {
-	case reflect.String:
-		v.SetString(strings.Clone(v.String()))
-	case reflect.Pointer:
-		if !v.IsNil() {
-			p := reflect.New(v.Type().Elem())
-			p.Elem().Set(v.Elem())
-			cloneSnapshot(p.Elem())
-			v.Set(p)
-		}
-	case reflect.Slice:
-		if !v.IsNil() {
-			p := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-			reflect.Copy(p, v)
-			for i := 0; i < p.Len(); i++ {
-				cloneSnapshot(p.Index(i))
-			}
-			v.Set(p)
-		}
-	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			cloneSnapshot(v.Field(i))
-		}
-	}
 }

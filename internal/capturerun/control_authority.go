@@ -23,7 +23,7 @@ func (manager *Manager) AuthorizeControl(ctx context.Context, id string, capabil
 	if !ok {
 		return View{}, ErrCapabilityRejected
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return View{}, err
 	}

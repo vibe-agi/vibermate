@@ -30,9 +30,7 @@ type NetworkAskRequest struct {
 func (request NetworkAskRequest) validate() error {
 	if err := validateIdentity(
 		"network ask ingress ID",
-		request.IngressID,
-		false,
-	); err != nil {
+		request.IngressID); err != nil {
 		return err
 	}
 	if request.Host == "" ||

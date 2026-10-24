@@ -98,9 +98,9 @@ func (service *Service) Discover(
 	endpointID upstreamendpoint.ID,
 	accountID provideraccount.ID,
 	refresh bool,
-	codexCapabilities ...bool,
+	codexCapabilities bool,
 ) (Snapshot, error) {
-	if service == nil || ctx == nil || endpointID == "" || accountID == "" || len(codexCapabilities) > 1 {
+	if service == nil || ctx == nil || endpointID == "" || accountID == "" {
 		return Snapshot{}, ErrInvalidCatalog
 	}
 	if err := ctx.Err(); err != nil {
@@ -133,11 +133,10 @@ func (service *Service) Discover(
 		accountRef.ID != accountID.String() {
 		return Snapshot{}, ErrInvalidCatalog
 	}
-	capabilities := len(codexCapabilities) == 1 && codexCapabilities[0]
-	if capabilities && !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
+	if codexCapabilities && !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
 		return Snapshot{}, ErrInvalidCatalog
 	}
-	key := cacheKey{endpointID: endpointID, accountID: accountID, codexCapabilities: capabilities}
+	key := cacheKey{endpointID: endpointID, accountID: accountID, codexCapabilities: codexCapabilities}
 	now := service.clock.Now().UTC()
 	if !refresh {
 		service.mu.Lock()
@@ -157,7 +156,7 @@ func (service *Service) Discover(
 		discoveryContext,
 		endpoint,
 		credential,
-		capabilities,
+		codexCapabilities,
 	)
 	cancelDiscovery()
 	snapshot := Snapshot{

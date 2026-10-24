@@ -112,11 +112,8 @@ func (client *Client) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	credential providerauth.Lease,
-	codexCapabilities ...bool,
+	codexCapabilities bool,
 ) (*http.Response, error) {
-	if len(codexCapabilities) > 1 {
-		return nil, upstreamservice.ErrUnsupported
-	}
 	if err := endpoint.Validate(); err != nil {
 		return nil, fmt.Errorf("discover Endpoint models: %w", err)
 	}
@@ -132,7 +129,7 @@ func (client *Client) FetchEndpointModels(
 	}
 	// Official Codex-capable accounts use the service-owned capability
 	// directory. Generic endpoint discovery still uses its ordinary models URL.
-	if len(codexCapabilities) == 1 && codexCapabilities[0] {
+	if codexCapabilities {
 		if !upstreamendpoint.SupportsCodexCatalog(endpoint.Origin, credential.Driver()) {
 			return nil, upstreamservice.ErrUnsupported
 		}

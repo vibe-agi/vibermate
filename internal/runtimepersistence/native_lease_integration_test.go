@@ -10,6 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -63,7 +64,7 @@ func newNativeLeaseFixtureOnStore(t *testing.T, store *Store, enabled, shared bo
 	if enabled {
 		candidate.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{
 			ID: "native.lease.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath,
-			CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct()),
+			CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()),
 		}}
 	}
 	publishEnvironmentRevision(t, environments, candidate, 0)
@@ -220,14 +221,14 @@ func TestNativeLeaseApplyLatestCannotGainLaunchAuthority(t *testing.T) {
 			next := fixture.snapshot.Aggregate()
 			next.Revision++
 			if change == "initial_off" {
-				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://relay.example"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
+				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new", Revision: 1, TargetOrigin: runtimeProviderOrigin(t, "https://relay.example"), Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct())}}
 			} else if change == "route" {
 				next.ClientToolAccess.Route.ID = "native.new"
 			} else if change == "profile" {
 				next.ClientToolAccess.Route.Revision++
 				profile := egressprofile.Direct()
 				profile.ID, profile.DisplayName = "profile.changed", "Changed profile"
-				next.ClientToolAccess.Route.EgressProfile = authoredEgress(t, profile)
+				next.ClientToolAccess.Route.EgressProfile = egressprofiletest.Explicit(t, profile)
 			}
 			publishEnvironmentRevision(t, fixture.environments, next, 1)
 			applied, err := fixture.assignments.ApplyLatest(context.Background(), fixture.capture, 1)
