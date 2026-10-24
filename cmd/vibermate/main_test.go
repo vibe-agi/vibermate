@@ -906,3 +906,29 @@ func TestManagedAuthDiagnosticsAreLocalized(t *testing.T) {
 		t.Fatalf("missing environment diagnostic: %d %s", code, key)
 	}
 }
+
+func TestParseRunAcceptsTransparentOnce(t *testing.T) {
+	config, err := parseRun([]string{"run", "--transparent", "--env", "work", "--", "codex"})
+	if err != nil || !config.transparent || config.environmentID != "work" {
+		t.Fatalf("parseRun(--transparent) = %+v, %v", config, err)
+	}
+	if config, err := parseRun([]string{"run", "--", "codex"}); err != nil || config.transparent {
+		t.Fatalf("default run = %+v, %v; want proxy-variable capture", config, err)
+	}
+	if _, err := parseRun([]string{"run", "--transparent", "--transparent", "--", "codex"}); err == nil {
+		t.Fatal("repeated --transparent accepted")
+	}
+}
+
+func TestTransparentFailuresHaveTheirOwnMessages(t *testing.T) {
+	for err, want := range map[error]string{
+		runlauncher.ErrTransparentUnsupported:                                                "cli.error.transparent.unsupported",
+		runlauncher.ErrTransparentUnavailable:                                                "cli.error.transparent.unavailable",
+		runlauncher.ErrTransparentExtensionInactive:                                          "cli.error.transparent.extensionInactive",
+		errors.Join(runlauncher.ErrCaptureSupervisionFailed, runlauncher.ErrTransparentLost): "cli.error.transparent.lost",
+	} {
+		if got := launchFailureKey(err); got != want {
+			t.Errorf("launchFailureKey(%v) = %q, want %q", err, got, want)
+		}
+	}
+}

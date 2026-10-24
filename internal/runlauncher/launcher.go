@@ -99,7 +99,10 @@ type Launcher struct {
 // together with the exact child invocation. When absent, the Capture records
 // traffic while each request continues to its original destination.
 type LaunchRequest struct {
-	ManagedAuth   bool
+	ManagedAuth bool
+	// Transparent captures the Agent and its descendants by process lineage
+	// instead of proxy environment variables (ADR 0024).
+	Transparent   bool
 	EnvironmentID environment.EnvironmentID
 	Command       []string
 }
@@ -358,6 +361,16 @@ func (launcher *Launcher) Run(
 		}
 	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
+	var transparent *transparentCapture
+	if request.Transparent {
+		transparent, err = launcher.startTransparent(grant, environmentGrant)
+		if err != nil {
+			launcher.finishBestEffort(control, grant)
+			return 1, err
+		}
+		defer transparent.Close()
+		environment = withoutProxyEnvironment(environment)
+	}
 	if recovery != nil {
 		recovery.childEnvironment = append([]string(nil), environment...)
 	}
@@ -427,10 +440,21 @@ func (launcher *Launcher) Run(
 		}
 	}
 	defer stopHeartbeat(errors.New("captured process ended"))
+	var transparentFailure <-chan error
+	if transparent != nil {
+		transparentFailure = transparent.supervise(heartbeatContext, child.Process.Pid, launcher.config.Stderr)
+	}
 
 	var waitErr error
 	select {
 	case waitErr = <-waitResult:
+	case transparentErr := <-transparentFailure:
+		stopSupervision(transparentErr)
+		cancelChild(transparentErr)
+		waitErr = <-waitResult
+		restoreTerminal()
+		launcher.finishBestEffort(control, grant)
+		return 1, errors.Join(ErrCaptureSupervisionFailed, transparentErr)
 	case heartbeatErr := <-heartbeatFailure:
 		stopSupervision(heartbeatErr)
 		cancelChild(heartbeatErr)
