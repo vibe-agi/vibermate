@@ -103,6 +103,7 @@ type Host struct {
 	control              *trackedListener
 	proxy                *trackedListener
 	socks                *trackedListener
+	flows                *flowService
 	appSession           AppSession
 	instanceID           string
 	shutdownLimit        time.Duration
@@ -305,6 +306,14 @@ func startWithConstructors(ctx context.Context, options Options,
 		return normalizeClose(controlTracked.Close())
 	})
 	controlBaseURL := "http://" + controlTracked.Addr().String()
+	var flows *flowService
+	if options.TransparentCapture {
+		flows, err = startFlowService(options.Paths.FlowRegistrationSocket(), options.Runtime.SecurityRandom)
+		if err != nil {
+			return fail("transparent capture rendezvous", err)
+		}
+		rollback.register("transparent capture rendezvous", func(context.Context) error { return flows.Close() })
+	}
 
 	now := options.Runtime.Clock.Now().UTC()
 	bootstrapExpiresAt := now.Add(options.BootstrapTTL)
@@ -562,7 +571,10 @@ func startWithConstructors(ctx context.Context, options Options,
 			APIVersions:    []string{"v1"},
 			EventVersions:  []string{},
 			BootstrapNonce: bootstrapNonce,
+			FlowPort:       flows.portOrZero(),
+			FlowSecret:     flows.secretOrEmpty(),
 		},
+		flows:                flows,
 		instanceID:           runtime.Status().InstanceID,
 		shutdownLimit:        options.ShutdownTimeout,
 		clock:                options.Runtime.Clock,
@@ -782,6 +794,11 @@ func (host *Host) executeShutdown() {
 	host.discoveryWG.Wait()
 	if err := host.discovery.Remove(host.instanceID); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("withdraw local control discovery: %w", err))
+	}
+	if host.flows != nil {
+		if err := host.flows.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close transparent capture rendezvous: %w", err))
+		}
 	}
 	if err := normalizeClose(host.control.Close()); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close control admission: %w", err))

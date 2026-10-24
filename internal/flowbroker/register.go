@@ -82,6 +82,10 @@ func (registration *Registration) receive(handle func(net.Conn)) {
 	}
 }
 
+// Done is closed when the claim ends: the broker closed it, vibermated
+// exited, or Close was called.
+func (registration *Registration) Done() <-chan struct{} { return registration.done }
+
 // Close ends the claim and waits for the receiver to stop.
 func (registration *Registration) Close() error {
 	var err error

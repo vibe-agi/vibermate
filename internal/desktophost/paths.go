@@ -28,6 +28,10 @@ func (paths Paths) LockPath() string {
 	return paths.layout.GenerationLock
 }
 
+func (paths Paths) FlowRegistrationSocket() string {
+	return paths.layout.FlowRegistrationSocket
+}
+
 func (paths Paths) DiscoveryPath() string {
 	return paths.layout.CLIControlRecord
 }

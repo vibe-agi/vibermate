@@ -114,6 +114,10 @@ type Descriptor struct {
 	APIVersions    []string `json:"apiVersions"`
 	EventVersions  []string `json:"eventVersions"`
 	BootstrapNonce string   `json:"bootstrapNonce"`
+	// FlowPort and FlowSecret let the native shell configure the transparent
+	// proxy extension. They are capabilities and appear only here.
+	FlowPort   int    `json:"flowPort,omitempty"`
+	FlowSecret string `json:"flowSecret,omitempty"`
 }
 
 func (descriptor Descriptor) Clone() Descriptor {

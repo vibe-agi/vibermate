@@ -220,3 +220,24 @@ func TestLoopbackTCPFlowsNeedTheSecret(t *testing.T) {
 		t.Fatal("run received no TCP flow")
 	}
 }
+
+func TestCloseEndsLiveRegistrations(t *testing.T) {
+	broker, registrations, flows := startBroker(t, sameUser)
+	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.Close()
+	select {
+	case <-registration.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("registration did not observe the broker closing")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for submit(t, flows, startChild(t), "") != flowUnowned {
+		if time.Now().After(deadline) {
+			t.Fatal("flows still owned after the broker closed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

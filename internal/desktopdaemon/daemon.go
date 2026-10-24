@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	goruntime "runtime"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
@@ -90,6 +91,9 @@ func ProductionOptions(
 	// The native App is also a Runtime Server. Remote clients authenticate as
 	// Runtime Users and share the same evidence database as the local App.
 	hostOptions.RemoteServerEnabled = true
+	// The transparent proxy extension exists only on macOS; Linux captures by
+	// network namespace and needs no broker (ADR 0024).
+	hostOptions.TransparentCapture = goruntime.GOOS == "darwin"
 	return Options{
 		Host:            hostOptions,
 		BootstrapWriter: bootstrapWriter,
