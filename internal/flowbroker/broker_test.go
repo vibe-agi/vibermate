@@ -14,7 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/processlineage"
 )
 
-func startBroker(t *testing.T, allow func(Peer) bool) (registrations, flows string) {
+func startBroker(t *testing.T, allow func(Peer) bool) (broker *Broker, registrations, flows string) {
 	t.Helper()
 	broker, err := New(processlineage.System(), allow)
 	if err != nil {
@@ -34,7 +34,7 @@ func startBroker(t *testing.T, allow func(Peer) bool) (registrations, flows stri
 		t.Cleanup(func() { listener.Close() })
 		go serve(listener)
 	}
-	return registrations, flows
+	return broker, registrations, flows
 }
 
 func startChild(t *testing.T) int {
@@ -56,7 +56,7 @@ func submit(t *testing.T, flows string, pid int, payload string) byte {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := WriteFlowRequest(conn, pid); err != nil {
+	if err := WriteFlowRequest(conn, pid, ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -76,7 +76,7 @@ func submit(t *testing.T, flows string, pid int, payload string) byte {
 func sameUser(peer Peer) bool { return peer.UID == os.Getuid() }
 
 func TestOwnedFlowIsHandedToItsRun(t *testing.T) {
-	registrations, flows := startBroker(t, sameUser)
+	_, registrations, flows := startBroker(t, sameUser)
 	received := make(chan string, 1)
 	registration, err := Register(registrations, "run-a", func(flow net.Conn) {
 		defer flow.Close()
@@ -108,7 +108,7 @@ func TestOwnedFlowIsHandedToItsRun(t *testing.T) {
 }
 
 func TestClosingRegistrationEndsOwnership(t *testing.T) {
-	registrations, flows := startBroker(t, sameUser)
+	_, registrations, flows := startBroker(t, sameUser)
 	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestClosingRegistrationEndsOwnership(t *testing.T) {
 }
 
 func TestOnlyAllowedPeersMaySubmitFlows(t *testing.T) {
-	registrations, flows := startBroker(t, func(Peer) bool { return false })
+	_, registrations, flows := startBroker(t, func(Peer) bool { return false })
 	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestOnlyAllowedPeersMaySubmitFlows(t *testing.T) {
 }
 
 func TestOneLiveRegistrationPerProcess(t *testing.T) {
-	registrations, _ := startBroker(t, sameUser)
+	_, registrations, _ := startBroker(t, sameUser)
 	first, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
@@ -156,5 +156,67 @@ func TestOneLiveRegistrationPerProcess(t *testing.T) {
 	if second, err := Register(registrations, "run-b", func(flow net.Conn) { flow.Close() }); err == nil {
 		second.Close()
 		t.Fatal("a process registered as two runs")
+	}
+}
+
+func TestLoopbackTCPFlowsNeedTheSecret(t *testing.T) {
+	broker, registrations, _ := startBroker(t, sameUser)
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	if err := broker.ServeFlowsTCP(listener, []byte("short")); err == nil {
+		t.Fatal("a short secret was accepted")
+	}
+	go broker.ServeFlowsTCP(listener, secret)
+	received := make(chan string, 1)
+	registration, err := Register(registrations, "run-a", func(flow net.Conn) {
+		defer flow.Close()
+		data, _ := io.ReadAll(flow)
+		received <- string(data)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registration.Close()
+	child := startChild(t)
+	submitTCP := func(secret string, payload string) byte {
+		conn, err := net.DialTCP("tcp4", nil, listener.Addr().(*net.TCPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if err := WriteFlowRequest(conn, child, secret); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		answer := make([]byte, 1)
+		if _, err := io.ReadFull(conn, answer); err != nil {
+			return 0
+		}
+		if answer[0] == flowOwned {
+			_, _ = io.WriteString(conn, payload)
+			_ = conn.CloseWrite()
+		}
+		return answer[0]
+	}
+	if answer := submitTCP("wrong-secret-wrong-secret-wrong-s", ""); answer != 0 {
+		t.Fatalf("wrong secret got answer %q", answer)
+	}
+	if answer := submitTCP("", ""); answer != 0 {
+		t.Fatalf("missing secret got answer %q", answer)
+	}
+	if answer := submitTCP(string(secret), "tcp-flow"); answer != flowOwned {
+		t.Fatalf("answer = %q, want owned", answer)
+	}
+	select {
+	case data := <-received:
+		if data != "tcp-flow" {
+			t.Fatalf("run received %q", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run received no TCP flow")
 	}
 }

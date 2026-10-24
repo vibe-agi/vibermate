@@ -4,6 +4,7 @@ package flowbroker
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -30,9 +31,9 @@ const (
 type Broker struct {
 	lineage *processlineage.Registry
 	reader  processlineage.Reader
-	// allowFlowPeer decides which processes may submit flows. On macOS only
-	// the Network Extension (running as root) may, so a same-user process
-	// cannot route traffic under another run's identity.
+	// allowFlowPeer decides which Unix-socket peers may submit flows, so a
+	// same-user process cannot route traffic under another run's identity.
+	// Loopback TCP submissions authenticate with a secret instead.
 	allowFlowPeer func(Peer) bool
 
 	sequence atomic.Uint64
@@ -72,9 +73,34 @@ func (broker *Broker) ServeRegistrations(listener *net.UnixListener) error {
 	return serve(listener, broker.register)
 }
 
-// ServeFlows accepts flow submissions until listener closes.
+// ServeFlows accepts flow submissions on a Unix socket, admitting peers that
+// allowFlowPeer accepts.
 func (broker *Broker) ServeFlows(listener *net.UnixListener) error {
-	return serve(listener, broker.flow)
+	return serve(listener, func(conn *net.UnixConn) {
+		peer, err := peerOf(conn)
+		if err != nil || !broker.allowFlowPeer(peer) {
+			conn.Close()
+			return
+		}
+		broker.flow(conn, nil)
+	})
+}
+
+// ServeFlowsTCP accepts flow submissions on loopback TCP, where the sandboxed
+// macOS extension (running as root) can reach a user-level vibermated. Each
+// request must carry secret, which the app hands the extension through its
+// provider configuration.
+func (broker *Broker) ServeFlowsTCP(listener *net.TCPListener, secret []byte) error {
+	if len(secret) < 32 {
+		return errors.New("flow secret must be at least 32 bytes")
+	}
+	for {
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			return err
+		}
+		go broker.flow(conn, secret)
+	}
 }
 
 func serve(listener *net.UnixListener, handle func(*net.UnixConn)) error {
@@ -143,22 +169,22 @@ func (broker *Broker) register(conn *net.UnixConn) {
 }
 
 type flowRequest struct {
-	Version int `json:"v"`
-	PID     int `json:"pid"`
+	Version int    `json:"v"`
+	PID     int    `json:"pid"`
+	Secret  string `json:"secret,omitempty"`
 }
 
 // flow answers whether the submitting process's flow is owned. An owned
 // flow's connection is passed to its run, which reads the flow header and
-// bytes the extension sends next.
-func (broker *Broker) flow(conn *net.UnixConn) {
+// bytes the extension sends next. With a secret, the request must carry it.
+func (broker *Broker) flow(conn fileConn, secret []byte) {
 	defer conn.Close()
-	peer, err := peerOf(conn)
-	if err != nil || !broker.allowFlowPeer(peer) {
-		return
-	}
 	_ = conn.SetReadDeadline(time.Now().Add(requestTimeout))
 	request, err := readFlowRequest(conn)
 	if err != nil {
+		return
+	}
+	if secret != nil && subtle.ConstantTimeCompare([]byte(request.Secret), secret) != 1 {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
@@ -199,8 +225,9 @@ func readFlowRequest(r io.Reader) (flowRequest, error) {
 }
 
 // WriteFlowRequest frames a flow ownership query, as the extension sends it.
-func WriteFlowRequest(w io.Writer, pid int) error {
-	encoded, err := json.Marshal(flowRequest{Version: 1, PID: pid})
+// secret is empty on a Unix socket, where peer credentials authenticate.
+func WriteFlowRequest(w io.Writer, pid int, secret string) error {
+	encoded, err := json.Marshal(flowRequest{Version: 1, PID: pid, Secret: secret})
 	if err != nil {
 		return err
 	}

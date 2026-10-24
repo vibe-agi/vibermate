@@ -13,9 +13,16 @@ import (
 // flowMarker is the one data byte that carries each passed flow descriptor.
 const flowMarker = 'F'
 
+// fileConn is a connection whose descriptor can be duplicated: Unix sockets
+// from tests and the loopback TCP connections the extension opens.
+type fileConn interface {
+	net.Conn
+	File() (*os.File, error)
+}
+
 // passConn sends a duplicate of conn's descriptor over channel. The caller
 // still owns conn and closes it afterwards; the receiver owns the duplicate.
-func passConn(channel *net.UnixConn, conn *net.UnixConn) error {
+func passConn(channel *net.UnixConn, conn fileConn) error {
 	file, err := conn.File()
 	if err != nil {
 		return err
