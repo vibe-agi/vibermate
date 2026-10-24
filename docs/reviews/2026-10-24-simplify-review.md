@@ -92,7 +92,7 @@ touched package.
 | ALT-4/5 | `runlauncher` branches on the `codex-cli` ID three ways and on an exact `0.145.0` version. Client identity has no single owner. Proposed fix: release feature bits and a per-recipe launch hook. | Changes to the launcher's contract need native Codex acceptance. |
 | ALT-6/7 | Codex arguments are rewritten in three passes, and the base URL is derived twice. Proposed fix: parse once into a `codexInvocation`, and reuse `clienttarget.Profile.Resolve`. | Needs parity table tests before switching. |
 | ALT-8 | Archive change detection tolerates WAL sidecars through a hand-written WAL header parser. Proposed fix: checkpoint and set `journal_mode=DELETE` under the maintenance lease. | Touches the on-disk archive lifecycle, and archives already on disk would need conversion. |
-| EFF-2/5/6 | On the egress path, each same-dialect request is re-decoded, re-validated and deep-copied 4–6 times, about 100–200 ms per 2.4 MB body. | These passes may be deliberate defence in depth on the egress boundary. The owner should decide before any is removed. |
+| EFF-5/6 | Each request is validated and deep-copied 4–6 times on the way out: end of decode, admission, model rewrite, provider encode and stream setup. | These may be deliberate defence in depth on the egress boundary. Removing any of them needs an explicit decision about which boundary is authoritative. |
 | EFF-4 | `openairesponses` re-runs the duplicate-key check on input items cut from a root that was already checked. | The fix threads a "names already validated" mode through the decoder. If that is done wrong, the documented duplicate-key rule silently weakens. Needs its own focused change and tests. |
 | EFF-10 | Content recording hashes and copies the full history twice per exchange. | Medium-risk restructuring of recording. |
 | SIMP-4 | The schema upgrade is copied per revision (1→2, 2→3). | Could become a table-driven runner. Merging `LegacyDigest` and `SourceDigest` would change the receipt format used during an upgrade. |
@@ -125,13 +125,30 @@ touched package.
   The `nativetool.ErrDenied` argument at one call site was a misleading label
   for a receipt mismatch, and its `cause` was never used.
 
+## Suggested follow-up order
+
+1. **ALT-1:** classify the upstream service once, as typed capabilities on the
+   endpoint, and send them to the UI. This removes about 30 origin-string
+   checks and the Dart copy, and makes ALT-3 and the ChatGPT branch in
+   `providertransport/auth.go` (part of ALT-12) mechanical. It needs a
+   Flutter toolchain for the Dart half.
+2. **ALT-3:** move Codex turn-state and native headers behind a per-service
+   adapter hook in the Exchange pipeline.
+3. **ALT-4/5, then ALT-6/7:** add release feature bits and a launch-recipe
+   hook, then parse Codex arguments once. These need native Codex acceptance
+   runs.
+4. **EFF-4:** check duplicate keys once per document in `openairesponses`,
+   with tests that pin nested duplicate-key rejection first.
+5. **Dart deduplication**, once Flutter is available.
+
 ## Skipped
 
 | ID | Finding | Why skipped |
 |---|---|---|
 | SIMP-14 | Compatibility shims: the old `self_signed_tls` transport spelling and the old login-directory migration. | Kept on purpose. The login migration was requested and added on 2026-10-16 (`31057526`), the same day the supported schema upgrade landed. Public releases preserve existing installs, and a deployed server may still start with `--transport self_signed_tls`. |
-| ALT-10 | `responsesDataKeepaliveFor` picks keepalive by origin for one operation and by feature bit for another. | Older Codex releases would first need the feature bit set, so changing this alters behavior. |
 | SIMP-3 (partial) | The agent said the recorder's `sealed` state was never set, so the seal code was dead. | Wrong: recording maintenance and storage moves do set it. Only the unused `recordingArchiveBarrier` was removed. |
+| EFF-2 | Same-dialect requests are re-validated before egress, because the provider encoder re-marshals with sorted keys and the bytes never match the client body. | Kept. The cross-dialect branch always re-validates codec output, so the check guards codec output as well as transform scripts. Making it skip would need the encoder to forward the client's original bytes, which changes what is sent upstream. |
+| ALT-10 | `responsesDataKeepaliveFor` decides by origin for the ChatGPT Codex operation and by feature bit for `/v1/responses`. | Not equivalent. Only 0.145.0 (darwin-arm64), 0.159.2 and 0.160.0 carry `FeatureResponsesDataKeepalive`, while the ChatGPT path gives keepalive to every admitted client. Unifying them would turn keepalive off for some clients. The check reads the client-facing origin, as its comment requires. |
 | ALT-9 | Connection failures are classified by matching error text. Proposed: an error type checked with `errors.As`. | These errors pass through `crypto/tls` handshakes. Substring matching survives wrapping with `%v`; `errors.As` might not. |
 | ALT-12 (history) | History permission is checked both before acquiring a credential and inside the request. | The early check is deliberate: it denies the read before any credential is acquired. |
 | Unused `ctx` parameters | Reported by `unparam` on audit helpers. | Keeping `ctx` is idiomatic Go and cheap; removing it is churn. |
