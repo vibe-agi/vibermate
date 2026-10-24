@@ -1450,14 +1450,6 @@ func mustOrigin(t *testing.T, value string) originidentity.ClientOrigin {
 	return origin
 }
 
-func semanticCaptureBinding(t *testing.T, aggregate Environment, origin string) ConnectionBinding {
-	t.Helper()
-	binding, err := mustCompile(t, aggregate).BeginConnection(mustOrigin(t, origin))
-	if err != nil || binding.Mode != ConnectionModeSemantic {
-		t.Fatalf("BeginConnection(%q) = %+v, %v", origin, binding, err)
-	}
-	return binding
-}
 func mustProviderOrigin(t *testing.T, value string) originidentity.ProviderOrigin {
 	t.Helper()
 	origin, err := originidentity.ParseProviderOrigin(value)
@@ -1637,15 +1629,6 @@ func ambiguousTestCompiler(t *testing.T, accounts AccountCatalog) Compiler {
 }
 
 type fixedInspector struct{ references []CaptureReference }
-
-func mustLaunchAuthority(t *testing.T, aggregate Environment) LaunchAuthorityBoundary {
-	t.Helper()
-	boundary, err := NewLaunchAuthorityBoundary(mustCompile(t, aggregate))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return boundary
-}
 
 func (inspector fixedInspector) ActiveCaptures(_ context.Context, _ EnvironmentID, limit int) ([]CaptureReference, error) {
 	if len(inspector.references) > limit {

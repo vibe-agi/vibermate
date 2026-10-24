@@ -779,7 +779,7 @@ func (encoder *StreamEncoder) fail(path string, cause error) error {
 }
 
 func validateStreamStart(start protocolpath.StreamStart) error {
-	if err := validateBoundedString(start.ResponseID, 512, false); err != nil {
+	if err := validateBoundedString(start.ResponseID, 512); err != nil {
 		return fmt.Errorf("response ID: %w", err)
 	}
 	if start.CreatedAtUnix < 0 {
@@ -787,9 +787,7 @@ func validateStreamStart(start protocolpath.StreamStart) error {
 	}
 	if err := validateBoundedString(
 		start.ReportedModel,
-		protocolcore.MaxModelBytes,
-		false,
-	); err != nil {
+		protocolcore.MaxModelBytes); err != nil {
 		return fmt.Errorf("reported model: %w", err)
 	}
 	return nil

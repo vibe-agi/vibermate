@@ -68,7 +68,7 @@ type EndpointTransport interface {
 		context.Context,
 		upstreamendpoint.Endpoint,
 		providerauth.Lease,
-		...bool,
+		bool,
 	) (*http.Response, error)
 }
 
@@ -139,7 +139,7 @@ type Reader interface {
 		upstreamendpoint.ID,
 		provideraccount.ID,
 		bool,
-		...bool,
+		bool,
 	) (Snapshot, error)
 }
 

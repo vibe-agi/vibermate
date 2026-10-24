@@ -33,15 +33,3 @@ func (live *Live) Adopt(set RuleSet) {
 	defer live.mu.Unlock()
 	live.set = set
 }
-
-// Fixed is a set that never changes. It exists so a caller that has no store
-// still names what it is doing.
-type Fixed struct {
-	set RuleSet
-}
-
-func NewFixed(set RuleSet) Fixed {
-	return Fixed{set: set}
-}
-
-func (fixed Fixed) Current() RuleSet { return fixed.set }

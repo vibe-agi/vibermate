@@ -234,7 +234,7 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 				return Environment{}, duplicate("ClientProtocol within ClientEndpoint", string(plan.ClientProtocol))
 			}
 			protocols[plan.ClientProtocol] = struct{}{}
-			if err := validateNamedRevision("ClientAdapterPolicy", plan.ClientAdapterPolicy.ID, plan.ClientAdapterPolicy.Revision, true); err != nil {
+			if err := validateNamedRevision("ClientAdapterPolicy", plan.ClientAdapterPolicy.ID, plan.ClientAdapterPolicy.Revision); err != nil {
 				return Environment{}, err
 			}
 			if err := plan.EgressProfile.Validate(); err != nil {
@@ -313,9 +313,7 @@ func normalizeUpstreamPlan(
 	if err := validateNamedRevision(
 		"RouteSet",
 		upstream.RouteSet.ID,
-		upstream.RouteSet.Revision,
-		true,
-	); err != nil {
+		upstream.RouteSet.Revision); err != nil {
 		return err
 	}
 	if len(upstream.RouteSet.CandidateRouteIDs) == 0 {
@@ -428,10 +426,7 @@ func validateChildID(label, id string, revision Revision) error {
 	return nil
 }
 
-func validateNamedRevision(label, id string, revision Revision, required bool) error {
-	if !required && id == "" && revision == 0 {
-		return nil
-	}
+func validateNamedRevision(label, id string, revision Revision) error {
 	if err := validateID(label+" ID", id); err != nil {
 		return err
 	}
@@ -445,7 +440,7 @@ func validateRoute(route *UpstreamRoute) error {
 	if err := validateID("backend protocol", route.BackendProtocol); err != nil {
 		return fmt.Errorf("%w: route %q backend protocol is invalid", ErrInvalidEnvironment, route.ID)
 	}
-	if err := validateNamedRevision("ProviderTarget", route.ProviderTarget.ID, route.ProviderTarget.Revision, true); err != nil {
+	if err := validateNamedRevision("ProviderTarget", route.ProviderTarget.ID, route.ProviderTarget.Revision); err != nil {
 		return err
 	}
 	if err := route.ProviderTarget.Origin.Validate(); err != nil {
@@ -568,7 +563,7 @@ func validDisplayName(value string) bool {
 func validatePluginBindings(bindings []PluginBinding) error {
 	seen := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
-		if err := validateNamedRevision("PluginBinding", binding.ID, binding.Revision, true); err != nil {
+		if err := validateNamedRevision("PluginBinding", binding.ID, binding.Revision); err != nil {
 			return fmt.Errorf("%w: PluginBinding is invalid", ErrInvalidEnvironment)
 		}
 		if err := validateID("Plugin ID", binding.PluginID); err != nil {
@@ -667,26 +662,6 @@ func duplicate(label, value string) error {
 
 func validProtocol(value ClientProtocol) bool {
 	return value == ClientProtocolAnthropicMessages || value == ClientProtocolOpenAIResponses || value == ClientProtocolOpenAIChat
-}
-
-func hasDuplicateString(values []string) bool {
-	for index := 1; index < len(values); index++ {
-		if values[index] == values[index-1] {
-			return true
-		}
-	}
-	return false
-}
-
-func hasDuplicateUnsortedString(values []string) bool {
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if _, duplicate := seen[value]; duplicate {
-			return true
-		}
-		seen[value] = struct{}{}
-	}
-	return false
 }
 
 func routePreservesClientAccount(origin originidentity.ClientOrigin, protocol ClientProtocol, route UpstreamRoute) bool {

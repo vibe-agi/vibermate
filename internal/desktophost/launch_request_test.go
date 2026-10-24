@@ -5,8 +5,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
-const testEnvironmentID = "system_transparent"
-
 func transparentLaunch(command ...string) runlauncher.LaunchRequest {
 	return runlauncher.LaunchRequest{
 		EnvironmentID: environment.SystemTransparentID,

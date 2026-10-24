@@ -46,7 +46,7 @@ func TestDiscoverChatGPTModelSlugsAreEndpointOwned(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, false)
+			snapshot, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, false, false)
 			if test.want == nil {
 				if !errors.Is(err, ErrInvalidCatalog) {
 					t.Fatalf("invalid model catalog error = %v", err)

@@ -1069,47 +1069,6 @@ func (terminal *PendingTerminal) Reject() error {
 	return nil
 }
 
-func appendTextBlock(destination *bytes.Buffer, index int, text string) error {
-	if err := appendEvent(destination, "content_block_start", struct {
-		Type         string `json:"type"`
-		Index        int    `json:"index"`
-		ContentBlock struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content_block"`
-	}{
-		Type:  "content_block_start",
-		Index: index,
-		ContentBlock: struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{Type: "text", Text: ""},
-	}); err != nil {
-		return err
-	}
-	if err := appendEvent(destination, "content_block_delta", struct {
-		Type  string `json:"type"`
-		Index int    `json:"index"`
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	}{
-		Type:  "content_block_delta",
-		Index: index,
-		Delta: struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{Type: "text_delta", Text: text},
-	}); err != nil {
-		return err
-	}
-	return appendEvent(destination, "content_block_stop", struct {
-		Type  string `json:"type"`
-		Index int    `json:"index"`
-	}{Type: "content_block_stop", Index: index})
-}
-
 func appendTerminalEvents(
 	destination *bytes.Buffer,
 	reason protocolcore.StopReason,

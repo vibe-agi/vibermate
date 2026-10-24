@@ -141,7 +141,7 @@ func ExerciseLocalDefaultDiscovery(t *testing.T, acquire func(*testing.T, origin
 	var response *http.Response
 	wantDials := int64(1)
 	if selected.WhileHeld == nil {
-		response, err = client.FetchEndpointModels(t.Context(), selected.Endpoint, selected.Lease)
+		response, err = client.FetchEndpointModels(t.Context(), selected.Endpoint, selected.Lease, false)
 	} else {
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
@@ -160,7 +160,7 @@ func ExerciseLocalDefaultDiscovery(t *testing.T, acquire func(*testing.T, origin
 			}
 		}()
 		go func() {
-			r, e := client.FetchEndpointModels(ctx, selected.Endpoint, selected.Lease)
+			r, e := client.FetchEndpointModels(ctx, selected.Endpoint, selected.Lease, false)
 			done <- runtimeFetchResult{response: r, err: e}
 		}()
 		waitForGateQueue(t, gate, 1)

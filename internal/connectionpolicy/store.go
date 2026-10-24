@@ -3,7 +3,6 @@ package connectionpolicy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -63,12 +62,4 @@ func ShippedSnapshot(revision uint64) Snapshot {
 		Revision: revision,
 		Mode:     ModeMonitor,
 	}
-}
-
-func (snapshot Snapshot) validate() error {
-	if snapshot.Revision == 0 {
-		return fmt.Errorf("%w: revision is required", ErrInvalidRuleSet)
-	}
-	_, err := snapshot.Compile()
-	return err
 }

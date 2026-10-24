@@ -252,13 +252,13 @@ func (p Projection) ValidateWithin(ctx context.Context, l SourceLimits) error {
 	// complete Record is needed for either an empty replay or a deferred page.
 	r := p.Request
 	r.System, r.Messages = nil, nil
-	if err := r.validateProjectionWithin(p.Mode, false); err != nil {
+	if err := r.validateProjection(p.Mode); err != nil {
 		return err
 	}
 	if p.Response != nil {
 		v := *p.Response
 		v.Blocks = nil
-		if err := v.validateWithin(p.Mode, false); err != nil {
+		if err := v.validate(p.Mode); err != nil {
 			return err
 		}
 	}

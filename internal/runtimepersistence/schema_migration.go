@@ -151,9 +151,6 @@ type legacyTable struct {
 }
 
 func quoteMigrationIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
-func legacyTables(ctx context.Context) ([]legacyTable, error) {
-	return frozenMigrationTables(ctx, schemaV1SQL)
-}
 func frozenMigrationTables(ctx context.Context, frozen string) ([]legacyTable, error) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

@@ -31,14 +31,6 @@ var _ offlinehold.Prober = (*TLSProber)(nil)
 
 const DefaultTLSProbeTargetTimeout = 10 * time.Second
 
-func NewTLSProber() (*TLSProber, error) {
-	builder, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{BaseDialer: &net.Dialer{}})
-	if err != nil {
-		return nil, err
-	}
-	return NewTLSProberWithBuilder(builder, nil)
-}
-
 // Trusted in-process composition only; it grants no target or send authority.
 func NewTLSProberWithBuilder(builder *egressnetwork.Builder, roots *x509.CertPool) (*TLSProber, error) {
 	if builder == nil {

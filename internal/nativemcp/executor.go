@@ -591,7 +591,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	// Only this immediate Start's exact receipt can qualify its own attempt.
 	// A valid receipt belonging to some other operation must never send here.
 	if receipt.OperationID() == "" || receipt.OperationID() != c.id || receipt.AttemptID() != attempt.String() {
-		return e.finishFailure(c.id, s, w, nativetool.ErrDenied, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	headerTimer := time.AfterFunc(e.limits.Headers, cancel)
 	send := e.sendClaimed(call, outgoing, plan, receipt, s, r.stream != nil)
@@ -605,10 +605,10 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		if r.stream != nil {
 			return e.finishRecoveryTransportFailure(c, s, r.stream, receipt, nil, claim)
 		}
-		return e.finishFailure(c.id, s, w, err, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	if response == nil || response.Body == nil {
-		return e.finishFailure(c.id, s, w, errProtocol, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	defer response.Body.Close()
 	counted := &countedResponseBody{ReadCloser: response.Body}
@@ -624,19 +624,19 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		}
 	}()
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
-		return e.finishFailure(c.id, s, w, errProtocol, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	if response.StatusCode == 404 || response.StatusCode >= 500 {
-		return e.finishFailure(c.id, s, w, errSession, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	if err = e.validateResponseSession(c, r, s, response); err != nil {
-		return e.finishFailure(c.id, s, w, err, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	media, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if response.StatusCode == http.StatusOK && media == "text/event-stream" && r.stream == nil {
 		r.stream, err = e.openStream(call, c, r, s, binding, receipt, startedAt, claim, effectiveBytes)
 		if err != nil {
-			return e.finishFailure(c.id, s, w, err, true, claim)
+			return e.finishUncertain(c.id, s, w, claim)
 		}
 		defer e.detachStream(s, r.stream)
 		stop := context.AfterFunc(r.stream.context, cancel)
@@ -646,7 +646,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		if r.stream != nil {
 			return e.finishStreamAttempt(c, r, s, receipt, counted, w, err, claim)
 		}
-		return e.finishFailure(c.id, s, w, err, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	contentReason := ContentObservationReason("")
 	if r.kind == nativetool.RequestToolsCall && plan.ContentRecording().Mode == environment.ContentRecordingFull {
@@ -664,7 +664,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 	if r.kind == nativetool.RequestToolsList && !knownRPCFailure {
 		candidate, err = e.prepareCatalog(r, s)
 		if err != nil {
-			return e.finishFailure(c.id, s, w, err, true, claim)
+			return e.finishUncertain(c.id, s, w, claim)
 		}
 		defer e.releaseCatalogCandidate(candidate)
 	}
@@ -687,7 +687,7 @@ func (e *executor) Serve(ctx context.Context, c CapturedRequest, w http.Response
 		}
 	}
 	if err != nil {
-		return e.finishFailure(c.id, s, w, err, true, claim)
+		return e.finishUncertain(c.id, s, w, claim)
 	}
 	if r.kind == nativetool.RequestInitialized && !knownRPCFailure {
 		revision, err := e.dependencies.Store.ReadySession(call, s.id, s.revision, e.dependencies.Clock().UTC())
@@ -965,36 +965,31 @@ func (e *executor) bindRequest(c CapturedRequest, r rpc, s *session, selected en
 	b, err := nativetool.NewBinding(input)
 	return b, intents, nil, err
 }
-func (e *executor) finishFailure(id nativetool.ID, s *session, w http.ResponseWriter, cause error, possible bool, claim nativeClaimHandle) Terminal {
+
+// finishUncertain settles an operation whose execution may have happened: the
+// tool call was already released, so no failure after that point proves it
+// did not run.
+func (e *executor) finishUncertain(id nativetool.ID, s *session, w http.ResponseWriter, claim nativeClaimHandle) Terminal {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	reason := reasonFor(cause)
-	outcome := OutcomeFailed
-	state, storedReason := "failed", "transport_failed"
-	if possible {
-		outcome = OutcomeUncertain
-		reason = ReasonExecutionUncertain
-		state, storedReason = "uncertain", "execution_uncertain"
-	}
-	err := e.dependencies.Store.Finish(ctx, id, nativetool.TerminalInput{Outcome: state, Reason: storedReason, ObservedAt: e.dependencies.Clock().UTC()})
+	reason := ReasonExecutionUncertain
+	err := e.dependencies.Store.Finish(ctx, id, nativetool.TerminalInput{Outcome: "uncertain", Reason: "execution_uncertain", ObservedAt: e.dependencies.Clock().UTC()})
 	if err == nil {
 		e.notePhysicalTerminal(claim)
 	}
-	if possible {
-		if barrierErr := e.dependencies.Store.MarkReplayBarrier(ctx, s.owner.capture, s.owner.revision, e.dependencies.Clock().UTC()); barrierErr != nil {
-			err = errors.Join(err, barrierErr)
+	if barrierErr := e.dependencies.Store.MarkReplayBarrier(ctx, s.owner.capture, s.owner.revision, e.dependencies.Clock().UTC()); barrierErr != nil {
+		err = errors.Join(err, barrierErr)
+	}
+	s.mu.Lock()
+	exact := s.closed
+	for _, active := range s.active {
+		if active.operation == id && active.protocolCanceled {
+			exact = true
 		}
-		s.mu.Lock()
-		exact := s.closed
-		for _, active := range s.active {
-			if active.operation == id && active.protocolCanceled {
-				exact = true
-			}
-		}
-		s.mu.Unlock()
-		if !exact {
-			_ = e.Revoke(ctx, s.owner.capture, RevocationOwnerChanged)
-		}
+	}
+	s.mu.Unlock()
+	if !exact {
+		_ = e.Revoke(ctx, s.owner.capture, RevocationOwnerChanged)
 	}
 	if err != nil {
 		reason = ReasonStorageUnavailable
@@ -1002,7 +997,7 @@ func (e *executor) finishFailure(id nativetool.ID, s *session, w http.ResponseWr
 	if w != nil {
 		reject(w, id, reason)
 	}
-	return Terminal{OperationID: id, Outcome: outcome, Reason: reason}
+	return Terminal{OperationID: id, Outcome: OutcomeUncertain, Reason: reason}
 }
 func (e *executor) readBounded(reader io.Reader, maximum int64) ([]byte, func(), error) {
 	if reader == nil {

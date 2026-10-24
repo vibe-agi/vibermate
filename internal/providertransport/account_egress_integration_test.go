@@ -437,7 +437,7 @@ func testAccountEgressThroughSOCKS(t *testing.T, acquire func(*testing.T, egress
 					request.Header.Set("Content-Type", "application/json")
 					response, requestErr = client.DoCodexOAuthTokenRequest(request, credential.account)
 				case "models":
-					response, requestErr = client.FetchEndpointModels(ctx, endpoint, owned)
+					response, requestErr = client.FetchEndpointModels(ctx, endpoint, owned, false)
 				case "reset":
 					id, err := ResetRequestID(credential.account.ID, "fixture-credit")
 					if err != nil {

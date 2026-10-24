@@ -459,7 +459,7 @@ type providerRuntime interface {
 		context.Context,
 		upstreamendpoint.Endpoint,
 		providerauth.Lease,
-		...bool,
+		bool,
 	) (*http.Response, error)
 	FetchModelsDev(context.Context) (*http.Response, error)
 	FetchModelsDevPrices(context.Context) (*http.Response, error)

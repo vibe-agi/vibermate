@@ -11,7 +11,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 func TestCaptureAuthoritySetKeepsPersistedLaunchBoundaryImmutable(t *testing.T) {
@@ -204,27 +203,6 @@ func (authority *recordingCaptureAssignmentAuthority) Resolve(
 	captureidentity.Reference,
 ) (captureassignment.Assignment, error) {
 	return authority.assignment, authority.err
-}
-
-type fixedSnapshotResolver struct{}
-
-func (fixedSnapshotResolver) Resolve(environment.EnvironmentID) (environment.EnvironmentSnapshot, error) {
-	return environment.EnvironmentSnapshot{}, errors.New("unexpected Environment resolve")
-}
-
-func (fixedSnapshotResolver) ResolveRevision(
-	context.Context,
-	environment.EnvironmentID,
-	environment.Revision,
-) (environment.EnvironmentSnapshot, error) {
-	return environment.EnvironmentSnapshot{}, errors.New("unexpected Environment revision resolve")
-}
-
-func (fixedSnapshotResolver) ResolveClientOrigin(
-	environment.EnvironmentID,
-	originidentity.ClientOrigin,
-) (environment.ClientEndpointSnapshot, error) {
-	return environment.ClientEndpointSnapshot{}, errors.New("unexpected ClientOrigin resolve")
 }
 
 func captureAuthorityAssignment(

@@ -31,18 +31,6 @@ func TestExchangeObservationFailureDoesNotReachProducer(t *testing.T) {
 	}
 }
 
-type observationActivityWriter struct{ err error }
-
-func (writer *observationActivityWriter) Record(context.Context, activity.Event) (activity.Record, error) {
-	return activity.Record{OccurredAt: time.Now()}, writer.err
-}
-
-type observationUsageWriter struct{ err error }
-
-func (writer *observationUsageWriter) RecordUsage(context.Context, runtimeusage.Observation) error {
-	return writer.err
-}
-
 // Complements the actual SQL append-fault matrix in runtimepersistence and
 // the real host forwarding/restart test: every async failure stage keeps its
 // public warning without changing required readiness or actual owner drain.

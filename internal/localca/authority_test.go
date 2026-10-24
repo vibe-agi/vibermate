@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
@@ -285,12 +284,4 @@ func verifyHandshake(
 	clientErr := client.Handshake()
 	serverErr := <-serverResult
 	return errors.Join(clientErr, serverErr)
-}
-
-type fixedClock struct {
-	now time.Time
-}
-
-func (clock fixedClock) Now() time.Time {
-	return clock.now
 }
