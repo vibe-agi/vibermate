@@ -24,6 +24,9 @@ func TestContentSourcePublicationReusesSuccessfulMessagesWithinTransaction(t *te
 				`CREATE TABLE task6_publication_attempts(kind TEXT NOT NULL,digest TEXT NOT NULL)`,
 				`CREATE TRIGGER task6_message_attempt BEFORE INSERT ON runtime_exchange_content_messages BEGIN INSERT INTO task6_publication_attempts VALUES('message',NEW.digest); END`,
 				`CREATE TRIGGER task6_block_attempt BEFORE INSERT ON runtime_exchange_content_blocks BEGIN INSERT INTO task6_publication_attempts VALUES('block',NEW.digest); END`,
+				// A block already stored is rewritten by an UPDATE rather than an
+				// INSERT, so a write attempt is either statement.
+				`CREATE TRIGGER task6_block_rewrite BEFORE UPDATE ON runtime_exchange_content_blocks BEGIN INSERT INTO task6_publication_attempts VALUES('block',NEW.digest); END`,
 			} {
 				if _, err := store.database.Exec(statement); err != nil {
 					t.Fatal(err)
