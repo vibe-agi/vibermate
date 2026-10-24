@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -19,6 +18,9 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/hopbyhop"
+	"github.com/vibe-agi/vibermate/internal/recording"
 
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -1005,9 +1007,7 @@ func NewResponseEnvelope(
 	if clean == nil {
 		clean = make(http.Header)
 	}
-	for _, token := range strings.Split(clean.Get("Connection"), ",") {
-		clean.Del(strings.TrimSpace(token))
-	}
+	hopbyhop.RemoveConnectionNamed(clean)
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Authenticate",

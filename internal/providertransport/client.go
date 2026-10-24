@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/hopbyhop"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -923,10 +924,7 @@ func prepareProviderHeaders(
 	if headers == nil {
 		headers = make(http.Header)
 	}
-	connectionTokens := strings.Split(headers.Get("Connection"), ",")
-	for _, token := range connectionTokens {
-		headers.Del(strings.TrimSpace(token))
-	}
+	hopbyhop.RemoveConnectionNamed(headers)
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Connection",

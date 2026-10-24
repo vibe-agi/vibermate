@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"hash"
 	"io"
 	"log"
@@ -26,6 +25,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/hopbyhop"
+	"github.com/vibe-agi/vibermate/internal/recording"
 
 	"golang.org/x/net/http2"
 
@@ -2313,9 +2315,7 @@ func exchangeStatus(err error) int {
 
 func copyResponseHeaders(destination, source http.Header) {
 	clean := source.Clone()
-	for _, token := range strings.Split(clean.Get("Connection"), ",") {
-		clean.Del(strings.TrimSpace(token))
-	}
+	hopbyhop.RemoveConnectionNamed(clean)
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Authenticate",
@@ -3194,9 +3194,7 @@ func forwardableHeaders(source http.Header) http.Header {
 	if headers == nil {
 		headers = make(http.Header)
 	}
-	for _, token := range strings.Split(headers.Get("Connection"), ",") {
-		headers.Del(strings.TrimSpace(token))
-	}
+	hopbyhop.RemoveConnectionNamed(headers)
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Authorization",
