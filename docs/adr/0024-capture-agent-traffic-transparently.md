@@ -48,7 +48,21 @@ the existing transparent policy, exactly as an unknown destination is today.
 Capture fails closed and visibly. If the extension is not approved, or the
 namespace or TUN cannot be created, `vibermate run` refuses to start the
 Agent and names the fix. It never silently falls back to proxy variables.
-Proxy-variable launch stays available as an explicit mode.
+Proxy-variable launch stays the default; transparent capture is chosen with
+`--transparent`.
+
+On macOS the extension cannot tell an unowned flow from one it could not
+ask about, so it declines both. A capture outage would therefore let new
+Agent connections leave uncaptured. Instead, `vibermate run` watches its
+registration:
+
+- When the registration drops (the app quit or restarted), it pauses the
+  Agent's process group at once.
+- It resumes the Agent when the claim is restored with an active extension.
+- It stops the run after 30 seconds without one.
+
+Flows already handed to the run continue, because they no longer depend on
+the broker.
 
 Rejected alternatives:
 
