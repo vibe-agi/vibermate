@@ -100,21 +100,29 @@ touched package.
 | REUSE-3 | Strict JSON decoding is implemented in several places (`protocolcore`, `releasemanifest`, `acceptancereport`, `localca`, `systemtrust`). | Some copies reject only exact duplicate keys, so unifying them changes what is accepted. Error text differs too. |
 | REUSE-5 | Display-name and ASCII-ID validators are repeated in about 15 packages. | Each site needs its own diff, because trimming and limits differ. |
 
-## Found, not fixed (for `/code-review`)
+**Bug fix found during the review**
 
-- `nativemcp.finishUncertain` (formerly `finishFailure`) ignored the failure
-  cause even before this change. Every caller passed `possible=true`, so
-  denials (`nativetool.ErrDenied`) and session errors are all recorded as
-  `execution_uncertain`. This change keeps that behavior. Check whether it is
-  intended.
+- ALT-11: five header sanitizers read only the first `Connection` line with
+  `Header.Get`. RFC 9110 allows the header on several lines, so a field named
+  on a later line was forwarded. The affected paths are provider and original
+  egress, loopback forwarding, response copying and the Exchange response
+  envelope. They now share `hopbyhop.RemoveConnectionNamed`, which reads every
+  line. Tests for each site failed before the fix and pass after it.
+
+**Checked, not a bug**
+
+- `nativemcp.finishUncertain` (formerly `finishFailure`) records every failure
+  as `execution_uncertain`. Every call site runs after `Store.Start`, so the
+  request may already have been sent, and uncertain is the correct outcome.
+  The `nativetool.ErrDenied` argument at one call site was a misleading label
+  for a receipt mismatch, and its `cause` was never used.
 
 ## Skipped
 
 | ID | Finding | Why skipped |
 |---|---|---|
-| SIMP-14 | Compatibility shims: the old `self_signed_tls` transport spelling and the old login-directory migration. | Removing them changes which configurations and files are accepted. That is a product decision. |
+| SIMP-14 | Compatibility shims: the old `self_signed_tls` transport spelling and the old login-directory migration. | Kept on purpose. The login migration was requested and added on 2026-10-16 (`31057526`), the same day the supported schema upgrade landed. Public releases preserve existing installs, and a deployed server may still start with `--transport self_signed_tls`. |
 | ALT-10 | `responsesDataKeepaliveFor` picks keepalive by origin for one operation and by feature bit for another. | Older Codex releases would first need the feature bit set, so changing this alters behavior. |
-| ALT-11 | `Connection` header parsing is copied about 13 times. Five copies read only the first header line. | Unifying them strips more headers on those five paths. That is a behavior change, arguably a fix, and belongs in a separate PR. |
 | SIMP-3 (partial) | The agent said the recorder's `sealed` state was never set, so the seal code was dead. | Wrong: recording maintenance and storage moves do set it. Only the unused `recordingArchiveBarrier` was removed. |
 | ALT-9 | Connection failures are classified by matching error text. Proposed: an error type checked with `errors.As`. | These errors pass through `crypto/tls` handshakes. Substring matching survives wrapping with `%v`; `errors.As` might not. |
 | ALT-12 (history) | History permission is checked both before acquiring a credential and inside the request. | The early check is deliberate: it denies the read before any credential is acquired. |
