@@ -151,6 +151,9 @@ func (signer *Signer) StripJSON(body []byte) ([]byte, bool, error) {
 	if signer.destroyed {
 		return nil, false, ErrUnavailable
 	}
+	if !mayContainMarker(body) {
+		return bytes.Clone(body), false, nil
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var value any
@@ -171,6 +174,18 @@ func (signer *Signer) StripJSON(body []byte) ([]byte, bool, error) {
 		return nil, false, ErrUnavailable
 	}
 	return encoded, true, nil
+}
+
+// markerTail is the part of markerPrefix after "<!--". JSON can spell "<" as
+// \u003c, but the tail's letters, digits and colons decode from themselves or
+// from a \u escape, never from another escape.
+var markerTail = []byte(markerPrefix[len("<!--"):])
+
+// mayContainMarker is false only when no JSON string in body can decode to
+// text containing markerPrefix, which skips the full parse of every request
+// that carries no annotation.
+func mayContainMarker(body []byte) bool {
+	return bytes.Contains(body, markerTail) || bytes.Contains(body, []byte(`\u`))
 }
 
 func stripValue(value any, key []byte, depth int, values *int) (bool, bool) {

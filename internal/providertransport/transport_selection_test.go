@@ -66,7 +66,7 @@ func TestTransportSelectionRuntimeConsumersRefuseBeforeAdmission(t *testing.T) {
 			}
 			var response *http.Response
 			if operation == "models" || operation == "https_loopback" {
-				response, err = client.FetchEndpointModels(t.Context(), endpoint, credential)
+				response, err = client.FetchEndpointModels(t.Context(), endpoint, credential, false)
 			} else {
 				request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, codexoauth.TokenURL, strings.NewReader(`{"grant_type":"synthetic"}`))
 				request.Header.Set("Content-Type", "application/json")

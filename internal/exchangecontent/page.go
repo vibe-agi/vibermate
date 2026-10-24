@@ -2,7 +2,6 @@ package exchangecontent
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -112,53 +111,4 @@ func (page ContentPage) Validate() error {
 
 func validPageCursor(cursor string) bool {
 	return len(cursor) <= MaxPageCursorBytes && utf8.ValidString(cursor)
-}
-
-func validatePageContent(messages []Message, blocks []Block, mode environment.ContentRecordingMode, exchangeID string) error {
-	validateBlocks := func(values []Block) error {
-		for _, block := range values {
-			if block.Deferred == nil {
-				if err := block.Validate(mode); err != nil {
-					return err
-				}
-				continue
-			}
-			// An unloaded value has no asserted kind, text, tool identity or size.
-			d := block.Deferred
-			want := Block{Kind: "deferred", Availability: AvailabilityRecorded, Deferred: d}
-			left, _ := json.Marshal(block)
-			right, _ := json.Marshal(want)
-			if string(left) != string(right) || d.ExchangeID != exchangeID || d.Cursor == "" || !validPageCursor(d.Cursor) ||
-				d.EstimatedBytes < 0 || d.EstimatedBytes > MaxEncodedBytes {
-				return ErrInvalidEvidence
-			}
-		}
-		return nil
-	}
-	if err := validateBlocks(blocks); err != nil {
-		return err
-	}
-	for _, message := range messages {
-		if message.Role == "unknown" {
-			if message.Agent != nil || len(message.Blocks) != 1 || message.Blocks[0].Deferred == nil {
-				return ErrInvalidEvidence
-			}
-		} else {
-			// Validate role/agent independently without admitting placeholders to
-			// the canonical Record contract.
-			probe := message
-			probe.Blocks = []Block{{Kind: "text", Availability: AvailabilityOmitted}}
-			r := Request{RequestedModel: "page", EffectiveModel: "page", Messages: []Message{probe}}
-			if err := r.validateProjection(environment.ContentRecordingMetadataOnly); err != nil {
-				return err
-			}
-		}
-		if len(message.Blocks) == 0 {
-			return ErrInvalidEvidence
-		}
-		if err := validateBlocks(message.Blocks); err != nil {
-			return err
-		}
-	}
-	return nil
 }

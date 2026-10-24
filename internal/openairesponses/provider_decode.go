@@ -881,7 +881,7 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 			_, _ = safe.Write(encoded)
 		}
 	}
-	return bytes.Clone(safe.Bytes()), nil
+	return safe.Bytes(), nil
 }
 
 func (stream *ProviderStream) encodeClientEvent(event ssewire.Event) ([]byte, error) {

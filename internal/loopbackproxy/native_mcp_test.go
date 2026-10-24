@@ -5,14 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/capturegrant"
-	"github.com/vibe-agi/vibermate/internal/connectionevent"
-	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
-	"github.com/vibe-agi/vibermate/internal/localca"
-	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
-	"github.com/vibe-agi/vibermate/internal/nativemcp"
-	"github.com/vibe-agi/vibermate/internal/rawevidence"
-	"github.com/vibe-agi/vibermate/internal/testrecording"
 	"io"
 	"net"
 	"net/http"
@@ -22,6 +14,16 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/testrecording"
 
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
@@ -187,7 +189,7 @@ func newNativeFixtureMode(t *testing.T, mode environment.ToolPolicyMode, recordi
 			t.Fatal(err)
 		}
 	}
-	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}}
+	e := environment.Environment{ID: "native.synthetic", Name: "Synthetic native", State: environment.StateActive, Revision: 1, ContentRecording: recording, PolicySet: &environment.PolicySet{ToolMode: mode}, ClientToolAccess: &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.synthetic.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct())}}}
 	if settings != nil {
 		if settings.shared {
 			e.ClientEndpoints = testEnvironmentForDialectRevision(t, protocolspec.DialectOpenAIResponses, "synthetic-model", 1, 1).ClientEndpoints

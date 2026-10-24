@@ -1,10 +1,12 @@
 package productruntime
 
 import (
+	"reflect"
+
 	"github.com/vibe-agi/vibermate/internal/acpobservation"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/recording"
-	"reflect"
 )
 
 func (r *observationRecorder) ObserveACP(stamp recording.Stamp, value acpobservation.Record) (result recording.OfferResult) {
@@ -43,7 +45,7 @@ func (r *observationRecorder) ObserveACP(stamp recording.Stamp, value acpobserva
 	if !ok {
 		return recording.DroppedCapacity
 	}
-	cloneSnapshot(reflect.ValueOf(&value).Elem())
+	exchangecontent.CloneOwned(reflect.ValueOf(&value).Elem())
 	bytes = n
 	return r.enqueue(&recordingItem{kind: recording.ACP, stamp: stamp, acp: &value, reservation: reservation, bytes: int64(bytes)})
 }

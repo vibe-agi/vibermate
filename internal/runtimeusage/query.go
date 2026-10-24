@@ -70,10 +70,6 @@ func (query Query) valid() bool {
 		query.until.After(query.from)
 }
 
-func (query Query) contains(value time.Time) bool {
-	return !value.Before(query.from) && value.Before(query.until)
-}
-
 func (query Query) day(value time.Time) string {
 	return value.In(query.location).Format(usageDateLayout)
 }

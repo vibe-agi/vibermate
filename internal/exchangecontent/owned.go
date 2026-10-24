@@ -3,13 +3,14 @@ package exchangecontent
 import (
 	"context"
 	"errors"
-	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/protocolcore"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"reflect"
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 type OwnedRecord struct {
@@ -128,7 +129,7 @@ func ownValue(v reflect.Value, reservation *recording.Reservation) error {
 	if n > 64<<20 || !reservation.TryGrow(int64(n)) {
 		return ErrOwnershipCapacity
 	}
-	cloneOwnedValue(v)
+	CloneOwned(v)
 	return nil
 }
 func ownedValueBytes(v reflect.Value) uint64 {
@@ -161,7 +162,12 @@ func ownedValueBytes(v reflect.Value) uint64 {
 	}
 	return n
 }
-func cloneOwnedValue(v reflect.Value) {
+
+// CloneOwned replaces every string, pointer and slice reachable from v with a
+// private copy and normalizes times to UTC, so the value shares no memory with
+// its source. It is for closed projection structs with only exported fields:
+// v must be settable, and maps and interfaces are not copied.
+func CloneOwned(v reflect.Value) {
 	if v.Type() == reflect.TypeOf(time.Time{}) {
 		v.Set(reflect.ValueOf(v.Interface().(time.Time).UTC()))
 		return
@@ -173,7 +179,7 @@ func cloneOwnedValue(v reflect.Value) {
 		if !v.IsNil() {
 			p := reflect.New(v.Type().Elem())
 			p.Elem().Set(v.Elem())
-			cloneOwnedValue(p.Elem())
+			CloneOwned(p.Elem())
 			v.Set(p)
 		}
 	case reflect.Slice:
@@ -181,13 +187,13 @@ func cloneOwnedValue(v reflect.Value) {
 			p := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 			reflect.Copy(p, v)
 			for i := 0; i < p.Len(); i++ {
-				cloneOwnedValue(p.Index(i))
+				CloneOwned(p.Index(i))
 			}
 			v.Set(p)
 		}
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			cloneOwnedValue(v.Field(i))
+			CloneOwned(v.Field(i))
 		}
 	}
 }

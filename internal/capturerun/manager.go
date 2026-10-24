@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/lifecyclegate"
 )
 
 const (
@@ -85,7 +86,7 @@ type Manager struct {
 	nativeRevocation interface {
 		Revoke(context.Context, captureidentity.Reference, string) error
 	}
-	lifecycle *lifecycleGate
+	lifecycle *lifecyclegate.Gate
 	recovery  Recovery
 
 	shutdownMu      sync.Mutex
@@ -120,7 +121,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		evidenceBarrier:  options.EvidenceBarrier,
 		nativeRevocation: options.NativeRevocation,
 		archiveBarrier:   options.ArchiveBarrier,
-		lifecycle:        newLifecycleGate(),
+		lifecycle:        lifecyclegate.New("CaptureRun", ErrInvalidRequest, ErrRuntimeStopping),
 		recovery:         recovery,
 	}, nil
 }
@@ -136,7 +137,7 @@ func (manager *Manager) ActiveCount(ctx context.Context) (int, error) {
 	if manager == nil {
 		return 0, ErrRuntimeStopping
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +161,7 @@ func (manager *Manager) Create(
 	if err := command.validate(manager.maxLifetime); err != nil {
 		return LaunchGrant{}, err
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return LaunchGrant{}, err
 	}
@@ -234,7 +235,7 @@ func (manager *Manager) AuthorizeProxy(
 	if _, err := NewProxyCapability(capability.value); err != nil {
 		return Evidence{}, err
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -268,7 +269,7 @@ func (manager *Manager) Attach(
 	if processID <= 0 {
 		return View{}, fmt.Errorf("%w: process ID must be positive", ErrInvalidRequest)
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return View{}, err
 	}
@@ -304,7 +305,7 @@ func (manager *Manager) Heartbeat(
 	if lifetime <= 0 || lifetime > manager.maxLifetime {
 		return View{}, fmt.Errorf("%w: heartbeat lifetime is invalid", ErrInvalidRequest)
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return View{}, err
 	}
@@ -342,7 +343,7 @@ func (manager *Manager) Finish(
 	if err := validateCapability(capability.value); err != nil {
 		return err
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -391,7 +392,7 @@ func (manager *Manager) notifyNativeStop(ctx context.Context, id string) error {
 
 func (manager *Manager) BeginShutdown() {
 	if manager != nil {
-		manager.lifecycle.closeAdmission()
+		manager.lifecycle.CloseAdmission()
 	}
 }
 
@@ -399,7 +400,7 @@ func (manager *Manager) Drain(ctx context.Context) error {
 	if manager == nil {
 		return nil
 	}
-	return manager.lifecycle.drain(ctx)
+	return manager.lifecycle.Drain(ctx)
 }
 
 // Shutdown is retryable after a deadline: admission stays closed, and a later

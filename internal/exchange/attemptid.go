@@ -27,11 +27,6 @@ func NewCryptographicAttemptIDSource() AttemptIDSource {
 	return randomAttemptIDSource{random: rand.Reader}
 }
 
-// NewAttemptIDSource returns a source over an explicit random reader.
-func NewAttemptIDSource(random io.Reader) AttemptIDSource {
-	return randomAttemptIDSource{random: random}
-}
-
 func (source randomAttemptIDSource) NewAttemptID() (string, error) {
 	if source.random == nil {
 		return "", errors.New("attempt ID random source is nil")

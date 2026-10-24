@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
@@ -869,7 +870,7 @@ func publishManagedEnvironment(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter.claude", Revision: 1,
 				},
-				EgressProfile: authoredEgress(t, egressprofile.Direct()),
+				EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct()),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

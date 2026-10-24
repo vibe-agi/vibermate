@@ -27,18 +27,6 @@ func (rollbackThenError) Commit(transaction *sql.Tx) error {
 	return errInjectedCommitResult
 }
 
-type commitThenCloseAdmission struct {
-	operations *operationGate
-}
-
-func (committer commitThenCloseAdmission) Commit(transaction *sql.Tx) error {
-	if err := transaction.Commit(); err != nil {
-		return err
-	}
-	committer.operations.closeAdmission()
-	return errInjectedCommitResult
-}
-
 func shutdownTestStore(t testing.TB, store *Store) {
 	t.Helper()
 	if err := store.Shutdown(context.Background()); err != nil {

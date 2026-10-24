@@ -2,13 +2,14 @@ package productruntime
 
 import (
 	"context"
+	"reflect"
+
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	"reflect"
 )
 
 // Read capabilities stay complete through the facade; producer methods only
@@ -45,7 +46,7 @@ func (a *recordingActivity) Record(ctx context.Context, e activity.Event) (activ
 	if !ok {
 		return prepared, nil
 	}
-	cloneSnapshot(reflect.ValueOf(&prepared).Elem())
+	exchangecontent.CloneOwned(reflect.ValueOf(&prepared).Elem())
 	bytes := snapshotBytes(reflect.ValueOf(prepared))
 	result := q.enqueue(&recordingItem{kind: recording.Activity, stamp: stamp, bytes: int64(bytes), reservation: reservation, metadata: &recordedMetadata{activity: prepared, activitySink: a}})
 	q.budget.RecordOffer(recording.Activity, result, bytes)

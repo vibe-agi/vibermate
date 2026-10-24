@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -73,6 +74,35 @@ func TestSignerLeavesBodiesWithoutAuthenticAnnotationsByteExact(t *testing.T) {
 		if changed || !bytes.Equal(cleaned, body) {
 			t.Fatalf("StripJSON(%q) = (%q, %t), want byte-exact unchanged", body, cleaned, changed)
 		}
+	}
+}
+
+func TestSignerRemovesAnnotationsSpelledWithUnicodeEscapes(t *testing.T) {
+	t.Parallel()
+
+	signer, err := NewSigner(bytes.Repeat([]byte{0x42}, signingKeyBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(signer.Destroy)
+	annotation, err := signer.Issue("turn-time", "2026-08-27 14:05 Asia/Singapore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var escaped strings.Builder
+	for _, character := range annotation {
+		fmt.Fprintf(&escaped, `\u%04x`, character)
+	}
+	body := []byte(`{"content":"before ` + escaped.String() + ` after"}`)
+	if bytes.Contains(body, markerTail) {
+		t.Fatal("fixture still spells the marker literally")
+	}
+	cleaned, changed, err := signer.StripJSON(body)
+	if err != nil || !changed {
+		t.Fatalf("StripJSON() = (%q, %t, %v), want an escaped annotation removed", cleaned, changed, err)
+	}
+	if string(cleaned) != `{"content":"before  after"}` {
+		t.Fatalf("cleaned = %s", cleaned)
 	}
 }
 

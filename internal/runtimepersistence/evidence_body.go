@@ -127,28 +127,65 @@ func putEvidenceChunk(
 	digest [sha256.Size]byte,
 	chunk []byte,
 ) error {
-	codec := chunkCodecZstd
-	stored := bodyEncoder.EncodeAll(chunk, nil)
-	if len(stored) >= len(chunk) {
-		codec = chunkCodecIdentity
-		stored = chunk
-	}
-	result, err := transaction.ExecContext(
-		ctx,
-		`INSERT INTO runtime_evidence_chunks(digest, plain_bytes, codec, payload)
-		 VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
-		 SET plain_bytes = excluded.plain_bytes
-		 WHERE runtime_evidence_chunks.plain_bytes = excluded.plain_bytes`,
-		digest[:], len(chunk), codec, stored,
-	)
+	written, err := putCompressedRow(ctx, transaction, "runtime_evidence_chunks", digest[:], chunk)
 	if err != nil {
 		return fmt.Errorf("persist evidence chunk: %w", err)
 	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
+	if !written {
 		return errors.New("stored evidence chunk disagrees with its digest")
 	}
 	return nil
+}
+
+// putCompressedRow is the shared unconditional write behind putEvidenceChunk
+// and putStoredBlock, for a content-addressed table with the columns
+// (digest, plain_bytes, codec, payload). It reports whether exactly one row
+// was written; false means a row with this digest has a different length.
+//
+// A row already present is rewritten with the same length by an UPDATE in
+// the same transaction, so it is still written, never skipped. The payload is
+// compressed only when that UPDATE finds no row: most chunks of a resent
+// history already exist, and compressing them only to have the conflict
+// branch discard the result is the most expensive part of the write.
+func putCompressedRow(
+	ctx context.Context,
+	transaction *sql.Tx,
+	table string,
+	digest any,
+	plain []byte,
+) (bool, error) {
+	result, err := transaction.ExecContext(
+		ctx,
+		`UPDATE `+table+` SET plain_bytes = ? WHERE digest = ? AND plain_bytes = ?`,
+		len(plain), digest, len(plain),
+	)
+	if err != nil {
+		return false, err
+	}
+	if changed, err := result.RowsAffected(); err != nil {
+		return false, err
+	} else if changed == 1 {
+		return true, nil
+	}
+	codec := chunkCodecZstd
+	stored := bodyEncoder.EncodeAll(plain, nil)
+	if len(stored) >= len(plain) {
+		codec = chunkCodecIdentity
+		stored = plain
+	}
+	result, err = transaction.ExecContext(
+		ctx,
+		`INSERT INTO `+table+`(digest, plain_bytes, codec, payload)
+		 VALUES (?, ?, ?, ?) ON CONFLICT(digest) DO UPDATE
+		 SET plain_bytes = excluded.plain_bytes
+		 WHERE `+table+`.plain_bytes = excluded.plain_bytes`,
+		digest, len(plain), codec, stored,
+	)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return err == nil && changed == 1, nil
 }
 
 // loadEvidenceBody rebuilds a body from its manifest and verifies the result

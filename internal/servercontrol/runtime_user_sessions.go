@@ -141,10 +141,7 @@ func (handler *RuntimeUserSessionsHandler) current(
 		writeProblem(writer, http.StatusUnauthorized, "runtime_user_session_invalid")
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(writer).Encode(RuntimeUserCurrentSession{
+	writeServerJSON(writer, http.StatusOK, RuntimeUserCurrentSession{
 		Schema: RuntimeUserCurrentSessionSchema, InstanceID: handler.instanceID,
 		APIVersion: "v1", ProductBuild: handler.productBuild,
 		User: RuntimeUserView{
@@ -214,10 +211,7 @@ func (handler *RuntimeUserSessionsHandler) login(
 		writeProblem(writer, http.StatusServiceUnavailable, "runtime_user_login_unavailable")
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(writer).Encode(RuntimeUserSession{
+	writeServerJSON(writer, http.StatusCreated, RuntimeUserSession{
 		Schema: RuntimeUserSessionSchema, InstanceID: handler.instanceID,
 		APIVersion: "v1", ProductBuild: handler.productBuild,
 		User: RuntimeUserView{

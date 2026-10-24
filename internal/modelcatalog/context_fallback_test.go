@@ -39,7 +39,7 @@ func TestDiscoverCodexContextWindowFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snapshot, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, true)
+			snapshot, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, true, false)
 			if test.invalid {
 				if !errors.Is(err, ErrInvalidCatalog) {
 					t.Fatalf("invalid maximum accepted: %v", err)

@@ -43,9 +43,7 @@ type ClientRootAskRequest struct {
 func (request ClientRootAskRequest) validate() error {
 	if err := validateIdentity(
 		"client root ask signer ID",
-		request.SignerID,
-		false,
-	); err != nil {
+		request.SignerID); err != nil {
 		return err
 	}
 	if request.SignerRevision == 0 {

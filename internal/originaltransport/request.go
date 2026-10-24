@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"net/http"
 	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/hopbyhop"
+	"github.com/vibe-agi/vibermate/internal/recording"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
@@ -243,9 +245,7 @@ func sanitizeHeaders(source http.Header) http.Header {
 	if headers == nil {
 		headers = make(http.Header)
 	}
-	for _, token := range strings.Split(headers.Get("Connection"), ",") {
-		headers.Del(strings.TrimSpace(token))
-	}
+	hopbyhop.RemoveConnectionNamed(headers)
 	for _, name := range []string{
 		"Connection",
 		"Proxy-Authorization",

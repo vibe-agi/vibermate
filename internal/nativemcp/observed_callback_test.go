@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -409,7 +410,7 @@ func TestNativeObservedReviewDenyReusesSamePOSTCapacity(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
 	defer cancel()
 	published := make(chan nativetool.Approval, 1)
-	f := newNativeFixtureWithApprovalObservation(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, authoredEgress(t, egressprofile.Direct()), toolapproval.Config{DecisionTimeout: 3 * time.Second}, func(approval nativetool.Approval) {
+	f := newNativeFixtureWithApprovalObservation(t, environment.ToolPolicyReview, environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff}, 0, egressprofiletest.Explicit(t, egressprofile.Direct()), toolapproval.Config{DecisionTimeout: 3 * time.Second}, func(approval nativetool.Approval) {
 		select {
 		case published <- approval:
 		case <-ctx.Done():

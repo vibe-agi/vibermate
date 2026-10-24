@@ -588,7 +588,7 @@ func runActualOwnerProductUpdate(t *testing.T, held bool, edges ...string) {
 			defer credential.Release()
 			modelDone = make(chan error, 1)
 			go func() {
-				response, err := r.FetchEndpointModels(ctx, endpoint, credential)
+				response, err := r.FetchEndpointModels(ctx, endpoint, credential, false)
 				if response != nil && response.Body != nil {
 					io.Copy(io.Discard, response.Body)
 					response.Body.Close()

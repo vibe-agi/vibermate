@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/cyberaccess"
 )
 
 // Isolation is a launch compatibility fact, never release or Root evidence.
@@ -141,8 +143,10 @@ func walkCodexInvocationWithLiteral(args []string, visit func(name, value string
 			if value == "" {
 				return 0, false, ErrCodexIsolationUnsupported
 			}
-			if name == "--cyber-access-program" && value != "standard" && value != "daybreak_blue" && value != "daybreak_red" {
-				return 0, false, ErrCodexIsolationUnsupported
+			if name == "--cyber-access-program" {
+				if _, err := cyberaccess.ParsePreference(value); err != nil {
+					return 0, false, ErrCodexIsolationUnsupported
+				}
 			}
 			if visit != nil {
 				if err := visit(name, value); err != nil {

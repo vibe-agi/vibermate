@@ -3,19 +3,19 @@ package productruntime
 import (
 	"context"
 	"errors"
-	"github.com/vibe-agi/vibermate/internal/acpobservation"
-	"github.com/vibe-agi/vibermate/internal/evidencearchive"
-	"github.com/vibe-agi/vibermate/internal/exchangecontent"
-	"github.com/vibe-agi/vibermate/internal/nativemcp"
-	"github.com/vibe-agi/vibermate/internal/nativetool"
-	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
-	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"math"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/vibe-agi/vibermate/internal/acpobservation"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/nativemcp"
+	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
+	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -358,30 +358,6 @@ func (r *observationRecorder) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-type recordingArchiveBarrier struct {
-	capture interface {
-		BeginClear(context.Context) (evidencearchive.Release, error)
-	}
-	recorder *observationRecorder
-}
-
-func (b recordingArchiveBarrier) BeginClear(ctx context.Context) (evidencearchive.Release, error) {
-	release, err := b.capture.BeginClear(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if b.recorder == nil {
-		return release, nil
-	}
-	reopen, err := b.recorder.beginClear(ctx)
-	if err != nil {
-		release()
-		return nil, err
-	}
-	var once sync.Once
-	return func() { once.Do(func() { reopen(); release() }) }, nil
 }
 
 type observationRecorderBuilder func(context.Context, *recording.Budget, connectionevent.ScopedStore, egressaudit.ScopedAttemptStore) *observationRecorder

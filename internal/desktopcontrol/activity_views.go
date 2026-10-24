@@ -311,7 +311,7 @@ type activityListQuery struct {
 	conversationID  string
 }
 
-func parseActivityListQuery(rawQuery string, inspection ...bool) (activityListQuery, error) {
+func parseActivityListQuery(rawQuery string, inspection bool) (activityListQuery, error) {
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return activityListQuery{}, errInvalidActivityQuery
@@ -329,7 +329,7 @@ func parseActivityListQuery(rawQuery string, inspection ...bool) (activityListQu
 		}
 	}
 	if entries, present := values["cursor"]; present {
-		if len(inspection) > 0 && inspection[0] {
+		if inspection {
 			query.cursor = entries[0]
 			if query.cursor == "" {
 				err = errInvalidActivityQuery

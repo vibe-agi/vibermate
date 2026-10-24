@@ -160,47 +160,6 @@ func startAgent(
 	return startAgentProcess(command, client, marker)
 }
 
-func startDeferredClaudeAgent(
-	config config,
-	workingDirectory string,
-	tools string,
-	marker string,
-) (*agentRun, *deferredAgentInput, error) {
-	client, err := selectedAcceptanceClient(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	if client.ID != acceptanceClientClaudeCode {
-		return nil, nil, errors.New(
-			"deferred input requires the fixed Claude client",
-		)
-	}
-	stateDirectory, err := agentStateDirectory(client.ID, workingDirectory)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := privateDirectory(stateDirectory); err != nil {
-		return nil, nil, fmt.Errorf("prepare Claude Code state: %w", err)
-	}
-	command, err := newDeferredClaudeCommand(
-		config,
-		workingDirectory,
-		tools,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	reader, writer := io.Pipe()
-	command.Stdin = reader
-	run, err := startAgentProcess(command, client, marker)
-	if err != nil {
-		_ = writer.CloseWithError(err)
-		_ = reader.CloseWithError(err)
-		return nil, nil, err
-	}
-	return run, &deferredAgentInput{writer: writer}, nil
-}
-
 func (input *deferredAgentInput) sendClaudePrompt(prompt string) error {
 	if input == nil || input.writer == nil || prompt == "" {
 		return errors.New("deferred Claude input is invalid")
@@ -224,79 +183,6 @@ func (input *deferredAgentInput) sendClaudePrompt(prompt string) error {
 		writeErr = io.ErrShortWrite
 	}
 	return errors.Join(writeErr, input.writer.Close())
-}
-
-func (input *deferredAgentInput) close() error {
-	if input == nil || input.writer == nil {
-		return nil
-	}
-	input.mu.Lock()
-	defer input.mu.Unlock()
-	if input.sent {
-		return nil
-	}
-	input.sent = true
-	return input.writer.Close()
-}
-
-func startFallbackAgent(
-	config config,
-	workingDirectory string,
-	prompt string,
-	marker string,
-) (*agentRun, error) {
-	client, err := selectedAcceptanceClient(config)
-	if err != nil {
-		return nil, err
-	}
-	if client.ID != acceptanceClientCodexCLI {
-		return nil, errors.New("HTTP fallback evidence requires fixed Codex")
-	}
-	if err := privateDirectory(
-		filepath.Join(workingDirectory, codexStateDirectoryName),
-	); err != nil {
-		return nil, fmt.Errorf("prepare Codex state: %w", err)
-	}
-	command, err := newFallbackAgentCommand(
-		config,
-		workingDirectory,
-		prompt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return startAgentProcess(command, client, marker)
-}
-
-func startResumeAgent(
-	config config,
-	workingDirectory string,
-	prompt string,
-	threadID agentThreadID,
-	marker string,
-) (*agentRun, error) {
-	client, err := selectedAcceptanceClient(config)
-	if err != nil {
-		return nil, err
-	}
-	if client.ID != acceptanceClientCodexCLI {
-		return nil, errors.New("resume requires the fixed Codex client")
-	}
-	if err := privateDirectory(
-		filepath.Join(workingDirectory, codexStateDirectoryName),
-	); err != nil {
-		return nil, fmt.Errorf("prepare Codex state: %w", err)
-	}
-	command, err := newResumeAgentCommand(
-		config,
-		workingDirectory,
-		prompt,
-		threadID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return startAgentProcess(command, client, marker)
 }
 
 func startAgentProcess(
@@ -1534,60 +1420,6 @@ func (run *agentRun) wait(
 	}
 }
 
-func (run *agentRun) signalInterrupt() error {
-	if run == nil || run.command == nil || run.command.Process == nil {
-		return errors.New("client run process is unavailable")
-	}
-	return run.command.Process.Signal(os.Interrupt)
-}
-
-func (run *agentRun) waitForDelta(ctx context.Context) error {
-	if run == nil || run.clientID != acceptanceClientClaudeCode {
-		return errors.New("Claude stream run is unavailable")
-	}
-	for {
-		run.mu.Lock()
-		if run.deltas > 0 {
-			run.mu.Unlock()
-			return nil
-		}
-		if run.readErr != nil {
-			err := run.readErr
-			run.mu.Unlock()
-			return err
-		}
-		changed := run.changed
-		run.mu.Unlock()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-run.done:
-			select {
-			case <-run.outputDone:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			run.mu.Lock()
-			if run.deltas > 0 {
-				run.mu.Unlock()
-				return nil
-			}
-			waitErr := run.waitErr
-			run.mu.Unlock()
-			if waitErr == nil {
-				return errors.New(
-					"Claude exited before its first streamed delta",
-				)
-			}
-			return fmt.Errorf(
-				"Claude exited before its first streamed delta: %w",
-				normalizeWaitError(waitErr),
-			)
-		}
-	}
-}
-
 func (run *agentRun) waitForConfiguredTool(
 	ctx context.Context,
 	expected string,
@@ -1643,50 +1475,6 @@ func (run *agentRun) waitForConfiguredTool(
 			return fmt.Errorf(
 				"Claude exited before exposing required tool %q",
 				expected,
-			)
-		}
-	}
-}
-
-func (run *agentRun) waitForHTTPFallback(ctx context.Context) error {
-	if run == nil || run.clientID != acceptanceClientCodexCLI {
-		return errors.New("Codex fallback run is unavailable")
-	}
-	for {
-		run.mu.Lock()
-		if run.httpFallbackSeen {
-			run.mu.Unlock()
-			return nil
-		}
-		if run.readErr != nil {
-			err := run.readErr
-			run.mu.Unlock()
-			return err
-		}
-		changed := run.changed
-		run.mu.Unlock()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-run.done:
-			select {
-			case <-run.outputDone:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			run.mu.Lock()
-			seen := run.httpFallbackSeen
-			readErr := run.readErr
-			run.mu.Unlock()
-			if readErr != nil {
-				return readErr
-			}
-			if seen {
-				return nil
-			}
-			return errors.New(
-				"Codex exited without HTTP fallback evidence",
 			)
 		}
 	}

@@ -174,11 +174,11 @@ func SourceFromRecordWithin(l SourceLimits, r Record) (*Source, error) {
 	if len(r.Request.Messages) == 0 {
 		return nil, ErrInvalidEvidence
 	}
-	if err := r.Request.validateProjectionWithin(r.Mode, false); err != nil {
+	if err := r.Request.validateProjection(r.Mode); err != nil {
 		return nil, err
 	}
 	if r.Response != nil {
-		if err := r.Response.validateWithin(r.Mode, false); err != nil {
+		if err := r.Response.validate(r.Mode); err != nil {
 			return nil, err
 		}
 	}

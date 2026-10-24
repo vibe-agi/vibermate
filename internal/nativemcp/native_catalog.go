@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/vibe-agi/vibermate/internal/recording"
 	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
+	"github.com/vibe-agi/vibermate/internal/recording"
 )
 
 // ContentProfiles is trusted classification for sensitive binding, approval
@@ -168,23 +168,6 @@ func retainedToolResult(raw []byte, paths []string, l Limits) ([]byte, bool) {
 	}
 	clean, err := json.Marshal(object)
 	return clean, err == nil
-}
-func (e *executor) contentProfile(s *session, name string) (ContentProfile, bool) {
-	if e.dependencies.ContentProfiles == nil {
-		return ContentProfile{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.catalog == nil {
-		return ContentProfile{}, false
-	}
-	definition, ok := s.catalog.Lookup(name)
-	if !ok {
-		return ContentProfile{}, false
-	}
-	contract := s.plan.Route().Contract
-	profile, ok := e.dependencies.ContentProfiles.Resolve(contract, definition)
-	return profile, ok && profile.valid(contract, definition)
 }
 
 type catalogCandidate struct {

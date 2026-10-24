@@ -398,14 +398,6 @@ func loadDevelopmentFile(
 	return items, nil
 }
 
-func persistDevelopmentFile(
-	path string,
-	schema string,
-	items map[string]developmentSecret,
-) error {
-	return persistDevelopmentFileWithOps(context.Background(), path, schema, items, defaultSecretFileOps())
-}
-
 func persistDevelopmentFileWithOps(
 	ctx context.Context,
 	path string,

@@ -410,11 +410,6 @@ func TestInstalledCodexSameSessionContinuation(t *testing.T) {
 	task7CheckGraph(t, filepath.Join(directory, "data"), false)
 	task7Write(t, filepath.Join(directory, "native-success.json"), map[string]any{"threadId": id, "rollout": rollout, "prefix_sha256": task7Hash(prefix), "seeded_sha256": task7Hash(seeded.Bytes()), "post_sha256": task7Hash(after), "seeded_items": count, "upstream_items": len(continued.Input), "continuation_posts": 1, "upstream_sha256": task7Hash(actual[1]), "catalog_calls": catalog, "exchange_id": complete.ExchangeID, "store_messages": len(complete.Request.Messages), "response_sha256": task7Hash([]byte(complete.Response.Blocks[0].Text)), "diagnostics": 0, "auth_unchanged": true})
 }
-func task7NormalizeJSON(t *testing.T, data []byte) any {
-	var v any
-	task7Must(t, json.Unmarshal(data, &v))
-	return v
-}
 
 // RED control: this is the original lower-bound/marker verifier, extracted
 // unchanged so corrupted real wire can demonstrate its false-positive paths.

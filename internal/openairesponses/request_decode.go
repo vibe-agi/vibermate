@@ -31,10 +31,6 @@ type requestWire struct {
 	Tools              []json.RawMessage `json:"tools,omitempty"`
 }
 
-type inputTypeWire struct {
-	Type string `json:"type"`
-}
-
 type additionalToolsWire struct {
 	Type  string            `json:"type"`
 	Role  string            `json:"role"`
@@ -182,10 +178,6 @@ type toolOutputContentWire struct {
 	Detail           string `json:"detail,omitempty"`
 	AudioURL         string `json:"audio_url,omitempty"`
 	EncryptedContent string `json:"encrypted_content,omitempty"`
-}
-
-type toolTypeWire struct {
-	Type string `json:"type"`
 }
 
 type functionToolWire struct {
@@ -402,9 +394,7 @@ func (codec *Codec) decodeClientRequest(
 	if wire.PromptCacheKey != "" {
 		if err := validateBoundedString(
 			wire.PromptCacheKey,
-			512,
-			false,
-		); err != nil {
+			512); err != nil {
 			return protocolcore.Request{}, report.Build(),
 				invalidClient("$.prompt_cache_key", err)
 		}
@@ -469,9 +459,7 @@ func decodeRequestProtocolEvidence(
 	if previousResponseID != nil {
 		if err := validateBoundedString(
 			*previousResponseID,
-			protocolcore.MaxProtocolEvidenceValueBytes,
-			false,
-		); err != nil {
+			protocolcore.MaxProtocolEvidenceValueBytes); err != nil {
 			return nil, invalidClient("$.previous_response_id", err)
 		}
 		byName["openai_responses.previous_response_id"] = *previousResponseID
@@ -505,9 +493,7 @@ func decodeRequestProtocolEvidence(
 			}
 			if err := validateBoundedString(
 				value,
-				protocolcore.MaxProtocolEvidenceValueBytes,
-				false,
-			); err != nil {
+				protocolcore.MaxProtocolEvidenceValueBytes); err != nil {
 				return nil, invalidClient("$.client_metadata."+field.wireName, err)
 			}
 			byName[field.evidenceName] = value
@@ -545,9 +531,7 @@ func decodeRequestProtocolEvidence(
 			}
 			if err := validateBoundedString(
 				metadata.TurnID,
-				protocolcore.MaxProtocolEvidenceValueBytes,
-				false,
-			); err != nil {
+				protocolcore.MaxProtocolEvidenceValueBytes); err != nil {
 				return nil, invalidClient(
 					fmt.Sprintf("$.input[%d].internal_chat_message_metadata_passthrough.turn_id", index),
 					err,
@@ -1124,7 +1108,7 @@ func decodeResponsesReasoningItem(
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return protocolcore.Message{}, responsesReasoningFailure(clientInput, path, err)
 	}
-	if err := validateBoundedString(wire.ID, 512, false); err != nil {
+	if err := validateBoundedString(wire.ID, 512); err != nil {
 		return protocolcore.Message{}, responsesReasoningFailure(clientInput, path+".id", err)
 	}
 	if wire.Type != "reasoning" {
@@ -1307,7 +1291,7 @@ func decodeInputMessage(
 		))
 	}
 	if wire.ID != "" {
-		if err := validateBoundedString(wire.ID, 512, false); err != nil {
+		if err := validateBoundedString(wire.ID, 512); err != nil {
 			return protocolcore.Message{}, report,
 				invalidClient(path+".id", err)
 		}
@@ -1360,7 +1344,7 @@ func decodeInternalMessageMetadata(
 	// turn IDs mean that the inspection view cannot establish a turn identity;
 	// they must not prevent an otherwise valid provider request from being sent.
 	if wire.TurnID != "" || !compatible {
-		if err := validateBoundedString(wire.TurnID, 512, false); err != nil {
+		if err := validateBoundedString(wire.TurnID, 512); err != nil {
 			return protocolcore.TranslationReport{},
 				invalidClient(path+".turn_id", err)
 		}
@@ -1498,11 +1482,10 @@ func validateResponsesInputImage(raw json.RawMessage) error {
 	if image.ImageURL != "" {
 		err = validateBoundedString(
 			image.ImageURL,
-			protocolcore.MaxProviderExtensionBytes,
-			false,
-		)
+			protocolcore.MaxProviderExtensionBytes)
+
 	} else {
-		err = validateBoundedString(image.FileID, 512, false)
+		err = validateBoundedString(image.FileID, 512)
 	}
 	if err != nil {
 		return err
@@ -1525,9 +1508,8 @@ func validateResponsesInputAudio(raw json.RawMessage) error {
 	}
 	return validateBoundedString(
 		audio.AudioURL,
-		protocolcore.MaxProviderExtensionBytes,
-		false,
-	)
+		protocolcore.MaxProviderExtensionBytes)
+
 }
 
 func decodeFunctionCall(
@@ -1839,9 +1821,7 @@ func decodeToolOutputText(
 			}
 			if err := validateBoundedString(
 				item.EncryptedContent,
-				protocolcore.MaxProviderExtensionBytes,
-				false,
-			); err != nil {
+				protocolcore.MaxProviderExtensionBytes); err != nil {
 				return "", protocolcore.TranslationReport{}, invalidClient(
 					fmt.Sprintf("%s[%d].encrypted_content", path, index),
 					err,
@@ -2315,8 +2295,8 @@ func singleton(message protocolcore.Message) []protocolcore.Message {
 	return []protocolcore.Message{message}
 }
 
-func validateBoundedString(value string, maxBytes int, allowEmpty bool) error {
-	if !allowEmpty && value == "" {
+func validateBoundedString(value string, maxBytes int) error {
+	if value == "" {
 		return errors.New("value is empty")
 	}
 	if !utf8.ValidString(value) {

@@ -3,17 +3,19 @@ package loopbackproxy_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
-	"strings"
-	"testing"
-	"time"
 )
 
 func TestNativeLaunchViewUsesVerifiedInitialSnapshotForCreateAndResolve(t *testing.T) {
@@ -46,7 +48,7 @@ func TestNativeLaunchViewUsesVerifiedInitialSnapshotForCreateAndResolve(t *testi
 				next := snapshot.Aggregate()
 				next.Revision++
 				origin, _ := originidentity.ParseProviderOrigin("https://native.example")
-				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: authoredEgress(t, egressprofile.Direct())}}
+				next.ClientToolAccess = &environment.ClientToolAccessPolicy{Enabled: true, Route: &environment.ClientToolRoute{ID: "native.new.route", Revision: 1, TargetOrigin: origin, Path: environment.ClientToolMCPPath, CredentialOwner: environment.ClientToolCredentialOriginal, Contract: environment.ClientToolContractCodexLegacy, EgressProfile: egressprofiletest.Explicit(t, egressprofile.Direct())}}
 				draft, err := f.environments.SaveDraft(ctx, environment.DraftCommand{Candidate: next, ExpectedBaseRevision: 1})
 				if err != nil {
 					t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
+	"github.com/vibe-agi/vibermate/internal/lifecyclegate"
 )
 
 const (
@@ -79,7 +80,7 @@ type Manager struct {
 	nativeRevocation     interface {
 		Revoke(context.Context, captureidentity.Reference, string) error
 	}
-	lifecycle *lifecycleGate
+	lifecycle *lifecyclegate.Gate
 	recovery  Recovery
 }
 
@@ -105,7 +106,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		evidenceBarrier:      options.EvidenceBarrier,
 		nativeRevocation:     options.NativeRevocation,
 		archiveBarrier:       options.ArchiveBarrier,
-		lifecycle:            newLifecycleGate(),
+		lifecycle:            lifecyclegate.New("ManualCapture", ErrInvalidCommand, ErrRuntimeStopping),
 		recovery:             recovery,
 	}, nil
 }
@@ -121,7 +122,7 @@ func (manager *Manager) ActiveCount(ctx context.Context) (int, error) {
 	if manager == nil {
 		return 0, ErrRuntimeStopping
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -143,7 +144,7 @@ func (manager *Manager) Create(
 	if err := manager.validateCreate(command); err != nil {
 		return Grant{}, err
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -209,7 +210,7 @@ func (manager *Manager) Rotate(
 	if command.ExpectedCredentialRevision == MaxCredentialRevision {
 		return Grant{}, ErrRevisionConflict
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -245,7 +246,7 @@ func (manager *Manager) Revoke(
 		!command.ExpectedCredentialRevision.Valid() {
 		return View{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return View{}, err
 	}
@@ -306,7 +307,7 @@ func (manager *Manager) AuthorizeProxy(
 	if _, err := NewProxyCredential(credential.value); err != nil {
 		return Evidence{}, err
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -345,7 +346,7 @@ func (manager *Manager) Get(
 	if !owner.Valid() || !id.Valid() {
 		return View{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return View{}, err
 	}
@@ -369,7 +370,7 @@ func (manager *Manager) List(
 		(request.Cursor != nil && !request.Cursor.Valid()) {
 		return Page{}, ErrInvalidCommand
 	}
-	operation, finish, err := manager.lifecycle.begin(ctx)
+	operation, finish, err := manager.lifecycle.Begin(ctx)
 	if err != nil {
 		return Page{}, err
 	}
@@ -391,7 +392,7 @@ func (manager *Manager) List(
 
 func (manager *Manager) BeginShutdown() {
 	if manager != nil {
-		manager.lifecycle.closeAdmission()
+		manager.lifecycle.CloseAdmission()
 	}
 }
 
@@ -399,7 +400,7 @@ func (manager *Manager) Drain(ctx context.Context) error {
 	if manager == nil {
 		return nil
 	}
-	return manager.lifecycle.drain(ctx)
+	return manager.lifecycle.Drain(ctx)
 }
 
 // Shutdown closes and drains manager operations but deliberately preserves

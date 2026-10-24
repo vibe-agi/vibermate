@@ -2,12 +2,14 @@ package productruntime
 
 import (
 	"context"
+	"testing"
+
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
-	"testing"
 )
 
 type clientToolPreparation interface {
@@ -67,15 +69,15 @@ func TestClientToolAccessUsesOriginalClientRegistration(t *testing.T) {
 	}
 	unsaved := candidate.Clone()
 	for pi := range unsaved.ClientEndpoints[matching].ProtocolPlans {
-		unsaved.ClientEndpoints[matching].ProtocolPlans[pi].EgressProfile = authoredEgress(t, profile)
+		unsaved.ClientEndpoints[matching].ProtocolPlans[pi].EgressProfile = egressprofiletest.Explicit(t, profile)
 	}
 	prepared, err := builder.PrepareClientToolAccess(ctx, unsaved, &environment.ClientToolAccessPolicy{Enabled: true})
-	if err != nil || prepared.Route.EgressProfile != authoredEgress(t, profile) {
+	if err != nil || prepared.Route.EgressProfile != egressprofiletest.Explicit(t, profile) {
 		t.Fatalf("ignored unsaved original client egress: %v", err)
 	}
 	ambiguous := unsaved.Clone()
 	second := ambiguous.ClientEndpoints[matching].ProtocolPlans[0]
-	second.EgressProfile = authoredEgress(t, egressprofile.Direct())
+	second.EgressProfile = egressprofiletest.Explicit(t, egressprofile.Direct())
 	ambiguous.ClientEndpoints[matching].ProtocolPlans = append(ambiguous.ClientEndpoints[matching].ProtocolPlans, second)
 	if _, err = builder.PrepareClientToolAccess(ctx, ambiguous, &environment.ClientToolAccessPolicy{Enabled: true}); err == nil {
 		t.Fatal("ambiguous original-client egress silently selected first")

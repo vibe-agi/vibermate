@@ -5,13 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"github.com/vibe-agi/vibermate/internal/instanceguard"
-	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressprofile/egressprofiletest"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
+	"github.com/vibe-agi/vibermate/internal/runtimedata"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -493,7 +495,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 				ID: environment.ClientProtocolPlanID("plan." + id), Revision: 1, ClientProtocol: protocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter." + id, Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
-				EgressProfile:       authoredEgress(t, egressprofile.Direct()),
+				EgressProfile:       egressprofiletest.Explicit(t, egressprofile.Direct()),
 			}},
 		}},
 	}

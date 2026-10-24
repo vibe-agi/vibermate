@@ -57,8 +57,8 @@ func TestDiscoverUsesOnlyEndpointAsAvailabilityAuthority(t *testing.T) {
 	}
 
 	snapshot, err := catalog.Discover(
-		context.Background(), endpoint.ID, testCatalogAccountID, false,
-	)
+		context.Background(), endpoint.ID, testCatalogAccountID, false, false)
+
 	if err != nil {
 		t.Fatalf("discover endpoint models: %v", err)
 	}
@@ -113,8 +113,7 @@ func TestDiscoverDefaultBudgetIncludesHostCredentialAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := catalog.Discover(
-		context.Background(), endpoint.ID, testCatalogAccountID, true,
-	); err != nil {
+		context.Background(), endpoint.ID, testCatalogAccountID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if budget := <-observedBudget; budget < 19*time.Second {
@@ -142,8 +141,8 @@ func TestDiscoverPreservesTransportTimeoutCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = catalog.Discover(
-		context.Background(), endpoint.ID, testCatalogAccountID, true,
-	)
+		context.Background(), endpoint.ID, testCatalogAccountID, true, false)
+
 	if !errors.Is(err, ErrCatalogUnavailable) ||
 		!errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("discovery error did not preserve its timeout cause: %v", err)
@@ -174,8 +173,8 @@ func TestDiscoverDoesNotGuessAvailabilityForCustomEndpoint(t *testing.T) {
 	}
 
 	_, err = catalog.Discover(
-		context.Background(), endpoint.ID, testCatalogAccountID, false,
-	)
+		context.Background(), endpoint.ID, testCatalogAccountID, false, false)
+
 	if !errors.Is(err, ErrCatalogUnavailable) {
 		t.Fatalf("custom endpoint must not inherit directory availability, got %v", err)
 	}
@@ -205,8 +204,8 @@ func TestDiscoverNeverTreatsMetadataAsEndpointAvailability(t *testing.T) {
 	}
 
 	_, err = catalog.Discover(
-		context.Background(), endpoint.ID, testCatalogAccountID, false,
-	)
+		context.Background(), endpoint.ID, testCatalogAccountID, false, false)
+
 	if !errors.Is(err, ErrCatalogUnavailable) {
 		t.Fatalf("Endpoint failure must remain unavailable, got %v", err)
 	}
@@ -283,7 +282,7 @@ func TestDiscoverInvalidatesCacheWhenAccountSettingsChange(t *testing.T) {
 	}
 	for _, revision := range []uint64{1, 1, 2, 2} {
 		catalog.credentials = credentialAuthorityStub{settingsRevision: revision}
-		if _, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, false); err != nil {
+		if _, err := catalog.Discover(context.Background(), endpoint.ID, testCatalogAccountID, false, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -326,7 +325,7 @@ func (function endpointTransportFunc) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	_ providerauth.Lease,
-	_ ...bool,
+	_ bool,
 ) (*http.Response, error) {
 	return function(ctx, endpoint)
 }
@@ -337,7 +336,7 @@ func (transport endpointTransportClient) FetchEndpointModels(
 	ctx context.Context,
 	endpoint upstreamendpoint.Endpoint,
 	_ providerauth.Lease,
-	_ ...bool,
+	_ bool,
 ) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(
 		ctx,
