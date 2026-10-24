@@ -241,3 +241,59 @@ func TestCloseEndsLiveRegistrations(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
+	broker, registrations, _ := startBroker(t, sameUser)
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	secret := "0123456789abcdef0123456789abcdef"
+	go broker.ServeFlowsTCP(listener, []byte(secret))
+	now := time.Now()
+	broker.now = func() time.Time { return now }
+	hello := func(secret string) byte {
+		conn, err := net.DialTCP("tcp4", nil, listener.Addr().(*net.TCPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if err := WriteHello(conn, secret); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		answer := make([]byte, 1)
+		if _, err := io.ReadFull(conn, answer); err != nil {
+			return 0
+		}
+		return answer[0]
+	}
+	registerExtension := func() bool {
+		registration, err := Register(registrations, "run", func(flow net.Conn) { flow.Close() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer registration.Close()
+		return registration.Extension()
+	}
+	if registerExtension() {
+		t.Fatal("extension reported active before any hello")
+	}
+	if answer := hello("wrong-secret-wrong-secret-wrong-s"); answer != 0 {
+		t.Fatalf("hello with the wrong secret answered %q", answer)
+	}
+	if registerExtension() {
+		t.Fatal("a hello with the wrong secret counted")
+	}
+	if answer := hello(secret); answer != helloAccepted {
+		t.Fatalf("hello answered %q", answer)
+	}
+	if !registerExtension() {
+		t.Fatal("extension not reported active after a hello")
+	}
+	now = now.Add(extensionFreshness)
+	if registerExtension() {
+		t.Fatal("a stale hello still counted")
+	}
+}

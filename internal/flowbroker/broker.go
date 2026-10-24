@@ -21,6 +21,10 @@ const (
 	requestTimeout = 2 * time.Second
 	flowOwned      = 'Y'
 	flowUnowned    = 'N'
+	helloAccepted  = 'H'
+	// extensionFreshness is how recent a hello must be for the extension to
+	// count as active; it sends one at least every 10 seconds.
+	extensionFreshness = 30 * time.Second
 )
 
 // Broker attributes intercepted flows to Capture Runs and hands each owned
@@ -33,9 +37,11 @@ type Broker struct {
 	// Loopback TCP submissions authenticate with a secret instead.
 	allowFlowPeer func(Peer) bool
 
-	sequence atomic.Uint64
-	mu       sync.Mutex
-	channels map[string]*runChannel
+	sequence  atomic.Uint64
+	lastHello atomic.Int64
+	now       func() time.Time
+	mu        sync.Mutex
+	channels  map[string]*runChannel
 }
 
 type runChannel struct {
@@ -52,6 +58,7 @@ func New(reader processlineage.Reader, allowFlowPeer func(Peer) bool) (*Broker, 
 		reader:        reader,
 		allowFlowPeer: allowFlowPeer,
 		channels:      map[string]*runChannel{},
+		now:           time.Now,
 	}, nil
 }
 
@@ -78,6 +85,14 @@ type registrationRequest struct {
 type registrationReply struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Extension reports whether a platform capture layer announced itself
+	// recently. Without one, descendants' flows are not being intercepted.
+	Extension bool `json:"extension,omitempty"`
+}
+
+func (broker *Broker) extensionActive() bool {
+	last := broker.lastHello.Load()
+	return last != 0 && broker.now().Sub(time.Unix(0, last)) < extensionFreshness
 }
 
 // ServeRegistrations accepts run registrations until listener closes.
@@ -131,7 +146,7 @@ func serve(listener *net.UnixListener, handle func(*net.UnixConn)) error {
 func (broker *Broker) register(conn *net.UnixConn) {
 	defer conn.Close()
 	reply := func(err error) {
-		message := registrationReply{OK: err == nil}
+		message := registrationReply{OK: err == nil, Extension: err == nil && broker.extensionActive()}
 		if err != nil {
 			message.Error = err.Error()
 		}
@@ -194,6 +209,11 @@ func (broker *Broker) flow(conn fileConn, secret []byte) {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
+	if request.Hello {
+		broker.lastHello.Store(broker.now().UnixNano())
+		_, _ = conn.Write([]byte{helloAccepted})
+		return
+	}
 	key, owned := broker.lineage.Owner(request.PID)
 	broker.mu.Lock()
 	channel := broker.channels[key]

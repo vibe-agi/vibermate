@@ -13,9 +13,10 @@ import (
 // Registration is a run's live claim on its descendants' flows. Closing it
 // (or the process exiting) ends the claim.
 type Registration struct {
-	conn *net.UnixConn
-	done chan struct{}
-	once sync.Once
+	conn      *net.UnixConn
+	extension bool
+	done      chan struct{}
+	once      sync.Once
 }
 
 // Register claims the calling process's descendants for run. The broker
@@ -51,7 +52,7 @@ func Register(socketPath, run string, handle func(net.Conn)) (*Registration, err
 		return nil, errors.New("flow broker refused registration")
 	}
 	_ = conn.SetDeadline(time.Time{})
-	registration := &Registration{conn: conn, done: make(chan struct{})}
+	registration := &Registration{conn: conn, extension: reply.Extension, done: make(chan struct{})}
 	go registration.receive(handle)
 	return registration, nil
 }
@@ -81,6 +82,10 @@ func (registration *Registration) receive(handle func(net.Conn)) {
 		go handle(flow)
 	}
 }
+
+// Extension reports whether the broker had heard from an active capture
+// extension when the claim was made. A claim without one captures nothing.
+func (registration *Registration) Extension() bool { return registration.extension }
 
 // Done is closed when the claim ends: the broker closed it, vibermated
 // exited, or Close was called.

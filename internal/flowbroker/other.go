@@ -26,3 +26,5 @@ func Register(string, string, func(net.Conn)) (*Registration, error) { return ni
 func (*Registration) Close() error { return nil }
 
 func (*Registration) Done() <-chan struct{} { return nil }
+
+func (*Registration) Extension() bool { return false }
