@@ -144,6 +144,9 @@ func (broker *Broker) Close() {
 type registrationRequest struct {
 	Version int    `json:"v"`
 	Run     string `json:"run"`
+	// Token is the value the run set for TokenEnvironment in its Agent's
+	// environment. It is optional; without it only lineage attributes.
+	Token string `json:"token,omitempty"`
 }
 
 type registrationReply struct {
@@ -230,7 +233,8 @@ func (broker *Broker) register(conn *net.UnixConn) {
 		return
 	}
 	var request registrationRequest
-	if json.Unmarshal(line, &request) != nil || request.Version != 1 || request.Run == "" || len(request.Run) > 256 {
+	if json.Unmarshal(line, &request) != nil || request.Version != 1 || request.Run == "" || len(request.Run) > 256 ||
+		(request.Token != "" && !ValidToken(request.Token)) {
 		reply(errors.New("registration request is invalid"))
 		return
 	}
@@ -258,7 +262,11 @@ func (broker *Broker) register(conn *net.UnixConn) {
 		}
 	}
 	key := request.Run + "#" + strconv.FormatUint(broker.sequence.Add(1), 10)
-	if err := broker.lineage.Register(root.Identity, key); err != nil {
+	marker := ""
+	if request.Token != "" {
+		marker = TokenEnvironment + "=" + request.Token
+	}
+	if err := broker.lineage.RegisterWithMarker(root.Identity, key, marker); err != nil {
 		reply(err)
 		return
 	}

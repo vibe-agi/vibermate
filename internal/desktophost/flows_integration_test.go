@@ -62,11 +62,12 @@ func TestHostServesTransparentCaptureRendezvous(t *testing.T) {
 	}
 
 	received := make(chan string, 1)
-	registration, err := flowbroker.Register(paths.FlowRegistrationSocket(), "run-1", func(flow net.Conn) {
+	registration, err := flowbroker.Register(paths.FlowRegistrationSocket(), "run-1", "", func(flow net.Conn) {
 		defer flow.Close()
 		data, _ := io.ReadAll(flow)
 		received <- string(data)
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}

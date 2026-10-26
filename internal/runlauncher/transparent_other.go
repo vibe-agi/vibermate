@@ -2,5 +2,8 @@
 
 package runlauncher
 
-func pauseProcessGroup(int) error  { return ErrTransparentUnsupported }
-func resumeProcessGroup(int) error { return ErrTransparentUnsupported }
+type pausedRun struct{}
+
+func pauseRun(int, string) pausedRun { return pausedRun{} }
+
+func (pausedRun) resume() {}

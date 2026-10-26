@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/flowbroker"
 	"github.com/vibe-agi/vibermate/internal/flowingress"
 	"github.com/vibe-agi/vibermate/internal/processlineage"
@@ -267,4 +269,107 @@ func shortSocketDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(directory) })
 	return directory
+}
+
+// A nested transparent run's Agent must carry only its own token: an outer
+// run's inherited token would attribute the nested Agent's orphans to the
+// outer run.
+func TestTransparentAgentCarriesOnlyItsOwnToken(t *testing.T) {
+	adapter := testAdapterEvidence(clientadapter.LaunchCodexResponsesHTTP)
+	grant := capturecontrol.LaunchGrant{Run: testCaptureRunView("nested", clientadapter.RecognitionVerified, adapter), CatalogRevision: 7, LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP, Recognition: clientadapter.RecognitionVerified, Adapter: adapter, ExecutablePath: "/tmp/codex", ProxyAddress: "http://127.0.0.1:43210", ProxyDelivery: capturecontrol.ProxyDeliveryLocalListener, ProxyToken: "proxy-capability", RunCapability: "run-capability", RootPEMPath: "/tmp/root.pem", ProtectedAuthorities: []string{"api.openai.com:443", "chatgpt.com:443"}, ManagedCredentialAuthorities: []string{"api.openai.com:443", "chatgpt.com:443"}}
+	outer := flowbroker.TokenEnvironment + "=outer-run-token-outer-run-token-outer"
+	built, err := buildEnvironment([]string{"PATH=/bin", outer}, grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(built, outer) {
+		t.Fatal("an inherited outer-run token survived ordinary launch preparation")
+	}
+	capture := &transparentCapture{token: "inner-run-token-inner-run-token-inner"}
+	agent := capture.agentEnvironment(built)
+	var tokens []string
+	for _, entry := range agent {
+		if strings.HasPrefix(entry, flowbroker.TokenEnvironment+"=") {
+			tokens = append(tokens, entry)
+		}
+	}
+	if !slices.Equal(tokens, []string{capture.marker()}) {
+		t.Fatalf("Agent tokens = %q, want only %q", tokens, capture.marker())
+	}
+}
+
+func startMarked(t *testing.T, environment []string, setsid bool) *exec.Cmd {
+	t.Helper()
+	child := exec.Command("sleep", "60")
+	child.Env = environment
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: setsid}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(child.Process.Pid, syscall.SIGCONT)
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	return child
+}
+
+// Pausing reaches descendants that left the Agent's process group, never
+// resumes a process the user had stopped, and leaves unmarked processes alone.
+func TestPauseRunStopsEveryMarkedProcess(t *testing.T) {
+	marker := flowbroker.TokenEnvironment + "=pause-test-" + strconv.Itoa(os.Getpid())
+	marked := append(os.Environ(), marker)
+	group := startProcessGroup(t)
+	daemon := startMarked(t, marked, true)
+	userStopped := startMarked(t, marked, true)
+	unrelated := startMarked(t, os.Environ(), true)
+	if err := syscall.Kill(userStopped.Process.Pid, syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, userStopped.Process.Pid, 'T')
+
+	paused := pauseRun(group.Process.Pid, marker)
+	waitState(t, group.Process.Pid, 'T')
+	waitState(t, daemon.Process.Pid, 'T')
+	if state := processState(t, unrelated.Process.Pid); state == 'T' {
+		t.Fatal("an unmarked process was paused")
+	}
+	paused.resume()
+	waitState(t, group.Process.Pid, 'S')
+	waitState(t, daemon.Process.Pid, 'S')
+	time.Sleep(50 * time.Millisecond)
+	if state := processState(t, userStopped.Process.Pid); state != 'T' {
+		t.Fatalf("a process the user stopped was resumed (state %c)", state)
+	}
+}
+
+// A descendant orphaned before its first connection is attributed through the
+// token its environment inherited.
+func TestTransparentCaptureOwnsAnOrphanByToken(t *testing.T) {
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
+	broker := startTestBroker(t, socket, true)
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Close()
+	shell := exec.Command("sh", "-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+	shell.Env = append(os.Environ(), capture.marker())
+	output, err := shell.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(orphan, syscall.SIGKILL) })
+	conn := broker.dial(t)
+	defer conn.Close()
+	if err := flowbroker.WriteFlowRequest(conn, orphan, testFlowSecret); err != nil {
+		t.Fatal(err)
+	}
+	if answer := readAnswer(t, conn); answer != 'Y' {
+		t.Fatalf("orphan flow answer = %q, want owned", answer)
+	}
 }

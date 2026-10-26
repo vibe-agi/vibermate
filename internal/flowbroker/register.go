@@ -22,12 +22,13 @@ type Registration struct {
 
 // Register claims the calling process's descendants for run. The broker
 // identifies the caller from socket credentials; handle receives each owned
-// flow and owns it.
-func Register(socketPath, run string, handle func(net.Conn)) (*Registration, error) {
-	return register(socketPath, run, handle, keepaliveTimeout)
+// flow and owns it. A non-empty token also claims any process whose
+// environment carries TokenEnvironment=token.
+func Register(socketPath, run, token string, handle func(net.Conn)) (*Registration, error) {
+	return register(socketPath, run, token, handle, keepaliveTimeout)
 }
 
-func register(socketPath, run string, handle func(net.Conn), timeout time.Duration) (*Registration, error) {
+func register(socketPath, run, token string, handle func(net.Conn), timeout time.Duration) (*Registration, error) {
 	if handle == nil {
 		return nil, errors.New("flow handler is required")
 	}
@@ -35,7 +36,7 @@ func register(socketPath, run string, handle func(net.Conn), timeout time.Durati
 	if err != nil {
 		return nil, err
 	}
-	request, _ := json.Marshal(registrationRequest{Version: 1, Run: run})
+	request, _ := json.Marshal(registrationRequest{Version: 1, Run: run, Token: token})
 	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
 	if _, err := conn.Write(append(request, '\n')); err != nil {
 		conn.Close()

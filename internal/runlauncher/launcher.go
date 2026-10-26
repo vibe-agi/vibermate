@@ -369,7 +369,7 @@ func (launcher *Launcher) Run(
 			return 1, err
 		}
 		defer transparent.Close()
-		environment = withoutProxyEnvironment(environment)
+		environment = transparent.agentEnvironment(environment)
 	}
 	if recovery != nil {
 		recovery.childEnvironment = append([]string(nil), environment...)

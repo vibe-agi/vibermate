@@ -103,11 +103,12 @@ func sameUser(peer Peer) bool { return peer.UID == os.Getuid() }
 func TestOwnedFlowIsHandedToItsRun(t *testing.T) {
 	_, registrations, flows := startBroker(t, sameUser)
 	received := make(chan string, 1)
-	registration, err := Register(registrations, "run-a", func(flow net.Conn) {
+	registration, err := Register(registrations, "run-a", "", func(flow net.Conn) {
 		defer flow.Close()
 		data, _ := io.ReadAll(flow)
 		received <- string(data)
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestOwnedFlowIsHandedToItsRun(t *testing.T) {
 
 func TestClosingRegistrationEndsOwnership(t *testing.T) {
 	_, registrations, flows := startBroker(t, sameUser)
-	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
+	registration, err := Register(registrations, "run-a", "", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestClosingRegistrationEndsOwnership(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	again, err := Register(registrations, "run-b", func(flow net.Conn) { flow.Close() })
+	again, err := Register(registrations, "run-b", "", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatalf("re-register after close: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestClosingRegistrationEndsOwnership(t *testing.T) {
 
 func TestOnlyAllowedPeersMaySubmitFlows(t *testing.T) {
 	_, registrations, flows := startBroker(t, func(Peer) bool { return false })
-	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
+	registration, err := Register(registrations, "run-a", "", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,17 +176,18 @@ func TestOnlyAllowedPeersMaySubmitFlows(t *testing.T) {
 // previous claim at once; the old claim ends and flows reach the new one.
 func TestReRegistrationReplacesTheSameProcessClaim(t *testing.T) {
 	_, registrations, flows := startBroker(t, sameUser)
-	first, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
+	first, err := Register(registrations, "run-a", "", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
 	received := make(chan string, 1)
-	second, err := Register(registrations, "run-a", func(flow net.Conn) {
+	second, err := Register(registrations, "run-a", "", func(flow net.Conn) {
 		defer flow.Close()
 		data, _ := io.ReadAll(flow)
 		received <- string(data)
 	})
+
 	if err != nil {
 		t.Fatalf("re-registration: %v", err)
 	}
@@ -221,11 +223,12 @@ func TestLoopbackTCPFlowsNeedTheSecret(t *testing.T) {
 	}
 	go broker.ServeFlowsTCP(listener, secret)
 	received := make(chan string, 1)
-	registration, err := Register(registrations, "run-a", func(flow net.Conn) {
+	registration, err := Register(registrations, "run-a", "", func(flow net.Conn) {
 		defer flow.Close()
 		data, _ := io.ReadAll(flow)
 		received <- string(data)
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +275,7 @@ func TestLoopbackTCPFlowsNeedTheSecret(t *testing.T) {
 
 func TestCloseEndsLiveRegistrations(t *testing.T) {
 	broker, registrations, flows := startBroker(t, sameUser)
-	registration, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
+	registration, err := Register(registrations, "run-a", "", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +321,7 @@ func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
 		return answer[0]
 	}
 	registerExtension := func() bool {
-		registration, err := Register(registrations, "run", func(flow net.Conn) { flow.Close() })
+		registration, err := Register(registrations, "run", "", func(flow net.Conn) { flow.Close() })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -367,7 +370,7 @@ const (
 )
 
 func registerFast(socket, run string, handle func(net.Conn)) (*Registration, error) {
-	return register(socket, run, handle, fastTimeout)
+	return register(socket, run, "", handle, fastTimeout)
 }
 
 func serveTCPFlows(t *testing.T, broker *Broker) *net.TCPAddr {

@@ -2,6 +2,8 @@ package runlauncher
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -65,8 +67,12 @@ func withoutProxyEnvironment(environment []string) []string {
 // broker identifies the launcher from socket credentials; each owned flow it
 // passes back is forwarded through the run's own proxy frontier.
 type transparentCapture struct {
-	socket  string
-	run     string
+	socket string
+	run    string
+	// token is set as flowbroker.TokenEnvironment in the Agent's environment
+	// only; descendants inherit it, so the broker can attribute an orphaned
+	// process and the launcher can pause every process of its run.
+	token   string
 	ingress *flowingress.Ingress
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -83,9 +89,14 @@ func startTransparentCapture(socket, run string, proxy flowingress.Proxy) (*tran
 	if err != nil {
 		return nil, err
 	}
+	entropy := make([]byte, 32)
+	if _, err := rand.Read(entropy); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	capture := &transparentCapture{
-		socket: socket, run: run, ingress: ingress, ctx: ctx, cancel: cancel,
+		socket: socket, run: run, token: base64.RawURLEncoding.EncodeToString(entropy),
+		ingress: ingress, ctx: ctx, cancel: cancel,
 		recoveryWindow: transparentRecoveryWindow,
 	}
 	if err := capture.register(); err != nil {
@@ -96,7 +107,7 @@ func startTransparentCapture(socket, run string, proxy flowingress.Proxy) (*tran
 }
 
 func (capture *transparentCapture) register() error {
-	registration, err := flowbroker.Register(capture.socket, capture.run, capture.serve)
+	registration, err := flowbroker.Register(capture.socket, capture.run, capture.token, capture.serve)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrTransparentUnavailable, err)
 	}
@@ -108,6 +119,16 @@ func (capture *transparentCapture) register() error {
 	capture.registration = registration
 	capture.mu.Unlock()
 	return nil
+}
+
+// marker is the environment entry that identifies this run's processes.
+func (capture *transparentCapture) marker() string {
+	return flowbroker.TokenEnvironment + "=" + capture.token
+}
+
+// agentEnvironment drops proxy variables and sets this run's token.
+func (capture *transparentCapture) agentEnvironment(environment []string) []string {
+	return append(withoutProxyEnvironment(environment), capture.marker())
 }
 
 func (capture *transparentCapture) serve(flow net.Conn) {
@@ -137,13 +158,13 @@ func (capture *transparentCapture) supervise(ctx context.Context, processGroup i
 			if ctx.Err() != nil {
 				return
 			}
-			_ = pauseProcessGroup(processGroup)
+			paused := pauseRun(processGroup, capture.marker())
 			fmt.Fprintln(notices, "vibermate: transparent capture was interrupted; the Agent is paused until ViberMate is available again.")
 			if err := capture.restore(ctx); err != nil {
 				failed <- err
 				return
 			}
-			_ = resumeProcessGroup(processGroup)
+			paused.resume()
 			fmt.Fprintln(notices, "vibermate: transparent capture restored; the Agent resumed.")
 		}
 	}()

@@ -29,7 +29,9 @@ func (*Broker) Stats() Stats { return Stats{} }
 
 type Registration struct{}
 
-func Register(string, string, func(net.Conn)) (*Registration, error) { return nil, errUnsupported }
+func Register(string, string, string, func(net.Conn)) (*Registration, error) {
+	return nil, errUnsupported
+}
 
 func (*Registration) Close() error { return nil }
 

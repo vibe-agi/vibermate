@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/flowbroker"
 )
 
 const clientCredentialPlaceholder = "vibermate-local-proxy"
@@ -18,11 +19,14 @@ const clientCredentialPlaceholder = "vibermate-local-proxy"
 const claudeDisableNonStreamingFallback = "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"
 
 var managedEnvironment = map[string]struct{}{
-	"HTTP_PROXY":                   {},
-	"HTTPS_PROXY":                  {},
-	"ALL_PROXY":                    {},
-	"NO_PROXY":                     {},
-	"VIBERMATE_CAPTURE_RUN_ID":     {},
+	"HTTP_PROXY":               {},
+	"HTTPS_PROXY":              {},
+	"ALL_PROXY":                {},
+	"NO_PROXY":                 {},
+	"VIBERMATE_CAPTURE_RUN_ID": {},
+	// A transparent run sets its own token; an inherited one belongs to an
+	// outer run and must not reach a nested run's Agent.
+	flowbroker.TokenEnvironment:    {},
 	"VIBERMATE_CONNECTION":         {},
 	"VIBERMATE_CREDENTIAL_FILE":    {},
 	"VIBERMATE_TOKEN":              {},

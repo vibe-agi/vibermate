@@ -9,6 +9,26 @@ import (
 
 const maxRequestBytes = 512
 
+// TokenEnvironment names the variable a run sets, to its registration's
+// token, in its Agent's environment. Descendants inherit it, which attributes
+// a process orphaned before its first connection (ADR 0024).
+const TokenEnvironment = "VIBERMATE_TRANSPARENT_CAPTURE"
+
+// ValidToken reports whether token can name a registration: 32 to 128
+// URL-safe base64 characters.
+func ValidToken(token string) bool {
+	if len(token) < 32 || len(token) > 128 {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 type flowRequest struct {
 	Version int    `json:"v"`
 	PID     int    `json:"pid"`
