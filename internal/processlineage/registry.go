@@ -2,6 +2,7 @@ package processlineage
 
 import (
 	"errors"
+	"strings"
 	"sync"
 )
 
@@ -27,6 +28,11 @@ type Registry struct {
 	roots   map[Identity]string
 	runs    map[string]Identity
 	learned map[Identity]string
+	// markers maps an exact environment entry to the run that set it in its
+	// Agent's environment. It finds a descendant whose parents exited before
+	// its first connection, which a parent walk cannot.
+	markers    map[string]string
+	runMarkers map[string]string
 }
 
 func NewRegistry(reader Reader) *Registry {
@@ -35,6 +41,9 @@ func NewRegistry(reader Reader) *Registry {
 		roots:   map[Identity]string{},
 		runs:    map[string]Identity{},
 		learned: map[Identity]string{},
+
+		markers:    map[string]string{},
+		runMarkers: map[string]string{},
 	}
 }
 
@@ -42,7 +51,15 @@ func NewRegistry(reader Reader) *Registry {
 // established root from an unforgeable source such as socket peer
 // credentials, never from a request field.
 func (registry *Registry) Register(root Identity, run string) error {
-	if root.PID <= 1 || run == "" {
+	return registry.RegisterWithMarker(root, run, "")
+}
+
+// RegisterWithMarker also attributes to run any process whose environment
+// contains marker, an exact KEY=value entry the run placed in its Agent's
+// environment and that descendants inherit. An empty marker registers lineage
+// only.
+func (registry *Registry) RegisterWithMarker(root Identity, run, marker string) error {
+	if root.PID <= 1 || run == "" || (marker != "" && !strings.Contains(marker, "=")) {
 		return errInvalidRegistration
 	}
 	live, err := registry.reader.Read(root.PID)
@@ -54,11 +71,22 @@ func (registry *Registry) Register(root Identity, run string) error {
 	if _, taken := registry.roots[root]; taken {
 		return errRootTaken
 	}
+	if owner, taken := registry.markers[marker]; marker != "" && taken && owner != run {
+		return errInvalidRegistration
+	}
 	if previous, exists := registry.runs[run]; exists {
 		delete(registry.roots, previous)
 	}
+	if previous, exists := registry.runMarkers[run]; exists {
+		delete(registry.markers, previous)
+		delete(registry.runMarkers, run)
+	}
 	registry.roots[root] = run
 	registry.runs[run] = root
+	if marker != "" {
+		registry.markers[marker] = run
+		registry.runMarkers[run] = marker
+	}
 	return nil
 }
 
@@ -78,6 +106,10 @@ func (registry *Registry) Deregister(run string) {
 		delete(registry.roots, root)
 		delete(registry.runs, run)
 	}
+	if marker, exists := registry.runMarkers[run]; exists {
+		delete(registry.markers, marker)
+		delete(registry.runMarkers, run)
+	}
 	for identity, owner := range registry.learned {
 		if owner == run {
 			delete(registry.learned, identity)
@@ -88,14 +120,19 @@ func (registry *Registry) Deregister(run string) {
 // Owner returns the run that owns pid. It walks parents until it meets a
 // registered root or a process already attributed, then remembers every
 // process on the path, so a descendant later reparented away from the root
-// keeps its run.
+// keeps its run. When the walk finds no owner (the process was orphaned
+// before its first connection), a run's marker in the process's environment
+// attributes it instead.
 func (registry *Registry) Owner(pid int) (string, bool) {
 	var path []Identity
 	current := pid
 	for depth := 0; depth < maxDepth && current > 1; depth++ {
 		process, err := registry.reader.Read(current)
 		if err != nil {
-			return "", false
+			if depth == 0 {
+				return "", false
+			}
+			break // A parent exited mid-walk; the marker may still apply.
 		}
 		registry.mu.Lock()
 		run, isRoot := registry.roots[process.Identity]
@@ -112,6 +149,40 @@ func (registry *Registry) Owner(pid int) (string, bool) {
 		}
 		path = append(path, process.Identity)
 		current = process.Parent
+	}
+	if len(path) == 0 {
+		return "", false
+	}
+	if run, found := registry.markedRun(pid); found {
+		registry.remember(path[:1], run)
+		return run, true
+	}
+	return "", false
+}
+
+// markedRun looks for a registered run's marker in pid's environment. It
+// reads nothing while no run has registered a marker.
+func (registry *Registry) markedRun(pid int) (string, bool) {
+	environment, ok := registry.reader.(EnvironmentReader)
+	if !ok {
+		return "", false
+	}
+	registry.mu.Lock()
+	marked := len(registry.markers) != 0
+	registry.mu.Unlock()
+	if !marked {
+		return "", false
+	}
+	entries, err := environment.Environment(pid)
+	if err != nil {
+		return "", false
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, entry := range entries {
+		if run, exists := registry.markers[entry]; exists {
+			return run, true
+		}
 	}
 	return "", false
 }
