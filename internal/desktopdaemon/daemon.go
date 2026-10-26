@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	goruntime "runtime"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
@@ -93,7 +92,7 @@ func ProductionOptions(
 	hostOptions.RemoteServerEnabled = true
 	// The transparent proxy extension exists only on macOS; Linux captures by
 	// network namespace and needs no broker (ADR 0024).
-	hostOptions.TransparentCapture = goruntime.GOOS == "darwin"
+	hostOptions.TransparentCapture = transparentCaptureSupported()
 	return Options{
 		Host:            hostOptions,
 		BootstrapWriter: bootstrapWriter,

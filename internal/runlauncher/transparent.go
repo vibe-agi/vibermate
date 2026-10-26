@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -205,7 +204,7 @@ func (capture *transparentCapture) Close() {
 // broker before the Agent starts. Flows go through the same proxy the
 // environment would have named, so the Runtime sees the same credential.
 func (launcher *Launcher) startTransparent(grant, environmentGrant capturecontrol.LaunchGrant) (*transparentCapture, error) {
-	if runtime.GOOS != "darwin" {
+	if !transparentPlatformSupported() {
 		return nil, ErrTransparentUnsupported
 	}
 	layout, err := runtimepath.Default()

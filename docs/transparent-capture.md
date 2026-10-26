@@ -147,6 +147,36 @@ connections never enter the namespace.
    checklist.
 5. Linux `netnscapture`.
 
+## Linux end-to-end harness
+
+`tool/transparent-linux-e2e.sh` exercises the shared Go path end to end on
+Linux: the real `vibermated` (Desktop daemon) and `vibermate run
+--transparent`, a capture Runtime, and real outbound HTTPS. A root emulator
+(`cmd/vibermate-transparent-emulator`) stands in for the macOS extension.
+nftables redirects only a dedicated test user's outbound IPv4 TCP to it, and
+it speaks the same broker protocol: liveness stream, hellos, ownership
+queries, flow header and relay. An unowned flow it dials directly, as a
+declined flow would go.
+
+The binaries are built with the `vibermate_transparent_emulation` tag, which
+enables the broker and `--transparent` on Linux. Release builds never carry
+it and still refuse transparent capture off macOS.
+
+The harness checks:
+
+- refusal without an active extension, and a clean start once it is active;
+- pausing when the extension goes away, resuming when it returns, and the run
+  failing after the 30-second window;
+- an unrelated process going direct;
+- the Runtime recording an Agent's connection under its own Capture Run,
+  including for two concurrent runs;
+- a child orphaned before its first connection being captured by token.
+
+It needs passwordless `sudo`, nftables and outbound HTTPS, and is never part
+of `make check`. It does not exercise the Swift provider, the macOS process
+readers, or Linux transparent capture itself, which will use a per-run
+network namespace.
+
 ## Verify on a Mac before release
 
 The native target is a **System Extension**, embedded in
