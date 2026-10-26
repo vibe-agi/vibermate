@@ -90,8 +90,12 @@ func submit(t *testing.T, flows string, pid int, payload string) byte {
 		return 0
 	}
 	if answer[0] == flowOwned {
-		if _, err := io.WriteString(conn, payload); err != nil {
-			t.Fatal(err)
+		// An empty payload writes nothing: the run may close the flow before
+		// a zero-length write, which would fail with a broken pipe.
+		if payload != "" {
+			if _, err := io.WriteString(conn, payload); err != nil {
+				t.Fatal(err)
+			}
 		}
 		_ = conn.CloseWrite()
 	}
