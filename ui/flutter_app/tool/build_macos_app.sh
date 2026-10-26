@@ -64,7 +64,9 @@ if [[ "${mode}" == "preview" ]]; then
   /usr/libexec/PlistBuddy -c 'Set :CFBundleName ViberMate Preview' "${preview_app}/Contents/Info.plist"
   codesign --force --sign - "${preview_app}"
 else
-  kernel_go="$(python3 -c 'import os, shutil; print(os.path.realpath(shutil.which("go") or ""))')"
+  # Resolve the toolchain selected by go.mod, not a launcher that would fall
+  # back to an older compiler when the kernel builder sets GOTOOLCHAIN=local.
+  kernel_go="$(python3 -c 'import os, subprocess; print(os.path.realpath(os.path.join(subprocess.check_output(["go", "env", "GOROOT"], text=True).strip(), "bin", "go")))')"
   case "$(uname -m)" in
     arm64) kernel_target="darwin/arm64"; export FLUTTER_XCODE_ARCHS=arm64 ;;
     x86_64) kernel_target="darwin/amd64"; export FLUTTER_XCODE_ARCHS=x86_64 ;;
