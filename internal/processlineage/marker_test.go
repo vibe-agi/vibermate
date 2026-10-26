@@ -102,7 +102,7 @@ func TestMarkerBelongsToOneRun(t *testing.T) {
 	}
 }
 
-// A real setsid child whose parent shell exits before it is looked up is
+// A real background child whose parent shell exits before it is looked up is
 // found by the marker its environment inherited.
 func TestSystemMarkerFindsARealOrphan(t *testing.T) {
 	self, err := System().Read(os.Getpid())
@@ -119,7 +119,7 @@ func TestSystemMarkerFindsARealOrphan(t *testing.T) {
 	}
 	orphan := func(environment []string) int {
 		t.Helper()
-		shell := exec.Command("sh", "-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+		shell := exec.Command("sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
 		shell.Env = environment
 		output, err := shell.Output()
 		if err != nil {

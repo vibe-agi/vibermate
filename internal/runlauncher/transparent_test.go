@@ -353,7 +353,7 @@ func TestTransparentCaptureOwnsAnOrphanByToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer capture.Close()
-	shell := exec.Command("sh", "-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+	shell := exec.Command("sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
 	shell.Env = append(os.Environ(), capture.marker())
 	output, err := shell.Output()
 	if err != nil {
