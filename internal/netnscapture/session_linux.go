@@ -126,6 +126,9 @@ func receiveTUN(control *os.File) (int, error) {
 	if receiveErr != nil {
 		return -1, receiveErr
 	}
+	if n == 1 && data[0] == 'R' {
+		return -1, ErrRestricted
+	}
 	if n != 1 || data[0] != 'T' {
 		return -1, errors.New("the namespace helper failed before handing over its TUN device")
 	}

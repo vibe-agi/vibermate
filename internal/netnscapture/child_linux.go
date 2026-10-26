@@ -42,9 +42,12 @@ func RunChild(arguments []string) error {
 	defer control.Close()
 	tun, err := configureNetwork()
 	if err != nil {
+		reportRestricted(control, err)
 		return fmt.Errorf("configure the capture network: %w", err)
 	}
 	if err := redirectResolver(); err != nil {
+		unix.Close(tun)
+		reportRestricted(control, err)
 		return fmt.Errorf("point DNS at the capture resolver: %w", err)
 	}
 	if err := unix.Sendmsg(int(control.Fd()), []byte{'T'}, unix.UnixRights(tun), nil, 0); err != nil {
@@ -63,6 +66,14 @@ func RunChild(arguments []string) error {
 		return fmt.Errorf("drop namespace capabilities: %w", err)
 	}
 	return syscall.Exec(arguments[0], arguments[1:], os.Environ())
+}
+
+// reportRestricted tells the launcher, before the helper exits, that the
+// namespace was created without usable capabilities.
+func reportRestricted(control *os.File, err error) {
+	if errors.Is(err, unix.EPERM) {
+		_, _ = control.Write([]byte{'R'})
+	}
 }
 
 type ifreqFlags struct {

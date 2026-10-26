@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -185,6 +186,9 @@ func runCapturedAgent(t *testing.T, origin, mode string) string {
 	if err := session.Start(); err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
+		if errors.Is(err, ErrRestricted) {
+			t.Skipf("this host restricts unprivileged user namespaces: %v", err)
+		}
 		t.Fatalf("namespace hand-off: %v (stderr %q)", err, stderr.String())
 	}
 	done := make(chan error, 1)

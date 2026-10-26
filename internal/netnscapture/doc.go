@@ -7,6 +7,13 @@
 // fails closed: without the launcher the namespace has no route out.
 package netnscapture
 
+import "errors"
+
+// ErrRestricted reports a host that creates the namespaces but denies their
+// capabilities, as Ubuntu's kernel.apparmor_restrict_unprivileged_userns
+// does for programs without an AppArmor profile allowing user namespaces.
+var ErrRestricted = errors.New("this host denies capabilities inside unprivileged user namespaces")
+
 // ChildCommand is the hidden vibermate argument that runs RunChild inside the
 // new namespaces. It is never typed by a person.
 const ChildCommand = "__vibermate-capture-namespace"

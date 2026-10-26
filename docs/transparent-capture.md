@@ -167,9 +167,13 @@ enter the namespace.
   the TUN device. When the launcher exits, the device closes, and DNS and
   every connection fail. There is no state to pause or revoke.
 
-Unprivileged user namespaces must be allowed (Ubuntu's AppArmor restriction
-and `kernel.unprivileged_userns_clone=0` refuse them); the run then fails
-with a message naming the cause instead of starting uncaptured.
+Unprivileged user namespaces must be allowed. Ubuntu 23.10 and later
+(`kernel.apparmor_restrict_unprivileged_userns=1`, also on GitHub's Ubuntu
+runners) create the namespaces but deny capabilities inside them unless an
+AppArmor profile grants `userns` to the program; other distributions may
+set `kernel.unprivileged_userns_clone=0`. Either way the helper reports it
+and the run fails with a message naming the cause instead of starting
+uncaptured. A Linux package should install such a profile for `vibermate`.
 
 The netstack is `gvisor.dev/gvisor` at a `go` branch "Merge release" commit,
 the last one whose `go.mod` accepts Go 1.26 and that the checksum database
