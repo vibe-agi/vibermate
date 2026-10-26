@@ -39,6 +39,7 @@ import {
   validateSigningTransformationEvidence,
   validateTreeLedgerEquality,
 } from "./macos-distribution-policy.mjs";
+import { readSigningProfiles, transparentProxyBundleIdentifier, transparentProxyBundlePath } from "./macos-system-extension.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryDirectory = resolve(scriptDirectory, "../..");
@@ -509,13 +510,15 @@ function inspectUnsignedCodeObject(path, label) {
   }
 }
 
-function inspectEntitlements(path, label) {
+function inspectEntitlements(path, label, expectedIdentifier, teamID) {
   const result = runTool(
     "/usr/bin/codesign",
     ["--display", "--entitlements", "-", "--xml", path],
     `${label} entitlement inspection`,
   );
-  validateClosedEntitlements(result.stdout, label);
+  const role = expectedIdentifier === macOSDistributionPolicy.appIdentifier ? "application"
+    : expectedIdentifier === transparentProxyBundleIdentifier ? "transparent-proxy" : undefined;
+  validateClosedEntitlements(result.stdout, label, { role, teamID });
 }
 
 function inspectCodeSignature(
@@ -543,11 +546,11 @@ function inspectCodeSignature(
     expectedTeamID,
     { expectedIdentifier, label, requireRuntime },
   );
-  inspectEntitlements(path, label);
+  inspectEntitlements(path, label, expectedIdentifier, expectedTeamID);
   return metadata;
 }
 
-async function signingCertificateSHA256(path, label) {
+async function signingCertificateFingerprints(path, label) {
   const temporaryDirectory = await createCanonicalTemporaryDirectory(
     "vibermate-signing-certificate-",
   );
@@ -560,7 +563,11 @@ async function signingCertificateSHA256(path, label) {
     );
     const leafPath = `${prefix}0`;
     await requireCanonicalPath(leafPath, "file", `${label} leaf certificate`);
-    return requireCertificateSHA256(await sha256File(leafPath));
+    const certificate = await readFile(leafPath);
+    return {
+      sha1: createHash("sha1").update(certificate).digest("hex"),
+      sha256: requireCertificateSHA256(createHash("sha256").update(certificate).digest("hex")),
+    };
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -604,9 +611,18 @@ export async function inspectSignedMacOSApplicationAtPath(
     label: "ViberMate.app",
     requireRuntime: true,
   });
-  certificateFingerprints.add(
-    await signingCertificateSHA256(appPath, "ViberMate.app"),
-  );
+  const applicationCertificate = await signingCertificateFingerprints(appPath, "ViberMate.app");
+  certificateFingerprints.add(applicationCertificate.sha256);
+  await readSigningProfiles({
+    appProfilePath: resolve(appPath, "Contents/embedded.provisionprofile"),
+    extensionProfilePath: resolve(appPath, transparentProxyBundlePath, "Contents/embedded.provisionprofile"),
+    teamID: expectedTeamID,
+    identity: applicationCertificate.sha1,
+  });
+  const extensionInfo = resolve(appPath, transparentProxyBundlePath, "Contents/Info.plist");
+  if (readPlistValue(extensionInfo, "NetworkExtension.NEMachServiceName") !== `${expectedTeamID}.${transparentProxyBundleIdentifier}`) {
+    throw new Error("Transparent System Extension has the wrong team-prefixed service name");
+  }
   for (const [name, path] of Object.entries(executablePaths)) {
     verifyMacOSBuildVersions(path);
     validateLipoArchitectures(
@@ -623,7 +639,7 @@ export async function inspectSignedMacOSApplicationAtPath(
       label: name,
       requireRuntime: true,
     });
-    certificateFingerprints.add(await signingCertificateSHA256(path, name));
+    certificateFingerprints.add((await signingCertificateFingerprints(path, name)).sha256);
   }
   if (certificateFingerprints.size !== 1) {
     throw new Error("The application executables must use one signing certificate");
@@ -652,10 +668,10 @@ export async function inspectSignedMacOSDiskImageAtPath(
   await requireCanonicalPath(dmgPath, "file", "signed macOS disk image");
   verifyDiskImage(dmgPath, expectedTeamID);
   return Object.freeze({
-    certificateSHA256: await signingCertificateSHA256(
+    certificateSHA256: (await signingCertificateFingerprints(
       dmgPath,
       "Distribution DMG",
-    ),
+    )).sha256,
     diskImageSHA256: await sha256File(dmgPath),
     dmgFilename: basename(dmgPath),
     dmgPath,

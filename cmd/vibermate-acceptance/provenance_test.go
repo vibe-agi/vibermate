@@ -332,6 +332,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			"app-framework":           strings.Repeat("d", 64),
 			"file-selector-framework": strings.Repeat("8", 64),
 			"flutter-macos-framework": strings.Repeat("e", 64),
+			"transparent-proxy":       strings.Repeat("7", 64),
 			"url-launcher-framework":  strings.Repeat("9", 64),
 			"vibermated":              strings.Repeat("b", 64),
 			"vibermate-xray":          strings.Repeat("f", 64),
@@ -344,6 +345,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 		{Role: "url-launcher-framework", SHA256: strings.Repeat("9", 64)},
 		{Role: "daemon", SHA256: strings.Repeat("b", 64)},
 		{Role: "flutter-macos-framework", SHA256: strings.Repeat("e", 64)},
+		{Role: "transparent-proxy", SHA256: strings.Repeat("7", 64)},
 		{Role: "launcher", SHA256: strings.Repeat("c", 64)},
 		{Role: "vibermate-xray", SHA256: strings.Repeat("f", 64)},
 	}

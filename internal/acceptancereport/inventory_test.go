@@ -72,26 +72,37 @@ func TestProducerInventoryRemainsClosedAtIndependentVerifier(t *testing.T) {
 
 func TestVerifyFileRejectsKernelEvidenceDrift(t *testing.T) {
 	t.Parallel()
+	verifyNestedExecutableDrift(t, "vibermate-xray", "Contents/MacOS/vibermate-xray")
+}
+
+func TestVerifyFileRejectsTransparentProxyEvidenceDrift(t *testing.T) {
+	t.Parallel()
+	verifyNestedExecutableDrift(t, "transparent-proxy",
+		"Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension/Contents/MacOS/io.vibermate.desktop.transparent-proxy")
+}
+
+func verifyNestedExecutableDrift(t *testing.T, role, relative string) {
+	t.Helper()
 	for _, mutation := range []string{"missing role", "wrong path", "changed bytes", "missing executable", "symbolic executable", "nonexecutable", "manifest digest", "extra nested member"} {
 		t.Run(mutation, func(t *testing.T) {
 			t.Parallel()
 			report, expected := validFixture(t, "claude-code", "2.1.220")
-			kernel := filepath.Join(expected.Artifacts.DesktopApp, "Contents", "MacOS", "vibermate-xray")
+			kernel := filepath.Join(expected.Artifacts.DesktopApp, filepath.FromSlash(relative))
 			for index, artifact := range report.Provenance.Artifacts {
-				if artifact.Role != "vibermate-xray" {
+				if artifact.Role != role {
 					continue
 				}
 				switch mutation {
 				case "missing role":
 					report.Provenance.Artifacts = append(report.Provenance.Artifacts[:index], report.Provenance.Artifacts[index+1:]...)
 				case "wrong path":
-					report.Provenance.Artifacts[index].Path = filepath.Join(t.TempDir(), "vibermate-xray")
+					report.Provenance.Artifacts[index].Path = filepath.Join(t.TempDir(), filepath.Base(kernel))
 				}
 				break
 			}
 			switch mutation {
 			case "changed bytes":
-				writeExecutableFixture(t, kernel, "tampered kernel")
+				writeExecutableFixture(t, kernel, "tampered executable")
 			case "missing executable", "symbolic executable":
 				if err := os.Remove(kernel); err != nil {
 					t.Fatal(err)
@@ -111,7 +122,7 @@ func TestVerifyFileRejectsKernelEvidenceDrift(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				key := "vibermate-xray"
+				key := role
 				if mutation == "extra nested member" {
 					key = "extra"
 				}
@@ -151,10 +162,11 @@ func TestVerifyFileRejectsKernelEvidenceDrift(t *testing.T) {
 	}
 }
 
-func TestVerifyFileRehashesKernelAndPodConfiguration(t *testing.T) {
+func TestVerifyFileRehashesKernelPodAndTransparentProxyConfiguration(t *testing.T) {
 	t.Parallel()
 	for _, name := range producerInventoryFixture(t).Configuration {
-		if !strings.HasPrefix(name, "tool/vless-kernel/") && !strings.Contains(name, "/Podfile") {
+		if !strings.HasPrefix(name, "tool/vless-kernel/") && !strings.Contains(name, "/Podfile") &&
+			!strings.Contains(name, "/TransparentProxy/") {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {

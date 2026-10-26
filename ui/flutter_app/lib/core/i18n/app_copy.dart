@@ -2484,6 +2484,17 @@ final class AppCopy {
     'settings.auto': 'Auto',
     'settings.light': 'Light',
     'settings.dark': 'Dark',
+    'settings.transparent_capture.title': 'Transparent capture on this Mac',
+    'settings.transparent_capture.detail':
+        'Capture traffic from Agents launched with vibermate run --transparent and their child processes. Approve the extension and network configuration in macOS. Works with local and remote Runtimes.',
+    'settings.transparent_capture.state.not_installed': 'Not installed',
+    'settings.transparent_capture.state.approval_required':
+        'Approval required in macOS',
+    'settings.transparent_capture.state.starting': 'Starting…',
+    'settings.transparent_capture.state.active': 'Active',
+    'settings.transparent_capture.state.disabled': 'Disabled',
+    'settings.transparent_capture.state.unavailable': 'Unavailable',
+    'settings.transparent_capture.system_settings': 'Open System Settings',
     'settings.storage': 'Evidence storage',
     'settings.storage.not_encrypted':
         'The runtime database is not encrypted at rest. Only your user account’s file permissions protect it.',
@@ -5213,6 +5224,16 @@ final class AppCopy {
     'settings.auto': '自动',
     'settings.light': '亮色',
     'settings.dark': '暗色',
+    'settings.transparent_capture.title': '此 Mac 上的透明采集',
+    'settings.transparent_capture.detail':
+        '采集通过 vibermate run --transparent 启动的 Agent 及其子进程的流量。请在 macOS 中批准扩展和网络配置；本地与远程 Runtime 均可使用。',
+    'settings.transparent_capture.state.not_installed': '未安装',
+    'settings.transparent_capture.state.approval_required': '需要在 macOS 中批准',
+    'settings.transparent_capture.state.starting': '正在启动…',
+    'settings.transparent_capture.state.active': '已启用',
+    'settings.transparent_capture.state.disabled': '已关闭',
+    'settings.transparent_capture.state.unavailable': '不可用',
+    'settings.transparent_capture.system_settings': '打开系统设置',
     'settings.storage': '证据存储',
     'settings.storage.not_encrypted': '运行时数据库未加密，仅由当前用户的文件权限保护。',
     'settings.storage.location':

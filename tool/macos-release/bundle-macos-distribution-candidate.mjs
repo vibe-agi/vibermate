@@ -13,7 +13,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   macOSDistributionPolicy,
@@ -29,6 +29,7 @@ import {
   macOSDistributionDirectories,
   verifySignedMacOSDistributionCandidate,
 } from "./verify-macos-signed-candidate.mjs";
+import { prepareSystemExtensionSigning, provisioningInputsFromEnvironment } from "./macos-system-extension.mjs";
 
 const sha1Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -97,8 +98,9 @@ function rejectAmbientCredentials(environment) {
 
 async function signingInputs() {
   rejectAmbientCredentials(process.env);
+  const provisioning = provisioningInputsFromEnvironment(process.env);
   const revisions = releaseRevisionsFromEnvironment(process.env);
-  const identity = process.env.APPLE_SIGNING_IDENTITY?.trim();
+  const identity = provisioning.identity;
   const keychainPath = process.env.SIGNING_KEYCHAIN_PATH?.trim();
   const runnerTemp = process.env.RUNNER_TEMP?.trim();
   const teamID = requireAppleTeamID(process.env.VIBERMATE_APPLE_TEAM_ID?.trim());
@@ -129,6 +131,7 @@ async function signingInputs() {
     throw new Error("SIGNING_KEYCHAIN_PATH is not a regular keychain file");
   }
   return Object.freeze({
+    ...provisioning,
     identity,
     keychainPath,
     revisions,
@@ -138,17 +141,25 @@ async function signingInputs() {
   });
 }
 
-export function signingCommandArguments(kind, identity, keychainPath, path) {
+export function signingCommandArguments(kind, identity, keychainPath, path, entitlementsPath) {
   const common = [
     "--force",
     "--sign",
     identity,
-    "--keychain",
-    keychainPath,
+    ...(keychainPath === undefined ? [] : ["--keychain", keychainPath]),
     "--timestamp",
   ];
+  const capabilityArguments = [];
+  if (kind === "application" || kind === "transparent-proxy") {
+    if (typeof entitlementsPath !== "string" || !isAbsolute(entitlementsPath)) {
+      throw new Error(`${kind} signing requires validated capability entitlements`);
+    }
+    capabilityArguments.push("--entitlements", entitlementsPath, "--generate-entitlement-der");
+  } else if (entitlementsPath !== undefined) {
+    throw new Error(`${kind} signing does not admit capability entitlements`);
+  }
   if (kind === "application") {
-    return [...common, "--options", "runtime", path];
+    return [...common, "--options", "runtime", ...capabilityArguments, path];
   }
   if (kind === "diskImage") {
     return [
@@ -170,6 +181,7 @@ export function signingCommandArguments(kind, identity, keychainPath, path) {
     "runtime",
     "--identifier",
     macOSDistributionPolicy.codeObjects[kind].identifier,
+    ...capabilityArguments,
     path,
   ];
 }
@@ -194,7 +206,7 @@ export function diskImageCreationArguments(stagingDirectory, dmgPath) {
   ];
 }
 
-export function applicationSigningCommands(appPath, identity, keychainPath) {
+export function applicationSigningCommands(appPath, identity, keychainPath, entitlements = {}) {
   const commands = [];
   for (const name of nestedSigningNames) {
     const signingPath = resolve(
@@ -203,13 +215,13 @@ export function applicationSigningCommands(appPath, identity, keychainPath) {
     );
     commands.push({
       command: "/usr/bin/codesign",
-      arguments: signingCommandArguments(name, identity, keychainPath, signingPath),
+      arguments: signingCommandArguments(name, identity, keychainPath, signingPath, entitlements[name]),
       label: `${name} Developer ID signing`,
     });
   }
   commands.push({
     command: "/usr/bin/codesign",
-    arguments: signingCommandArguments("application", identity, keychainPath, appPath),
+    arguments: signingCommandArguments("application", identity, keychainPath, appPath, entitlements.application),
     label: "ViberMate.app Developer ID signing",
   });
   return commands;
@@ -316,8 +328,13 @@ async function main() {
     throw new Error("The unsigned candidate or archive-bound tree changed before signing");
   }
 
-  for (const command of applicationSigningCommands(unsigned.appPath, inputs.identity, inputs.keychainPath)) {
-    runTool(command.command, command.arguments, command.label);
+  const provisioning = await prepareSystemExtensionSigning(unsigned.appPath, inputs);
+  try {
+    for (const command of applicationSigningCommands(unsigned.appPath, inputs.identity, inputs.keychainPath, provisioning.entitlements)) {
+      runTool(command.command, command.arguments, command.label);
+    }
+  } finally {
+    await provisioning.cleanup();
   }
 
   await mkdir(macOSDistributionDirectories.dmgDirectory, {

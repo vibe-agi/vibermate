@@ -50,6 +50,8 @@ class MainFlutterWindow: NSWindow {
   private var rootTrustInstallerChannel: FlutterMethodChannel?
   private var rootTrustInstaller: RootTrustInstaller?
   private var publicCertificateChannel: FlutterMethodChannel?
+  private var transparentCaptureChannel: FlutterMethodChannel?
+  private var transparentProxyController: TransparentProxyController?
   private var restoreSizeAfterFullScreen = false
 
   override func awakeFromNib() {
@@ -109,6 +111,24 @@ class MainFlutterWindow: NSWindow {
       self?.handlePublicCertificate(call: call, result: result)
     }
     self.publicCertificateChannel = certificateChannel
+
+    let transparentController = TransparentProxyController(
+      system: MacTransparentProxySystem(),
+      enabled: UserDefaults.standard.bool(forKey: MacTransparentProxySystem.enabledPreference),
+      saveEnabled: { UserDefaults.standard.set($0, forKey: MacTransparentProxySystem.enabledPreference) }
+    )
+    let transparentChannel = FlutterMethodChannel(
+      name: "io.vibermate.desktop/transparent-capture",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    transparentController.onStatusChanged = { [weak transparentChannel] status in
+      transparentChannel?.invokeMethod("statusChanged", arguments: status)
+    }
+    transparentChannel.setMethodCallHandler { [weak self] call, result in
+      self?.handleTransparentCapture(call: call, result: result)
+    }
+    self.transparentProxyController = transparentController
+    self.transparentCaptureChannel = transparentChannel
 
     super.awakeFromNib()
     self.sharingType = .readOnly
@@ -252,6 +272,50 @@ class MainFlutterWindow: NSWindow {
 
   private func applyWindowTheme(_ theme: WorkbenchWindowTheme) {
     theme.apply(to: self)
+  }
+
+  private func handleTransparentCapture(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let controller = transparentProxyController else {
+      result(preferencesError("unavailable", "Transparent capture is unavailable"))
+      return
+    }
+    switch call.method {
+    case "configure":
+      do {
+        try controller.configure(call.arguments)
+        result(controller.snapshot)
+      } catch {
+        result(preferencesError("invalid_arguments", "Runtime connection settings are invalid"))
+      }
+    case "clearConfiguration":
+      guard let arguments = call.arguments as? [String: Any],
+            let instanceId = arguments["instanceId"] as? String, !instanceId.isEmpty else {
+        result(preferencesError("invalid_arguments", "Runtime instance is required"))
+        return
+      }
+      controller.clearConfiguration(instanceId: instanceId)
+      result(controller.snapshot)
+    case "status":
+      controller.refresh()
+      result(controller.snapshot)
+    case "setEnabled":
+      guard let arguments = call.arguments as? [String: Any],
+            let value = arguments["enabled"] as? NSNumber,
+            CFGetTypeID(value) == CFBooleanGetTypeID() else {
+        result(preferencesError("invalid_arguments", "Enabled must be a boolean"))
+        return
+      }
+      controller.setEnabled(value.boolValue)
+      result(controller.snapshot)
+    case "openSystemSettings":
+      if controller.openSettings() {
+        result(nil)
+      } else {
+        result(preferencesError("unavailable", "System Settings could not be opened"))
+      }
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 
   private func handlePublicCertificate(call: FlutterMethodCall, result: @escaping FlutterResult) {

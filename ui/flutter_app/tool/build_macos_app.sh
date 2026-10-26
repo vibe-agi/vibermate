@@ -12,6 +12,16 @@ release_ldflags="-X github.com/vibe-agi/vibermate/internal/productbuild.releaseV
 distribution_directory="${repository_root}/dist"
 candidate_directory=""
 verify_app="${script_directory}/verify_macos_app.sh"
+local_signer="${repository_root}/tool/macos-release/sign-local-macos-candidate.mjs"
+developer_id_signing=0
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}${VIBERMATE_MACOS_APP_PROVISION_PROFILE:-}${VIBERMATE_MACOS_EXTENSION_PROVISION_PROFILE:-}" ]]; then
+  if [[ "${mode}" == "preview" ]]; then
+    echo "Developer ID capability signing is available for live and candidate builds" >&2
+    exit 64
+  fi
+  node "${local_signer}" --validate-inputs
+  developer_id_signing=1
+fi
 
 # Keep local builds compatible with the same baseline as distribution builds.
 export MACOSX_DEPLOYMENT_TARGET=14.0
@@ -49,6 +59,7 @@ if [[ "${mode}" == "preview" ]]; then
   # NSWindow autosave uses the bundle's preferences domain, not our Runtime
   # data directory or CFFIXED_USER_HOME. Never share it with the live App.
   preview_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"
+  rm -rf -- "${preview_app}/Contents/Library/SystemExtensions"
   /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier io.vibermate.preview' "${preview_app}/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c 'Set :CFBundleName ViberMate Preview' "${preview_app}/Contents/Info.plist"
   codesign --force --sign - "${preview_app}"
@@ -140,14 +151,19 @@ else
       exit 70
       ;;
   esac
-  node "${script_directory}/desktop_build_manifest.mjs" \
-    --app="${app_bundle}" \
-    --repository-root="${repository_root}" \
-    --target="${desktop_target}"
-  # Nested Flutter frameworks and Go sidecars already carry their own ad-hoc
-  # signatures. Sign only the outer bundle here so embedding the manifest does
-  # not silently rewrite the nested bytes that manifest records.
-  codesign --force --sign - "${app_bundle}"
+  if [[ "${developer_id_signing}" == "1" ]]; then
+    node "${local_signer}" --app="${app_bundle}" --target="${desktop_target}"
+  else
+    extension_bundle="${app_bundle}/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension"
+    codesign --force --sign - "${extension_bundle}"
+    node "${script_directory}/desktop_build_manifest.mjs" \
+      --app="${app_bundle}" \
+      --repository-root="${repository_root}" \
+      --target="${desktop_target}"
+    # The manifest records final nested signatures; seal only the outer bundle.
+    codesign --force --sign - "${app_bundle}"
+    echo "Ad-hoc development build: transparent System Extension activation requires Developer ID signing and both profiles."
+  fi
 fi
 
 source_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"

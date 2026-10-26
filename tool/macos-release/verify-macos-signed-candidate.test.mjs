@@ -21,6 +21,7 @@ test("unsigned preflight rejects helper-only stale nested provenance", () => {
   const nested = {
     "app-framework": digest("1"), "file-selector-framework": digest("2"),
     "flutter-macos-framework": digest("3"), "url-launcher-framework": digest("4"),
+    "transparent-proxy": digest("8"),
     vibermate: digest("5"), "vibermate-xray": digest("6"), vibermated: digest("7"),
   };
   const actual = { ...nested, "vibermate-desktop": digest("8") };
@@ -42,6 +43,7 @@ function signingEvidenceFixture() {
         "app-framework": digest("4"),
         "file-selector-framework": digest("d"),
         "flutter-macos-framework": digest("5"),
+        "transparent-proxy": digest("9"),
         "url-launcher-framework": digest("e"),
         vibermate: digest("6"),
         "vibermate-desktop": digest("7"),

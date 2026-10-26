@@ -56,8 +56,9 @@ The extension or netstack sends one header before any client bytes:
   cannot reach a user-owned Unix socket. It therefore uses loopback TCP:
   `vibermated` listens on `127.0.0.1:<port>` with a per-start secret. Both
   reach only the native shell, as `flowPort` and `flowSecret` in the
-  bootstrap descriptor. The app writes them into the transparent proxy's
-  `providerConfiguration`. Every request is framed as a 2-byte big-endian
+  bootstrap descriptor. The app passes them as ephemeral
+  `startVPNTunnel(options:)` arguments. They are not written to the saved
+  `providerConfiguration`, logs, or UI state. Every request is framed as a 2-byte big-endian
   length followed by JSON:
   - Hello, sent at start and at least every 10 s:
     `{"v":1,"secret":"…","hello":true}`. The answer is the byte `H`.
@@ -130,6 +131,39 @@ connections never enter the namespace.
 5. Linux `netnscapture`.
 
 ## Verify on a Mac before release
+
+The native target is a **System Extension**, embedded in
+`Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension`.
+Its `NetworkExtension.NEProviderClasses` entry selects
+`TransparentProxy.TransparentProxyProvider`; its executable calls
+`NEProvider.startSystemExtensionMode()` before entering the dispatch loop.
+
+In the Desktop App, open **Settings → Access & launch → Transparent capture**.
+Enabling it activates the extension and requests network-configuration approval.
+Approve ViberMate in **System Settings → General → Login Items & Extensions**
+when requested. The App must be signed and installed in `/Applications` for
+normal activation. Ad-hoc source builds compile the target but cannot activate it.
+
+The first implementation captures outbound TCP on macOS. Localhost stays direct,
+and the Agent still uses system DNS before opening a connection; SNI/HTTP Host
+recovery does not replace a failed local DNS lookup. Linux namespace capture is
+separate future work. The known first-connection/orphan and broker-failure
+attribution limits in ADR 0024 remain release acceptance blockers.
+
+For a local signed candidate, supply `APPLE_SIGNING_IDENTITY`,
+`VIBERMATE_APPLE_TEAM_ID`, `VIBERMATE_MACOS_APP_PROVISION_PROFILE`, and
+`VIBERMATE_MACOS_EXTENSION_PROVISION_PROFILE` to
+`ui/flutter_app/tool/build_macos_app.sh candidate`. The profile inputs are paths
+to Developer ID profiles for the app and extension; the signer checks their
+certificate, team, bundle and capabilities before embedding them. This does not
+install, activate, notarize, or publish the candidate.
+
+GitHub's `macos-signing` environment provides the profiles through
+`APPLE_DEVELOPER_ID_APP_PROVISION_PROFILE_BASE64` and
+`APPLE_DEVELOPER_ID_TRANSPARENT_PROXY_PROVISION_PROFILE_BASE64`. The existing
+certificate/password and `macos-notarization` secrets are unchanged. The unsigned
+build job receives no Apple signing credentials. Profile files are materialized
+only in the protected signing job and removed with its temporary credentials.
 
 - The `app-proxy-provider-systemextension` entitlement in the Developer ID
   provisioning profile, and both user approvals: system extension and

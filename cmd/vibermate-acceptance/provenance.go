@@ -266,6 +266,8 @@ func validateDesktopBuildManifest(
 		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
 		"ui/flutter_app/macos/Runner/Info.plist",
 		"ui/flutter_app/macos/Runner/Release.entitlements",
+		"ui/flutter_app/macos/TransparentProxy/Info.plist",
+		"ui/flutter_app/macos/TransparentProxy/TransparentProxy.entitlements",
 	}
 	if len(manifest.ConfigurationSHA256) != len(requiredConfiguration) {
 		return errors.New("Desktop build configuration evidence is incomplete")
@@ -286,6 +288,7 @@ func validateDesktopBuildManifest(
 		"app-framework":           artifactDigests["app-framework"],
 		"file-selector-framework": artifactDigests["file-selector-framework"],
 		"flutter-macos-framework": artifactDigests["flutter-macos-framework"],
+		"transparent-proxy":       artifactDigests["transparent-proxy"],
 		"url-launcher-framework":  artifactDigests["url-launcher-framework"],
 		"vibermate":               artifactDigests["launcher"],
 		"vibermated":              artifactDigests["daemon"],
@@ -649,6 +652,12 @@ func collectArtifactProvenance(config config, acceptancePath, desktopPath, clien
 				"Contents", "Frameworks", "url_launcher_macos.framework", "Versions", "A", "url_launcher_macos"),
 		},
 		{role: "launcher", path: config.launcherPath},
+		{
+			role: "transparent-proxy",
+			path: filepath.Join(config.desktopAppPath,
+				"Contents", "Library", "SystemExtensions", "io.vibermate.desktop.transparent-proxy.systemextension",
+				"Contents", "MacOS", "io.vibermate.desktop.transparent-proxy"),
+		},
 		{role: "vibermate-xray", path: filepath.Join(config.desktopAppPath, "Contents", "MacOS", "vibermate-xray")},
 		{role: "acceptance", path: acceptancePath},
 		{role: "client-entrypoint", path: clientPath},

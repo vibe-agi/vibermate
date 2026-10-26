@@ -2071,6 +2071,7 @@ export async function prepareR0ReleaseEvidence(
       "app-framework": "App.framework/App",
       "file-selector-framework": "file_selector_macos.framework/file_selector_macos",
       "flutter-macos-framework": "FlutterMacOS.framework/FlutterMacOS",
+      "transparent-proxy": "TransparentProxy/io.vibermate.desktop.transparent-proxy",
       "url-launcher-framework": "url_launcher_macos.framework/url_launcher_macos",
     })) {
       const staged = await inspectRelativePath(

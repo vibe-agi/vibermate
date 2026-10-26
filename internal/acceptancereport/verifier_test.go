@@ -985,6 +985,9 @@ func validFixture(
 		t.Fatal(err)
 	}
 	artifactPaths := map[string]string{
+		"transparent-proxy": filepath.Join(bundle,
+			"Contents", "Library", "SystemExtensions", "io.vibermate.desktop.transparent-proxy.systemextension",
+			"Contents", "MacOS", "io.vibermate.desktop.transparent-proxy"),
 		"file-selector-framework": filepath.Join(bundle,
 			"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
 		"url-launcher-framework": filepath.Join(bundle,

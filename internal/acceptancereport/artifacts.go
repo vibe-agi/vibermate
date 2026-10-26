@@ -451,6 +451,9 @@ func expectedArtifactPaths(
 		"Resources",
 	)
 	paths := map[string]string{
+		"transparent-proxy": filepath.Join(coordinates.DesktopApp,
+			"Contents", "Library", "SystemExtensions", "io.vibermate.desktop.transparent-proxy.systemextension",
+			"Contents", "MacOS", "io.vibermate.desktop.transparent-proxy"),
 		"acceptance": coordinates.AcceptanceExecutable,
 		"app-framework": filepath.Join(
 			frameworksDirectory,
@@ -480,6 +483,7 @@ func expectedArtifactPaths(
 		"file-selector-framework",
 		"url-launcher-framework",
 		"launcher",
+		"transparent-proxy",
 		"vibermate-xray",
 	} {
 		path, err := directExecutable(paths[role], role)
@@ -601,6 +605,7 @@ func verifyDesktopBuildManifest(
 		"app-framework":           artifacts["app-framework"].SHA256,
 		"file-selector-framework": artifacts["file-selector-framework"].SHA256,
 		"flutter-macos-framework": artifacts["flutter-macos-framework"].SHA256,
+		"transparent-proxy":       artifacts["transparent-proxy"].SHA256,
 		"url-launcher-framework":  artifacts["url-launcher-framework"].SHA256,
 		"vibermate":               artifacts["launcher"].SHA256,
 		"vibermated":              artifacts["daemon"].SHA256,

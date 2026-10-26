@@ -252,6 +252,32 @@ test("signing and notarization consume separate Hideout-compatible secrets", () 
   );
 });
 
+test("the protected signer materializes both capability profiles inside its existing cleanup boundary", () => {
+  const profileStart = signJob.indexOf("Materialize the two Developer ID capability profiles");
+  const signingStart = signJob.indexOf("Perform the trusted inside-out signing transformation");
+  assert.ok(profileStart > 0 && profileStart < signingStart);
+  const profileStep = signJob.slice(profileStart, signingStart);
+  for (const name of [
+    "APPLE_DEVELOPER_ID_APP_PROVISION_PROFILE_BASE64",
+    "APPLE_DEVELOPER_ID_TRANSPARENT_PROXY_PROVISION_PROFILE_BASE64",
+  ]) {
+    assert.ok(profileStep.includes(`secrets.${name}`));
+    assert.ok(!unsignedJob.includes(`secrets.${name}`));
+    assert.ok(!notaryJob.includes(`secrets.${name}`));
+  }
+  assert.ok(profileStep.includes('app_profile="${SIGNING_STATE_DIRECTORY}/app.provisionprofile"'));
+  assert.ok(profileStep.includes('extension_profile="${SIGNING_STATE_DIRECTORY}/transparent-proxy.provisionprofile"'));
+  assert.match(profileStep, /umask 077/u);
+  assert.equal((profileStep.match(/\/usr\/bin\/base64 -D/gu) ?? []).length, 2);
+  for (const name of ["VIBERMATE_MACOS_APP_PROVISION_PROFILE", "VIBERMATE_MACOS_EXTENSION_PROVISION_PROFILE"]) {
+    assert.ok(profileStep.includes(`${name}=%s\\n`));
+  }
+  assert.match(profileStep, />> "\$\{GITHUB_ENV\}"/u);
+  const cleanup = signJob.slice(signJob.indexOf("Lock and delete the signing keychain before packaging"));
+  assert.match(cleanup, /if: \$\{\{ always\(\) \}\}/u);
+  assert.ok(cleanup.includes('/bin/rm -rf -- "${SIGNING_STATE_DIRECTORY}"'));
+});
+
 test("fresh installed evidence runs without Apple distribution credentials and executes only the notarized App", () => {
   assert.ok(installedEvidenceStart > notaryStart);
   assert.match(
@@ -324,23 +350,34 @@ test("every artifact identity includes run ID and attempt", () => {
   }
 });
 
-test("signing commands are closed, inside-out, and entitlement-free", () => {
+const capabilityFiles = {
+  application: "/signing/application.entitlements",
+  "transparent-proxy": "/signing/transparent-proxy.entitlements",
+};
+
+test("signing commands are closed with capabilities limited to their bundle roles", () => {
   const identity = "1".repeat(40);
   const keychain = "/runner/keychain";
   const nested = signingCommandArguments("vibermate", identity, keychain, "/app/vibermate");
-  const app = signingCommandArguments("application", identity, keychain, "/app/ViberMate.app");
+  const app = signingCommandArguments("application", identity, keychain, "/app/ViberMate.app", capabilityFiles.application);
   const dmg = signingCommandArguments("diskImage", identity, keychain, "/app/ViberMate.dmg");
   for (const arguments_ of [nested, app, dmg]) {
     assert.ok(arguments_.includes("--force"));
     assert.ok(arguments_.includes("--timestamp"));
     assert.ok(arguments_.includes("--keychain"));
     assert.ok(!arguments_.includes("--deep"));
-    assert.ok(!arguments_.includes("--entitlements"));
     assert.ok(!arguments_.includes("--preserve-metadata"));
   }
   assert.ok(nested.includes("runtime"));
   assert.ok(app.includes("runtime"));
   assert.ok(!dmg.includes("runtime"));
+  assert.ok(!nested.includes("--entitlements"));
+  assert.ok(!dmg.includes("--entitlements"));
+  assert.throws(() => signingCommandArguments("vibermate", identity, keychain, "/app/vibermate", capabilityFiles.application));
+  assert.equal(app[app.indexOf("--entitlements") + 1], capabilityFiles.application);
+  for (const role of ["application", "transparent-proxy"]) {
+    assert.throws(() => signingCommandArguments(role, identity, keychain, "/app/bundle"), /entitlements/u);
+  }
   assert.throws(() =>
     signingCommandArguments("vibermate-desktop", identity, keychain, "/app/main"),
   );
@@ -356,23 +393,27 @@ test("the kernel receives its exact Developer ID signing command", () => {
 });
 
 test("the actual application signing sequence signs every nested object before the outer App", () => {
-  const commands = applicationSigningCommands("/app/ViberMate.app", "1".repeat(40), "/runner/keychain");
+  const commands = applicationSigningCommands("/app/ViberMate.app", "1".repeat(40), "/runner/keychain", capabilityFiles);
   assert.deepEqual(commands.map((command) => command.arguments.at(-1)), [
     "/app/ViberMate.app/Contents/Frameworks/App.framework",
     "/app/ViberMate.app/Contents/Frameworks/file_selector_macos.framework",
     "/app/ViberMate.app/Contents/Frameworks/FlutterMacOS.framework",
+    "/app/ViberMate.app/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension",
     "/app/ViberMate.app/Contents/Frameworks/url_launcher_macos.framework",
     "/app/ViberMate.app/Contents/MacOS/vibermate",
     "/app/ViberMate.app/Contents/MacOS/vibermate-xray",
     "/app/ViberMate.app/Contents/MacOS/vibermated",
     "/app/ViberMate.app",
   ]);
-  const helper = commands[5];
+  const helper = commands.find((command) => command.label === "vibermate-xray Developer ID signing");
   assert.equal(helper.command, "/usr/bin/codesign");
   assert.deepEqual(helper.arguments, ["--force", "--sign", "1".repeat(40), "--keychain", "/runner/keychain", "--timestamp",
     "--options", "runtime", "--identifier", "io.vibermate.desktop.vibermate-xray",
     "/app/ViberMate.app/Contents/MacOS/vibermate-xray"]);
   assert.equal(helper.label, "vibermate-xray Developer ID signing");
+  const extension = commands.find((command) => command.label === "transparent-proxy Developer ID signing");
+  assert.equal(extension.arguments[extension.arguments.indexOf("--entitlements") + 1], capabilityFiles["transparent-proxy"]);
+  assert.equal(extension.arguments[extension.arguments.indexOf("--identifier") + 1], "io.vibermate.desktop.transparent-proxy");
 });
 
 test("DMG creation is fixed read-only UDZO with no overwrite option", () => {

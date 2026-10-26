@@ -78,6 +78,18 @@ code_paths=(
 )
 if [[ "${mode}" == "live" ]]; then
   code_paths+=("${macos_directory}/vibermate" "${macos_directory}/vibermated" "${macos_directory}/vibermate-xray")
+  extension_bundle="${app}/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension"
+  extension_executable="${extension_bundle}/Contents/MacOS/io.vibermate.desktop.transparent-proxy"
+  if [[ ! -x "${extension_executable}" || -L "${extension_bundle}" || -L "${extension_executable}" ||
+    "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${extension_bundle}/Contents/Info.plist")" != "io.vibermate.desktop.transparent-proxy" ||
+    "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${extension_bundle}/Contents/Info.plist")" != "14.0" ]]; then
+    echo "Transparent System Extension identity or executable is invalid" >&2
+    exit 70
+  fi
+  code_paths+=("${extension_executable}")
+elif [[ -e "${app}/Contents/Library/SystemExtensions" ]]; then
+  echo "Preview bundle unexpectedly contains a System Extension" >&2
+  exit 70
 fi
 node "${script_directory}/verify_macos_build_versions.mjs" "${code_paths[@]}"
 

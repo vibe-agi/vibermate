@@ -3,8 +3,10 @@
 package desktophost_test
 
 import (
+	"encoding/json"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/flowbroker"
 )
 
@@ -29,6 +32,9 @@ func TestHostServesTransparentCaptureRendezvous(t *testing.T) {
 	bootstrap := host.Bootstrap()
 	if bootstrap.FlowPort == 0 || len(bootstrap.FlowSecret) != 43 {
 		t.Fatalf("bootstrap flow rendezvous = port %d, secret length %d", bootstrap.FlowPort, len(bootstrap.FlowSecret))
+	}
+	if _, present := bootstrapJSONFields(t, bootstrap)["transparentCaptureError"]; present {
+		t.Fatal("successful capture bootstrap included a failure reason")
 	}
 	info, err := os.Stat(paths.FlowRegistrationSocket())
 	if err != nil {
@@ -97,6 +103,9 @@ func TestHostWithoutTransparentCapturePublishesNoRendezvous(t *testing.T) {
 	if bootstrap := host.Bootstrap(); bootstrap.FlowPort != 0 || bootstrap.FlowSecret != "" {
 		t.Fatalf("disabled Host published flow rendezvous: %+v", bootstrap)
 	}
+	if _, present := bootstrapJSONFields(t, host.Bootstrap())["transparentCaptureError"]; present {
+		t.Fatal("disabled capture bootstrap included a failure reason")
+	}
 	if _, err := os.Lstat(paths.FlowRegistrationSocket()); !os.IsNotExist(err) {
 		t.Fatalf("disabled Host created a registration socket: %v", err)
 	}
@@ -123,10 +132,47 @@ func TestHostStartsWithoutAnUnusableTransparentCaptureRendezvous(t *testing.T) {
 	options.TransparentCapture = true
 	host := startHost(t, options)
 	defer shutdownHost(t, host)
-	if status := host.Status(); !status.Ready || status.TransparentCaptureError == "" {
+	status := host.Status()
+	if !status.Ready || status.TransparentCaptureError == "" {
 		t.Fatalf("status = %+v, want a ready Host reporting why capture is unavailable", status)
 	}
 	if bootstrap := host.Bootstrap(); bootstrap.FlowPort != 0 || bootstrap.FlowSecret != "" {
 		t.Fatalf("unusable rendezvous was published: port %d", bootstrap.FlowPort)
 	}
+	var reason string
+	if err := json.Unmarshal(bootstrapJSONFields(t, host.Bootstrap())["transparentCaptureError"], &reason); err != nil {
+		t.Fatalf("bootstrap did not carry the capture startup failure: %v", err)
+	}
+	if reason != status.TransparentCaptureError {
+		t.Fatalf("bootstrap capture error = %q, want %q", reason, status.TransparentCaptureError)
+	}
+	app := host.AppSession()
+	response := controlRequest(t, app.BaseURL, http.MethodGet, "/api/v1/status", app.ReadToken, "vibermate://desktop")
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("ordinary runtime status = %d", response.StatusCode)
+	}
+	var runtimeStatus map[string]json.RawMessage
+	if err := json.NewDecoder(response.Body).Decode(&runtimeStatus); err != nil {
+		t.Fatal(err)
+	}
+	if string(runtimeStatus["ready"]) != "true" {
+		t.Fatal("ordinary runtime is not ready after capture startup failed")
+	}
+	if _, present := runtimeStatus["transparentCaptureError"]; present {
+		t.Fatal("capture bootstrap reason leaked into the generic runtime status contract")
+	}
+}
+
+func bootstrapJSONFields(t *testing.T, descriptor desktopbootstrap.Descriptor) map[string]json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	return fields
 }

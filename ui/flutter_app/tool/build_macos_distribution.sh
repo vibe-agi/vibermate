@@ -163,6 +163,8 @@ ditto --norsrc --noextattr --noacl --noqtn -X \
 /usr/bin/install -m 0644 "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
 /usr/bin/install -m 0644 "${repository_root}/LICENSE" "${web_destination}/LICENSE"
 /usr/bin/install -m 0644 "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
+extension_bundle="${app_bundle}/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension"
+codesign --force --sign - "${extension_bundle}"
 
 VIBERMATE_RELEASE_REQUIRE_CLEAN=1 \
   node "${script_directory}/desktop_build_manifest.mjs" \
@@ -176,6 +178,7 @@ for code_path in \
   "${app_bundle}/Contents/MacOS/vibermate" \
   "${app_bundle}/Contents/MacOS/vibermated" \
   "${app_bundle}/Contents/MacOS/vibermate-xray" \
+  "${extension_bundle}/Contents/MacOS/io.vibermate.desktop.transparent-proxy" \
   "${app_bundle}/Contents/Frameworks/App.framework/Versions/A/App" \
   "${app_bundle}/Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS" \
   "${app_bundle}/Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos" \
@@ -198,8 +201,15 @@ fi
 # this directory exists only so SBOM generation cannot omit framework code or
 # Flutter assets merely because they live behind framework symlinks.
 mkdir -p \
+  "${r0_directory}/TransparentProxy" \
   "${r0_directory}/App.framework" \
   "${r0_directory}/FlutterMacOS.framework"
+/usr/bin/install -m 0755 \
+  "${extension_bundle}/Contents/MacOS/io.vibermate.desktop.transparent-proxy" \
+  "${r0_directory}/TransparentProxy/io.vibermate.desktop.transparent-proxy"
+/usr/bin/install -m 0644 \
+  "${extension_bundle}/Contents/Info.plist" \
+  "${r0_directory}/TransparentProxy/Info.plist"
 /usr/bin/install -m 0755 \
   "${app_bundle}/Contents/Frameworks/App.framework/Versions/A/App" \
   "${r0_directory}/App.framework/App"
