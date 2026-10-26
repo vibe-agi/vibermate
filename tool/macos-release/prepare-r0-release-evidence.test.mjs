@@ -448,6 +448,11 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
     await artifactSnapshot(secondRoot),
   );
   assert.equal(universalChecks.length, 8);
+  assert.equal(
+    (await lstat(join(value.artifactRoot, "unsigned-payload/dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"))).mode & 0o7777,
+    0o755,
+    "the staged transparent extension remains executable",
+  );
 
   assert.deepEqual(
     (await readdir(join(value.artifactRoot, "unsigned-payload"))).sort(),
@@ -555,6 +560,16 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
     ],
     { cwd: repositoryUnderTest, stdio: "pipe" },
   );
+});
+
+test("source-traceability preparer (R0) rejects a non-executable transparent extension", async (t) => {
+  const value = await fixture(t);
+  await chmod(join(value.distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy"), 0o644);
+  await assert.rejects(
+    prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()),
+    /transparent-proxy must be executable/u,
+  );
+  await assertAbsent(value.artifactRoot);
 });
 
 test(

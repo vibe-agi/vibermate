@@ -998,7 +998,7 @@ async function stableDirectoryEntries(path, label, limit) {
   return entries;
 }
 
-async function stageDistTree(sourceRoot, destinationRoot, limits) {
+async function stageDistTree(sourceRoot, destinationRoot, limits, executablePaths = []) {
   const state = {
     entries: 0,
     files: 0,
@@ -1057,14 +1057,15 @@ async function stageDistTree(sourceRoot, destinationRoot, limits) {
     if (state.totalBytes > limits.payloadTotalBytes - initialInfo.size) {
       throw new Error("dist source exceeds the payload byte limit");
     }
+    const executable = executablePaths.includes(relativePath);
     await copyStableRegularFile(
       sourcePath,
       initialInfo,
       destinationPath,
-      0o644,
+      executable ? 0o755 : 0o644,
       `dist source ${relativePath}`,
       limits,
-      { nonempty: false },
+      { executable, nonempty: executable },
     );
     state.totalBytes += initialInfo.size;
     state.files += 1;
@@ -2055,6 +2056,7 @@ export async function prepareR0ReleaseEvidence(
       inspected.dist.path,
       join(payloadRoot, "dist"),
       limits,
+      ["dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"],
     );
     const kernelState = await stageDistTree(
       inspected.kernelMaterials.path,
