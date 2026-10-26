@@ -44,14 +44,22 @@ The extension or netstack sends one header before any client bytes:
 
 - **Registration.** `vibermated` listens on `runtime/flows.sock` (mode 0600)
   in the Desktop app cache. `vibermate run --transparent` connects and sends
-  `{"v":1,"run":"<id>"}` followed by a newline.
+  `{"v":1,"run":"<id>","token":"<token>"}` followed by a newline. The token
+  is the value the run set for `VIBERMATE_TRANSPARENT_CAPTURE` in its
+  Agent's environment (32–128 URL-safe characters).
   - The broker takes the root from the socket's peer credentials, never from
     the request. A process can therefore only claim its own descendants.
+    Registering again from the same process replaces its previous claim.
+  - Ownership: a parent walk to the registered root first; if it finds no
+    owner, the token in the process's start environment
+    (`/proc/<pid>/environ`, macOS `kern.procargs2`; same user only).
   - The reply is `{"ok":true,"extension":<bool>}`. `extension` says whether
-    the extension sent a hello in the last 30 seconds; the run refuses to
-    start when it is false.
+    the extension is active (a liveness stream is open, or a hello arrived
+    in the last 30 seconds); the run refuses to start when it is false.
   - The claim lasts as long as this connection. Owned flows arrive on it as
-    passed descriptors (`SCM_RIGHTS`, one `F` byte each).
+    passed descriptors (`SCM_RIGHTS`, one `F` byte each). The broker also
+    sends a `K` byte every second; three seconds without any byte ends the
+    claim on the run's side.
 - **Extension port.** The system extension runs as root inside a sandbox and
   cannot reach a user-owned Unix socket. It therefore uses loopback TCP:
   `vibermated` listens on `127.0.0.1:<port>` with a per-start secret. Both
@@ -60,8 +68,14 @@ The extension or netstack sends one header before any client bytes:
   `startVPNTunnel(options:)` arguments. They are not written to the saved
   `providerConfiguration`, logs, or UI state. Every request is framed as a 2-byte big-endian
   length followed by JSON:
-  - Hello, sent at start and at least every 10 s:
-    `{"v":1,"secret":"…","hello":true}`. The answer is the byte `H`.
+  - Liveness stream, opened at start once capture rules are installed:
+    `{"v":1,"secret":"…","hello":true,"stream":true,"queryFailures":<n>}`.
+    The answer is the byte `H`; the connection then stays open and silent
+    until the extension stops. The extension reopens it if it closes.
+  - Hello, at least every 10 s: `{"v":1,"secret":"…","hello":true,
+    "queryFailures":<n>}`. The answer is `H`. `queryFailures` (optional) is
+    the extension's running count of ownership queries it could not
+    complete; Host status reports it.
   - Flow query: `{"v":1,"pid":<source pid>,"secret":"…"}`. The answer is
     `Y` (owned: the extension then sends the flow header and copies bytes
     both ways on the same connection) or `N` (unowned: `handleNewFlow`
@@ -72,10 +86,13 @@ The extension or netstack sends one header before any client bytes:
   - Exclude `127.0.0.0/8`, `::1` and the broker port, so the extension's own
     connection to the broker and Agents' localhost traffic (dev servers, IDE
     sockets, OAuth callbacks) stay direct.
-  - Bound the query at about 200 ms and decline on timeout. Unlike Linux
+  - Bound the query at about 200 ms. On failure, refuse a process already
+    seen owned and decline any other, counting the failure. Unlike Linux
     namespaces, process lineage leaves localhost untouched.
-- **Outage.** If `vibermated` quits, registrations drop and each run pauses
-  its Agent, as described in ADR 0024.
+- **Outage.** The broker ends every claim when the extension's stream closes
+  or its hellos go stale; a run ends its claim when keepalives stop or
+  `vibermated` quits. Either way the run pauses its process group and every
+  process carrying its token, as described in ADR 0024.
 
 ## Destination naming
 
@@ -147,8 +164,9 @@ normal activation. Ad-hoc source builds compile the target but cannot activate i
 The first implementation captures outbound TCP on macOS. Localhost stays direct,
 and the Agent still uses system DNS before opening a connection; SNI/HTTP Host
 recovery does not replace a failed local DNS lookup. Linux namespace capture is
-separate future work. The known first-connection/orphan and broker-failure
-attribution limits in ADR 0024 remain release acceptance blockers.
+separate future work. Orphan attribution by token, capture-loss pausing and
+the remaining failed-query residual are described in ADR 0024; real-hardware
+acceptance of them is still required before release.
 
 For a local signed candidate, supply `APPLE_SIGNING_IDENTITY`,
 `VIBERMATE_APPLE_TEAM_ID`, `VIBERMATE_MACOS_APP_PROVISION_PROFILE`, and

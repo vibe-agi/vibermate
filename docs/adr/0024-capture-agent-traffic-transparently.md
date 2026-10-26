@@ -54,18 +54,36 @@ cannot start one, the reason appears in Host status and the daemon still
 starts. The refusal belongs to the run that asked for transparent capture,
 not to every capture.
 
-On macOS the extension cannot tell an unowned flow from one it could not
-ask about, so it declines both. A capture outage would therefore let new
-Agent connections leave uncaptured. Instead, `vibermate run` watches its
-registration:
+Each transparent run also generates a token and sets it, as
+`VIBERMATE_TRANSPARENT_CAPTURE`, in its Agent's environment only; a token
+inherited from an outer run is dropped. Descendants inherit it. When a
+parent walk finds no owner, because the process was orphaned or daemonized
+before its first connection, the broker reads the process's start
+environment (same user only) and attributes it to the run whose token it
+carries. Lineage still wins, so a nested run's processes belong to the
+nested run.
 
-- When the registration drops (the app quit or restarted), it pauses the
-  Agent's process group at once.
-- It resumes the Agent when the claim is restored with an active extension.
-- It stops the run after 30 seconds without one.
+On macOS the extension cannot tell an unowned flow from one it could not
+ask about. Declining both keeps the Mac usable when ViberMate is slow or
+gone; refusing both would cut off every application. Failed queries
+therefore pass through, and the guarantee comes from pausing:
+
+- The extension holds a liveness stream open to the broker and sends a hello
+  at least every 10 seconds. When the stream closes (stop, crash, lost
+  connection) or no hello arrives for 30 seconds, the broker ends every
+  run's claim, even while vibermated keeps running.
+- The broker sends each claim a keepalive every second; a run that hears
+  nothing for three seconds treats the claim as lost, which covers a hung
+  broker.
+- When its claim ends for any reason, `vibermate run` at once pauses the
+  Agent's process group and every other process carrying its token,
+  skipping processes the user had already stopped. It resumes exactly that
+  set when the claim is restored with an active extension, and stops the run
+  after 30 seconds without one.
 
 Flows already handed to the run continue, because they no longer depend on
-the broker.
+the broker. The extension refuses a failed query only for a process it has
+already seen owned.
 
 Rejected alternatives:
 
@@ -82,5 +100,15 @@ Known limits:
 
 - Linux namespaces separate loopback, so localhost callbacks from a browser
   or IDE into the Agent need managed authentication or a later forwarder.
-- On macOS, a process that escapes its lineage before its first connection
-  is unowned.
+- On macOS, a process orphaned before its first connection is attributed
+  only if it kept the run's token in its environment; one started with a
+  cleared environment (for example `env -i`) is unowned.
+- One ownership query that fails while the broker and extension are both
+  healthy, for a process the extension has never seen, goes direct. The
+  extension counts these and Host status reports the count. Removing the
+  case would need the extension to hold such flows and relay unowned ones
+  itself.
+- Pausing cannot reach a process of the run that already exited, and between
+  a capture loss and its detection (at most about three seconds for a hung
+  broker, 30 seconds for an extension that hangs with its stream open) new
+  connections are not captured.
