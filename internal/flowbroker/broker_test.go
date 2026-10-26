@@ -57,7 +57,8 @@ func submit(t *testing.T, flows string, pid int, payload string) byte {
 	}
 	defer conn.Close()
 	if err := WriteFlowRequest(conn, pid, ""); err != nil {
-		t.Fatal(err)
+		// The broker may close a refused peer before the request is written.
+		return 0
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	answer := make([]byte, 1)

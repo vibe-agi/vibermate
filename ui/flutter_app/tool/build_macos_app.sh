@@ -23,6 +23,18 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}${VIBERMATE_MACOS_APP_PROVISION_PROFILE:-}$
   developer_id_signing=1
 fi
 
+# Xcode leaves nested code unsigned (CODE_SIGNING_ALLOWED=NO, so the System
+# Extension's restricted entitlements never need a profile at build time).
+# Ad-hoc builds therefore seal each embedded framework themselves, inside out,
+# before anything records or seals the outer bundle.
+sign_embedded_frameworks_ad_hoc() {
+  local framework
+  for framework in "$1"/Contents/Frameworks/*.framework; do
+    [[ -d "${framework}" ]] || continue
+    codesign --force --sign - "${framework}"
+  done
+}
+
 # Keep local builds compatible with the same baseline as distribution builds.
 export MACOSX_DEPLOYMENT_TARGET=14.0
 
@@ -62,6 +74,7 @@ if [[ "${mode}" == "preview" ]]; then
   rm -rf -- "${preview_app}/Contents/Library/SystemExtensions"
   /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier io.vibermate.preview' "${preview_app}/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c 'Set :CFBundleName ViberMate Preview' "${preview_app}/Contents/Info.plist"
+  sign_embedded_frameworks_ad_hoc "${preview_app}"
   codesign --force --sign - "${preview_app}"
 else
   # Resolve the toolchain selected by go.mod, not a launcher that would fall
@@ -157,6 +170,7 @@ else
     node "${local_signer}" --app="${app_bundle}" --target="${desktop_target}"
   else
     extension_bundle="${app_bundle}/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension"
+    sign_embedded_frameworks_ad_hoc "${app_bundle}"
     codesign --force --sign - "${extension_bundle}"
     node "${script_directory}/desktop_build_manifest.mjs" \
       --app="${app_bundle}" \
