@@ -66,14 +66,33 @@ struct FlowDestination {
 struct FlowBroker {
   let configuration: FlowBrokerConfiguration
 
-  func hello() throws {
+  func hello(queryFailures: UInt64 = 0) throws {
+    let socket = try announce(stream: false, queryFailures: queryFailures)
+    socket.close()
+  }
+
+  // The liveness stream stays open for the session. The broker treats its
+  // close (stop, crash, lost connection) as the extension going away and ends
+  // every run's claim, so runs pause instead of sending traffic uncaptured.
+  func openLivenessStream(queryFailures: UInt64) throws -> BrokerSocket {
+    try announce(stream: true, queryFailures: queryFailures)
+  }
+
+  private func announce(stream: Bool, queryFailures: UInt64) throws -> BrokerSocket {
     let deadline = DispatchTime.now() + .milliseconds(200)
     let socket = try BrokerSocket(port: configuration.port, deadline: deadline)
-    defer { socket.close() }
-    try socket.write(brokerFrame(["v": 1, "secret": configuration.secret, "hello": true], limit: 512),
-                     deadline: deadline)
-    guard try socket.read(maximum: 1, deadline: deadline) == Data([72]) else {
-      throw FlowBrokerError.invalidReply
+    do {
+      var fields: [String: Any] = ["v": 1, "secret": configuration.secret, "hello": true]
+      if stream { fields["stream"] = true }
+      if queryFailures > 0 { fields["queryFailures"] = NSNumber(value: queryFailures) }
+      try socket.write(brokerFrame(fields, limit: 512), deadline: deadline)
+      guard try socket.read(maximum: 1, deadline: deadline) == Data([72]) else {
+        throw FlowBrokerError.invalidReply
+      }
+      return socket
+    } catch {
+      socket.close()
+      throw error
     }
   }
 
@@ -146,6 +165,15 @@ final class BrokerSocket {
 
   func close() {
     if descriptor >= 0 { Darwin.close(descriptor); descriptor = -1 }
+  }
+
+  // The broker never writes on a liveness stream, so readability means EOF,
+  // a reset or an error: the broker went away. Does not block.
+  func peerClosed() -> Bool {
+    guard descriptor >= 0 else { return true }
+    var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    let result = poll(&event, 1, 0)
+    return result != 0 || event.revents != 0
   }
 
   deinit { close() }

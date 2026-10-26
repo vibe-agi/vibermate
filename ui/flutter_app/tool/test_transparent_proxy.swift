@@ -40,6 +40,50 @@ final class TransparentProxyTests: XCTestCase {
     server.finish()
   }
 
+  func testLivenessStreamStaysOpenUntilTheExtensionCloses() throws {
+    let observedClose = DispatchSemaphore(value: 0)
+    let server = try LoopbackBroker { socket in
+      let request = try readFrame(socket, limit: 512)
+      XCTAssertEqual(request["hello"] as? Bool, true)
+      XCTAssertEqual(request["stream"] as? Bool, true)
+      XCTAssertEqual(request["queryFailures"] as? Int, 4)
+      XCTAssertNil(request["pid"])
+      try sendAll(socket, Data([72]))
+      // The broker sends nothing more; it learns of the close as EOF.
+      XCTAssertThrowsError(try readExactly(socket, count: 1))
+      observedClose.signal()
+    }
+    let stream = try FlowBroker(configuration: server.configuration()).openLivenessStream(queryFailures: 4)
+    XCTAssertFalse(stream.peerClosed())
+    stream.close()
+    XCTAssertEqual(observedClose.wait(timeout: .now() + .seconds(3)), .success)
+    server.finish()
+  }
+
+  func testLivenessStreamNoticesTheBrokerGoingAway() throws {
+    let server = try LoopbackBroker { socket in
+      _ = try readFrame(socket, limit: 512)
+      try sendAll(socket, Data([72]))
+    }
+    let stream = try FlowBroker(configuration: server.configuration()).openLivenessStream(queryFailures: 0)
+    server.finish() // The fixture closed its end.
+    let deadline = Date().addingTimeInterval(2)
+    while !stream.peerClosed() && Date() < deadline { usleep(10_000) }
+    XCTAssertTrue(stream.peerClosed())
+    stream.close()
+  }
+
+  func testPeriodicHelloOmitsStreamAndReportsFailures() throws {
+    let server = try LoopbackBroker { socket in
+      let request = try readFrame(socket, limit: 512)
+      XCTAssertNil(request["stream"])
+      XCTAssertEqual(request["queryFailures"] as? Int, 9)
+      try sendAll(socket, Data([72]))
+    }
+    try FlowBroker(configuration: server.configuration()).hello(queryFailures: 9)
+    server.finish()
+  }
+
   func testOwnedQueryKeepsSameSocketForHeaderAndPayload() throws {
     let server = try LoopbackBroker { socket in
       let request = try readFrame(socket, limit: 512)

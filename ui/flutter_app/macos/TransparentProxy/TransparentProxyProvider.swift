@@ -34,7 +34,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
         }
         // Announce readiness only after capture rules are installed, so a run
         // cannot observe a healthy hello and launch before interception starts.
-        do { try current.broker.hello() }
+        do { try current.openLivenessStream() }
         catch { self.startFailed(current, error: error, completion: completionHandler); return }
         guard self.isCurrent(current) else {
           self.startFailed(current, error: FlowBrokerError.endOfStream, completion: completionHandler)
@@ -82,9 +82,14 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
       }
       return true
     } catch {
-      // The v1 broker cannot distinguish a first-seen owned process from an
-      // unrelated process on query failure. Known audit identities are refused;
-      // unknown identities retain the protocol's fail-open behavior.
+      // A failed query cannot tell a first-seen owned process from an
+      // unrelated one. Known owned identities are refused; unknown ones go
+      // direct so a slow or absent vibermated never cuts off the Mac. Runs
+      // pause every process carrying their token whenever the broker or this
+      // extension is unavailable, so only a single failed query for a
+      // never-seen process of a healthy run remains; it is counted and
+      // reported in Host status (ADR 0024).
+      current.recordQueryFailure()
       return current.wasOwned(identity) ? Self.refuse(tcp) : false
     }
   }
@@ -189,6 +194,8 @@ private final class ProxySession {
   private var relays: [UUID: TCPFlowRelay] = [:]
   private var history = FlowOwnershipHistory()
   private var stopped = false
+  private var stream: BrokerSocket?
+  private var queryFailures: UInt64 = 0
 
   init(configuration: FlowBrokerConfiguration) { broker = FlowBroker(configuration: configuration) }
 
@@ -201,10 +208,44 @@ private final class ProxySession {
     timer.setEventHandler { [weak self] in
       // Keep capture rules and known ownership during an outage. Cancelling
       // the provider here would send all flows directly around the broker.
-      try? self?.broker.hello()
+      guard let self = self else { return }
+      try? self.broker.hello(queryFailures: self.failures())
+      self.reopenStreamIfClosed()
     }
     self.timer = timer
     timer.resume()
+  }
+
+  // Runs on livenessQueue only.
+  func openLivenessStream() throws {
+    let socket = try broker.openLivenessStream(queryFailures: failures())
+    lock.lock()
+    guard !stopped else { lock.unlock(); socket.close(); throw FlowBrokerError.endOfStream }
+    let previous = stream
+    stream = socket
+    lock.unlock()
+    previous?.close()
+  }
+
+  private func reopenStreamIfClosed() {
+    lock.lock()
+    let current = stream
+    let stopped = self.stopped
+    lock.unlock()
+    guard !stopped, current?.peerClosed() ?? true else { return }
+    try? openLivenessStream()
+  }
+
+  func recordQueryFailure() {
+    lock.lock()
+    queryFailures &+= 1
+    lock.unlock()
+  }
+
+  private func failures() -> UInt64 {
+    lock.lock()
+    defer { lock.unlock() }
+    return queryFailures
   }
 
   func stop(completion: @escaping () -> Void = {}) {
@@ -212,9 +253,14 @@ private final class ProxySession {
     stopped = true
     let timer = self.timer
     self.timer = nil
+    let stream = self.stream
+    self.stream = nil
     let active = Array(relays.values)
     lock.unlock()
     timer?.cancel()
+    // Closing the stream tells the broker at once; runs pause their Agents.
+    // Stream I/O stays on livenessQueue, serialized with the timer's checks.
+    livenessQueue.async { stream?.close() }
     for relay in active { relay.stop() }
     relayGroup.notify(queue: livenessQueue, execute: completion)
   }
