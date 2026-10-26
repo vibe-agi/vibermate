@@ -44,6 +44,23 @@ func TestHostServesTransparentCaptureRendezvous(t *testing.T) {
 		t.Fatalf("registration socket mode = %v", info.Mode())
 	}
 
+	// Play the extension: hold a liveness stream open for the whole test.
+	stream, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(bootstrap.FlowPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if err := flowbroker.WriteHelloStream(stream, bootstrap.FlowSecret, 3); err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(stream, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if status := host.Status(); !status.TransparentCaptureExtensionActive || status.TransparentCaptureQueryFailures != 3 {
+		t.Fatalf("status = %+v, want the extension active with its reported failures", status)
+	}
+
 	received := make(chan string, 1)
 	registration, err := flowbroker.Register(paths.FlowRegistrationSocket(), "run-1", func(flow net.Conn) {
 		defer flow.Close()
@@ -52,6 +69,9 @@ func TestHostServesTransparentCaptureRendezvous(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !registration.Extension() {
+		t.Fatal("registration did not see the active extension")
 	}
 	child := exec.Command("sleep", "30")
 	if err := child.Start(); err != nil {

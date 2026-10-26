@@ -15,6 +15,12 @@ type flowRequest struct {
 	Secret  string `json:"secret,omitempty"`
 	// Hello announces that the extension is active; it carries no flow.
 	Hello bool `json:"hello,omitempty"`
+	// Stream keeps a hello connection open for the extension's lifetime, so
+	// the broker learns of a crash or stop the moment the socket closes.
+	Stream bool `json:"stream,omitempty"`
+	// QueryFailures is the extension's running count of ownership queries
+	// it could not complete, reported with each hello.
+	QueryFailures uint64 `json:"queryFailures,omitempty"`
 }
 
 func readFlowRequest(r io.Reader) (flowRequest, error) {
@@ -31,7 +37,8 @@ func readFlowRequest(r io.Reader) (flowRequest, error) {
 		return flowRequest{}, err
 	}
 	var request flowRequest
-	if err := json.Unmarshal(encoded, &request); err != nil || request.Version != 1 || (request.Hello != (request.PID == 0)) || (!request.Hello && request.PID <= 1) {
+	if err := json.Unmarshal(encoded, &request); err != nil || request.Version != 1 || (request.Hello != (request.PID == 0)) || (!request.Hello && request.PID <= 1) ||
+		(!request.Hello && (request.Stream || request.QueryFailures != 0)) {
 		return flowRequest{}, errors.New("flow request is invalid")
 	}
 	return request, nil
@@ -40,6 +47,12 @@ func readFlowRequest(r io.Reader) (flowRequest, error) {
 // WriteHello frames the extension's periodic liveness announcement.
 func WriteHello(w io.Writer, secret string) error {
 	return writeRequest(w, flowRequest{Version: 1, Secret: secret, Hello: true})
+}
+
+// WriteHelloStream frames the hello that opens the extension's liveness
+// stream; the connection then stays open until the extension stops.
+func WriteHelloStream(w io.Writer, secret string, queryFailures uint64) error {
+	return writeRequest(w, flowRequest{Version: 1, Secret: secret, Hello: true, Stream: true, QueryFailures: queryFailures})
 }
 
 // WriteFlowRequest frames a flow ownership query, as the extension sends it.

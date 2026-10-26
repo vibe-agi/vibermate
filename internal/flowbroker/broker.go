@@ -23,9 +23,14 @@ const (
 	flowUnowned    = 'N'
 	helloAccepted  = 'H'
 	// extensionFreshness is how recent a hello must be for the extension to
-	// count as active; it sends one at least every 10 seconds.
+	// count as active; it sends one at least every 10 seconds. It covers an
+	// extension that hangs while its liveness stream stays open.
 	extensionFreshness = 30 * time.Second
 )
+
+// livenessInterval is how often the broker re-evaluates whether the
+// extension is active and sends each registration a keepalive.
+const livenessInterval = time.Second
 
 // Broker attributes intercepted flows to Capture Runs and hands each owned
 // flow's connection to the run that registered its process lineage.
@@ -37,11 +42,26 @@ type Broker struct {
 	// Loopback TCP submissions authenticate with a secret instead.
 	allowFlowPeer func(Peer) bool
 
-	sequence  atomic.Uint64
-	lastHello atomic.Int64
-	now       func() time.Time
-	mu        sync.Mutex
-	channels  map[string]*runChannel
+	sequence      atomic.Uint64
+	lastHello     atomic.Int64
+	queryFailures atomic.Uint64
+	now           func() time.Time
+	interval      time.Duration
+	stop          chan struct{}
+	stopOnce      sync.Once
+
+	mu       sync.Mutex
+	channels map[string]*runChannel
+	streams  int
+}
+
+// Stats is the broker's view of the capture extension, for Host status.
+type Stats struct {
+	ExtensionActive bool
+	// QueryFailures is the extension's reported count of ownership queries
+	// it could not complete. Such a flow from a process never seen before is
+	// the remaining way an owned connection can leave uncaptured (ADR 0024).
+	QueryFailures uint64
 }
 
 type runChannel struct {
@@ -50,22 +70,58 @@ type runChannel struct {
 }
 
 func New(reader processlineage.Reader, allowFlowPeer func(Peer) bool) (*Broker, error) {
-	if reader == nil || allowFlowPeer == nil {
+	return newBroker(reader, allowFlowPeer, time.Now, livenessInterval)
+}
+
+func newBroker(reader processlineage.Reader, allowFlowPeer func(Peer) bool, now func() time.Time, interval time.Duration) (*Broker, error) {
+	if reader == nil || allowFlowPeer == nil || now == nil || interval <= 0 {
 		return nil, errors.New("flow broker reader and flow peer policy are required")
 	}
-	return &Broker{
+	broker := &Broker{
 		lineage:       processlineage.NewRegistry(reader),
 		reader:        reader,
 		allowFlowPeer: allowFlowPeer,
 		channels:      map[string]*runChannel{},
-		now:           time.Now,
-	}, nil
+		now:           now,
+		interval:      interval,
+		stop:          make(chan struct{}),
+	}
+	go broker.monitor()
+	return broker, nil
 }
 
-// Close ends every live registration, so each run sees its claim drop and
-// stops its Agent from opening uncaptured connections. Listeners are owned
-// and closed by the caller.
-func (broker *Broker) Close() {
+// Stats reports the extension's liveness and query failures.
+func (broker *Broker) Stats() Stats {
+	return Stats{ExtensionActive: broker.extensionActive(), QueryFailures: broker.queryFailures.Load()}
+}
+
+// monitor revokes every registration when the extension stops being active
+// while vibermated keeps running: its stream closed and no hello is fresh.
+// Each run then pauses its Agent instead of letting new connections leave
+// uncaptured.
+func (broker *Broker) monitor() {
+	ticker := time.NewTicker(broker.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-broker.stop:
+			return
+		case <-ticker.C:
+			broker.checkLiveness()
+		}
+	}
+}
+
+// checkLiveness keeps no claim open while the extension is inactive. A run
+// refuses a claim granted without an active extension, so this only ends
+// claims whose capture has stopped working.
+func (broker *Broker) checkLiveness() {
+	if !broker.extensionActive() {
+		broker.revokeRegistrations()
+	}
+}
+
+func (broker *Broker) revokeRegistrations() {
 	broker.mu.Lock()
 	channels := make([]*runChannel, 0, len(broker.channels))
 	for _, channel := range broker.channels {
@@ -75,6 +131,14 @@ func (broker *Broker) Close() {
 	for _, channel := range channels {
 		_ = channel.conn.Close()
 	}
+}
+
+// Close ends every live registration, so each run sees its claim drop and
+// stops its Agent from opening uncaptured connections. Listeners are owned
+// and closed by the caller.
+func (broker *Broker) Close() {
+	broker.stopOnce.Do(func() { close(broker.stop) })
+	broker.revokeRegistrations()
 }
 
 type registrationRequest struct {
@@ -91,6 +155,12 @@ type registrationReply struct {
 }
 
 func (broker *Broker) extensionActive() bool {
+	broker.mu.Lock()
+	streams := broker.streams
+	broker.mu.Unlock()
+	if streams > 0 {
+		return true
+	}
 	last := broker.lastHello.Load()
 	return last != 0 && broker.now().Sub(time.Unix(0, last)) < extensionFreshness
 }
@@ -174,6 +244,19 @@ func (broker *Broker) register(conn *net.UnixConn) {
 		reply(errors.New("registering process is unavailable"))
 		return
 	}
+	// Socket credentials prove the same process is registering again, for
+	// example after it judged its previous claim lost. The new claim replaces
+	// the old one instead of waiting for the broker to notice the old close.
+	if previous, exists := broker.lineage.RootRun(root.Identity); exists {
+		broker.mu.Lock()
+		old := broker.channels[previous]
+		delete(broker.channels, previous)
+		broker.mu.Unlock()
+		broker.lineage.Deregister(previous)
+		if old != nil {
+			_ = old.conn.Close()
+		}
+	}
 	key := request.Run + "#" + strconv.FormatUint(broker.sequence.Add(1), 10)
 	if err := broker.lineage.Register(root.Identity, key); err != nil {
 		reply(err)
@@ -186,13 +269,38 @@ func (broker *Broker) register(conn *net.UnixConn) {
 	defer func() {
 		broker.lineage.Deregister(key)
 		broker.mu.Lock()
-		delete(broker.channels, key)
+		if broker.channels[key] == channel {
+			delete(broker.channels, key)
+		}
 		broker.mu.Unlock()
 	}()
 	reply(nil)
 	_ = conn.SetReadDeadline(time.Time{})
+	stopKeepalive := make(chan struct{})
+	defer close(stopKeepalive)
+	go channel.keepalive(stopKeepalive, broker.interval)
 	// The run sends nothing more; a read returns when it disconnects.
 	_, _ = io.Copy(io.Discard, conn)
+}
+
+// keepalive lets the run tell a live broker from a hung one: a run that
+// hears nothing for several intervals treats its claim as lost.
+func (channel *runChannel) keepalive(stop <-chan struct{}, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			channel.mu.Lock()
+			_, err := channel.conn.Write([]byte{keepaliveMarker})
+			channel.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}
 }
 
 // flow answers whether the submitting process's flow is owned. An owned
@@ -211,7 +319,25 @@ func (broker *Broker) flow(conn fileConn, secret []byte) {
 	_ = conn.SetReadDeadline(time.Time{})
 	if request.Hello {
 		broker.lastHello.Store(broker.now().UnixNano())
-		_, _ = conn.Write([]byte{helloAccepted})
+		broker.queryFailures.Store(request.QueryFailures)
+		if _, err := conn.Write([]byte{helloAccepted}); err != nil || !request.Stream {
+			return
+		}
+		broker.mu.Lock()
+		broker.streams++
+		broker.mu.Unlock()
+		broker.checkLiveness()
+		// The extension sends nothing more; the read returns when it stops,
+		// crashes or loses the connection.
+		_, _ = io.Copy(io.Discard, conn)
+		// A closed stream means the extension stopped or crashed: its last
+		// hello no longer proves anything. A live extension's next periodic
+		// hello restores activity.
+		broker.lastHello.Store(0)
+		broker.mu.Lock()
+		broker.streams--
+		broker.mu.Unlock()
+		broker.checkLiveness()
 		return
 	}
 	key, owned := broker.lineage.Owner(request.PID)

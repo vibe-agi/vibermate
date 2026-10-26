@@ -10,8 +10,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// flowMarker is the one data byte that carries each passed flow descriptor.
-const flowMarker = 'F'
+// flowMarker is the one data byte that carries each passed flow descriptor;
+// keepaliveMarker carries none and only proves the broker is responsive.
+const (
+	flowMarker      = 'F'
+	keepaliveMarker = 'K'
+)
 
 // fileConn is a connection whose descriptor can be duplicated: Unix sockets
 // from tests and the loopback TCP connections the extension opens.
@@ -38,13 +42,17 @@ func passConn(channel *net.UnixConn, conn fileConn) error {
 	return nil
 }
 
-// receiveConn reads one passed flow descriptor from channel.
+// receiveConn reads one message from channel: a passed flow descriptor, or a
+// keepalive (nil connection, nil error).
 func receiveConn(channel *net.UnixConn) (net.Conn, error) {
 	data := make([]byte, 1)
 	oob := make([]byte, unix.CmsgSpace(4))
 	n, oobn, _, _, err := channel.ReadMsgUnix(data, oob)
 	if err != nil {
 		return nil, err
+	}
+	if n == 1 && data[0] == keepaliveMarker && oobn == 0 {
+		return nil, nil
 	}
 	if n != 1 || data[0] != flowMarker {
 		return nil, errors.New("flow channel message is invalid")

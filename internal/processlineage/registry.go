@@ -62,6 +62,14 @@ func (registry *Registry) Register(root Identity, run string) error {
 	return nil
 }
 
+// RootRun returns the run registered for root, if any.
+func (registry *Registry) RootRun(root Identity) (string, bool) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	run, exists := registry.roots[root]
+	return run, exists
+}
+
 // Deregister forgets run and every descendant learned for it.
 func (registry *Registry) Deregister(run string) {
 	registry.mu.Lock()

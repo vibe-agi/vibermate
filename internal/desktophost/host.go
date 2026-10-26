@@ -70,10 +70,16 @@ type Status struct {
 	SOCKSAddress   string `json:"socksAddress,omitempty"`
 	// TransparentCaptureError explains why transparent capture is
 	// unavailable in this generation; empty when it is running or disabled.
-	TransparentCaptureError string     `json:"transparentCaptureError,omitempty"`
-	StartedAt               time.Time  `json:"startedAt"`
-	StoppedAt               *time.Time `json:"stoppedAt,omitempty"`
-	StopReasonCode          string     `json:"stopReasonCode,omitempty"`
+	TransparentCaptureError string `json:"transparentCaptureError,omitempty"`
+	// TransparentCaptureExtensionActive reports whether the network extension
+	// is connected to this generation's broker.
+	TransparentCaptureExtensionActive bool `json:"transparentCaptureExtensionActive,omitempty"`
+	// TransparentCaptureQueryFailures counts ownership queries the extension
+	// could not complete; ADR 0024 explains why a nonzero count matters.
+	TransparentCaptureQueryFailures uint64     `json:"transparentCaptureQueryFailures,omitempty"`
+	StartedAt                       time.Time  `json:"startedAt"`
+	StoppedAt                       *time.Time `json:"stoppedAt,omitempty"`
+	StopReasonCode                  string     `json:"stopReasonCode,omitempty"`
 }
 
 type AppSession = desktopbootstrap.Session
@@ -690,6 +696,11 @@ func (host *Host) Status() Status {
 	status := host.status
 	host.statusMu.RUnlock()
 	status.Ready = host.readiness.Ready()
+	if host.flows != nil {
+		stats := host.flows.broker.Stats()
+		status.TransparentCaptureExtensionActive = stats.ExtensionActive
+		status.TransparentCaptureQueryFailures = stats.QueryFailures
+	}
 	if !status.Ready && status.State == StateReady {
 		status.State = StateDegraded
 	}

@@ -15,6 +15,7 @@ import (
 type Registration struct {
 	conn      *net.UnixConn
 	extension bool
+	timeout   time.Duration
 	done      chan struct{}
 	once      sync.Once
 }
@@ -23,6 +24,10 @@ type Registration struct {
 // identifies the caller from socket credentials; handle receives each owned
 // flow and owns it.
 func Register(socketPath, run string, handle func(net.Conn)) (*Registration, error) {
+	return register(socketPath, run, handle, keepaliveTimeout)
+}
+
+func register(socketPath, run string, handle func(net.Conn), timeout time.Duration) (*Registration, error) {
 	if handle == nil {
 		return nil, errors.New("flow handler is required")
 	}
@@ -52,7 +57,7 @@ func Register(socketPath, run string, handle func(net.Conn)) (*Registration, err
 		return nil, errors.New("flow broker refused registration")
 	}
 	_ = conn.SetDeadline(time.Time{})
-	registration := &Registration{conn: conn, extension: reply.Extension, done: make(chan struct{})}
+	registration := &Registration{conn: conn, extension: reply.Extension, timeout: timeout, done: make(chan struct{})}
 	go registration.receive(handle)
 	return registration, nil
 }
@@ -72,14 +77,23 @@ func readLine(conn *net.UnixConn) ([]byte, error) {
 	return nil, errors.New("flow broker reply is too long")
 }
 
+// keepaliveTimeout is how long a registration waits for any message from
+// the broker before treating its claim as lost: a broker that stopped
+// answering may also have stopped answering the extension.
+const keepaliveTimeout = 3 * livenessInterval
+
 func (registration *Registration) receive(handle func(net.Conn)) {
 	defer close(registration.done)
+	defer registration.conn.Close()
 	for {
+		_ = registration.conn.SetReadDeadline(time.Now().Add(registration.timeout))
 		flow, err := receiveConn(registration.conn)
 		if err != nil {
 			return
 		}
-		go handle(flow)
+		if flow != nil {
+			go handle(flow)
+		}
 	}
 }
 

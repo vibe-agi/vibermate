@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +17,30 @@ import (
 
 func startBroker(t *testing.T, allow func(Peer) bool) (broker *Broker, registrations, flows string) {
 	t.Helper()
-	broker, err := New(processlineage.System(), allow)
+	return startBrokerWith(t, allow, time.Now, livenessInterval)
+}
+
+// fakeClock is safe to read from the broker's monitor goroutine.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (clock *fakeClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *fakeClock) advance(by time.Duration) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = clock.now.Add(by)
+}
+
+func startBrokerWith(t *testing.T, allow func(Peer) bool, now func() time.Time, interval time.Duration) (broker *Broker, registrations, flows string) {
+	t.Helper()
+	broker, err := newBroker(processlineage.System(), allow, now, interval)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,16 +171,40 @@ func TestOnlyAllowedPeersMaySubmitFlows(t *testing.T) {
 	}
 }
 
-func TestOneLiveRegistrationPerProcess(t *testing.T) {
-	_, registrations, _ := startBroker(t, sameUser)
+// A process that registers again (it judged its claim lost) replaces its
+// previous claim at once; the old claim ends and flows reach the new one.
+func TestReRegistrationReplacesTheSameProcessClaim(t *testing.T) {
+	_, registrations, flows := startBroker(t, sameUser)
 	first, err := Register(registrations, "run-a", func(flow net.Conn) { flow.Close() })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	if second, err := Register(registrations, "run-b", func(flow net.Conn) { flow.Close() }); err == nil {
-		second.Close()
-		t.Fatal("a process registered as two runs")
+	received := make(chan string, 1)
+	second, err := Register(registrations, "run-a", func(flow net.Conn) {
+		defer flow.Close()
+		data, _ := io.ReadAll(flow)
+		received <- string(data)
+	})
+	if err != nil {
+		t.Fatalf("re-registration: %v", err)
+	}
+	defer second.Close()
+	select {
+	case <-first.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replaced claim did not end")
+	}
+	if answer := submit(t, flows, startChild(t), "to-new-claim"); answer != flowOwned {
+		t.Fatalf("answer = %q, want owned", answer)
+	}
+	select {
+	case data := <-received:
+		if data != "to-new-claim" {
+			t.Fatalf("new claim received %q", data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the new claim received no flow")
 	}
 }
 
@@ -244,7 +292,8 @@ func TestCloseEndsLiveRegistrations(t *testing.T) {
 }
 
 func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
-	broker, registrations, _ := startBroker(t, sameUser)
+	clock := &fakeClock{now: time.Now()}
+	broker, registrations, _ := startBrokerWith(t, sameUser, clock.Now, livenessInterval)
 	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
@@ -252,8 +301,6 @@ func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
 	defer listener.Close()
 	secret := "0123456789abcdef0123456789abcdef"
 	go broker.ServeFlowsTCP(listener, []byte(secret))
-	now := time.Now()
-	broker.now = func() time.Time { return now }
 	hello := func(secret string) byte {
 		conn, err := net.DialTCP("tcp4", nil, listener.Addr().(*net.TCPAddr))
 		if err != nil {
@@ -293,7 +340,7 @@ func TestRegistrationReportsWhetherTheExtensionIsActive(t *testing.T) {
 	if !registerExtension() {
 		t.Fatal("extension not reported active after a hello")
 	}
-	now = now.Add(extensionFreshness)
+	clock.advance(extensionFreshness)
 	if registerExtension() {
 		t.Fatal("a stale hello still counted")
 	}
@@ -309,4 +356,138 @@ func shortSocketDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(directory) })
 	return directory
+}
+
+const testSecret = "0123456789abcdef0123456789abcdef"
+
+// Liveness tests use their own fast interval and keepalive timeout.
+const (
+	fastInterval = 20 * time.Millisecond
+	fastTimeout  = 200 * time.Millisecond
+)
+
+func registerFast(socket, run string, handle func(net.Conn)) (*Registration, error) {
+	return register(socket, run, handle, fastTimeout)
+}
+
+func serveTCPFlows(t *testing.T, broker *Broker) *net.TCPAddr {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go broker.ServeFlowsTCP(listener, []byte(testSecret))
+	return listener.Addr().(*net.TCPAddr)
+}
+
+func openLivenessStream(t *testing.T, address *net.TCPAddr, queryFailures uint64) *net.TCPConn {
+	t.Helper()
+	conn, err := net.DialTCP("tcp4", nil, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHelloStream(conn, testSecret, queryFailures); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	answer := make([]byte, 1)
+	if _, err := io.ReadFull(conn, answer); err != nil || answer[0] != helloAccepted {
+		t.Fatalf("stream hello answer = %q, %v", answer, err)
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	return conn
+}
+
+func waitDone(t *testing.T, registration *Registration, within time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-registration.Done():
+	case <-time.After(within):
+		t.Fatalf("registration survived %s", what)
+	}
+}
+
+// The extension crashing or stopping closes its liveness stream; every claim
+// ends at once even though vibermated keeps running.
+func TestClosedLivenessStreamRevokesRegistrations(t *testing.T) {
+	broker, registrations, _ := startBrokerWith(t, sameUser, time.Now, fastInterval)
+	stream := openLivenessStream(t, serveTCPFlows(t, broker), 7)
+	registration, err := registerFast(registrations, "run", func(flow net.Conn) { flow.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registration.Close()
+	if !registration.Extension() {
+		t.Fatal("an open liveness stream did not count as an active extension")
+	}
+	if stats := broker.Stats(); !stats.ExtensionActive || stats.QueryFailures != 7 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	// Keepalives hold a healthy claim open well past the keepalive timeout.
+	time.Sleep(4 * fastTimeout)
+	select {
+	case <-registration.Done():
+		t.Fatal("a healthy claim ended")
+	default:
+	}
+	stream.Close()
+	waitDone(t, registration, 2*time.Second, "the extension's stream closing")
+	if broker.Stats().ExtensionActive {
+		t.Fatal("extension still active after its stream closed")
+	}
+}
+
+// A hung extension that stops sending hellos (and holds no stream) loses
+// liveness once its last hello is stale; claims are revoked.
+func TestStaleHelloRevokesRegistrations(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	broker, registrations, _ := startBrokerWith(t, sameUser, clock.Now, fastInterval)
+	address := serveTCPFlows(t, broker)
+	conn, err := net.DialTCP("tcp4", nil, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHello(conn, testSecret); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	registration, err := registerFast(registrations, "run", func(flow net.Conn) { flow.Close() })
+	if err != nil || !registration.Extension() {
+		t.Fatalf("registration = %v, extension %t", err, err == nil && registration.Extension())
+	}
+	defer registration.Close()
+	clock.advance(extensionFreshness)
+	waitDone(t, registration, 2*time.Second, "the extension's hello going stale")
+}
+
+// A broker that stops answering (hung, not exited) must not leave runs
+// believing they are captured.
+func TestSilentBrokerEndsTheClaim(t *testing.T) {
+	socket := filepath.Join(shortSocketDir(t), "hung.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.AcceptUnix()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = readLine(conn)
+		_, _ = io.WriteString(conn, `{"ok":true,"extension":true}`+"\n")
+		time.Sleep(10 * time.Second)
+	}()
+	registration, err := registerFast(socket, "run", func(flow net.Conn) { flow.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registration.Close()
+	waitDone(t, registration, 5*fastTimeout, "a broker that stopped sending keepalives")
 }
