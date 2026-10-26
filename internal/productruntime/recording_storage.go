@@ -45,6 +45,8 @@ type recordingStorage struct {
 	clearAuthority      toolapproval.ArchiveClearAuthority
 	cleanupPending      atomic.Bool
 	cleanupWake         chan struct{}
+	mirrorWake          chan struct{}
+	mirrorPending       chan struct{}
 	provisioning        string
 	dataGuard           *instanceguard.Guard
 	publish             func(context.Context, string, string, *instanceguard.Guard) error
@@ -134,7 +136,7 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 		startupErr = errors.Join(startupErr, runtimedata.ErrBackupInvalid)
 	}
 	ctx, cancel := context.WithCancel(owner)
-	s := &recordingStorage{nextExpiry: clock.Now().UTC().Add(time.Minute), layout: layout, sources: sources, approvalReady: make(chan struct{}), startupClaim: claim, startupToken: token, startupErr: startupErr, provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), cleanupWake: make(chan struct{}, 1), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
+	s := &recordingStorage{nextExpiry: clock.Now().UTC().Add(time.Minute), layout: layout, sources: sources, approvalReady: make(chan struct{}), startupClaim: claim, startupToken: token, startupErr: startupErr, provisioning: layout.ObservationProvisioning, dataGuard: dataGuard, publish: runtimedata.MarkObservationProvisioned, maintenanceRequests: make(chan recordingMaintenanceRequest), cleanupWake: make(chan struct{}, 1), mirrorWake: make(chan struct{}, 1), visibility: control, control: control, ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{}), root: root, recorder: q, tracker: tracker, catalog: catalog, random: random, clock: clock, open: runtimepersistence.OpenObservations, recover: recoverEgressAttempts,
 		options: runtimepersistence.ObservationOptions{DatabasePath: filepath.Join(root, layout.Observation.RelativePath), LayoutID: layout.ID, ArchiveID: recordingSourceID(layout), ContentLimits: limits, BusyTimeout: runtimepersistence.DefaultBusyTimeout, CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout}}
 	if overrides.publishObservations != nil {
 		s.publish = overrides.publishObservations
@@ -168,6 +170,7 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 		q.nativeContent = s
 	}
 	q.available = s.available
+	q.awaitMirror = s.awaitMirror
 	go s.run()
 	return s, nil
 }
@@ -225,7 +228,7 @@ func (s *recordingStorage) run() {
 					if s.unsafeMaintenance.Load() {
 						continue
 					}
-					if err := s.refreshMirror(sinks.store); err != nil {
+					if err := s.refreshAnnouncedMirror(sinks.store); err != nil {
 						s.tracker.recordingState(RecordingDegraded)
 						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
 							s.invalidateRecordingSource()
@@ -240,7 +243,16 @@ func (s *recordingStorage) run() {
 					if s.unsafeMaintenance.Load() {
 						continue
 					}
-					if err := s.refreshMirror(sinks.store); err != nil {
+					if err := s.refreshAnnouncedMirror(sinks.store); err != nil {
+						s.tracker.recordingState(RecordingDegraded)
+						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
+							s.invalidateRecordingSource()
+						}
+					}
+				}
+			case <-s.mirrorWake:
+				if !s.unsafeMaintenance.Load() {
+					if err := s.refreshAnnouncedMirror(sinks.store); err != nil {
 						s.tracker.recordingState(RecordingDegraded)
 						if errors.Is(err, runtimepersistence.ErrRecordingPrivacyUnavailable) {
 							s.invalidateRecordingSource()
@@ -600,6 +612,44 @@ func (s *recordingStorage) refreshMirror(store *runtimepersistence.ObservationSt
 	}
 	s.publishedMirror = snapshot.Stamp
 	return nil
+}
+
+// refreshAnnouncedMirror claims the waiters registered so far before reading
+// the control snapshot, so each of them sees a mirror at least as new as the
+// control state it observed when it asked.
+func (s *recordingStorage) refreshAnnouncedMirror(store *runtimepersistence.ObservationStore) error {
+	s.mu.Lock()
+	waiters := s.mirrorPending
+	s.mirrorPending = nil
+	s.mu.Unlock()
+	if waiters != nil {
+		defer close(waiters)
+	}
+	return s.refreshMirror(store)
+}
+
+// awaitMirror asks the fixed owner for one mirror refresh that starts after
+// this call and waits for it. A Capture's fence is committed before any of its
+// work is admitted, so its observations are admissible after that refresh.
+func (s *recordingStorage) awaitMirror(ctx context.Context) bool {
+	s.mu.Lock()
+	if s.mirrorPending == nil {
+		s.mirrorPending = make(chan struct{})
+	}
+	refreshed := s.mirrorPending
+	s.mu.Unlock()
+	select {
+	case s.mirrorWake <- struct{}{}:
+	default:
+	}
+	select {
+	case <-refreshed:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-s.ctx.Done():
+		return false
+	}
 }
 
 func (s *recordingStorage) invalidateRecordingSource() {

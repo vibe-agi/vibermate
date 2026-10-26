@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/acpobservation"
@@ -23,6 +24,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
 )
+
+// mirrorRetryTimeout bounds how long one observation waits for the mirror.
+const mirrorRetryTimeout = 2 * time.Second
 
 // One finite queue owns only sanitized value snapshots. It shares Raw's budget.
 // Each sequential store call is a batch of one (below the 64 item/4 MiB target).
@@ -46,6 +50,7 @@ type recordingItem struct {
 type observationRecorder struct {
 	originalScopesOnly bool
 	available          func() bool
+	awaitMirror        func(context.Context) bool
 	nativeContent      nativetool.ContentWriter
 	acp                acpobservation.Writer
 	capture            recording.CaptureWriter
@@ -242,28 +247,12 @@ func (r *observationRecorder) run() {
 		case item := <-r.queue:
 			outcome := recording.Discarded
 			if item.stamp.Current() && r.ctx.Err() == nil {
-				var err error
-				if item.kind == recording.ACP {
-					err = r.acp.PutACP(r.ctx, *item.acp)
-				} else if item.kind == recording.Capture {
-					err = r.capture.PutCaptureObservation(r.ctx, item.stamp.Scope(), item.capture)
-				} else if item.kind == recording.Native {
-					if item.nativeContent != nil {
-						err = item.nativeContentSink.PutNativeContent(r.ctx, item.nativeContent.Observation())
-					} else {
-						err = item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
-					}
-				} else if item.kind == recording.Connection {
-					err = r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
-				} else if item.kind == recording.Activity {
-					err = item.metadata.persist(r.ctx, item.stamp.Scope(), r.reportFailure, &r.usagePolicy)
-				} else if item.kind == recording.Content {
-					err = item.contentSink.RecordScopedSource(r.ctx, item.stamp.Scope(), item.content.Source())
-					if err != nil && r.reportFailure != nil {
-						r.reportFailure("response_content", err)
-					}
-				} else {
-					err = r.egress.PutScopedAttempt(r.ctx, item.stamp.Scope(), item.egress)
+				err := r.persist(item)
+				if errors.Is(err, recording.ErrObservationDiscarded) && r.retryAfterMirror(item) {
+					err = r.persist(item)
+				}
+				if item.kind == recording.Content && err != nil && r.reportFailure != nil {
+					r.reportFailure("response_content", err)
 				}
 				outcome = recording.Persisted
 				if err != nil {
@@ -277,6 +266,41 @@ func (r *observationRecorder) run() {
 		}
 	}
 }
+func (r *observationRecorder) persist(item *recordingItem) error {
+	switch item.kind {
+	case recording.ACP:
+		return r.acp.PutACP(r.ctx, *item.acp)
+	case recording.Capture:
+		return r.capture.PutCaptureObservation(r.ctx, item.stamp.Scope(), item.capture)
+	case recording.Native:
+		if item.nativeContent != nil {
+			return item.nativeContentSink.PutNativeContent(r.ctx, item.nativeContent.Observation())
+		}
+		return item.nativeSink.PutNativeHistory(r.ctx, *item.nativeHistory)
+	case recording.Connection:
+		return r.connections.PutConnection(r.ctx, item.stamp.Scope(), item.connection)
+	case recording.Activity:
+		return item.metadata.persist(r.ctx, item.stamp.Scope(), r.reportFailure, &r.usagePolicy)
+	case recording.Content:
+		return item.contentSink.RecordScopedSource(r.ctx, item.stamp.Scope(), item.content.Source())
+	default:
+		return r.egress.PutScopedAttempt(r.ctx, item.stamp.Scope(), item.egress)
+	}
+}
+
+// A Capture's first observations can reach storage before the inspection
+// mirror has published its fence, and the trigger then rejects them as if the
+// Capture were gone. One mirror refresh that starts after the rejection tells
+// the two apart; while storage is paused nothing is refreshed, so no wait.
+func (r *observationRecorder) retryAfterMirror(item *recordingItem) bool {
+	if r.awaitMirror == nil || !item.stamp.Current() || r.available != nil && !r.available() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, mirrorRetryTimeout)
+	defer cancel()
+	return r.awaitMirror(ctx) && item.stamp.Current() && r.ctx.Err() == nil
+}
+
 func (r *observationRecorder) settle(item *recordingItem, outcome recording.Settlement) {
 	r.budget.RecordSettlement(item.kind, outcome, uint64(item.bytes))
 	if item.metadata != nil && item.metadata.usage != nil {
