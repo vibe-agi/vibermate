@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/runtime_storage.dart';
 import '../../core/bootstrap/terminal_command.dart';
+import '../../core/bootstrap/transparent_capture.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
@@ -849,8 +850,84 @@ final class _GeneralSettingsPane extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 12),
+      if (controller.transparentCapture case final capture?) ...[
+        _TransparentCapturePanel(controller: capture, copy: copy),
+        const SizedBox(height: 12),
+      ],
       _ProductUpdatePanel(controller: controller, copy: copy),
     ],
+  );
+}
+
+final class _TransparentCapturePanel extends StatelessWidget {
+  const _TransparentCapturePanel({
+    required this.controller,
+    required this.copy,
+  });
+
+  final TransparentCaptureController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => _SettingsSurface(
+    key: const Key('transparent-capture-panel'),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.hub_outlined,
+              size: 17,
+              color: context.viberColors.route,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                copy('settings.transparent_capture.title'),
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Semantics(
+              label: copy('settings.transparent_capture.title'),
+              child: Switch(
+                key: const Key('transparent-capture-toggle'),
+                value: controller.enabled,
+                onChanged:
+                    controller.busy ||
+                        (!controller.enabled && !controller.canEnable)
+                    ? null
+                    : controller.setEnabled,
+              ),
+            ),
+          ],
+        ),
+        Text(
+          copy('settings.transparent_capture.detail'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          copy('settings.transparent_capture.state.${controller.state}'),
+          key: const Key('transparent-capture-state'),
+          style: Theme.of(context).textTheme.labelMedium,
+        ),
+        if (controller.error case final error?) ...[
+          const SizedBox(height: 8),
+          InlineNotice(message: error, error: true),
+        ],
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const Key('transparent-capture-system-settings'),
+          onPressed: controller.busy ? null : controller.openSystemSettings,
+          icon: const Icon(Icons.open_in_new, size: 14),
+          label: Text(copy('settings.transparent_capture.system_settings')),
+        ),
+      ],
+    ),
   );
 }
 

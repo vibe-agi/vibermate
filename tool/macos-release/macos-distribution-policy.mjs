@@ -5,6 +5,7 @@ import {
   flutterDesktopBuildConfigurationNames,
   validateFlutterDesktopBuildManifest,
 } from "../../ui/flutter_app/tool/desktop_build_manifest.mjs";
+import { capabilityEntitlements, transparentProxyBundleIdentifier, transparentProxyBundlePath, transparentProxyExecutablePath } from "./macos-system-extension.mjs";
 
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const certificateSHA256Pattern = /^[0-9a-f]{64}$/u;
@@ -60,6 +61,7 @@ export const macOSDistributionPolicy = Object.freeze({
     "app-framework",
     "file-selector-framework",
     "flutter-macos-framework",
+    "transparent-proxy",
     "url-launcher-framework",
     "vibermate",
     "vibermate-desktop",
@@ -67,6 +69,11 @@ export const macOSDistributionPolicy = Object.freeze({
     "vibermated",
   ]),
   codeObjects: Object.freeze({
+    "transparent-proxy": Object.freeze({
+      identifier: transparentProxyBundleIdentifier,
+      relativePath: transparentProxyExecutablePath,
+      signingPath: transparentProxyBundlePath,
+    }),
     "app-framework": Object.freeze({
       identifier: "io.flutter.flutter.app",
       relativePath:
@@ -116,6 +123,7 @@ export const macOSDistributionPolicy = Object.freeze({
   // executable. Validation maps each admitted alias back to one code object and
   // requires every reported cdhash for that object and architecture to agree.
   notaryTicketAliases: Object.freeze({
+    "transparent-proxy": Object.freeze([transparentProxyBundlePath]),
     "app-framework": Object.freeze([
       "Contents/Frameworks/App.framework/Versions/Current",
     ]),
@@ -152,7 +160,7 @@ export const macOSDistributionPolicy = Object.freeze({
   notaryEvidenceFilename: "notarization-evidence.json",
   notaryLogFilename: "apple-notary-log.json",
   notarySubmitFilename: "apple-notary-submit.json",
-  notaryTicketedCodeDirectoryCount: 16,
+  notaryTicketedCodeDirectoryCount: 18,
   releaseRelativeDirectory:
     "ui/flutter_app/build/distribution/universal-apple-darwin/release",
   signingEvidenceFilename: "signing-transformation.json",
@@ -439,9 +447,26 @@ export function validateCodesignMetadata(
   });
 }
 
-export function validateClosedEntitlements(source, label = "Code signature") {
+export function validateClosedEntitlements(source, label = "Code signature", { role, teamID } = {}) {
   if (typeof source !== "string" || source.length > (1 << 20)) {
     throw new Error(`${label} entitlements are invalid`);
+  }
+  if (role === "application" || role === "transparent-proxy") {
+    const required = capabilityEntitlements(role, teamID);
+    const envelope = source.match(/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!DOCTYPE plist[^>]*>\s*)?<plist\s+version="1\.0"\s*>\s*<dict\s*>([\s\S]*)<\/dict\s*>\s*<\/plist\s*>\s*$/u);
+    if (envelope === null) throw new Error(`${label} capability entitlements are missing or invalid`);
+    let remainder = envelope[1];
+    const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const valuePattern = (value) => value === true ? "<true\\s*/>"
+      : Array.isArray(value) ? `<array>\\s*${value.map(valuePattern).join("\\s*")}\\s*</array>`
+        : `<string>${escape(value)}</string>`;
+    for (const [key, value] of Object.entries(required)) {
+      const pattern = new RegExp(`<key>${escape(key)}</key>\\s*${valuePattern(value)}`, "u");
+      if (!pattern.test(remainder)) throw new Error(`${label} is missing required capability ${key}`);
+      remainder = remainder.replace(pattern, "");
+    }
+    if (remainder.trim() !== "") throw new Error(`${label} has an unexpected capability entitlement`);
+    return;
   }
   if (source.trim().length === 0) {
     return;

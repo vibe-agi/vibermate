@@ -532,6 +532,33 @@ jobs:
           identity_sha1="$(printf '%s' "${identity_sha1}" | tr '[:upper:]' '[:lower:]')"
           printf 'sha1=%s\n' "${identity_sha1}" >> "${GITHUB_OUTPUT}"
 
+      - name: Materialize the two Developer ID capability profiles
+        timeout-minutes: 5
+        shell: bash
+        env:
+          APP_PROVISION_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APP_PROVISION_PROFILE_BASE64 }}
+          EXTENSION_PROVISION_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_TRANSPARENT_PROXY_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "${APP_PROVISION_PROFILE_BASE64}"
+          test -n "${EXTENSION_PROVISION_PROFILE_BASE64}"
+          test -d "${SIGNING_STATE_DIRECTORY}"
+          app_profile="${SIGNING_STATE_DIRECTORY}/app.provisionprofile"
+          extension_profile="${SIGNING_STATE_DIRECTORY}/transparent-proxy.provisionprofile"
+          test ! -e "${app_profile}"
+          test ! -e "${extension_profile}"
+          umask 077
+          printf '%s' "${APP_PROVISION_PROFILE_BASE64}" | /usr/bin/base64 -D > "${app_profile}"
+          printf '%s' "${EXTENSION_PROVISION_PROFILE_BASE64}" | /usr/bin/base64 -D > "${extension_profile}"
+          for profile in "${app_profile}" "${extension_profile}"; do
+            test -s "${profile}"
+            test "$(/usr/bin/stat -f '%z' "${profile}")" -le 4194304
+          done
+          {
+            printf 'VIBERMATE_MACOS_APP_PROVISION_PROFILE=%s\n' "${app_profile}"
+            printf 'VIBERMATE_MACOS_EXTENSION_PROVISION_PROFILE=%s\n' "${extension_profile}"
+          } >> "${GITHUB_ENV}"
+
       - name: Perform the trusted inside-out signing transformation
         timeout-minutes: 35
         shell: bash

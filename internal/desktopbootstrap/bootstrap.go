@@ -44,7 +44,7 @@ const (
 	FailureRootResetFailed          FailureReason = "root_reset_failed"
 )
 
-// Failure is the only startup diagnosis that crosses the native pipe. It is a
+// Failure describes a fatal startup diagnosis crossing the native pipe. It is a
 // closed reason code and deliberately carries no error text, paths, or secret
 // material.
 type Failure struct {
@@ -114,6 +114,13 @@ type Descriptor struct {
 	APIVersions    []string `json:"apiVersions"`
 	EventVersions  []string `json:"eventVersions"`
 	BootstrapNonce string   `json:"bootstrapNonce"`
+	// FlowPort and FlowSecret let the native shell configure the transparent
+	// proxy extension. They are capabilities and appear only here.
+	FlowPort   int    `json:"flowPort,omitempty"`
+	FlowSecret string `json:"flowSecret,omitempty"`
+	// TransparentCaptureError explains a failed rendezvous startup while the
+	// ordinary Desktop runtime remains available. It is absent on success.
+	TransparentCaptureError string `json:"transparentCaptureError,omitempty"`
 }
 
 func (descriptor Descriptor) Clone() Descriptor {

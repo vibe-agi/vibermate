@@ -62,15 +62,24 @@ const (
 
 // Status is the safe Host publication state. It never contains a capability.
 type Status struct {
-	State          State      `json:"state"`
-	Ready          bool       `json:"ready"`
-	InstanceID     string     `json:"instanceId"`
-	ControlBaseURL string     `json:"controlBaseUrl,omitempty"`
-	ProxyOrigin    string     `json:"proxyOrigin,omitempty"`
-	SOCKSAddress   string     `json:"socksAddress,omitempty"`
-	StartedAt      time.Time  `json:"startedAt"`
-	StoppedAt      *time.Time `json:"stoppedAt,omitempty"`
-	StopReasonCode string     `json:"stopReasonCode,omitempty"`
+	State          State  `json:"state"`
+	Ready          bool   `json:"ready"`
+	InstanceID     string `json:"instanceId"`
+	ControlBaseURL string `json:"controlBaseUrl,omitempty"`
+	ProxyOrigin    string `json:"proxyOrigin,omitempty"`
+	SOCKSAddress   string `json:"socksAddress,omitempty"`
+	// TransparentCaptureError explains why transparent capture is
+	// unavailable in this generation; empty when it is running or disabled.
+	TransparentCaptureError string `json:"transparentCaptureError,omitempty"`
+	// TransparentCaptureExtensionActive reports whether the network extension
+	// is connected to this generation's broker.
+	TransparentCaptureExtensionActive bool `json:"transparentCaptureExtensionActive,omitempty"`
+	// TransparentCaptureQueryFailures counts ownership queries the extension
+	// could not complete; ADR 0024 explains why a nonzero count matters.
+	TransparentCaptureQueryFailures uint64     `json:"transparentCaptureQueryFailures,omitempty"`
+	StartedAt                       time.Time  `json:"startedAt"`
+	StoppedAt                       *time.Time `json:"stoppedAt,omitempty"`
+	StopReasonCode                  string     `json:"stopReasonCode,omitempty"`
 }
 
 type AppSession = desktopbootstrap.Session
@@ -103,6 +112,7 @@ type Host struct {
 	control              *trackedListener
 	proxy                *trackedListener
 	socks                *trackedListener
+	flows                *flowService
 	appSession           AppSession
 	instanceID           string
 	shutdownLimit        time.Duration
@@ -305,6 +315,20 @@ func startWithConstructors(ctx context.Context, options Options,
 		return normalizeClose(controlTracked.Close())
 	})
 	controlBaseURL := "http://" + controlTracked.Addr().String()
+	// Transparent capture is optional: a failure here disables it visibly
+	// instead of stopping the Host. vibermate run --transparent then refuses
+	// to start, which is where failing closed belongs.
+	var flows *flowService
+	transparentCaptureError := ""
+	if options.TransparentCapture {
+		flows, err = startFlowService(options.Paths.FlowRegistrationSocket(), options.Runtime.SecurityRandom)
+		if err != nil {
+			flows = nil
+			transparentCaptureError = err.Error()
+		} else {
+			rollback.register("transparent capture rendezvous", func(context.Context) error { return flows.Close() })
+		}
+	}
 
 	now := options.Runtime.Clock.Now().UTC()
 	bootstrapExpiresAt := now.Add(options.BootstrapTTL)
@@ -555,14 +579,18 @@ func startWithConstructors(ctx context.Context, options Options,
 		socks:        socksTracked,
 		appSession:   appSession,
 		descriptor: desktopbootstrap.Descriptor{
-			Schema:         desktopbootstrap.DescriptorSchema,
-			InstanceID:     runtime.Status().InstanceID,
-			ProcessID:      os.Getpid(),
-			BaseURL:        controlBaseURL,
-			APIVersions:    []string{"v1"},
-			EventVersions:  []string{},
-			BootstrapNonce: bootstrapNonce,
+			Schema:                  desktopbootstrap.DescriptorSchema,
+			InstanceID:              runtime.Status().InstanceID,
+			ProcessID:               os.Getpid(),
+			BaseURL:                 controlBaseURL,
+			APIVersions:             []string{"v1"},
+			EventVersions:           []string{},
+			BootstrapNonce:          bootstrapNonce,
+			FlowPort:                flows.portOrZero(),
+			FlowSecret:              flows.secretOrEmpty(),
+			TransparentCaptureError: transparentCaptureError,
 		},
+		flows:                flows,
 		instanceID:           runtime.Status().InstanceID,
 		shutdownLimit:        options.ShutdownTimeout,
 		clock:                options.Runtime.Clock,
@@ -572,12 +600,13 @@ func startWithConstructors(ctx context.Context, options Options,
 		controlBaseURL:       controlBaseURL,
 		processID:            os.Getpid(),
 		status: Status{
-			State:          StateStarting,
-			InstanceID:     runtime.Status().InstanceID,
-			ControlBaseURL: controlBaseURL,
-			ProxyOrigin:    proxyOrigin,
-			SOCKSAddress:   socksAddress,
-			StartedAt:      now,
+			State:                   StateStarting,
+			InstanceID:              runtime.Status().InstanceID,
+			ControlBaseURL:          controlBaseURL,
+			ProxyOrigin:             proxyOrigin,
+			SOCKSAddress:            socksAddress,
+			StartedAt:               now,
+			TransparentCaptureError: transparentCaptureError,
 		},
 		shutdownDone: make(chan struct{}),
 	}
@@ -667,6 +696,11 @@ func (host *Host) Status() Status {
 	status := host.status
 	host.statusMu.RUnlock()
 	status.Ready = host.readiness.Ready()
+	if host.flows != nil {
+		stats := host.flows.broker.Stats()
+		status.TransparentCaptureExtensionActive = stats.ExtensionActive
+		status.TransparentCaptureQueryFailures = stats.QueryFailures
+	}
 	if !status.Ready && status.State == StateReady {
 		status.State = StateDegraded
 	}
@@ -782,6 +816,11 @@ func (host *Host) executeShutdown() {
 	host.discoveryWG.Wait()
 	if err := host.discovery.Remove(host.instanceID); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("withdraw local control discovery: %w", err))
+	}
+	if host.flows != nil {
+		if err := host.flows.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close transparent capture rendezvous: %w", err))
+		}
 	}
 	if err := normalizeClose(host.control.Close()); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close control admission: %w", err))

@@ -502,3 +502,25 @@ func recordingAuthorityScope(t *testing.T, r *Runtime, kind captureidentity.Kind
 	}
 	return grant.Run.ID, r.recorder.StampScope(admitted.RecordingScope)
 }
+
+// An observation from a cleared archive epoch is stale even while storage is
+// paused (a clear's maintenance publishes the mirror before resuming), so a
+// late terminal is always reported stale, never merely unavailable.
+func TestStaleObservationIsStaleWhileStorageIsPaused(t *testing.T) {
+	budget, err := recording.NewBudget(recording.Limits{Records: 8, Bytes: 64 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := newObservationRecorder(t.Context(), budget, nil, nil)
+	defer recorder.Shutdown(context.Background())
+	stamp := recorder.ScopeStamp(captureidentity.Reference{})
+	recorder.epoch.Advance(recorder.epoch.Value() + 1)
+	recorder.available = func() bool { return false }
+	attempt, err := egressaudit.New(egressaudit.NewInput{ObservationStamp: stamp, ID: "late", Purpose: egressaudit.PurposeUpdate, PayloadClass: egressaudit.PayloadRuntime, Parent: egressaudit.ParentRef{Kind: egressaudit.ParentRuntimeAction, ID: "runtime-action"}, Caller: egressaudit.CallerCore, TargetOrigin: "https://example.test", Decision: egressaudit.BuiltInDirectDecision(egressaudit.AuthorityRuntime), StartedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recorder.ObserveEgress(stamp, attempt); got != recording.DroppedStale {
+		t.Fatalf("stale observation while paused = %v, want DroppedStale", got)
+	}
+}

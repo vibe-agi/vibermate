@@ -226,6 +226,12 @@ async function fixture(t) {
   const flutterFrameworkPayload = Buffer.from("universal FlutterMacOS framework\n");
   const fileSelectorPayload = Buffer.from("universal file selector framework\n");
   const urlLauncherPayload = Buffer.from("universal URL launcher framework\n");
+  const transparentProxyPayload = Buffer.from("universal transparent proxy extension\n");
+  await writeFixtureFile(
+    join(distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy"),
+    transparentProxyPayload,
+    0o755,
+  );
   await writeFixtureFile(
     join(distPath, "file_selector_macos.framework/file_selector_macos"),
     fileSelectorPayload,
@@ -285,6 +291,7 @@ async function fixture(t) {
       "app-framework": sha256(appFrameworkPayload),
       "file-selector-framework": sha256(fileSelectorPayload),
       "flutter-macos-framework": sha256(flutterFrameworkPayload),
+      "transparent-proxy": sha256(transparentProxyPayload),
       "url-launcher-framework": sha256(urlLauncherPayload),
       vibermate: sha256(launcherPayload),
       "vibermate-xray": sha256(kernelPayload),
@@ -366,6 +373,11 @@ async function externalInputRoot(value) {
     0o755,
   );
   await writeFixtureFile(
+    join(root, "dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"),
+    await readFile(join(value.distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy")),
+    0o755,
+  );
+  await writeFixtureFile(
     join(root, "dist/FlutterMacOS.framework/Resources/icudtl.dat"),
     await readFile(
       join(value.distPath, "FlutterMacOS.framework/Resources/icudtl.dat"),
@@ -436,6 +448,11 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
     await artifactSnapshot(secondRoot),
   );
   assert.equal(universalChecks.length, 8);
+  assert.equal(
+    (await lstat(join(value.artifactRoot, "unsigned-payload/dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"))).mode & 0o7777,
+    0o755,
+    "the staged transparent extension remains executable",
+  );
 
   assert.deepEqual(
     (await readdir(join(value.artifactRoot, "unsigned-payload"))).sort(),
@@ -543,6 +560,16 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
     ],
     { cwd: repositoryUnderTest, stdio: "pipe" },
   );
+});
+
+test("source-traceability preparer (R0) rejects a non-executable transparent extension", async (t) => {
+  const value = await fixture(t);
+  await chmod(join(value.distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy"), 0o644);
+  await assert.rejects(
+    prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()),
+    /transparent-proxy must be executable/u,
+  );
+  await assertAbsent(value.artifactRoot);
 });
 
 test(
@@ -942,6 +969,15 @@ test("source-traceability preparer (R0) rejects dirty source and wrong revisions
 });
 
 test("source-traceability preparer (R0) binds build-manifest configuration and nested-code digests", async (t) => {
+  await t.test("transparent extension nested-code digest", async (t) => {
+    const value = await fixture(t);
+    await writeFixtureFile(join(value.distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy"), "changed extension bytes\n", 0o755);
+    await assert.rejects(
+      prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()),
+      /bytes do not match Desktop nested-code provenance/u,
+    );
+    await assertAbsent(value.artifactRoot);
+  });
   for (const plugin of ["file_selector_macos", "url_launcher_macos"]) {
     await t.test(`${plugin} nested-code digest`, async (t) => {
       const value = await fixture(t);

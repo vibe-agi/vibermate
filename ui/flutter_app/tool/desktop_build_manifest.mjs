@@ -44,6 +44,8 @@ export const flutterDesktopBuildConfigurationNames = Object.freeze([
   "ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
   "ui/flutter_app/macos/Runner/Info.plist",
   "ui/flutter_app/macos/Runner/Release.entitlements",
+  "ui/flutter_app/macos/TransparentProxy/Info.plist",
+  "ui/flutter_app/macos/TransparentProxy/TransparentProxy.entitlements",
 ]);
 
 export const flutterDesktopNestedCode = Object.freeze({
@@ -53,6 +55,8 @@ export const flutterDesktopNestedCode = Object.freeze({
     "Contents/Frameworks/file_selector_macos.framework/Versions/A/file_selector_macos",
   "flutter-macos-framework":
     "Contents/Frameworks/FlutterMacOS.framework/Versions/A/FlutterMacOS",
+  "transparent-proxy":
+    "Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension/Contents/MacOS/io.vibermate.desktop.transparent-proxy",
   "url-launcher-framework":
     "Contents/Frameworks/url_launcher_macos.framework/Versions/A/url_launcher_macos",
   vibermate: "Contents/MacOS/vibermate",

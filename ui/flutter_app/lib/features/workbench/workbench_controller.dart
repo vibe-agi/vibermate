@@ -19,6 +19,7 @@ import '../../core/bootstrap/root_trust_installer.dart';
 import '../../core/bootstrap/public_certificate_exporter.dart';
 import '../../core/bootstrap/runtime_connection.dart';
 import '../../core/bootstrap/terminal_command.dart';
+import '../../core/bootstrap/transparent_capture.dart';
 import '../../core/preferences/workbench_preferences.dart';
 import '../../core/i18n/app_copy.dart';
 import '../../core/api/product_update_api.dart';
@@ -294,6 +295,12 @@ final class WorkbenchController extends ChangeNotifier
   }) : _api = api,
        _terminalCommands = terminalCommands,
        _rootTrustInstaller = rootTrustInstaller,
+       transparentCapture =
+           !previewMode &&
+               !kIsWeb &&
+               defaultTargetPlatform == TargetPlatform.macOS
+           ? TransparentCaptureController.shared
+           : null,
        _certificateExporter = certificateExporter,
        _closeRuntime = closeRuntime,
        _restartRuntime = restartRuntime,
@@ -317,7 +324,15 @@ final class WorkbenchController extends ChangeNotifier
        selectedEnvironmentRevision =
            initialPreferences.selectedEnvironmentRevision,
        selectedEndpointId = initialPreferences.selectedEndpointId,
-       preferenceWarning = initialPreferencesIssue?.copyKey;
+       preferenceWarning = initialPreferencesIssue?.copyKey {
+    transparentCapture?.addListener(_transparentCaptureChanged);
+  }
+
+  final TransparentCaptureController? transparentCapture;
+
+  void _transparentCaptureChanged() {
+    if (!_disposed) notifyListeners();
+  }
 
   final ControlApi _api;
 
@@ -1742,6 +1757,7 @@ final class WorkbenchController extends ChangeNotifier
     bool awaitDetail = true,
   }) async {
     if (_disposed || inventoryMutating || environmentMutating) return false;
+    unawaited(transparentCapture?.refresh());
     final generation = ++_dashboardGeneration;
     captureOverviewRefresh += 1;
     if (data == null) loading = true;
@@ -1889,6 +1905,9 @@ final class WorkbenchController extends ChangeNotifier
         if (serverManagement) await refreshServerManagement(quiet: true);
         if (section == WorkbenchSection.settings && terminalManagement) {
           await refreshTerminalCommand(quiet: true);
+        }
+        if (section == WorkbenchSection.settings) {
+          unawaited(transparentCapture?.refresh());
         }
       }
     } catch (error) {
@@ -2101,6 +2120,9 @@ final class WorkbenchController extends ChangeNotifier
       unawaited(_refreshNetwork());
     }
     if (value == WorkbenchSection.settings || value == WorkbenchSection.usage) {
+      if (value == WorkbenchSection.settings) {
+        unawaited(transparentCapture?.refresh());
+      }
       if (serverManagement &&
           (serverAccess == null ||
               runtimeUsers == null ||
@@ -5310,6 +5332,7 @@ final class WorkbenchController extends ChangeNotifier
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    transparentCapture?.removeListener(_transparentCaptureChanged);
     if (_observingLifecycle) {
       WidgetsBinding.instance.removeObserver(this);
       _observingLifecycle = false;

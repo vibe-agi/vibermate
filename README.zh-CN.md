@@ -36,6 +36,12 @@ brew install --cask vibe-agi/tap/vibermate
 vibermate run -- claude    # 或：vibermate run -- codex
 ```
 
+开发版另提供实验性的 macOS **透明接管**：在 **设置 → 接入与启动** 中启用，
+批准已签名的网络扩展与网络配置后，使用
+`vibermate run --transparent --env work -- claude`（也支持 Codex）。
+指定 `--server` 时同样需要本机 App。当前预览仅接管 TCP，仍使用系统 DNS，
+且进程归属仍有限制，尚未完成发布验收。详见[设置、签名与验收说明](docs/transparent-capture.md)。
+
 **Linux 服务器（x86-64 与 ARM64）**
 
 从[最新发布](https://github.com/vibe-agi/vibermate/releases/latest)下载对应架构的压缩包，解压后启动：

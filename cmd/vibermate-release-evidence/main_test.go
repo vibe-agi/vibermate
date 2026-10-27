@@ -500,26 +500,28 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 		PublishedAt: "2026-08-03T12:34:56+08:00",
 	}
 	configuration := map[string]string{
-		"go.mod":                                                strings.Repeat("1", 64),
-		"go.sum":                                                strings.Repeat("2", 64),
-		"tool/vless-kernel/kernel-lock.json":                    strings.Repeat("c", 64),
-		"tool/vless-kernel/dependency.patch":                    strings.Repeat("c", 64),
-		"tool/vless-kernel/upstream.commit":                     strings.Repeat("c", 64),
-		"tool/vless-kernel/LICENSE.upstream":                    strings.Repeat("c", 64),
-		"tool/vless-kernel/build_kernel.py":                     strings.Repeat("c", 64),
-		"tool/vless-kernel/package_kernel.py":                   strings.Repeat("c", 64),
-		"tool/vless-kernel/verify_package.mjs":                  strings.Repeat("c", 64),
-		"ui/flutter_app/.metadata":                              strings.Repeat("3", 64),
-		"ui/flutter_app/pubspec.yaml":                           strings.Repeat("4", 64),
-		"ui/flutter_app/pubspec.lock":                           strings.Repeat("5", 64),
-		"ui/flutter_app/tool/flutter-sdk.env":                   strings.Repeat("6", 64),
-		"ui/flutter_app/macos/Podfile":                          strings.Repeat("d", 64),
-		"ui/flutter_app/macos/Podfile.lock":                     strings.Repeat("d", 64),
-		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj": strings.Repeat("7", 64),
-		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig":  strings.Repeat("8", 64),
-		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig":  strings.Repeat("9", 64),
-		"ui/flutter_app/macos/Runner/Info.plist":                strings.Repeat("a", 64),
-		"ui/flutter_app/macos/Runner/Release.entitlements":      strings.Repeat("b", 64),
+		"go.mod":                                                              strings.Repeat("1", 64),
+		"go.sum":                                                              strings.Repeat("2", 64),
+		"tool/vless-kernel/kernel-lock.json":                                  strings.Repeat("c", 64),
+		"tool/vless-kernel/dependency.patch":                                  strings.Repeat("c", 64),
+		"tool/vless-kernel/upstream.commit":                                   strings.Repeat("c", 64),
+		"tool/vless-kernel/LICENSE.upstream":                                  strings.Repeat("c", 64),
+		"tool/vless-kernel/build_kernel.py":                                   strings.Repeat("c", 64),
+		"tool/vless-kernel/package_kernel.py":                                 strings.Repeat("c", 64),
+		"tool/vless-kernel/verify_package.mjs":                                strings.Repeat("c", 64),
+		"ui/flutter_app/.metadata":                                            strings.Repeat("3", 64),
+		"ui/flutter_app/pubspec.yaml":                                         strings.Repeat("4", 64),
+		"ui/flutter_app/pubspec.lock":                                         strings.Repeat("5", 64),
+		"ui/flutter_app/tool/flutter-sdk.env":                                 strings.Repeat("6", 64),
+		"ui/flutter_app/macos/Podfile":                                        strings.Repeat("d", 64),
+		"ui/flutter_app/macos/Podfile.lock":                                   strings.Repeat("d", 64),
+		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj":               strings.Repeat("7", 64),
+		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig":                strings.Repeat("8", 64),
+		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig":                strings.Repeat("9", 64),
+		"ui/flutter_app/macos/Runner/Info.plist":                              strings.Repeat("a", 64),
+		"ui/flutter_app/macos/Runner/Release.entitlements":                    strings.Repeat("b", 64),
+		"ui/flutter_app/macos/TransparentProxy/Info.plist":                    strings.Repeat("e", 64),
+		"ui/flutter_app/macos/TransparentProxy/TransparentProxy.entitlements": strings.Repeat("f", 64),
 	}
 	sidecarPayloads := map[string][]byte{
 		"vibermate":      []byte("launcher\n"),
@@ -529,11 +531,13 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 	appFrameworkPayload := []byte("universal App framework\n")
 	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
 	fileSelectorPayload := []byte("universal file selector framework\n")
+	transparentProxyPayload := []byte("universal transparent proxy extension\n")
 	urlLauncherPayload := []byte("universal URL launcher framework\n")
 	nestedCode := map[string]string{
 		"app-framework":           cliSHA256(appFrameworkPayload),
 		"file-selector-framework": cliSHA256(fileSelectorPayload),
 		"flutter-macos-framework": cliSHA256(flutterFrameworkPayload),
+		"transparent-proxy":       cliSHA256(transparentProxyPayload),
 		"url-launcher-framework":  cliSHA256(urlLauncherPayload),
 		"vibermate":               cliSHA256(sidecarPayloads["vibermate"]),
 		"vibermated":              cliSHA256(sidecarPayloads["vibermated"]),
@@ -587,6 +591,7 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 	writeCLIPayloadFile(t, artifactRoot, "vless-kernel/package-manifest.json", []byte("{}\n"), 0o644)
 	writeCLIPayloadFile(t, artifactRoot, "dist/App.framework/App", appFrameworkPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
+	writeCLIPayloadFile(t, artifactRoot, "dist/TransparentProxy/io.vibermate.desktop.transparent-proxy", transparentProxyPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755)
 	writeCLIPayloadFile(t, artifactRoot, "vibermate-build-manifest.json", desktopPayload, 0o644)
@@ -605,6 +610,8 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 			cliLedgerFileEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
 			{"mode": 0o755, "path": "dist/FlutterMacOS.framework", "type": "directory"},
 			cliLedgerFileEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
+			{"mode": 0o755, "path": "dist/TransparentProxy", "type": "directory"},
+			cliLedgerFileEntry("dist/TransparentProxy/io.vibermate.desktop.transparent-proxy", transparentProxyPayload, 0o755),
 			{"mode": 0o755, "path": "dist/file_selector_macos.framework", "type": "directory"},
 			cliLedgerFileEntry("dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755),
 			cliLedgerFileEntry("dist/index.html", distPayload, 0o644),

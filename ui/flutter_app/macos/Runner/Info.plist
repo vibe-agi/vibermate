@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>ViberMate captures network connections from agents you launch with transparent capture, using their selected traffic policy.</string>
 </dict>
 </plist>

@@ -33,6 +33,32 @@ const submissionID = "12345678-1234-4abc-8def-1234567890ab";
 const archiveFilename = "ViberMate_0.1.37_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
+function capabilityEntitlements(role) {
+  const extension = role === "transparent-proxy";
+  const identifier = extension ? "io.vibermate.desktop.transparent-proxy" : "io.vibermate.desktop";
+  return `<?xml version="1.0"?><plist version="1.0"><dict>
+    <key>com.apple.application-identifier</key><string>${teamID}.${identifier}</string>
+    <key>com.apple.developer.team-identifier</key><string>${teamID}</string>
+    <key>com.apple.developer.networking.networkextension</key><array><string>app-proxy-provider-systemextension</string></array>
+    ${extension
+      ? "<key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.network.client</key><true/>"
+      : "<key>com.apple.developer.system-extension.install</key><true/>"}
+  </dict></plist>`;
+}
+
+test("capability entitlements are exact and scoped to the app and transparent extension", () => {
+  for (const role of ["application", "transparent-proxy"]) {
+    const source = capabilityEntitlements(role);
+    assert.doesNotThrow(() => validateClosedEntitlements(source, role, { role, teamID }));
+    assert.throws(() => validateClosedEntitlements("", role, { role, teamID }));
+    assert.throws(() => validateClosedEntitlements(source.replace("app-proxy-provider-systemextension", "packet-tunnel-provider-systemextension"), role, { role, teamID }));
+    assert.throws(() => validateClosedEntitlements(source.replace("</dict>", "<key>com.apple.security.get-task-allow</key><true/></dict>"), role, { role, teamID }));
+    assert.throws(() => validateClosedEntitlements(source, role, { role, teamID: "Z9Y8X7W6V5" }));
+    assert.throws(() => validateClosedEntitlements(source, "vibermate"));
+  }
+  assert.throws(() => validateClosedEntitlements(capabilityEntitlements("application"), "extension", { role: "transparent-proxy", teamID }));
+});
+
 test("frozen release identity is coherent", () => {
   assert.equal(macOSDistributionPolicy.appVersion, "0.1.37");
   assert.equal(macOSDistributionPolicy.appBuildNumber, "39");
@@ -238,7 +264,7 @@ test("Developer ID metadata requires the team, timestamp, and runtime", () => {
   );
 });
 
-test("every signed code object has an exact empty entitlement set", () => {
+test("unprivileged signed code objects keep an exact empty entitlement set", () => {
   assert.doesNotThrow(() =>
     requireNoGetTaskAllow(
       "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>",
@@ -410,7 +436,7 @@ test("Apple notary log admits known bundle aliases and repeated scan tickets", (
 });
 
 test("notarization evidence counts every Universal code directory", () => {
-  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 16);
+  assert.equal(macOSDistributionPolicy.notaryTicketedCodeDirectoryCount, 18);
 });
 
 test("privacy resource tickets accept null or omitted architecture", () => {
@@ -542,6 +568,7 @@ test("embedded build manifest is clean distribution provenance", () => {
       "app-framework": "8".repeat(64),
       "file-selector-framework": "c".repeat(64),
       "flutter-macos-framework": "9".repeat(64),
+      "transparent-proxy": "f".repeat(64),
       "url-launcher-framework": "d".repeat(64),
       vibermate: "a".repeat(64),
       "vibermate-xray": "e".repeat(64),
@@ -676,6 +703,7 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
         "app-framework": "1".repeat(64),
         "file-selector-framework": "d".repeat(64),
         "flutter-macos-framework": "2".repeat(64),
+        "transparent-proxy": "3".repeat(64),
         "url-launcher-framework": "e".repeat(64),
         vibermate: "4".repeat(64),
         "vibermate-desktop": "5".repeat(64),
@@ -691,6 +719,7 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
         "app-framework": "7".repeat(64),
         "file-selector-framework": "1".repeat(64),
         "flutter-macos-framework": "8".repeat(64),
+        "transparent-proxy": "9".repeat(64),
         "url-launcher-framework": "2".repeat(64),
         vibermate: "a".repeat(64),
         "vibermate-desktop": "b".repeat(64),
@@ -829,7 +858,7 @@ test("private evidence has a closed secret-free schema", () => {
       statusCode: 0,
       submissionID,
       submitSHA256: "a".repeat(64),
-      ticketedCodeDirectories: 16,
+      ticketedCodeDirectories: 18,
     },
     tools: {
       ...admittedAppleTools(),

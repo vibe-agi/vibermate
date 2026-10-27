@@ -341,7 +341,11 @@ func (frontier *localProxyFrontier) serveHTTP(writer http.ResponseWriter, reques
 		http.Error(writer, "Runtime proxy response unavailable", http.StatusBadGateway)
 		return
 	}
-	if connect && response.StatusCode >= 200 && response.StatusCode < 300 {
+	// A tunnel follows a successful CONNECT, and also an accepted protocol
+	// upgrade such as connect-udp, whose stream then carries capsules.
+	upgraded := response.StatusCode == http.StatusSwitchingProtocols &&
+		len(request.Header.Values("Upgrade")) != 0
+	if (connect && response.StatusCode >= 200 && response.StatusCode < 300) || upgraded {
 		// Hijacking transfers the socket lifetime to the tunnel. Stop and join
 		// HTTP cancellation before that handoff, so it cannot close a live tunnel.
 		joinBackendCancellation()

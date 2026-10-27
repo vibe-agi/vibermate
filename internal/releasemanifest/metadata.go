@@ -59,12 +59,15 @@ var desktopBuildConfigurationNames = []string{
 	"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
 	"ui/flutter_app/macos/Runner/Info.plist",
 	"ui/flutter_app/macos/Runner/Release.entitlements",
+	"ui/flutter_app/macos/TransparentProxy/Info.plist",
+	"ui/flutter_app/macos/TransparentProxy/TransparentProxy.entitlements",
 }
 
 var desktopNestedCodeNames = []string{
 	"app-framework",
 	"file-selector-framework",
 	"flutter-macos-framework",
+	"transparent-proxy",
 	"url-launcher-framework",
 	"vibermate",
 	"vibermate-xray",
@@ -72,10 +75,11 @@ var desktopNestedCodeNames = []string{
 }
 
 var desktopNestedCodePayloadPaths = map[string]string{
-	"dist/App.framework/App":                                 "app-framework",
-	"dist/FlutterMacOS.framework/FlutterMacOS":               "flutter-macos-framework",
-	"dist/file_selector_macos.framework/file_selector_macos": "file-selector-framework",
-	"dist/url_launcher_macos.framework/url_launcher_macos":   "url-launcher-framework",
+	"dist/App.framework/App":                                       "app-framework",
+	"dist/FlutterMacOS.framework/FlutterMacOS":                     "flutter-macos-framework",
+	"dist/TransparentProxy/io.vibermate.desktop.transparent-proxy": "transparent-proxy",
+	"dist/file_selector_macos.framework/file_selector_macos":       "file-selector-framework",
+	"dist/url_launcher_macos.framework/url_launcher_macos":         "url-launcher-framework",
 	"vibermate":      "vibermate",
 	"vibermate-xray": "vibermate-xray",
 	"vibermated":     "vibermated",
@@ -482,6 +486,7 @@ func validateUnsignedPayloadLedgerShape(
 		"vibermate",
 		"vibermated",
 		"vibermate-xray",
+		"dist/TransparentProxy/io.vibermate.desktop.transparent-proxy",
 	} {
 		for _, entry := range entries {
 			if entry.Path == executablePath && (*entry.Mode)&0o111 == 0 {

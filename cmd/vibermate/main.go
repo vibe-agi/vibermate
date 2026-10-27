@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientpath"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/netnscapture"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
@@ -40,6 +41,13 @@ const (
 )
 
 func main() {
+	// The capture namespace helper runs before anything else in the process.
+	if len(os.Args) > 1 && os.Args[1] == netnscapture.ChildCommand {
+		if err := netnscapture.RunChild(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "vibermate:", err)
+		}
+		os.Exit(1)
+	}
 	catalogs, err := locales.New()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, reasonCatalogMissing)
@@ -277,7 +285,7 @@ func executeContext(
 	if acp != nil {
 		code, err = launcher.RunACP(ctx, runlauncher.ACPLaunchRequest{Command: acp.command, RecordContent: acp.recordContent})
 	} else {
-		code, err = launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: run.environmentID, Command: run.command, ManagedAuth: run.managedAuth})
+		code, err = launcher.Run(ctx, runlauncher.LaunchRequest{EnvironmentID: run.environmentID, Command: run.command, ManagedAuth: run.managedAuth, Transparent: run.transparent})
 	}
 	if err == nil {
 		return code, ""
@@ -323,6 +331,18 @@ func launchFailureKey(err error) string {
 	if errors.Is(err, runlauncher.ErrLocalRootUntrusted) {
 		return "cli.error.localRootUntrusted"
 	}
+	switch {
+	case errors.Is(err, runlauncher.ErrTransparentLost):
+		return "cli.error.transparent.lost"
+	case errors.Is(err, runlauncher.ErrTransparentUnsupported):
+		return "cli.error.transparent.unsupported"
+	case errors.Is(err, runlauncher.ErrTransparentNamespaceUnavailable):
+		return "cli.error.transparent.namespaceUnavailable"
+	case errors.Is(err, runlauncher.ErrTransparentUnavailable):
+		return "cli.error.transparent.unavailable"
+	case errors.Is(err, runlauncher.ErrTransparentExtensionInactive):
+		return "cli.error.transparent.extensionInactive"
+	}
 	if errors.Is(err, runlauncher.ErrCaptureSupervisionFailed) {
 		return "cli.error.captureSupervisionFailed"
 	}
@@ -357,6 +377,7 @@ func launchFailureKey(err error) string {
 }
 
 type runConfig struct {
+	transparent   bool
 	managedAuth   bool
 	environmentID environment.EnvironmentID
 	server        serverconnection.Target
@@ -373,9 +394,18 @@ func parseRun(arguments []string) (runConfig, error) {
 	seenEnvironment := false
 	seenServer := false
 	managedAuth := false
+	transparent := false
 	index := 1
 	for index < len(arguments) && arguments[index] != "--" {
 		option := arguments[index]
+		if option == "--transparent" {
+			if transparent {
+				return runConfig{}, errors.New("--transparent may only be specified once")
+			}
+			transparent = true
+			index++
+			continue
+		}
 		if option == "--managed-auth" {
 			if managedAuth {
 				return runConfig{}, errors.New("--managed-auth may only be specified once")
@@ -422,6 +452,7 @@ func parseRun(arguments []string) (runConfig, error) {
 		return runConfig{}, runlauncher.ErrManagedAuthEnvironmentRequired
 	}
 	return runConfig{
+		transparent:   transparent,
 		managedAuth:   managedAuth,
 		environmentID: environmentID,
 		server:        server,

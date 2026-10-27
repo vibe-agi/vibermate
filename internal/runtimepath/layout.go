@@ -13,6 +13,7 @@ const (
 	runtimeDirectoryName = "runtime"
 	lockFileName         = "daemon.lock"
 	cliControlFileName   = "control.json"
+	flowSocketFileName   = "flows.sock"
 )
 
 type Layout struct {
@@ -20,6 +21,9 @@ type Layout struct {
 	RuntimeDirectory  string
 	GenerationLock    string
 	CLIControlRecord  string
+	// FlowRegistrationSocket is where vibermate run claims its descendants
+	// for transparent capture.
+	FlowRegistrationSocket string
 }
 
 func Default() (Layout, error) {
@@ -41,9 +45,10 @@ func FromAppCache(appCacheDirectory string) (Layout, error) {
 	}
 	runtimeDirectory := filepath.Join(appCacheDirectory, runtimeDirectoryName)
 	return Layout{
-		AppCacheDirectory: appCacheDirectory,
-		RuntimeDirectory:  runtimeDirectory,
-		GenerationLock:    filepath.Join(runtimeDirectory, lockFileName),
-		CLIControlRecord:  filepath.Join(runtimeDirectory, cliControlFileName),
+		AppCacheDirectory:      appCacheDirectory,
+		RuntimeDirectory:       runtimeDirectory,
+		GenerationLock:         filepath.Join(runtimeDirectory, lockFileName),
+		CLIControlRecord:       filepath.Join(runtimeDirectory, cliControlFileName),
+		FlowRegistrationSocket: filepath.Join(runtimeDirectory, flowSocketFileName),
 	}, nil
 }

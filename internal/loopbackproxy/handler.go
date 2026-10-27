@@ -202,6 +202,8 @@ type Options struct {
 	NativeOperationIDs    nativemcp.IDSource
 	TargetObserver        TargetObserver
 	HandshakeTimeout      time.Duration
+	// UDP carries connect-udp requests; without it they are refused.
+	UDP UDPOpener
 }
 
 // terminalFailureReporter is implemented by the production audit boundary.
@@ -223,6 +225,7 @@ type operation struct {
 }
 
 type Handler struct {
+	udp            UDPOpener
 	admissions     captureadmission.Authorizer
 	assignments    CaptureAssignmentAuthority
 	exchanges      exchange.Executor
@@ -315,6 +318,7 @@ func New(options Options) (*Handler, error) {
 		nativeTools:    options.NativeTools,
 		nativeIDs:      options.NativeOperationIDs,
 		targetObserver: options.TargetObserver,
+		udp:            options.UDP,
 		handshake:      options.HandshakeTimeout,
 		clock:          time.Now,
 		auditTimeout:   defaultAuditCompletionLimit,
@@ -346,6 +350,11 @@ func (handler *Handler) ServeHTTP(
 	defer cancelOperation()
 	request = request.WithContext(operationContext)
 	if !handler.attachCancellation(active, cancelOperation) {
+		return
+	}
+	// The UDP path records its own connection, policy and egress.
+	if isConnectUDP(request) {
+		handler.serveConnectUDP(writer, request)
 		return
 	}
 	// The host and the port are separate facts on the record. Writing the

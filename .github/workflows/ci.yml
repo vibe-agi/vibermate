@@ -366,6 +366,7 @@ jobs:
         working-directory: ui/flutter_app
         run: |
           set -euo pipefail
+          bash tool/test_transparent_proxy.sh
           flutter build macos --debug --config-only
           # These tests share one App host. Xcode 15 can hang while cancelling
           # a spare parallel Flutter host after all test classes have passed.

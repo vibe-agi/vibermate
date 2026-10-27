@@ -35,6 +35,7 @@ var (
 		"file-selector-framework",
 		"flutter-macos-framework",
 		"launcher",
+		"transparent-proxy",
 		"url-launcher-framework",
 		"vibermate-xray",
 	}
@@ -59,6 +60,8 @@ var (
 		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
 		"ui/flutter_app/macos/Runner/Info.plist",
 		"ui/flutter_app/macos/Runner/Release.entitlements",
+		"ui/flutter_app/macos/TransparentProxy/Info.plist",
+		"ui/flutter_app/macos/TransparentProxy/TransparentProxy.entitlements",
 	}
 	requiredGoBinaries     = []string{"acceptance", "daemon", "launcher"}
 	requiredClaudeChecksV7 = []string{
@@ -560,6 +563,9 @@ func verifyArtifacts(artifacts []ArtifactProvenance) error {
 		return errors.New("report Desktop App bundle path is invalid")
 	}
 	requiredMembers := map[string]string{
+		"transparent-proxy": filepath.Join(bundle,
+			"Contents", "Library", "SystemExtensions", "io.vibermate.desktop.transparent-proxy.systemextension",
+			"Contents", "MacOS", "io.vibermate.desktop.transparent-proxy"),
 		"file-selector-framework": filepath.Join(bundle,
 			"Contents", "Frameworks", "file_selector_macos.framework", "Versions", "A", "file_selector_macos"),
 		"url-launcher-framework": filepath.Join(bundle,

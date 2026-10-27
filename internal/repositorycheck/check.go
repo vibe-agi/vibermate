@@ -1030,13 +1030,17 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"cmd/vibermate-acceptance/native_mcp_audit.go":      {},
 		"cmd/vibermate-acceptance/native_mcp_fixture.go":    {},
 		"cmd/vibermate-acceptance/native_mcp_management.go": {},
-		"internal/providertransport/transport.go":           {},
-		"internal/providertransport/loopback.go":            {},
-		"internal/providertransport/probe.go":               {},
-		"internal/originaltransport/transport.go":           {},
-		"internal/originaltransport/probe.go":               {},
-		"internal/loopbackclient/client.go":                 {},
-		"internal/blindtunnel/dialer.go":                    {},
+		// Test-only stand-in for the macOS Network Extension, run as root by
+		// tool/transparent-linux-e2e.sh: it dials an unowned flow's original
+		// destination directly, as a declined flow would go. Never shipped.
+		"cmd/vibermate-transparent-emulator/direct.go": {},
+		"internal/providertransport/transport.go":      {},
+		"internal/providertransport/loopback.go":       {},
+		"internal/providertransport/probe.go":          {},
+		"internal/originaltransport/transport.go":      {},
+		"internal/originaltransport/probe.go":          {},
+		"internal/loopbackclient/client.go":            {},
+		"internal/blindtunnel/dialer.go":               {},
 		// egressnetwork is the single typed compiler for a frozen per-flow
 		// direct/SOCKS/DoH policy. Only these implementation files may construct
 		// its base dialer and the private HTTP client used for DNS-over-HTTPS;

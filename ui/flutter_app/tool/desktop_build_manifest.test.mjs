@@ -67,6 +67,7 @@ test("v3 is a closed Flutter-only build contract", () => {
     "app-framework",
     "file-selector-framework",
     "flutter-macos-framework",
+    "transparent-proxy",
     "url-launcher-framework",
     "vibermate",
     "vibermate-xray",
@@ -78,6 +79,17 @@ test("v3 is a closed Flutter-only build contract", () => {
       expectedTarget: "universal-apple-darwin",
     }),
   );
+});
+
+test("manifest binds the transparent extension executable and signing configuration", () => {
+  assert.equal(flutterDesktopNestedCode["transparent-proxy"],
+    "Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension/Contents/MacOS/io.vibermate.desktop.transparent-proxy");
+  for (const name of ["Info.plist", "TransparentProxy.entitlements"]) {
+    assert.ok(flutterDesktopBuildConfigurationNames.includes(`ui/flutter_app/macos/TransparentProxy/${name}`));
+  }
+  const missingExtension = manifest();
+  delete missingExtension.nestedCodeSHA256["transparent-proxy"];
+  assert.throws(() => validateFlutterDesktopBuildManifest(missingExtension));
 });
 
 test("manifest refuses stale, dirty, non-Flutter, and open shapes", () => {

@@ -51,6 +51,7 @@ check-flutter:
 	cd ui/flutter_app && flutter test
 
 check-flutter-macos: check-flutter
+	bash ui/flutter_app/tool/test_transparent_proxy.sh
 	cd ui/flutter_app && flutter build macos --debug --config-only
 	cd ui/flutter_app && xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 	ui/flutter_app/tool/build_macos_app.sh live

@@ -395,13 +395,33 @@ func TestVerifyArtifactsRejectsUnsignedPayloadPrivilegedModeBits(t *testing.T) {
 }
 
 func TestVerifyArtifactsRejectsDesktopNestedCodeDigestNotBoundToPayload(t *testing.T) {
+	for _, role := range []string{"app-framework", "transparent-proxy"} {
+		t.Run(role, func(t *testing.T) {
+			root := artifactTempDir(t)
+			manifest := manifestWithFiles(t, root)
+			desktop := readArtifactObject(t, root, &manifest, ArtifactRoleDesktopBuildManifest)
+			desktop["nestedCodeSHA256"].(map[string]any)[role] = strings.Repeat("c", 64)
+			rewriteDesktopArtifactAndLedger(t, root, &manifest, marshalArtifactJSON(t, desktop))
+			if err := VerifyArtifacts(root, manifest); !errors.Is(err, ErrArtifactMismatch) {
+				t.Fatalf("VerifyArtifacts() error = %v, want ErrArtifactMismatch", err)
+			}
+		})
+	}
+}
+
+func TestVerifyArtifactsRequiresExecutableTransparentProxy(t *testing.T) {
 	root := artifactTempDir(t)
 	manifest := manifestWithFiles(t, root)
-	desktop := readArtifactObject(t, root, &manifest, ArtifactRoleDesktopBuildManifest)
-	desktop["nestedCodeSHA256"].(map[string]any)["app-framework"] = strings.Repeat("c", 64)
-	rewriteDesktopArtifactAndLedger(t, root, &manifest, marshalArtifactJSON(t, desktop))
-	if err := VerifyArtifacts(root, manifest); !errors.Is(err, ErrArtifactMismatch) {
-		t.Fatalf("VerifyArtifacts() error = %v, want ErrArtifactMismatch", err)
+	const relative = "dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"
+	if err := os.Chmod(filepath.Join(root, UnsignedPayloadRoot, relative), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ledger := readArtifactObject(t, root, &manifest, ArtifactRoleAppTreeLedger)
+	ledgerEntryObject(t, ledger, relative)["mode"] = 0o644
+	writeDeclaredArtifact(t, root, artifactForRole(t, &manifest, ArtifactRoleAppTreeLedger), marshalArtifactJSON(t, ledger))
+	err := VerifyArtifacts(root, manifest)
+	if !errors.Is(err, ErrArtifactMismatch) || !strings.Contains(err.Error(), "executable \""+relative+"\" has no execute bit") {
+		t.Fatalf("nonexecutable extension error = %v", err)
 	}
 }
 
@@ -611,11 +631,13 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	appFrameworkPayload := []byte("universal App framework\n")
 	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
 	fileSelectorPayload := []byte("universal file selector framework\n")
+	transparentProxyPayload := []byte("universal transparent proxy extension\n")
 	urlLauncherPayload := []byte("universal URL launcher framework\n")
 	nestedCode := map[string]string{
 		"app-framework":           payloadSHA256(appFrameworkPayload),
 		"file-selector-framework": payloadSHA256(fileSelectorPayload),
 		"flutter-macos-framework": payloadSHA256(flutterFrameworkPayload),
+		"transparent-proxy":       payloadSHA256(transparentProxyPayload),
 		"url-launcher-framework":  payloadSHA256(urlLauncherPayload),
 		"vibermate":               payloadSHA256(sidecarPayloads["vibermate"]),
 		"vibermated":              payloadSHA256(sidecarPayloads["vibermated"]),
@@ -674,6 +696,7 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	writePayloadFixtureFile(t, root, "vless-kernel/package-manifest.json", []byte("{}\n"), 0o644)
 	writePayloadFixtureFile(t, root, "dist/App.framework/App", appFrameworkPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
+	writePayloadFixtureFile(t, root, "dist/TransparentProxy/io.vibermate.desktop.transparent-proxy", transparentProxyPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755)
 	writePayloadFixtureFile(t, root, "dist/url_launcher_macos.framework/url_launcher_macos", urlLauncherPayload, 0o755)
 	writePayloadFixtureFile(t, root, "vibermate-build-manifest.json", desktopPayload, 0o644)
@@ -692,6 +715,8 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 			fixtureFileLedgerEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
 			fixtureDirectoryLedgerEntry("dist/FlutterMacOS.framework", 0o755),
 			fixtureFileLedgerEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
+			fixtureDirectoryLedgerEntry("dist/TransparentProxy", 0o755),
+			fixtureFileLedgerEntry("dist/TransparentProxy/io.vibermate.desktop.transparent-proxy", transparentProxyPayload, 0o755),
 			fixtureDirectoryLedgerEntry("dist/file_selector_macos.framework", 0o755),
 			fixtureFileLedgerEntry("dist/file_selector_macos.framework/file_selector_macos", fileSelectorPayload, 0o755),
 			fixtureFileLedgerEntry("dist/index.html", distPayload, 0o644),

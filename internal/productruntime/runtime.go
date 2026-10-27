@@ -852,7 +852,14 @@ func startWithBuilders(
 	if err != nil {
 		return fail("account operation reader", err)
 	}
+	// Built before the proxy, which carries connect-udp through it; its
+	// shutdown stays registered after the proxy's.
+	udp := &runtimeUDP{owner: ownerContext, activity: captureActivity,
+		policy: connectionRules.Source(), approvals: approvals,
+		defaults: egressDefaults, gate: options.OfflineHold, network: network,
+		connections: connections, audit: runtimeEgress, clock: options.Clock, changed: make(chan struct{})}
 	proxy, err := buildProxy(proxyBuildRequest{
+		udp:          udp,
 		ownerContext: ownerContext,
 		admissions:   captureAdmissions,
 		assignments:  assignments,
@@ -883,10 +890,6 @@ func startWithBuilders(
 		)
 	}
 	pending.register("loopback proxy handler", proxy.Shutdown)
-	udp := &runtimeUDP{owner: ownerContext, activity: captureActivity,
-		policy: connectionRules.Source(), approvals: approvals,
-		defaults: egressDefaults, gate: options.OfflineHold, network: network,
-		connections: connections, audit: runtimeEgress, clock: options.Clock, changed: make(chan struct{})}
 	pending.register("UDP finalization", udp.Shutdown)
 	socks, err := socksproxy.New(socksproxy.Options{
 		Authorizer: captureAdmissions, TCPHandler: proxy,

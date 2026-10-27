@@ -42,6 +42,9 @@ type Options struct {
 	RemoteServerListenAddress    string
 	RemoteServerTransport        serverhost.TransportOptions
 	RemoteServerManagementUIRoot string
+	// TransparentCapture starts the flow broker that the macOS transparent
+	// proxy extension and vibermate run use (ADR 0024).
+	TransparentCapture bool
 }
 
 // DefaultOptions creates the current macOS arm64 Host policy. Callers still

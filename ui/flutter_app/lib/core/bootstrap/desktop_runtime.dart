@@ -9,6 +9,7 @@ import 'desktop_daemon_environment.dart';
 import 'desktop_bootstrap_budget.dart';
 import 'desktop_daemon_lifecycle.dart';
 import 'desktop_storage.dart';
+import 'transparent_capture.dart';
 
 final class DesktopRuntimeException implements Exception {
   const DesktopRuntimeException(
@@ -85,7 +86,9 @@ final class DesktopRuntime {
     required this.storage,
     this.storageNotice,
     required bool storagePreparationSeen,
+    required String instanceId,
   }) : _daemon = daemon,
+       _instanceId = instanceId,
        _storagePreparationSeen = storagePreparationSeen;
 
   static const _maximumBootstrapBytes = 16 * 1024;
@@ -94,6 +97,7 @@ final class DesktopRuntime {
 
   final ControlApi api;
   final Process _daemon;
+  final String _instanceId;
   final String executable;
   final String cacheDirectory;
   final String dataDirectory;
@@ -200,6 +204,12 @@ final class DesktopRuntime {
       }
       final session = await _exchangeSession(validated);
       final api = await HttpControlApi.connect(session);
+      await TransparentCaptureController.shared.configure(
+        instanceId: validated.instanceId,
+        flowPort: validated.flowPort,
+        flowSecret: validated.flowSecret,
+        hostError: validated.transparentCaptureError,
+      );
       return DesktopRuntime._(
         api: api,
         daemon: process,
@@ -209,6 +219,7 @@ final class DesktopRuntime {
         storage: storage,
         storageNotice: storageNotice,
         storagePreparationSeen: budget.upgradeSeen,
+        instanceId: validated.instanceId,
       );
     } catch (error) {
       try {
@@ -493,6 +504,7 @@ final class DesktopRuntime {
     if (_closed) return;
     _closed = true;
     try {
+      await TransparentCaptureController.shared.clearConfiguration(_instanceId);
       await api.close();
     } finally {
       await const DesktopDaemonLifecycle.production().close(
@@ -526,6 +538,9 @@ final class _DaemonDescriptor {
     required this.pid,
     required this.baseUrl,
     required this.bootstrapNonce,
+    this.flowPort,
+    this.flowSecret,
+    this.transparentCaptureError,
   });
 
   factory _DaemonDescriptor.fromJson(JsonObject value) {
@@ -568,16 +583,40 @@ final class _DaemonDescriptor {
         'Desktop bootstrap contract did not match',
       );
     }
+    final flowPort = value['flowPort'];
+    final flowSecret = value['flowSecret'];
+    final hasFlowFields =
+        value.containsKey('flowPort') || value.containsKey('flowSecret');
+    if (hasFlowFields &&
+        (flowPort is! int ||
+            flowPort < 1 ||
+            flowPort > 65535 ||
+            flowSecret is! String ||
+            !RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(flowSecret))) {
+      throw const DesktopRuntimeException(
+        'Desktop transparent capture bootstrap contract did not match',
+      );
+    }
     return _DaemonDescriptor(
       instanceId: requireString(value, 'instanceId', 'bootstrap.descriptor'),
       pid: requireInteger(value, 'pid', 'bootstrap.descriptor', minimum: 1),
       baseUrl: baseUrl,
       bootstrapNonce: nonce,
+      flowPort: flowPort as int?,
+      flowSecret: flowSecret as String?,
+      transparentCaptureError: optionalString(
+        value,
+        'transparentCaptureError',
+        'bootstrap.descriptor',
+      ),
     );
   }
 
   final String instanceId;
   final int pid;
+  final int? flowPort;
+  final String? flowSecret;
+  final String? transparentCaptureError;
   final Uri baseUrl;
   final String bootstrapNonce;
 }
