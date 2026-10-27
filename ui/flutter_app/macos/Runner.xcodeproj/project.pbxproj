@@ -37,6 +37,7 @@
 		C240ED15D4EE998C1D4A7801 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E7D110A17520C644DFF6D9F1 /* Cocoa.framework */; };
 		C404497FE01C2CB1DC743586 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5922CBB81A9AC4BAB638EC07 /* Pods_Runner.framework */; };
 		CF797D30B3528676EACBCC39 /* TCPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97E9CFA7FD5F100326D02B23 /* TCPFlowRelay.swift */; };
+		96B226364AC16252ED4AAA18 /* UDPFlowRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A5ED587674E6EB188554A9C /* UDPFlowRelay.swift */; };
 		D90424247FE2F73B2A1480E4 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EBB3B20DC6AAD5011B948577 /* Pods_RunnerTests.framework */; };
 		F09A10260000000000000001 /* WorkbenchWindowGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09A10260000000000000002 /* WorkbenchWindowGeometry.swift */; };
 		F09A10260000000000000003 /* WindowGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09A10260000000000000004 /* WindowGeometryTests.swift */; };
@@ -124,6 +125,7 @@
 		8521A5949B33205069BF3AF5 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		97E9CFA7FD5F100326D02B23 /* TCPFlowRelay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TCPFlowRelay.swift; sourceTree = "<group>"; };
+		5A5ED587674E6EB188554A9C /* UDPFlowRelay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UDPFlowRelay.swift; sourceTree = "<group>"; };
 		B0F8F5DDEA2F9E65E6D6E326 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
 		E412371B504B48F177B3E227 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		E7D110A17520C644DFF6D9F1 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
@@ -279,6 +281,7 @@
 			children = (
 				4A9187758926A5D10A5311CD /* FlowBroker.swift */,
 				97E9CFA7FD5F100326D02B23 /* TCPFlowRelay.swift */,
+				5A5ED587674E6EB188554A9C /* UDPFlowRelay.swift */,
 				25DF3D97CD60ED4DB6CF45AD /* TransparentProxyProvider.swift */,
 				8521A5949B33205069BF3AF5 /* main.swift */,
 				2EB58540D93E92C6CCF41414 /* Info.plist */,
@@ -561,6 +564,7 @@
 			files = (
 				381DB848E51A5C4E441E3613 /* FlowBroker.swift in Sources */,
 				CF797D30B3528676EACBCC39 /* TCPFlowRelay.swift in Sources */,
+				96B226364AC16252ED4AAA18 /* UDPFlowRelay.swift in Sources */,
 				B26D89A2B8F05917F356A216 /* TransparentProxyProvider.swift in Sources */,
 				744ACC9075E5F23F442A939C /* main.swift in Sources */,
 			);

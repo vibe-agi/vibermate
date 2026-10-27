@@ -60,8 +60,13 @@ on the same relay and credential as TCP, so it works for local and remote
 Runtimes inside the existing tunnel. The Runtime hands it to its existing
 UDP path, which applies the Environment's policy and audit and sends it
 through the configured egress, including an upstream SOCKS5 proxy. QUIC is
-therefore carried, not refused. DNS is the exception: it is answered by the
-capture layer so that names reach the Runtime as names.
+therefore carried, not refused. On Linux, DNS is the exception: it is
+answered by the capture layer so that names reach the Runtime as names. On
+macOS, Agents resolve through the system resolver, which is not theirs and is
+not captured; the extension claims outbound UDP as well as TCP, and an owned
+UDP socket's datagrams travel to the run framed with their remote endpoints,
+one `connect-udp` session per destination. Before this, the extension
+claimed TCP only, so an Agent's UDP on macOS went direct.
 
 CA trust is unchanged. `vibermate run` still sets `NODE_EXTRA_CA_CERTS`,
 `CODEX_CA_CERTIFICATE` and `SSL_CERT_FILE`, which children inherit; only the

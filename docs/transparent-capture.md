@@ -12,7 +12,7 @@ Agent + children ──(macOS: transparent proxy extension)──┐
                       vibermate run: Flow Ingress (per Capture Run)
                          names destination (platform host name → SNI/Host → IP)
                          TCP: CONNECT host:port + run proxy credential
-                         UDP (Linux): connect-udp host:port + run credential
+                         UDP: connect-udp host:port + run credential
                                                           ▼
                       existing local proxy frontier → relay → Runtime
                       (local vibermated, or remote over the server stream)
@@ -25,7 +25,7 @@ Agent + children ──(macOS: transparent proxy extension)──┐
 | `internal/flowingress` | `vibermate run` | Accepting one flow plus its header, naming the destination, sending CONNECT with the run credential through the frontier, splicing bytes. | Yes |
 | `internal/processlineage` | `vibermated` (macOS) | Process identity (pid + start time), parent walk, run-root registry, remembered descendant attribution. | Linux implementation, plus a darwin build/vet check |
 | Flow broker | `vibermated` (macOS) | The registration socket for runs and a loopback TCP port for the extension: ownership queries, extension liveness, flow hand-off to the owning run by descriptor passing. | Yes, with a fake extension client |
-| Network Extension | `ViberMate.app` (Swift) | `NETransparentProxyProvider`: claims outbound TCP, asks the broker, declines unowned flows, copies the bytes of owned ones. | Compiled in CI; acceptance on a Mac |
+| Network Extension | `ViberMate.app` (Swift) | `NETransparentProxyProvider`: claims outbound TCP and UDP, asks the broker, declines unowned flows, copies the bytes or datagrams of owned ones. | Compiled in CI; acceptance on a Mac |
 | `internal/netnscapture` | `vibermate run` (Linux) | Re-exec into a user+net+mount namespace, TUN creation, fd hand-back, `resolv.conf` bind mount, gVisor netstack, fake-IP DNS, UDP relay. | Yes (unprivileged userns works in the dev container) |
 | `internal/connectudp` | `vibermate run`, local proxy | RFC 9298 `connect-udp` over HTTP/1.1 Upgrade and RFC 9297 DATAGRAM capsules: the client side and the wire format. | Yes |
 | `connect-udp` in `internal/loopbackproxy` | Runtime proxy | Admits the run credential, opens the flow through the Runtime's UDP path (policy, approvals, audit, egress) and relays capsules. | Yes, against a real Runtime |
@@ -42,6 +42,14 @@ The extension or netstack sends one header before any client bytes:
 - `host` is optional and is a platform-reported name, never a guess.
 - Ownership is never part of the header. The receiving ingress belongs to
   exactly one run, and the broker chose it. A flow cannot name its own run.
+- A UDP flow (macOS) sends `{"v":1,"proto":"udp"}`: one application socket
+  may send to many destinations, so each datagram names its own. Datagram
+  frames follow in both directions: a 4-byte big-endian length of the rest,
+  a 1-byte endpoint length, the endpoint as `ip:port` (`[ip]:port` for
+  IPv6), and the payload (at most 65,535 bytes). The run opens one
+  `connect-udp` session per destination, on first use, and keeps at most 64
+  per flow with a two-minute idle timeout; a destination the Runtime refuses
+  stays refused until it goes quiet, and its datagrams are dropped.
 
 ## Rendezvous (macOS)
 
@@ -87,10 +95,11 @@ The extension or netstack sends one header before any client bytes:
     returns `false`).
   - A wrong secret closes the connection without an answer.
 - **Extension rules.**
-  - Claim outbound TCP only.
+  - Claim outbound TCP and UDP.
   - Exclude `127.0.0.0/8`, `::1` and the broker port, so the extension's own
     connection to the broker and Agents' localhost traffic (dev servers, IDE
-    sockets, OAuth callbacks) stay direct.
+    sockets, OAuth callbacks) stay direct. An owned UDP socket's datagrams
+    to loopback addresses are dropped rather than sent through the Runtime.
   - Bound the query at about 200 ms. On failure, refuse a process already
     seen owned and decline any other, counting the failure. Unlike Linux
     namespaces, process lineage leaves localhost untouched.
@@ -249,7 +258,7 @@ Approve ViberMate in **System Settings → General → Login Items & Extensions*
 when requested. The App must be signed and installed in `/Applications` for
 normal activation. Ad-hoc source builds compile the target but cannot activate it.
 
-The first implementation captures outbound TCP on macOS. Localhost stays direct,
+The extension captures outbound TCP and UDP on macOS. Localhost stays direct,
 and the Agent still uses system DNS before opening a connection; SNI/HTTP Host
 recovery does not replace a failed local DNS lookup. Orphan attribution by token, capture-loss pausing and
 the remaining failed-query residual are described in ADR 0024; real-hardware

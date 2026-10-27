@@ -56,17 +56,38 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
   }
 
   override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-    guard let tcp = flow as? NEAppProxyTCPFlow,
-          let identity = FlowSourceIdentity(auditToken: flow.metaData.sourceAppAuditToken) else { return false }
+    guard let identity = FlowSourceIdentity(auditToken: flow.metaData.sourceAppAuditToken) else { return false }
     sessionLock.lock()
     let current = session
     sessionLock.unlock()
     guard let current = current else { return false }
+    if let tcp = flow as? NEAppProxyTCPFlow { return handleTCP(tcp, identity: identity, current: current) }
+    if let udp = flow as? NEAppProxyUDPFlow { return handleUDP(udp, identity: identity, current: current) }
+    return false
+  }
+
+  private func handleTCP(_ tcp: NEAppProxyTCPFlow, identity: FlowSourceIdentity, current: ProxySession) -> Bool {
     guard let destination = Self.destination(tcp) else {
       return current.wasOwned(identity) ? Self.refuse(tcp) : false
     }
     if destination.isLoopback { return false }
+    return claim(tcp, identity: identity, current: current) { socket in
+      current.add(tcp, socket: socket, header: try destination.header())
+    }
+  }
 
+  // An owned UDP socket's datagrams are carried through vibermated too, never
+  // around it; each datagram names its own destination.
+  private func handleUDP(_ udp: NEAppProxyUDPFlow, identity: FlowSourceIdentity, current: ProxySession) -> Bool {
+    claim(udp, identity: identity, current: current) { socket in
+      current.add(udp, socket: socket, header: try FlowDestination.udpHeader())
+    }
+  }
+
+  // Asks the broker who owns the flow's process. Owned flows are handed to
+  // relay; unowned ones go direct.
+  private func claim(_ flow: NEAppProxyFlow, identity: FlowSourceIdentity, current: ProxySession,
+                     relay: (BrokerSocket) throws -> Bool) -> Bool {
     do {
       guard let socket = try current.broker.query(pid: identity.pid) else {
         current.recordUnowned(identity)
@@ -74,11 +95,10 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
       }
       current.recordOwned(identity)
       do {
-        let header = try destination.header()
-        if !current.add(tcp, socket: socket, header: header) { return Self.refuse(tcp) }
+        if try !relay(socket) { return Self.refuse(flow) }
       } catch {
         socket.close()
-        return Self.refuse(tcp)
+        return Self.refuse(flow)
       }
       return true
     } catch {
@@ -90,7 +110,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
       // never-seen process of a healthy run remains; it is counted and
       // reported in Host status (ADR 0024).
       current.recordQueryFailure()
-      return current.wasOwned(identity) ? Self.refuse(tcp) : false
+      return current.wasOwned(identity) ? Self.refuse(flow) : false
     }
   }
 
@@ -107,7 +127,7 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     current.stop { completion(error) }
   }
 
-  private static func refuse(_ flow: NEAppProxyTCPFlow) -> Bool {
+  private static func refuse(_ flow: NEAppProxyFlow) -> Bool {
     let error = NSError(domain: NEAppProxyErrorDomain, code: NEAppProxyFlowError.refused.rawValue)
     flow.closeReadWithError(error)
     flow.closeWriteWithError(error)
@@ -129,24 +149,27 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
 
   static func networkSettings() -> NETransparentProxyNetworkSettings {
     let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-    // nil endpoints match all outbound TCP. Wildcard IP + port 0 is not a
+    // nil endpoints match all outbound TCP and UDP. Wildcard IP + port 0 is not a
     // valid transparent-proxy rule. The /8 also excludes the broker socket.
-    settings.includedNetworkRules = [rule(host: nil, prefix: 0)]
-    settings.excludedNetworkRules = [rule(host: "127.0.0.0", prefix: 8), rule(host: "::1", prefix: 128)]
+    let protocols: [NENetworkRule.`Protocol`] = [.TCP, .UDP]
+    settings.includedNetworkRules = protocols.map { rule(host: nil, prefix: 0, protocol: $0) }
+    settings.excludedNetworkRules = protocols.flatMap { matched in
+      [rule(host: "127.0.0.0", prefix: 8, protocol: matched), rule(host: "::1", prefix: 128, protocol: matched)]
+    }
     return settings
   }
 
-  private static func rule(host: String?, prefix: Int) -> NENetworkRule {
+  private static func rule(host: String?, prefix: Int, protocol matched: NENetworkRule.`Protocol`) -> NENetworkRule {
     #if compiler(>=6.0)
     if #available(macOS 15.0, *) {
       let endpoint = host.map { Network.NWEndpoint.hostPort(host: .init($0), port: 0) }
       return NENetworkRule(remoteNetworkEndpoint: endpoint, remotePrefix: prefix,
-                           localNetworkEndpoint: nil, localPrefix: 0, protocol: .TCP, direction: .outbound)
+                           localNetworkEndpoint: nil, localPrefix: 0, protocol: matched, direction: .outbound)
     }
     #endif
     return NENetworkRule(remoteNetwork: host.map { NWHostEndpoint(hostname: $0, port: "0") },
                          remotePrefix: prefix, localNetwork: nil, localPrefix: 0,
-                         protocol: .TCP, direction: .outbound)
+                         protocol: matched, direction: .outbound)
   }
 }
 
@@ -191,7 +214,7 @@ private final class ProxySession {
   private let lock = NSLock()
   private let relayGroup = DispatchGroup()
   private var timer: DispatchSourceTimer?
-  private var relays: [UUID: TCPFlowRelay] = [:]
+  private var relays: [UUID: FlowRelay] = [:]
   private var history = FlowOwnershipHistory()
   private var stopped = false
   private var stream: BrokerSocket?
@@ -284,12 +307,20 @@ private final class ProxySession {
   }
 
   func add(_ flow: NEAppProxyTCPFlow, socket: BrokerSocket, header: Data) -> Bool {
+    add(socket: socket, header: header) { TCPFlowRelay(flow: SystemTCPFlow(flow), socket: socket, onFinish: $0) }
+  }
+
+  func add(_ flow: NEAppProxyUDPFlow, socket: BrokerSocket, header: Data) -> Bool {
+    add(socket: socket, header: header) { UDPFlowRelay(flow: SystemUDPFlow(flow), socket: socket, onFinish: $0) }
+  }
+
+  private func add(socket: BrokerSocket, header: Data, make: (@escaping () -> Void) -> FlowRelay) -> Bool {
     lock.lock()
     guard !stopped else { lock.unlock(); socket.close(); return false }
     let id = UUID()
     let group = relayGroup
     group.enter()
-    let relay = TCPFlowRelay(flow: SystemTCPFlow(flow), socket: socket) { [weak self] in
+    let relay = make { [weak self] in
       self?.remove(id)
       group.leave()
     }
@@ -324,6 +355,80 @@ private final class SystemTCPFlow: ProxyTCPFlow {
   func write(_ data: Data, completion: @escaping (Error?) -> Void) { flow.write(data, withCompletionHandler: completion) }
   func closeRead(error: Error?) { flow.closeReadWithError(flowError(error)) }
   func closeWrite(error: Error?) { flow.closeWriteWithError(flowError(error)) }
+
+  private func flowError(_ error: Error?) -> Error? {
+    guard let error = error as NSError? else { return nil }
+    if error.domain == NEAppProxyErrorDomain { return error }
+    return NSError(domain: NEAppProxyErrorDomain, code: NEAppProxyFlowError.internal.rawValue,
+                   userInfo: [NSUnderlyingErrorKey: error])
+  }
+}
+
+private final class SystemUDPFlow: ProxyUDPFlow {
+  private let flow: NEAppProxyUDPFlow
+  init(_ flow: NEAppProxyUDPFlow) { self.flow = flow }
+
+  func open(completion: @escaping (Error?) -> Void) {
+    #if compiler(>=6.0)
+    if #available(macOS 15.0, *) {
+      flow.open(withLocalFlowEndpoint: nil, completionHandler: completion)
+      return
+    }
+    #endif
+    flow.open(withLocalEndpoint: nil, completionHandler: completion)
+  }
+
+  // An empty or missing read means the application closed the flow.
+  // Datagrams with an endpoint that is not an IP address and port are dropped.
+  func readDatagrams(completion: @escaping ([ProxyDatagram]?, Error?) -> Void) {
+    #if compiler(>=6.0)
+    if #available(macOS 15.0, *) {
+      flow.readDatagrams { pairs, error in
+        guard let pairs = pairs, !pairs.isEmpty else { completion(nil, error); return }
+        completion(pairs.compactMap { payload, endpoint in
+          guard case let .hostPort(host, port) = endpoint else { return nil }
+          return ProxyDatagram(payload: payload, endpoint: datagramEndpoint(host: String(describing: host),
+                                                                            port: port.rawValue))
+        }, error)
+      }
+      return
+    }
+    #endif
+    flow.readDatagrams { datagrams, endpoints, error in
+      guard let datagrams = datagrams, let endpoints = endpoints, !datagrams.isEmpty else {
+        completion(nil, error)
+        return
+      }
+      completion(zip(datagrams, endpoints).compactMap { payload, endpoint in
+        guard let endpoint = endpoint as? NWHostEndpoint, let port = UInt16(endpoint.port) else { return nil }
+        return ProxyDatagram(payload: payload, endpoint: datagramEndpoint(host: endpoint.hostname, port: port))
+      }, error)
+    }
+  }
+
+  func writeDatagrams(_ datagrams: [ProxyDatagram], completion: @escaping (Error?) -> Void) {
+    let addressed = datagrams.compactMap { datagram in
+      parseDatagramEndpoint(datagram.endpoint).map { (datagram.payload, $0.host, $0.port) }
+    }
+    guard !addressed.isEmpty else { completion(nil); return }
+    #if compiler(>=6.0)
+    if #available(macOS 15.0, *) {
+      flow.writeDatagrams(addressed.map { payload, host, port in
+        (payload, Network.NWEndpoint.hostPort(host: .init(host), port: .init(integerLiteral: port)))
+      }, completionHandler: completion)
+      return
+    }
+    #endif
+    flow.writeDatagrams(addressed.map(\.0),
+                        sentBy: addressed.map { NWHostEndpoint(hostname: $0.1, port: String($0.2)) },
+                        completionHandler: completion)
+  }
+
+  func close(error: Error?) {
+    let error = flowError(error)
+    flow.closeReadWithError(error)
+    flow.closeWriteWithError(error)
+  }
 
   private func flowError(_ error: Error?) -> Error? {
     guard let error = error as NSError? else { return nil }
