@@ -41,7 +41,9 @@ function capabilityEntitlements(role) {
     <key>com.apple.developer.team-identifier</key><string>${teamID}</string>
     <key>com.apple.developer.networking.networkextension</key><array><string>app-proxy-provider-systemextension</string></array>
     ${extension
-      ? "<key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.network.client</key><true/>"
+      ? "<key>com.apple.security.app-sandbox</key><true/>" +
+        `<key>com.apple.security.application-groups</key><array><string>${teamID}.${identifier}</string></array>` +
+        "<key>com.apple.security.network.client</key><true/>"
       : "<key>com.apple.developer.system-extension.install</key><true/>"}
   </dict></plist>`;
 }
@@ -57,6 +59,12 @@ test("capability entitlements are exact and scoped to the app and transparent ex
     assert.throws(() => validateClosedEntitlements(source, "vibermate"));
   }
   assert.throws(() => validateClosedEntitlements(capabilityEntitlements("application"), "extension", { role: "transparent-proxy", teamID }));
+  // Without the App Group its NEMachServiceName is prefixed with, macOS
+  // refuses to activate the extension (OSSystemExtensionErrorDomain 9).
+  const withoutGroup = capabilityEntitlements("transparent-proxy")
+    .replace(/<key>com\.apple\.security\.application-groups<\/key><array>.*?<\/array>/u, "");
+  assert.throws(() => validateClosedEntitlements(withoutGroup, "extension", { role: "transparent-proxy", teamID }),
+    /application-groups/u);
 });
 
 test("frozen release identity is coherent", () => {

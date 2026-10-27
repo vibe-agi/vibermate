@@ -24,7 +24,13 @@ export function capabilityEntitlements(role, teamID) {
     "com.apple.developer.team-identifier": teamID,
     "com.apple.developer.networking.networkextension": [networkCapability],
     ...(extension
-      ? { "com.apple.security.app-sandbox": true, "com.apple.security.network.client": true }
+      ? {
+        "com.apple.security.app-sandbox": true,
+        // NEMachServiceName must begin with an App Group the extension holds,
+        // or system extension validation fails (OSSystemExtensionErrorDomain 9).
+        "com.apple.security.application-groups": [`${teamID}.${transparentProxyBundleIdentifier}`],
+        "com.apple.security.network.client": true,
+      }
       : { "com.apple.developer.system-extension.install": true }),
   };
 }
