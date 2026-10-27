@@ -114,11 +114,14 @@ func (r *observationRecorder) offer(s recording.Stamp, k recording.Kind, e conne
 			r.budget.RecordOffer(k, result, uint64(bytes))
 		}
 	}()
-	if r.available != nil && !r.available() {
-		return recording.DroppedUnavailable
-	}
+	// A stamp from a cleared epoch is stale whatever storage is doing; check
+	// it first so a late observation during maintenance is never reported as
+	// merely unavailable.
 	if !s.Current() {
 		return recording.DroppedStale
+	}
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
 	}
 	r.mu.Lock()
 	closed := r.closed || r.sealed
@@ -491,11 +494,11 @@ func (r *observationRecorder) prepareScope(ctx context.Context, raw rawEvidenceR
 func (r *observationRecorder) offerContent(ctx context.Context, s recording.Stamp, in exchangecontent.OwnInput, limits exchangecontent.SourceLimits, sink exchangecontent.SourceRecorder) (result recording.OfferResult) {
 	var bytes uint64
 	defer func() { r.budget.RecordOffer(recording.Content, result, bytes) }()
-	if r.available != nil && !r.available() {
-		return recording.DroppedUnavailable
-	}
 	if !s.Current() {
 		return recording.DroppedStale
+	}
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
 	}
 	scopedSink, supported := sink.(exchangecontent.ScopedSourceRecorder)
 	if !supported {

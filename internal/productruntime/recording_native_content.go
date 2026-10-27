@@ -10,11 +10,11 @@ import (
 func (r *observationRecorder) ObserveNativeContent(stamp recording.Stamp, in nativemcp.ContentInput) (result recording.OfferResult) {
 	var bytes uint64
 	defer func() { r.budget.RecordOffer(recording.Native, result, bytes) }()
-	if r.available != nil && !r.available() {
-		return recording.DroppedUnavailable
-	}
 	if !stamp.Current() {
 		return recording.DroppedStale
+	}
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
 	}
 	r.mu.Lock()
 	closed := r.closed || r.sealed
