@@ -163,6 +163,14 @@ ditto --norsrc --noextattr --noacl --noqtn -X \
 /usr/bin/install -m 0644 "${repository_root}/LICENSE" "${app_bundle}/Contents/Resources/LICENSE"
 /usr/bin/install -m 0644 "${repository_root}/LICENSE" "${web_destination}/LICENSE"
 /usr/bin/install -m 0644 "${repository_root}/THIRD_PARTY_LICENSES.md" "${app_bundle}/Contents/Resources/THIRD_PARTY_LICENSES.md"
+# Xcode leaves nested code unsigned (CODE_SIGNING_ALLOWED=NO, so the System
+# Extension's restricted entitlements never need a profile at build time).
+# Seal each embedded framework, then the extension, before the manifest
+# records nested signatures and the outer bundle is sealed.
+for framework in "${app_bundle}"/Contents/Frameworks/*.framework; do
+  [[ -d "${framework}" ]] || continue
+  codesign --force --sign - "${framework}"
+done
 extension_bundle="${app_bundle}/Contents/Library/SystemExtensions/io.vibermate.desktop.transparent-proxy.systemextension"
 codesign --force --sign - "${extension_bundle}"
 
