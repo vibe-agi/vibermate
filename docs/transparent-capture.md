@@ -51,8 +51,10 @@ The extension or netstack sends one header before any client bytes:
     the request. A process can therefore only claim its own descendants.
     Registering again from the same process replaces its previous claim.
   - Ownership: a parent walk to the registered root first; if it finds no
-    owner, the token in the process's start environment
-    (`/proc/<pid>/environ`, macOS `kern.procargs2`; same user only).
+    owner, membership in the process group a live Agent leads; then the
+    token in the process's start environment (`/proc/<pid>/environ`, macOS
+    `kern.procargs2`; same user only). macOS returns no environment for its
+    own platform binaries, so an orphaned `curl` is found by its group.
   - The reply is `{"ok":true,"extension":<bool>}`. `extension` says whether
     the extension is active (a liveness stream is open, or a hello arrived
     in the last 30 seconds); the run refuses to start when it is false.

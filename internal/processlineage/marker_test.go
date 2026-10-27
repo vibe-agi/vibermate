@@ -1,12 +1,14 @@
 package processlineage
 
 import (
+	"bufio"
 	"encoding/binary"
 	"os"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -102,6 +104,49 @@ func TestMarkerBelongsToOneRun(t *testing.T) {
 	}
 }
 
+const sleepVariable = "VIBERMATE_LINEAGE_TEST_SLEEP"
+
+// TestMain lets this test binary stand in for an ordinary (non-platform)
+// program that an Agent leaves running.
+func TestMain(m *testing.M) {
+	if os.Getenv(sleepVariable) != "" {
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// waitOrphaned waits until pid's parent is no longer parent, skipping the test
+// when the system does not reparent it in time.
+func waitOrphaned(t *testing.T, pid, parent int) {
+	t.Helper()
+	t.Cleanup(func() {
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		process, err := System().Read(pid)
+		if err == nil && process.Parent != parent {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Skipf("orphan %d was not reparented (parent %d)", pid, process.Parent)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func startedPID(t *testing.T, line string) int {
+	t.Helper()
+	pid, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || pid <= 1 {
+		t.Fatalf("background pid %q", line)
+	}
+	return pid
+}
+
 // A real background child whose parent shell exits before it is looked up is
 // found by the marker its environment inherited.
 func TestSystemMarkerFindsARealOrphan(t *testing.T) {
@@ -112,6 +157,10 @@ func TestSystemMarkerFindsARealOrphan(t *testing.T) {
 	if _, err := System().(EnvironmentReader).Environment(os.Getpid()); err != nil {
 		t.Skipf("environment unavailable: %v", err)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	registry := NewRegistry(System())
 	marker := "VIBERMATE_TEST_MARKER=" + strconv.Itoa(os.Getpid())
 	if err := registry.RegisterWithMarker(self.Identity, "run-test", marker); err != nil {
@@ -119,36 +168,61 @@ func TestSystemMarkerFindsARealOrphan(t *testing.T) {
 	}
 	orphan := func(environment []string) int {
 		t.Helper()
-		shell := exec.Command("sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
-		shell.Env = environment
+		// The orphan is this test binary, not a platform binary whose
+		// environment macOS hides.
+		shell := exec.Command("sh", "-c", `"$0" </dev/null >/dev/null 2>&1 & echo $!`, executable)
+		shell.Env = append(environment, sleepVariable+"=1")
 		output, err := shell.Output()
 		if err != nil {
 			t.Fatal(err)
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(output)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			if process, err := os.FindProcess(pid); err == nil {
-				_ = process.Kill()
-			}
-		})
-		// The shell has exited: the sleeper's parent is no longer this test.
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			process, err := System().Read(pid)
-			if err == nil && process.Parent != shell.Process.Pid && process.Parent != os.Getpid() {
-				return pid
-			}
-			if time.Now().After(deadline) {
-				t.Skipf("orphan %d was not reparented (parent %d)", pid, process.Parent)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+		pid := startedPID(t, string(output))
+		waitOrphaned(t, pid, shell.Process.Pid)
+		return pid
 	}
 	marked := orphan(append(os.Environ(), marker))
 	wantOwner(t, registry, marked, "run-test")
 	unmarked := orphan(os.Environ())
 	wantOwner(t, registry, unmarked, "")
+}
+
+// An Agent that leads its own process group leaves a platform binary running
+// and exits the shell that started it. With no marker registered, the
+// orphan is still owned through the Agent's group.
+func TestSystemGroupFindsARealOrphan(t *testing.T) {
+	self, err := System().Read(os.Getpid())
+	if err != nil {
+		t.Skipf("process table unavailable: %v", err)
+	}
+	registry := NewRegistry(System())
+	if err := registry.Register(self.Identity, "run-test"); err != nil {
+		t.Fatal(err)
+	}
+	agent := exec.Command("sh", "-c", `sh -c 'sleep 30 </dev/null >/dev/null 2>&1 & echo $!'; exec sleep 30`)
+	agent.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := agent.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = agent.Process.Kill(); _ = agent.Wait() })
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := startedPID(t, line)
+	first, err := System().Read(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Parent != agent.Process.Pid {
+		waitOrphaned(t, pid, first.Parent)
+	}
+	process, err := System().Read(pid)
+	if err != nil || process.Group != agent.Process.Pid {
+		t.Skipf("orphan %d is not in the Agent's group: %+v %v", pid, process, err)
+	}
+	wantOwner(t, registry, pid, "run-test")
 }
