@@ -252,7 +252,7 @@ Its `NetworkExtension.NEProviderClasses` entry selects
 `TransparentProxy.TransparentProxyProvider`; its executable calls
 `NEProvider.startSystemExtensionMode()` before entering the dispatch loop.
 
-In the Desktop App, open **Settings → Access & launch → Transparent capture**.
+In the Desktop App, open **Settings → Preferences → Transparent capture on this Mac**.
 Enabling it activates the extension and requests network-configuration approval.
 Approve ViberMate in **System Settings → General → Login Items & Extensions**
 when requested. The App must be signed and installed in `/Applications` for

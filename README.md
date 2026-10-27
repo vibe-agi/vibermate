@@ -44,12 +44,14 @@ up the `vibermate` command. Then, in your project:
 vibermate run -- claude    # or: vibermate run -- codex
 ```
 
-Development builds also include experimental macOS **Transparent capture**:
-enable it in **Settings → Access & launch**, approve the signed network extension
-and network configuration, then use `vibermate run --transparent --env work -- claude`
-(or Codex). A local App is required even with `--server`. This TCP-only preview
-retains system DNS and has process-attribution limits; it is not yet release
-accepted. See [setup, signing and acceptance](docs/transparent-capture.md).
+Experimental **Transparent capture** routes an Agent and every process it starts
+through ViberMate without proxy variables, TCP and UDP alike. On macOS, enable
+**Settings → Preferences → Transparent capture on this Mac** and approve the
+signed network extension and network configuration; on Linux it needs
+unprivileged user namespaces. Then use
+`vibermate run --transparent --env work -- claude` (or Codex). On macOS a local
+App is required even with `--server`. It is not yet release accepted. See
+[setup, signing and acceptance](docs/transparent-capture.md).
 
 To use an Environment's model-service account without a native client login,
 opt in for each launch. The same option supports Codex and Claude:
