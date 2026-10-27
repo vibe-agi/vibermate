@@ -22,7 +22,7 @@ const MaxHeaderBytes = 1024
 type Header struct {
 	Version     int            `json:"v"`
 	Protocol    string         `json:"proto"`
-	Destination netip.AddrPort `json:"dst"`
+	Destination netip.AddrPort `json:"dst,omitzero"`
 	// Host is a name the platform reported for the destination. It is never
 	// a guess; when absent, the ingress names the destination itself.
 	Host string `json:"host,omitempty"`
@@ -76,8 +76,20 @@ func ReadHeader(r io.Reader) (Header, error) {
 }
 
 func (header Header) validate() error {
-	if header.Version != 1 || header.Protocol != "tcp" ||
-		!header.Destination.IsValid() || header.Destination.Port() == 0 {
+	if header.Version != 1 {
+		return errInvalidHeader
+	}
+	switch header.Protocol {
+	case "tcp":
+		if !header.Destination.IsValid() || header.Destination.Port() == 0 {
+			return errInvalidHeader
+		}
+	case "udp":
+		// Each datagram names its own endpoint; the flow names none.
+		if header.Destination.IsValid() || header.Host != "" {
+			return errInvalidHeader
+		}
+	default:
 		return errInvalidHeader
 	}
 	if header.Host != "" && !validHostName(header.Host) {
