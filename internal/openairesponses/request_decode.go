@@ -325,8 +325,38 @@ func (codec *Codec) decodeClientRequest(
 			return protocolcore.Request{}, report.Build(), err
 		}
 		messages = append(messages, decodedMessages...)
-		tools = append(tools, decodedTools...)
-		namespaces = append(namespaces, decodedNamespaces...)
+		if strictRoot {
+			tools = append(tools, decodedTools...)
+			namespaces = append(namespaces, decodedNamespaces...)
+		} else {
+			// Native Responses history can carry incremental declarations for
+			// an already named tool/namespace. Project its latest definition;
+			// the original wire (including all updates) remains authoritative.
+			if err := validateIncrementalToolBatch(decodedTools, decodedNamespaces); err != nil {
+				return protocolcore.Request{}, report.Build(), invalidClient(fmt.Sprintf("$.input[%d].tools", index), err)
+			}
+			tools, err = mergeIncrementalTools(tools, decodedTools)
+			if err != nil {
+				return protocolcore.Request{}, report.Build(), invalidClient(fmt.Sprintf("$.input[%d].tools", index), err)
+			}
+			for _, update := range decodedNamespaces {
+				previous := slices.IndexFunc(namespaces, func(namespace protocolcore.ToolNamespace) bool {
+					return namespace.Name == update.Name
+				})
+				if previous < 0 {
+					if len(namespaces) >= protocolcore.MaxToolCount {
+						return protocolcore.Request{}, report.Build(), invalidClient(fmt.Sprintf("$.input[%d].tools", index), errors.New("tool namespace count is invalid"))
+					}
+					namespaces = append(namespaces, update)
+				} else {
+					namespaces[previous].Description = update.Description
+					namespaces[previous].Tools, err = mergeIncrementalTools(namespaces[previous].Tools, update.Tools)
+					if err != nil {
+						return protocolcore.Request{}, report.Build(), invalidClient(fmt.Sprintf("$.input[%d].tools", index), err)
+					}
+				}
+			}
+		}
 		if err := protocolcore.AppendReportWithin(&report, itemReport, budget); err != nil {
 			return protocolcore.Request{}, report.Build(), invalidClient("$", err)
 		}
@@ -448,6 +478,41 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report.Build(), invalidClient("$", err)
 	}
 	return request.Clone(), report.Build(), nil
+}
+
+// Repetition across distinct history items is an update; repetition inside one
+// batch is still malformed. Namespace members are validated by decodeTool.
+func validateIncrementalToolBatch(tools []protocolcore.ToolDefinition, namespaces []protocolcore.ToolNamespace) error {
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if _, duplicate := seen[tool.Name]; duplicate {
+			return errors.New("tool definition name is duplicated within one update")
+		}
+		seen[tool.Name] = struct{}{}
+	}
+	clear(seen)
+	for _, namespace := range namespaces {
+		if _, duplicate := seen[namespace.Name]; duplicate {
+			return errors.New("tool namespace name is duplicated within one update")
+		}
+		seen[namespace.Name] = struct{}{}
+	}
+	return nil
+}
+
+func mergeIncrementalTools(tools, updates []protocolcore.ToolDefinition) ([]protocolcore.ToolDefinition, error) {
+	for _, update := range updates {
+		previous := slices.IndexFunc(tools, func(tool protocolcore.ToolDefinition) bool { return tool.Name == update.Name })
+		if previous < 0 {
+			if len(tools) >= protocolcore.MaxToolCount {
+				return nil, errors.New("tool definition count is invalid")
+			}
+			tools = append(tools, update)
+		} else {
+			tools[previous] = update
+		}
+	}
+	return tools, nil
 }
 
 func decodeRequestProtocolEvidence(
