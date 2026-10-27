@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientpath"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/netnscapture"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
@@ -40,6 +41,13 @@ const (
 )
 
 func main() {
+	// The capture namespace helper runs before anything else in the process.
+	if len(os.Args) > 1 && os.Args[1] == netnscapture.ChildCommand {
+		if err := netnscapture.RunChild(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "vibermate:", err)
+		}
+		os.Exit(1)
+	}
 	catalogs, err := locales.New()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, reasonCatalogMissing)
@@ -328,6 +336,8 @@ func launchFailureKey(err error) string {
 		return "cli.error.transparent.lost"
 	case errors.Is(err, runlauncher.ErrTransparentUnsupported):
 		return "cli.error.transparent.unsupported"
+	case errors.Is(err, runlauncher.ErrTransparentNamespaceUnavailable):
+		return "cli.error.transparent.namespaceUnavailable"
 	case errors.Is(err, runlauncher.ErrTransparentUnavailable):
 		return "cli.error.transparent.unavailable"
 	case errors.Is(err, runlauncher.ErrTransparentExtensionInactive):

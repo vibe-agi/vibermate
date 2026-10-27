@@ -12,11 +12,11 @@ import (
 func (r *observationRecorder) ObserveACP(stamp recording.Stamp, value acpobservation.Record) (result recording.OfferResult) {
 	var bytes uint64
 	defer func() { r.budget.RecordOffer(recording.ACP, result, bytes) }()
-	if r.available != nil && !r.available() {
-		return recording.DroppedUnavailable
-	}
 	if !stamp.Current() {
 		return recording.DroppedStale
+	}
+	if r.available != nil && !r.available() {
+		return recording.DroppedUnavailable
 	}
 	r.mu.Lock()
 	closed := r.closed || r.sealed

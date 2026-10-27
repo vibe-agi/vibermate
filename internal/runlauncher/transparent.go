@@ -18,9 +18,22 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 )
 
+type transparentKind int
+
+const (
+	transparentNone transparentKind = iota
+	// transparentBroker: the macOS network extension asks vibermated's broker.
+	transparentBroker
+	// transparentNamespace: a Linux network namespace owned by the launcher.
+	transparentNamespace
+)
+
 var (
 	// ErrTransparentUnsupported reports a platform without transparent capture.
-	ErrTransparentUnsupported = errors.New("transparent capture is available on macOS only")
+	ErrTransparentUnsupported = errors.New("transparent capture is available on macOS and Linux only")
+	// ErrTransparentNamespaceUnavailable reports a Linux host that does not
+	// let an unprivileged process create the capture namespace.
+	ErrTransparentNamespaceUnavailable = errors.New("transparent capture needs unprivileged user namespaces")
 	// ErrTransparentUnavailable reports that the local ViberMate app could not
 	// accept the run's claim, so nothing would intercept the Agent.
 	ErrTransparentUnavailable = errors.New("transparent capture needs the ViberMate app running")
@@ -204,7 +217,7 @@ func (capture *transparentCapture) Close() {
 // broker before the Agent starts. Flows go through the same proxy the
 // environment would have named, so the Runtime sees the same credential.
 func (launcher *Launcher) startTransparent(grant, environmentGrant capturecontrol.LaunchGrant) (*transparentCapture, error) {
-	if !transparentPlatformSupported() {
+	if transparentMode() != transparentBroker {
 		return nil, ErrTransparentUnsupported
 	}
 	layout, err := runtimepath.Default()

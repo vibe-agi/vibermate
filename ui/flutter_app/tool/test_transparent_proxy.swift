@@ -234,17 +234,14 @@ final class TransparentProxyTests: XCTestCase {
     XCTAssertFalse(history.contains(identity))
   }
 
-  func testRulesCaptureOnlyOutboundTCPAndExcludeLoopback() throws {
+  func testRulesCaptureOutboundTCPAndUDPAndExcludeLoopback() throws {
     let settings = TransparentProxyProvider.networkSettings()
     let included = try XCTUnwrap(settings.includedNetworkRules)
-    XCTAssertEqual(included.count, 1)
-    XCTAssertEqual(included[0].matchProtocol, .TCP)
-    XCTAssertEqual(included[0].matchDirection, .outbound)
+    XCTAssertEqual(included.map(\.matchProtocol), [.TCP, .UDP])
     let excluded = try XCTUnwrap(settings.excludedNetworkRules)
-    XCTAssertEqual(excluded.count, 2)
-    XCTAssertEqual(excluded.map(\.matchRemotePrefix), [8, 128])
+    XCTAssertEqual(excluded.map(\.matchProtocol), [.TCP, .TCP, .UDP, .UDP])
+    XCTAssertEqual(excluded.map(\.matchRemotePrefix), [8, 128, 8, 128])
     for rule in included + excluded {
-      XCTAssertEqual(rule.matchProtocol, .TCP)
       XCTAssertEqual(rule.matchDirection, .outbound)
       #if compiler(>=6.0)
       if #available(macOS 15.0, *) {
@@ -256,11 +253,82 @@ final class TransparentProxyTests: XCTestCase {
     }
     #if compiler(>=6.0)
     if #available(macOS 15.0, *) {
-      XCTAssertNil(included[0].matchRemoteHostOrNetworkEndpoint)
-      XCTAssertEqual(excluded[0].matchRemoteHostOrNetworkEndpoint, .hostPort(host: "127.0.0.0", port: 0))
-      XCTAssertEqual(excluded[1].matchRemoteHostOrNetworkEndpoint, .hostPort(host: "::1", port: 0))
+      XCTAssertTrue(included.allSatisfy { $0.matchRemoteHostOrNetworkEndpoint == nil })
+      for pair in [Array(excluded[0...1]), Array(excluded[2...3])] {
+        XCTAssertEqual(pair[0].matchRemoteHostOrNetworkEndpoint, .hostPort(host: "127.0.0.0", port: 0))
+        XCTAssertEqual(pair[1].matchRemoteHostOrNetworkEndpoint, .hostPort(host: "::1", port: 0))
+      }
     }
     #endif
+  }
+
+  func testDatagramFramesRoundTripAtTheirLimitsAndRejectMalformedInput() throws {
+    let large = ProxyDatagram(payload: Data((0..<DatagramFrame.maxPayload).map { UInt8($0 % 253) }),
+                              endpoint: "[2001:db8::1]:443")
+    let small = ProxyDatagram(payload: Data("hi".utf8), endpoint: "192.0.2.1:53")
+    let empty = ProxyDatagram(payload: Data(), endpoint: "198.51.100.2:9")
+    let stream = try [large, small, empty].map { try XCTUnwrap(DatagramFrame.encode($0)) }.reduce(Data(), +)
+    var decoder = DatagramFrameDecoder()
+    var decoded: [ProxyDatagram] = []
+    var offset = 0
+    for size in [1, 3, 7, 70_000, 5, 100] where offset < stream.count {
+      let end = min(stream.count, offset + size)
+      decoded += try decoder.append(stream[offset..<end])
+      offset = end
+    }
+    decoded += try decoder.append(stream[offset...])
+    XCTAssertEqual(decoded, [large, small, empty])
+
+    let oversized = ProxyDatagram(payload: Data(count: DatagramFrame.maxPayload + 1), endpoint: "192.0.2.1:53")
+    for invalid in [oversized, ProxyDatagram(payload: Data(), endpoint: "example.com:443"),
+                    ProxyDatagram(payload: Data(), endpoint: "192.0.2.1:0"),
+                    ProxyDatagram(payload: Data(), endpoint: "2001:db8::1:443"),
+                    ProxyDatagram(payload: Data(), endpoint: "[192.0.2.1]:443")] {
+      XCTAssertNil(DatagramFrame.encode(invalid), invalid.endpoint)
+    }
+    for malformed in [Data([0, 0, 0, 0]), Data([0, 0, 0, 1, 0]),
+                      Data([0, 0, 0, 5, 4]) + Data("abcd".utf8)] {
+      var fresh = DatagramFrameDecoder()
+      XCTAssertThrowsError(try fresh.append(malformed))
+    }
+  }
+
+  func testUDPRelayCarriesDatagramsBothWaysAndKeepsLoopbackLocal() throws {
+    let outbound = [ProxyDatagram(payload: Data("query".utf8), endpoint: "192.0.2.53:53"),
+                    ProxyDatagram(payload: Data("local".utf8), endpoint: "127.0.0.1:5353"),
+                    ProxyDatagram(payload: Data("quic".utf8), endpoint: "[2001:db8::7]:443")]
+    let reply = ProxyDatagram(payload: Data("answer".utf8), endpoint: "192.0.2.53:53")
+    let server = try LoopbackBroker { socket in
+      _ = try readFrame(socket, limit: 512)
+      try sendAll(socket, Data([89]))
+      let header = try readFrame(socket, limit: 1024)
+      XCTAssertEqual(header.count, 2)
+      XCTAssertEqual(header["v"] as? Int, 1)
+      XCTAssertEqual(header["proto"] as? String, "udp")
+      var decoder = DatagramFrameDecoder()
+      var received: [ProxyDatagram] = []
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while received.count < 2 {
+        let count = recv(socket, &buffer, buffer.count, 0)
+        guard count > 0 else { throw TestSocketError.eof }
+        received += try decoder.append(Data(buffer.prefix(count)))
+      }
+      XCTAssertEqual(received, [outbound[0], outbound[2]])
+      try sendAll(socket, try XCTUnwrap(DatagramFrame.encode(reply)))
+      var byte: UInt8 = 0
+      XCTAssertEqual(recv(socket, &byte, 1, 0), 0)
+    }
+    let socket = try XCTUnwrap(FlowBroker(configuration: server.configuration()).query(pid: 8123))
+    let flow = ScriptedUDPFlow(reads: [outbound])
+    let finished = DispatchSemaphore(value: 0)
+    let relay = UDPFlowRelay(flow: flow, socket: socket, onFinish: { finished.signal() })
+    relay.start(header: try FlowDestination.udpHeader())
+    XCTAssertEqual(flow.written.wait(timeout: .now() + .seconds(2)), .success)
+    XCTAssertEqual(flow.writtenDatagrams(), [reply])
+    flow.endReads()
+    XCTAssertEqual(finished.wait(timeout: .now() + .seconds(2)), .success)
+    XCTAssertTrue(flow.isClosed())
+    server.finish()
   }
 
   func testRelayStopClosesBothPeersOnceEvenIfStartIsPending() throws {
@@ -295,6 +363,60 @@ final class TransparentProxyTests: XCTestCase {
 }
 
 private enum TestSocketError: Error { case failed(Int32), eof, invalidFrame }
+
+// Plays the application side of a UDP flow: returns each scripted read, then
+// waits for endReads before reporting the flow closed.
+private final class ScriptedUDPFlow: ProxyUDPFlow {
+  let written = DispatchSemaphore(value: 0)
+  private let ended = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private var reads: [[ProxyDatagram]]
+  private var writes: [ProxyDatagram] = []
+  private var closed = false
+
+  init(reads: [[ProxyDatagram]]) { self.reads = reads }
+
+  func open(completion: @escaping (Error?) -> Void) { completion(nil) }
+
+  func readDatagrams(completion: @escaping ([ProxyDatagram]?, Error?) -> Void) {
+    lock.lock()
+    let next = reads.isEmpty ? nil : reads.removeFirst()
+    lock.unlock()
+    DispatchQueue.global().async {
+      if let next = next { completion(next, nil); return }
+      self.ended.wait()
+      completion(nil, nil)
+    }
+  }
+
+  func writeDatagrams(_ datagrams: [ProxyDatagram], completion: @escaping (Error?) -> Void) {
+    lock.lock()
+    writes += datagrams
+    lock.unlock()
+    written.signal()
+    completion(nil)
+  }
+
+  func close(error: Error?) {
+    lock.lock()
+    closed = true
+    lock.unlock()
+  }
+
+  func endReads() { ended.signal() }
+
+  func writtenDatagrams() -> [ProxyDatagram] {
+    lock.lock()
+    defer { lock.unlock() }
+    return writes
+  }
+
+  func isClosed() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return closed
+  }
+}
 
 // The Network Extension creates NEAppProxyTCPFlow instances. A socket pair
 // exercises the same async read/write boundary here without activating it.

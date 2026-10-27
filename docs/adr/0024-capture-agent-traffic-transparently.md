@@ -20,11 +20,27 @@ Both deliver ordinary TCP flows to one per-run **Flow Ingress** inside
   is declined and the operating system handles it as if ViberMate were not
   installed. A descendant's attribution is remembered once seen, so a
   process that is later reparented to launchd stays attributed.
-- **Linux.** `vibermate run` starts the Agent in an unprivileged user and
-  network namespace whose default route is a TUN device. Every descendant
-  inherits the namespace, so attribution is structural. A gVisor netstack in
-  the run process turns packets into flows, and an in-namespace DNS responder
-  hands out fake IPs that map back to host names.
+- **Linux.** `vibermate run` starts the Agent in an unprivileged user,
+  network and mount namespace whose default route is a TUN device. Every
+  descendant inherits the namespace, so attribution is structural and no
+  broker is involved. A gVisor netstack in the run process turns packets
+  into flows. Its DNS responder, named by a generated `resolv.conf`
+  bind-mounted over the system one, answers A queries with fake IPs from
+  198.18.0.0/15 that map back to host names, so the Runtime resolves real
+  names through its own DoH. AAAA queries get an empty answer, so clients
+  use IPv4. Resolution through the systemd-resolved socket still returns
+  real addresses; SNI/Host sniffing names those flows.
+
+  The namespace is created with the caller's uid mapped to itself (files
+  keep their owners) and only `CAP_NET_ADMIN` and `CAP_SYS_ADMIN` inside
+  it, which are cleared before the Agent runs. Failing closed is
+  structural: if the launcher exits, the TUN device closes and the
+  namespace has no route out, so no pausing or token is needed. Where
+  unprivileged user namespaces are disabled, the run refuses to start and
+  says so. Loopback is separate inside the namespace: OAuth callbacks from
+  a browser and IDE connections into the Agent do not work in the first
+  version, so `--managed-auth` is the supported login with Linux
+  transparent capture.
 
 The Flow Ingress names the destination from, in order:
 
@@ -36,9 +52,21 @@ The Flow Ingress names the destination from, in order:
 It then sends `CONNECT host:port` with the run's existing proxy credential
 through the run's existing relay. Remote and local Runtimes therefore apply
 the same Environment, interception, DoH and egress rules as today, and the
-server needs no change. QUIC (UDP 443) is refused so clients fall back to
-TCP. DNS is answered locally, and other UDP is not captured in the first
-version.
+server needs no change.
+
+UDP goes through vibermated too, never around it. The run carries each
+captured UDP flow to the Runtime as an HTTP `connect-udp` request (RFC 9298)
+on the same relay and credential as TCP, so it works for local and remote
+Runtimes inside the existing tunnel. The Runtime hands it to its existing
+UDP path, which applies the Environment's policy and audit and sends it
+through the configured egress, including an upstream SOCKS5 proxy. QUIC is
+therefore carried, not refused. On Linux, DNS is the exception: it is
+answered by the capture layer so that names reach the Runtime as names. On
+macOS, Agents resolve through the system resolver, which is not theirs and is
+not captured; the extension claims outbound UDP as well as TCP, and an owned
+UDP socket's datagrams travel to the run framed with their remote endpoints,
+one `connect-udp` session per destination. Before this, the extension
+claimed TCP only, so an Agent's UDP on macOS went direct.
 
 CA trust is unchanged. `vibermate run` still sets `NODE_EXTRA_CA_CERTS`,
 `CODEX_CA_CERTIFICATE` and `SSL_CERT_FILE`, which children inherit; only the

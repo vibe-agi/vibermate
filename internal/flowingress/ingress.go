@@ -47,6 +47,7 @@ func New(proxy func() (Proxy, error)) (*Ingress, error) {
 
 // Serve owns conn: it reads the flow header, names the destination, opens a
 // CONNECT through the run's proxy and copies bytes until both sides finish.
+// A UDP flow instead carries datagram frames, each relayed as connect-udp.
 func (ingress *Ingress) Serve(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(headerTimeout))
@@ -56,6 +57,24 @@ func (ingress *Ingress) Serve(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 	_ = conn.SetReadDeadline(time.Time{})
+	if header.Protocol == "udp" {
+		return ingress.serveDatagrams(ctx, conn, reader)
+	}
+	return ingress.serve(ctx, conn, reader, header)
+}
+
+// ServeFlow is Serve for a caller that already knows the flow's original
+// destination, such as a netstack, so no header precedes the client's bytes.
+// It carries TCP only; such a caller relays its own UDP.
+func (ingress *Ingress) ServeFlow(ctx context.Context, conn net.Conn, header Header) error {
+	defer conn.Close()
+	if err := header.validate(); err != nil || header.Protocol != "tcp" {
+		return errors.Join(errInvalidHeader, err)
+	}
+	return ingress.serve(ctx, conn, bufio.NewReaderSize(conn, sniffBytes), header)
+}
+
+func (ingress *Ingress) serve(ctx context.Context, conn net.Conn, reader *bufio.Reader, header Header) error {
 	target := Destination(header, conn, reader)
 	upstream, err := ingress.connect(ctx, target)
 	if err != nil {
@@ -64,6 +83,10 @@ func (ingress *Ingress) Serve(ctx context.Context, conn net.Conn) error {
 	defer upstream.Close()
 	return splice(conn, reader, upstream)
 }
+
+// Proxy returns the run's current proxy, for other transports (such as
+// connect-udp) that must reach the Runtime the same way.
+func (ingress *Ingress) Proxy() (Proxy, error) { return ingress.proxy() }
 
 // Destination names the CONNECT target: a platform-reported host name, else
 // the sniffed TLS SNI or HTTP Host, else the IP address.

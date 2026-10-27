@@ -61,6 +61,11 @@ struct FlowDestination {
     }
     return try brokerFrame(fields, limit: 1024)
   }
+
+  // A UDP flow names no destination: each datagram frame carries its own.
+  static func udpHeader() throws -> Data {
+    try brokerFrame(["v": 1, "proto": "udp"], limit: 1024)
+  }
 }
 
 struct FlowBroker {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/connectudp"
 	"github.com/vibe-agi/vibermate/internal/flowingress"
 )
 
@@ -131,4 +132,54 @@ func recordClientHello(t *testing.T, serverName string) []byte {
 	}
 	right.Close()
 	return append(header, body...)
+}
+
+// connect-udp through the run's real frontier: the frontier swaps in the run
+// capability and tunnels the accepted upgrade, so capsules flow end to end.
+func TestConnectUDPPassesThroughFrontier(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	observed := make(chan tunnelObservation, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		observed <- tunnelObservation{request.URL.Path, request.Header.Get("Proxy-Authorization")}
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n")
+		for {
+			payload, err := connectudp.ReadDatagram(reader)
+			if err != nil {
+				return
+			}
+			if err := connectudp.WriteDatagram(conn, payload); err != nil {
+				return
+			}
+		}
+	}()
+	frontier := newTestLocalProxyFrontier(t, "generation-1", "http://"+listener.Addr().String(), "runtime-run-capability")
+	conn, err := connectudp.Dial(t.Context(), frontier.Origin(), frontier.Token(), "dns.example", 53)
+	if err != nil {
+		t.Fatalf("connect-udp through the frontier: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.WriteDatagram([]byte("query")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := conn.ReadDatagram(); err != nil || string(got) != "query" {
+		t.Fatalf("echo = %q, %v", got, err)
+	}
+	got := <-observed
+	if got.target != connectudp.Path("dns.example", 53) || got.proxyAuth != frontierBasic("capture", "runtime-run-capability") {
+		t.Fatalf("Runtime saw %+v", got)
+	}
 }

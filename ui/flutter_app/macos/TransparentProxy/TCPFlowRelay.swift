@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+// A relay between one application flow and its broker connection.
+protocol FlowRelay: AnyObject {
+  func start(header: Data)
+  func stop()
+}
+
 protocol ProxyTCPFlow: AnyObject {
   func open(completion: @escaping (Error?) -> Void)
   func read(completion: @escaping (Data?, Error?) -> Void)
@@ -9,7 +15,7 @@ protocol ProxyTCPFlow: AnyObject {
   func closeWrite(error: Error?)
 }
 
-final class TCPFlowRelay {
+final class TCPFlowRelay: FlowRelay {
   private let flow: ProxyTCPFlow
   private let queue = DispatchQueue(label: "io.vibermate.transparent-proxy.relay")
   private var socket: RelayDescriptor?
@@ -177,7 +183,7 @@ final class TCPFlowRelay {
   }
 }
 
-private final class RelayDescriptor {
+final class RelayDescriptor {
   let value: Int32
   init(_ value: Int32) { self.value = value }
   deinit { Darwin.close(value) }

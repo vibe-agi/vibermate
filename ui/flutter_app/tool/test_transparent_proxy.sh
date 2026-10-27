@@ -17,6 +17,7 @@ xcrun swiftc -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
   -Xlinker -rpath -Xlinker "${xctest_platform}/usr/lib" \
   "${flutter_directory}/macos/TransparentProxy/FlowBroker.swift" \
   "${flutter_directory}/macos/TransparentProxy/TCPFlowRelay.swift" \
+  "${flutter_directory}/macos/TransparentProxy/UDPFlowRelay.swift" \
   "${flutter_directory}/macos/TransparentProxy/TransparentProxyProvider.swift" \
   "${script_directory}/test_transparent_proxy.swift" \
   -lbsm -o "${proxy_temp}/protocol-tests"
@@ -28,6 +29,7 @@ xcrun swiftc -swift-version 5 -warnings-as-errors -application-extension \
   -target "$(uname -m)-apple-macosx14.0" -module-name TransparentProxy \
   "${flutter_directory}/macos/TransparentProxy/FlowBroker.swift" \
   "${flutter_directory}/macos/TransparentProxy/TCPFlowRelay.swift" \
+  "${flutter_directory}/macos/TransparentProxy/UDPFlowRelay.swift" \
   "${flutter_directory}/macos/TransparentProxy/TransparentProxyProvider.swift" \
   "${flutter_directory}/macos/TransparentProxy/main.swift" \
   -framework NetworkExtension -framework Network -lbsm \

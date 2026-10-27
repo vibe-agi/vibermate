@@ -996,6 +996,7 @@ type proxyBuildRequest struct {
 	rawEvidence    rawevidence.RequestRecorder
 	random         io.Reader
 	bodyAdmission  *exchange.BodyAdmission
+	udp            loopbackproxy.UDPOpener
 }
 
 type proxyRuntime interface {
@@ -1025,6 +1026,7 @@ func buildProxy(
 		EgressAudit:    request.egressAudit,
 		RawEvidence:    request.rawEvidence,
 		BodyAdmission:  request.bodyAdmission,
+		UDP:            request.udp,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),

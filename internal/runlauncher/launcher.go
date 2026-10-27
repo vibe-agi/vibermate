@@ -22,8 +22,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/flowingress"
 	"github.com/vibe-agi/vibermate/internal/launchsnapshot"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/netnscapture"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
 
@@ -362,14 +364,32 @@ func (launcher *Launcher) Run(
 	}
 	launcher.announceCodexSessions(grant.LaunchRecipe)
 	var transparent *transparentCapture
+	var namespaceIngress *flowingress.Ingress
 	if request.Transparent {
-		transparent, err = launcher.startTransparent(grant, environmentGrant)
-		if err != nil {
+		switch transparentMode() {
+		case transparentBroker:
+			transparent, err = launcher.startTransparent(grant, environmentGrant)
+			if err != nil {
+				launcher.finishBestEffort(control, grant)
+				return 1, err
+			}
+			defer transparent.Close()
+			environment = transparent.agentEnvironment(environment)
+		case transparentNamespace:
+			proxy := flowingress.Proxy{Origin: environmentGrant.ProxyAddress, Token: environmentGrant.ProxyToken}
+			namespaceIngress, err = flowingress.New(func() (flowingress.Proxy, error) { return proxy, nil })
+			if err != nil {
+				launcher.finishBestEffort(control, grant)
+				return 1, err
+			}
+			environment = withoutProxyEnvironment(environment)
+			if !request.ManagedAuth {
+				fmt.Fprintln(launcher.config.Stderr, "vibermate: transparent capture on Linux isolates localhost, so a browser sign-in callback cannot reach the Agent; use --managed-auth for sign-in.")
+			}
+		default:
 			launcher.finishBestEffort(control, grant)
-			return 1, err
+			return 1, ErrTransparentUnsupported
 		}
-		defer transparent.Close()
-		environment = transparent.agentEnvironment(environment)
 	}
 	if recovery != nil {
 		recovery.childEnvironment = append([]string(nil), environment...)
@@ -397,12 +417,34 @@ func (launcher *Launcher) Run(
 		launcher.config.TerminationTimeout,
 		launcher.config.Stdin,
 	)
+	var namespace *netnscapture.Session
+	if namespaceIngress != nil {
+		namespace, err = netnscapture.Prepare(child, namespaceIngress)
+		if err != nil {
+			restoreTerminal()
+			launcher.finishBestEffort(control, grant)
+			return 1, errors.Join(ErrTransparentNamespaceUnavailable, err)
+		}
+		defer namespace.Close()
+	}
 	if err := child.Start(); err != nil {
 		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
+		if namespace != nil {
+			return 1, errors.Join(ErrTransparentNamespaceUnavailable, err)
+		}
 		return 1, fmt.Errorf("start captured process: %w", err)
 	}
 	defer restoreTerminal()
+	if namespace != nil {
+		if err := namespace.Start(); err != nil {
+			cancelChild(err)
+			_ = waitChild(child, launcher.config.TerminationTimeout)
+			restoreTerminal()
+			launcher.finishBestEffort(control, grant)
+			return 1, errors.Join(ErrTransparentNamespaceUnavailable, err)
+		}
+	}
 	stopSignals := relaySignals(child.Process)
 	defer stopSignals()
 	if err := launcher.callWithin(
