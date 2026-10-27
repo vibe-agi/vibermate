@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -173,12 +174,32 @@ func TestTransparentCaptureForwardsADescendantsFlow(t *testing.T) {
 
 func processState(t *testing.T, pid int) byte {
 	t.Helper()
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	process, err := processlineage.System().Read(pid)
 	if err != nil {
 		t.Skipf("process state unavailable: %v", err)
 	}
-	fields := strings.Fields(string(data[bytes.LastIndexByte(data, ')')+1:]))
-	return fields[0][0]
+	if process.Stopped {
+		return 'T'
+	}
+	return 'S'
+}
+
+// sleepCommand runs sleep from a binary whose start environment the broker
+// can read. macOS hides the environment of its own platform binaries, so
+// there the test runs an ad-hoc signed copy, as an Agent's own tools are.
+func sleepCommand(t *testing.T, arguments ...string) *exec.Cmd {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		return exec.Command("sleep", arguments...)
+	}
+	path := filepath.Join(t.TempDir(), "sleep")
+	if output, err := exec.Command("cp", "/bin/sleep", path).CombinedOutput(); err != nil {
+		t.Fatalf("copy sleep: %v %s", err, output)
+	}
+	if output, err := exec.Command("codesign", "-f", "-s", "-", path).CombinedOutput(); err != nil {
+		t.Fatalf("sign the sleep copy: %v %s", err, output)
+	}
+	return exec.Command(path, arguments...)
 }
 
 func waitState(t *testing.T, pid int, want byte) {
@@ -300,7 +321,7 @@ func TestTransparentAgentCarriesOnlyItsOwnToken(t *testing.T) {
 
 func startMarked(t *testing.T, environment []string, setsid bool) *exec.Cmd {
 	t.Helper()
-	child := exec.Command("sleep", "60")
+	child := sleepCommand(t, "60")
 	child.Env = environment
 	child.SysProcAttr = &syscall.SysProcAttr{Setsid: setsid}
 	if err := child.Start(); err != nil {
@@ -353,7 +374,7 @@ func TestTransparentCaptureOwnsAnOrphanByToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer capture.Close()
-	shell := exec.Command("sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+	shell := exec.Command("sh", "-c", `"$0" 30 </dev/null >/dev/null 2>&1 & echo $!`, sleepCommand(t).Path)
 	shell.Env = append(os.Environ(), capture.marker())
 	output, err := shell.Output()
 	if err != nil {
