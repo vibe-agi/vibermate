@@ -33,6 +33,14 @@ func (table *fakeTable) set(pid, parent int, start int64) Identity {
 	return identity
 }
 
+func (table *fakeTable) setGroup(pid, group int) {
+	table.mu.Lock()
+	defer table.mu.Unlock()
+	process := table.processes[pid]
+	process.Group = group
+	table.processes[pid] = process
+}
+
 func (table *fakeTable) remove(pid int) {
 	table.mu.Lock()
 	defer table.mu.Unlock()
@@ -189,4 +197,33 @@ func TestSystemReaderFollowsRealChildren(t *testing.T) {
 	wantOwner(t, registry, command.Process.Pid, "run-test")
 	wantOwner(t, registry, os.Getpid(), "")
 	wantOwner(t, registry, os.Getppid(), "")
+}
+
+// An orphan whose environment is unreadable (a macOS platform binary) is
+// still owned through the process group its Agent leads, and only while that
+// Agent lives. Groups led by a root or by an unrelated process own nothing.
+func TestOwnerAttributesAnOrphanByItsAgentsGroup(t *testing.T) {
+	table, registry := newFakeTree()
+	if err := registry.Register(Identity{PID: 100, Start: 100}, "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	table.setGroup(101, 101) // claude leads its own group
+	table.set(400, 1, 400)   // an orphaned curl, reparented to launchd
+	table.setGroup(400, 101)
+	wantOwner(t, registry, 400, "run-a")
+
+	table.set(401, 1, 401) // an orphan in the root's own group
+	table.setGroup(100, 100)
+	table.setGroup(401, 100)
+	wantOwner(t, registry, 401, "")
+
+	table.set(402, 1, 402) // an orphan in an unrelated terminal job
+	table.setGroup(300, 300)
+	table.setGroup(402, 300)
+	wantOwner(t, registry, 402, "")
+
+	table.set(403, 1, 403) // the Agent has exited: its group names nothing
+	table.setGroup(403, 101)
+	table.remove(101)
+	wantOwner(t, registry, 403, "")
 }

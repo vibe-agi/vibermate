@@ -121,18 +121,39 @@ func (registry *Registry) Deregister(run string) {
 // registered root or a process already attributed, then remembers every
 // process on the path, so a descendant later reparented away from the root
 // keeps its run. When the walk finds no owner (the process was orphaned
-// before its first connection), a run's marker in the process's environment
-// attributes it instead.
+// before its first connection), two facts it inherited still name the run:
+// its process group, while the Agent leading that group lives, and a run's
+// marker in its environment. macOS hides the environment of its own platform
+// binaries (curl, sh, git), so the group comes first.
 func (registry *Registry) Owner(pid int) (string, bool) {
+	run, path := registry.walk(pid)
+	if run != "" || len(path) == 0 {
+		return run, run != ""
+	}
+	if run, found := registry.groupRun(path[0], pid); found {
+		registry.remember(path[:1], run)
+		return run, true
+	}
+	if run, found := registry.markedRun(pid); found {
+		registry.remember(path[:1], run)
+		return run, true
+	}
+	return "", false
+}
+
+// walk follows parents from pid. It returns the owning run and remembers the
+// path, or no run and the identities it visited (empty when pid is gone or is
+// itself a root).
+func (registry *Registry) walk(pid int) (string, []Identity) {
 	var path []Identity
 	current := pid
 	for depth := 0; depth < maxDepth && current > 1; depth++ {
 		process, err := registry.reader.Read(current)
 		if err != nil {
 			if depth == 0 {
-				return "", false
+				return "", nil
 			}
-			break // A parent exited mid-walk; the marker may still apply.
+			break // A parent exited mid-walk; the fallbacks may still apply.
 		}
 		registry.mu.Lock()
 		run, isRoot := registry.roots[process.Identity]
@@ -141,23 +162,34 @@ func (registry *Registry) Owner(pid int) (string, bool) {
 		}
 		registry.mu.Unlock()
 		if isRoot && depth == 0 {
-			return "", false
+			return "", nil
 		}
 		if run != "" {
 			registry.remember(path, run)
-			return run, true
+			return run, nil
 		}
 		path = append(path, process.Identity)
 		current = process.Parent
 	}
-	if len(path) == 0 {
+	return "", path
+}
+
+// groupRun attributes pid by its process group. The launcher starts each
+// Agent as the leader of a new group, and a group's id is its leader's pid,
+// which cannot be reused while the leader lives. So a live leader that leads
+// its own group and descends from a root names the run. A root's own group is
+// never owned, like the root itself.
+func (registry *Registry) groupRun(self Identity, pid int) (string, bool) {
+	process, err := registry.reader.Read(pid)
+	if err != nil || process.Identity != self || process.Group <= 1 || process.Group == pid {
 		return "", false
 	}
-	if run, found := registry.markedRun(pid); found {
-		registry.remember(path[:1], run)
-		return run, true
+	leader, err := registry.reader.Read(process.Group)
+	if err != nil || leader.Group != leader.Identity.PID {
+		return "", false
 	}
-	return "", false
+	run, _ := registry.walk(leader.Identity.PID)
+	return run, run != ""
 }
 
 // markedRun looks for a registered run's marker in pid's environment. It

@@ -81,10 +81,14 @@ Each transparent run also generates a token and sets it, as
 `VIBERMATE_TRANSPARENT_CAPTURE`, in its Agent's environment only; a token
 inherited from an outer run is dropped. Descendants inherit it. When a
 parent walk finds no owner, because the process was orphaned or daemonized
-before its first connection, the broker reads the process's start
-environment (same user only) and attributes it to the run whose token it
-carries. Lineage still wins, so a nested run's processes belong to the
-nested run.
+before its first connection, the broker first checks the process group: the
+Agent leads its own group, a group id is its leader's pid and cannot be
+reused while that leader lives, so membership in a live Agent's group names
+the run. Failing that, it reads the process's start environment (same user
+only) and attributes it to the run whose token it carries. macOS hides the
+start environment of its own platform binaries (`curl`, `sh`, `git`), which
+is why the group comes first. Lineage still wins, so a nested run's
+processes belong to the nested run.
 
 On macOS the extension cannot tell an unowned flow from one it could not
 ask about. Declining both keeps the Mac usable when ViberMate is slow or
@@ -124,8 +128,11 @@ Known limits:
 - Linux namespaces separate loopback, so localhost callbacks from a browser
   or IDE into the Agent need managed authentication or a later forwarder.
 - On macOS, a process orphaned before its first connection is attributed
-  only if it kept the run's token in its environment; one started with a
-  cleared environment (for example `env -i`) is unowned.
+  only if it stayed in the Agent's process group while the Agent lives, or
+  kept the run's token in an environment macOS lets the broker read. A
+  platform binary that also left the group (`setsid`, a new job) is unowned,
+  as is any process started with a cleared environment (`env -i`) outside
+  the group.
 - One ownership query that fails while the broker and extension are both
   healthy, for a process the extension has never seen, goes direct. The
   extension counts these and Host status reports the count. Removing the
