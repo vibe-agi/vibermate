@@ -562,14 +562,15 @@ test("source-traceability preparer (R0) stages a deterministic verifier-ready ev
   );
 });
 
-test("source-traceability preparer (R0) rejects a non-executable transparent extension", async (t) => {
+test("source-traceability preparer (R0) stages the transparent extension executable from the 0644 transfer", async (t) => {
   const value = await fixture(t);
+  // The build-input transfer requires every dist file to be exactly 0644.
   await chmod(join(value.distPath, "TransparentProxy/io.vibermate.desktop.transparent-proxy"), 0o644);
-  await assert.rejects(
-    prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies()),
-    /transparent-proxy must be executable/u,
+  await prepareR0ReleaseEvidence(preparationOptions(value), preparationDependencies());
+  assert.equal(
+    (await lstat(join(value.artifactRoot, "unsigned-payload/dist/TransparentProxy/io.vibermate.desktop.transparent-proxy"))).mode & 0o7777,
+    0o755,
   );
-  await assertAbsent(value.artifactRoot);
 });
 
 test(

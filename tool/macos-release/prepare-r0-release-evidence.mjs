@@ -1057,6 +1057,8 @@ async function stageDistTree(sourceRoot, destinationRoot, limits, executablePath
     if (state.totalBytes > limits.payloadTotalBytes - initialInfo.size) {
       throw new Error("dist source exceeds the payload byte limit");
     }
+    // The build-input transfer carries every dist file as 0644, so the source
+    // mode says nothing; listed executables are staged executable regardless.
     const executable = executablePaths.includes(relativePath);
     await copyStableRegularFile(
       sourcePath,
@@ -1065,7 +1067,7 @@ async function stageDistTree(sourceRoot, destinationRoot, limits, executablePath
       executable ? 0o755 : 0o644,
       `dist source ${relativePath}`,
       limits,
-      { executable, nonempty: executable },
+      { nonempty: executable },
     );
     state.totalBytes += initialInfo.size;
     state.files += 1;
