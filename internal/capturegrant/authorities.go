@@ -3,6 +3,7 @@ package capturegrant
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
@@ -44,6 +45,7 @@ type CaptureAuthoritySet struct {
 	environmentID      environment.EnvironmentID
 	launchAuthority    environment.LaunchAuthorityBoundary
 	launchEnvironment  environment.LaunchEnvironmentPolicy
+	captureScope       *capturescope.Policy
 	nativeToolLogin    *NativeToolLoginView
 }
 
@@ -96,6 +98,15 @@ func (set CaptureAuthoritySet) ManagedCredentialAuthorities() []string {
 
 func (set CaptureAuthoritySet) LaunchEnvironment() environment.LaunchEnvironmentPolicy {
 	return set.launchEnvironment.Clone()
+}
+
+// CaptureScope is the launch revision's capture scope (ADR 0025), or nil.
+func (set CaptureAuthoritySet) CaptureScope() *capturescope.Policy {
+	if set.captureScope == nil {
+		return nil
+	}
+	scope := set.captureScope.Clone()
+	return &scope
 }
 
 func (set CaptureAuthoritySet) Review() CaptureAuthorityReview {
@@ -298,6 +309,7 @@ func (resolver *environmentAuthorityResolver) attachLaunchEnvironment(
 		)
 	}
 	set.launchEnvironment = snapshot.LaunchEnvironment()
+	set.captureScope = snapshot.CaptureScope()
 	policy := snapshot.Aggregate().ClientToolAccess
 	if policy != nil && policy.Enabled && policy.Validate() == nil {
 		route := policy.Route

@@ -38,6 +38,10 @@ func (environment Environment) Clone() Environment {
 		policy := *environment.PolicySet
 		cloned.PolicySet = &policy
 	}
+	if environment.CaptureScope != nil {
+		scope := environment.CaptureScope.Clone()
+		cloned.CaptureScope = &scope
+	}
 	cloned.ClientEndpoints = make([]ClientEndpoint, len(environment.ClientEndpoints))
 	for endpointIndex, endpoint := range environment.ClientEndpoints {
 		cloned.ClientEndpoints[endpointIndex] = cloneEndpoint(endpoint)
@@ -178,6 +182,14 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 	// policy are one authority and therefore one digest.
 	if value.EffectivePolicySet() == DefaultPolicySet() {
 		value.PolicySet = nil
+	}
+	// An empty capture scope is the default; rules have no order of their own.
+	if scope := value.CaptureScope; scope != nil {
+		if len(scope.Rules) == 0 && !scope.AllowUserAdditions {
+			value.CaptureScope = nil
+		} else {
+			sort.Slice(scope.Rules, func(left, right int) bool { return scope.Rules[left].ID < scope.Rules[right].ID })
+		}
 	}
 	sort.Slice(value.ClientEndpoints, func(left, right int) bool {
 		return value.ClientEndpoints[left].ID < value.ClientEndpoints[right].ID
@@ -409,6 +421,14 @@ func validateRoot(value Environment, allowSystem bool) error {
 	}
 	if err := value.EffectivePolicySet().Validate(); err != nil {
 		return err
+	}
+	if value.CaptureScope != nil {
+		if value.ID == SystemTransparentID {
+			return ErrInvalidEnvironment
+		}
+		if err := value.CaptureScope.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidEnvironment, err)
+		}
 	}
 	if err := value.LaunchEnvironment.Validate(); err != nil {
 		return err

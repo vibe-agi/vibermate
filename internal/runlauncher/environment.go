@@ -2,11 +2,11 @@ package runlauncher
 
 import (
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"net"
 	"net/url"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
@@ -118,7 +118,13 @@ func buildEnvironment(
 	for key, value := range grant.LaunchEnvironment.SetEnv {
 		preserved[key] = value
 	}
-	noProxy := safeNoProxy(noProxyValues, grant.ProtectedAuthorities)
+	// ADR 0025: the Environment's capture scope decides what stays off
+	// ViberMate; the user's own NO_PROXY counts only when it allows that.
+	noProxy := capturescope.Compile(
+		grant.CaptureScope,
+		grant.ProtectedAuthorities,
+		capturescope.Options{UserNoProxy: noProxyValues},
+	).NoProxy()
 	preserved["HTTP_PROXY"] = proxy
 	preserved["HTTPS_PROXY"] = proxy
 	preserved["http_proxy"] = proxy
@@ -288,75 +294,4 @@ func authenticatedProxyURL(origin string, capability string) (string, error) {
 	}
 	proxy.User = url.UserPassword("capture", capability)
 	return proxy.String(), nil
-}
-
-func safeNoProxy(values []string, protected []string) string {
-	protectedEndpoints := make([]protectedEndpoint, 0, len(protected))
-	for _, authority := range protected {
-		host, port, err := netSplitAuthority(authority)
-		if err == nil {
-			protectedEndpoints = append(
-				protectedEndpoints,
-				protectedEndpoint{host: host, port: port},
-			)
-		}
-	}
-	var safe []string
-	seen := make(map[string]struct{})
-	for _, value := range values {
-		for _, raw := range strings.Split(value, ",") {
-			entry := strings.TrimSpace(raw)
-			if entry == "" || noProxyCanCover(entry, protectedEndpoints) {
-				continue
-			}
-			if _, duplicate := seen[entry]; duplicate {
-				continue
-			}
-			seen[entry] = struct{}{}
-			safe = append(safe, entry)
-		}
-	}
-	return strings.Join(safe, ",")
-}
-
-type protectedEndpoint struct {
-	host string
-	port uint16
-}
-
-func noProxyCanCover(entry string, protected []protectedEndpoint) bool {
-	lower := strings.ToLower(strings.TrimSpace(entry))
-	if lower == "" || lower == "*" {
-		return true
-	}
-	if strings.ContainsAny(lower, " \t\r\n/") {
-		return true
-	}
-	entryHost := lower
-	var entryPort uint16
-	if host, portText, err := net.SplitHostPort(lower); err == nil {
-		entryHost = strings.Trim(host, "[]")
-		port, parseErr := strconv.ParseUint(portText, 10, 16)
-		if parseErr != nil || port == 0 {
-			return true
-		}
-		entryPort = uint16(port)
-	} else {
-		entryHost = strings.Trim(entryHost, "[]")
-	}
-	entryHost = strings.TrimPrefix(entryHost, "*")
-	entryHost = strings.TrimPrefix(entryHost, ".")
-	if entryHost == "" {
-		return true
-	}
-	for _, endpoint := range protected {
-		if entryPort != 0 && entryPort != endpoint.port {
-			continue
-		}
-		if endpoint.host == entryHost ||
-			strings.HasSuffix(endpoint.host, "."+entryHost) {
-			return true
-		}
-	}
-	return false
 }

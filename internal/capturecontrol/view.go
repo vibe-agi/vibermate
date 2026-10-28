@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"path/filepath"
 	"time"
 
@@ -101,6 +102,9 @@ type LaunchGrant struct {
 	// LaunchEnvironment is the immutable Environment-revision overlay applied
 	// only to the child process created for this Capture.
 	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
+	// CaptureScope is the launch revision's capture scope (ADR 0025). Absent
+	// means the default: only built-in destinations stay off ViberMate.
+	CaptureScope *capturescope.Policy `json:"captureScope,omitempty"`
 }
 
 type NativeToolLoginView = capturegrant.NativeToolLoginView
@@ -303,6 +307,7 @@ func (grant LaunchGrant) Validate() error {
 		grant.ProtectedAuthorities == nil ||
 		grant.ManagedCredentialAuthorities == nil ||
 		grant.LaunchEnvironment.Validate() != nil ||
+		(grant.CaptureScope != nil && grant.CaptureScope.Validate() != nil) ||
 		grant.Run.CatalogRevision != grant.CatalogRevision ||
 		grant.Run.ClientRecognition != grant.Recognition {
 		return errors.New("CaptureRun launch grant is incomplete")

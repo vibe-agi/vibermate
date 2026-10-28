@@ -100,6 +100,11 @@ The extension or netstack sends one header before any client bytes:
     connection to the broker and Agents' localhost traffic (dev servers, IDE
     sockets, OAuth callbacks) stay direct. An owned UDP socket's datagrams
     to loopback addresses are dropped rather than sent through the Runtime.
+  - Decline DNS (port 53, TCP, and UDP by the flow's first destination), so
+    the system resolver's queries, which macOS attributes to the Agent, stay
+    on the system path (ADR 0025).
+  - Destinations an Environment's capture scope keeps off ViberMate are
+    described in [ADR 0025](adr/0025-decide-on-the-client-what-never-enters-vibermate.md).
   - Bound the query at about 200 ms. On failure, refuse a process already
     seen owned and decline any other, counting the failure. Unlike Linux
     namespaces, process lineage leaves localhost untouched.

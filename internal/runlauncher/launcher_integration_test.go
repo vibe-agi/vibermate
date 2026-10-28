@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
 	"net/http"
@@ -622,7 +623,7 @@ exit 7
 		lines["arg2"] != "two words" ||
 		lines["http"] != wantProxy ||
 		lines["https"] != wantProxy ||
-		lines["no_proxy"] != "localhost" ||
+		lines["no_proxy"] != capturescope.Compile(nil, nil, capturescope.Options{}).NoProxy() ||
 		lines["run"] != "capture-run-1" ||
 		lines["root"] != rootPath ||
 		lines["node_proxy"] != "1" ||

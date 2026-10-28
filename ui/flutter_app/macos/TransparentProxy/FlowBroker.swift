@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import NetworkExtension
 
 enum FlowBrokerError: Error {
   case invalidConfiguration, invalidFrame, invalidReply, timedOut, endOfStream
@@ -229,3 +230,8 @@ private func brokerFrame(_ fields: [String: Any], limit: Int) throws -> Data {
   guard !encoded.isEmpty, encoded.count <= limit else { throw FlowBrokerError.invalidFrame }
   return Data([UInt8(encoded.count >> 8), UInt8(encoded.count & 255)]) + encoded
 }
+
+// The macOS 14 flow callbacks take NetworkExtension's NWEndpoint class. Files
+// that also import Network see two NWEndpoint types; this file imports only
+// NetworkExtension, so the alias names the class unambiguously.
+typealias LegacyNetworkEndpoint = NWEndpoint

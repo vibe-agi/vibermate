@@ -262,6 +262,13 @@ final class TransparentProxyTests: XCTestCase {
     #endif
   }
 
+  func testDNSStaysOnTheSystemPath() {
+    XCTAssertTrue(TransparentProxyProvider.staysOnSystemPath(port: 53))
+    for port: UInt16 in [0, 52, 54, 443, 853, 5353] {
+      XCTAssertFalse(TransparentProxyProvider.staysOnSystemPath(port: port), "\(port)")
+    }
+  }
+
   func testDatagramFramesRoundTripAtTheirLimitsAndRejectMalformedInput() throws {
     let large = ProxyDatagram(payload: Data((0..<DatagramFrame.maxPayload).map { UInt8($0 % 253) }),
                               endpoint: "[2001:db8::1]:443")

@@ -66,11 +66,26 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
     return false
   }
 
+  // DNS stays on the system path (ADR 0025): the system resolver's queries
+  // reach the extension as the Agent's, and through a server Runtime they
+  // would go to a resolver that exists only on this Mac.
+  static func staysOnSystemPath(port: UInt16) -> Bool { port == 53 }
+
+  // macOS 14 delivers a UDP flow here with its first destination.
+  override func handleNewUDPFlow(_ flow: NEAppProxyUDPFlow,
+                                 initialRemoteEndpoint remoteEndpoint: LegacyNetworkEndpoint) -> Bool {
+    if let endpoint = remoteEndpoint as? NWHostEndpoint, let port = UInt16(endpoint.port),
+       Self.staysOnSystemPath(port: port) {
+      return false
+    }
+    return handleNewFlow(flow)
+  }
+
   private func handleTCP(_ tcp: NEAppProxyTCPFlow, identity: FlowSourceIdentity, current: ProxySession) -> Bool {
     guard let destination = Self.destination(tcp) else {
       return current.wasOwned(identity) ? Self.refuse(tcp) : false
     }
-    if destination.isLoopback { return false }
+    if destination.isLoopback || Self.staysOnSystemPath(port: destination.port) { return false }
     return claim(tcp, identity: identity, current: current) { socket in
       current.add(tcp, socket: socket, header: try destination.header())
     }
@@ -172,6 +187,19 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
                          protocol: matched, direction: .outbound)
   }
 }
+
+// macOS 15 and later deliver a UDP flow through this protocol instead.
+#if compiler(>=6.0)
+@available(macOS 15.0, *)
+extension TransparentProxyProvider: NEAppProxyUDPFlowHandling {
+  func handleNewUDPFlow(_ flow: NEAppProxyUDPFlow, initialRemoteFlowEndpoint remoteEndpoint: Network.NWEndpoint) -> Bool {
+    if case let .hostPort(_, port) = remoteEndpoint, Self.staysOnSystemPath(port: port.rawValue) {
+      return false
+    }
+    return handleNewFlow(flow)
+  }
+}
+#endif
 
 struct FlowSourceIdentity: Hashable {
   let pid: pid_t

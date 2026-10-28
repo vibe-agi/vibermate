@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -112,6 +113,18 @@ func (compiler Compiler) compile(input Environment, kind compilationKind) (Envir
 	for index, endpoint := range normalized.ClientEndpoints {
 		snapshot.byOrigin[endpoint.ClientOrigin.String()] = index
 	}
+	if kind == compileCandidate && normalized.CaptureScope != nil {
+		protected, _, err := snapshotAuthorityScopes(snapshot)
+		if err != nil {
+			return EnvironmentSnapshot{}, err
+		}
+		if rule, covers := capturescope.Covers(*normalized.CaptureScope, protected); covers {
+			return EnvironmentSnapshot{}, fmt.Errorf(
+				"%w: capture scope rule %q covers an endpoint this Environment serves",
+				ErrInvalidEnvironment, rule,
+			)
+		}
+	}
 	return snapshot, nil
 }
 
@@ -209,6 +222,16 @@ func (snapshot EnvironmentSnapshot) SystemOwned() bool       { return snapshot.s
 func (snapshot EnvironmentSnapshot) ContentRecording() ContentRecordingPolicy {
 	return snapshot.aggregate.ContentRecording
 }
+
+// CaptureScope is the revision's capture scope, or nil for the default.
+func (snapshot EnvironmentSnapshot) CaptureScope() *capturescope.Policy {
+	if snapshot.aggregate.CaptureScope == nil {
+		return nil
+	}
+	scope := snapshot.aggregate.CaptureScope.Clone()
+	return &scope
+}
+
 func (snapshot EnvironmentSnapshot) LaunchEnvironment() LaunchEnvironmentPolicy {
 	return snapshot.aggregate.LaunchEnvironment.Clone()
 }

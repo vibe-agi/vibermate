@@ -24,7 +24,7 @@ func TestNativeLaunchPreservesOriginalLoginWithoutModelPlaceholder(t *testing.T)
 	if got["CODEX_API_KEY"] != "" {
 		t.Fatal("native launch replaced original AuthManager with model placeholder")
 	}
-	if got["CODEX_HOME"] != "/tmp/synthetic-native-home" || got["CODEX_CONNECTORS_TOKEN"] != "synthetic-connectors-token" || got["CUSTOM_OAUTH_TOKEN"] != "synthetic-oauth-token" || got["NO_PROXY"] != "localhost" {
+	if got["CODEX_HOME"] != "/tmp/synthetic-native-home" || got["CODEX_CONNECTORS_TOKEN"] != "synthetic-connectors-token" || got["CUSTOM_OAUTH_TOKEN"] != "synthetic-oauth-token" || got["NO_PROXY"] != builtinNoProxy {
 		t.Fatal("native original auth or protected proxy scope was lost")
 	}
 	for _, path := range []struct {
@@ -42,7 +42,7 @@ func TestNativeLaunchPreservesOriginalLoginWithoutModelPlaceholder(t *testing.T)
 				t.Fatal(err)
 			}
 			values := environmentMap(env)
-			if values["CODEX_API_KEY"] != "" || values["CODEX_HOME"] != "/tmp/synthetic-native-home" || values["NO_PROXY"] != "localhost" {
+			if values["CODEX_API_KEY"] != "" || values["CODEX_HOME"] != "/tmp/synthetic-native-home" || values["NO_PROXY"] != builtinNoProxy {
 				t.Fatal("native login path was replaced")
 			}
 			for _, entry := range path.extra {

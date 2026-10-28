@@ -4886,6 +4886,98 @@ final class EnvironmentContentRecordingPolicy {
   JsonObject toJson() => {'mode': mode, 'retentionDays': retentionDays};
 }
 
+/// One destination an Environment's runs keep off ViberMate (ADR 0025). The
+/// Runtime enforces the bounds; the client checks only the shape.
+final class EnvironmentCaptureScopeRule {
+  const EnvironmentCaptureScopeRule({
+    required this.id,
+    required this.kind,
+    required this.value,
+    this.port = 0,
+  });
+
+  factory EnvironmentCaptureScopeRule.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'id', 'kind', 'value'},
+      optional: const {'port'},
+    );
+    final kind = requireString(value, 'kind', path);
+    final port = value.containsKey('port')
+        ? requireInteger(value, 'port', path, minimum: 1)
+        : 0;
+    if (!const {'host', 'suffix', 'prefix'}.contains(kind) || port > 65535) {
+      throw ControlContractException('$path capture scope rule is invalid');
+    }
+    return EnvironmentCaptureScopeRule(
+      id: requireString(value, 'id', path),
+      kind: kind,
+      value: requireString(value, 'value', path),
+      port: port,
+    );
+  }
+
+  final String id;
+  final String kind;
+  final String value;
+  final int port;
+
+  JsonObject toJson() => {
+    'id': id,
+    'kind': kind,
+    'value': value,
+    if (port != 0) 'port': port,
+  };
+}
+
+/// Which destinations an Environment's runs keep off ViberMate (ADR 0025).
+final class EnvironmentCaptureScope {
+  const EnvironmentCaptureScope({
+    this.rules = const [],
+    this.allowUserAdditions = false,
+  });
+
+  factory EnvironmentCaptureScope.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {},
+      optional: const {'rules', 'allowUserAdditions'},
+    );
+    final rules = value.containsKey('rules')
+        ? requireList(value['rules'], '$path.rules').indexed
+              .map(
+                (entry) => EnvironmentCaptureScopeRule.fromJson(
+                  entry.$2,
+                  '$path.rules[${entry.$1}]',
+                ),
+              )
+              .toList(growable: false)
+        : const <EnvironmentCaptureScopeRule>[];
+    if (rules.map((rule) => rule.id).toSet().length != rules.length) {
+      throw ControlContractException('$path capture scope rule IDs repeat');
+    }
+    return EnvironmentCaptureScope(
+      rules: List.unmodifiable(rules),
+      allowUserAdditions: value.containsKey('allowUserAdditions')
+          ? requireBoolean(value, 'allowUserAdditions', path)
+          : false,
+    );
+  }
+
+  final List<EnvironmentCaptureScopeRule> rules;
+  final bool allowUserAdditions;
+
+  JsonObject toJson() => {
+    if (rules.isNotEmpty)
+      'rules': rules.map((rule) => rule.toJson()).toList(growable: false),
+    if (allowUserAdditions) 'allowUserAdditions': true,
+  };
+}
+
 final class EnvironmentPolicySet {
   const EnvironmentPolicySet({required this.toolMode});
 
@@ -5899,6 +5991,7 @@ final class EnvironmentRecord {
     required this.launchEnvironment,
     required this.policySet,
     this.clientToolAccess,
+    this.captureScope,
   });
 
   factory EnvironmentRecord.fromJson(
@@ -5924,8 +6017,14 @@ final class EnvironmentRecord {
         'launchEnvironment',
         'policySet',
       },
-      optional: const {'clientToolAccess'},
+      optional: const {'clientToolAccess', 'captureScope'},
     );
+    final captureScope = value.containsKey('captureScope')
+        ? EnvironmentCaptureScope.fromJson(
+            value['captureScope'],
+            '$path.captureScope',
+          )
+        : null;
     final endpoints =
         requireList(value['clientEndpoints'], '$path.clientEndpoints').indexed
             .map(
@@ -6019,6 +6118,7 @@ final class EnvironmentRecord {
         value['policySet'],
         '$path.policySet',
       ),
+      captureScope: captureScope,
     );
   }
 
@@ -6035,6 +6135,7 @@ final class EnvironmentRecord {
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
   final EnvironmentClientToolAccess? clientToolAccess;
+  final EnvironmentCaptureScope? captureScope;
   bool get clientToolAccessEnabled => clientToolAccess?.enabled == true;
 
   Iterable<EnvironmentRoute> get routes sync* {
@@ -6055,6 +6156,7 @@ final class EnvironmentRecord {
     EnvironmentLaunchPolicy? launchEnvironment,
     EnvironmentPolicySet? policySet,
     EnvironmentClientToolAccess? clientToolAccess,
+    EnvironmentCaptureScope? captureScope,
   }) => EnvironmentRecord(
     id: id,
     name: name ?? this.name,
@@ -6069,6 +6171,7 @@ final class EnvironmentRecord {
     launchEnvironment: launchEnvironment ?? this.launchEnvironment,
     policySet: policySet ?? this.policySet,
     clientToolAccess: clientToolAccess ?? this.clientToolAccess,
+    captureScope: captureScope ?? this.captureScope,
   );
 
   JsonObject toJson() => {
@@ -6089,6 +6192,7 @@ final class EnvironmentRecord {
     'launchEnvironment': launchEnvironment.toJson(),
     'policySet': policySet.toJson(),
     if (clientToolAccessEnabled) 'clientToolAccess': clientToolAccess!.toJson(),
+    if (captureScope != null) 'captureScope': captureScope!.toJson(),
   };
 }
 
@@ -6104,6 +6208,7 @@ final class EnvironmentDraftInput {
     required this.launchEnvironment,
     required this.policySet,
     this.clientToolAccessEnabled = false,
+    this.captureScope,
   });
 
   factory EnvironmentDraftInput.fromEnvironment(
@@ -6128,6 +6233,8 @@ final class EnvironmentDraftInput {
     policySet: policySet ?? environment.policySet,
     clientToolAccessEnabled:
         clientToolAccessEnabled ?? environment.clientToolAccessEnabled,
+    // Carried through unchanged, so editing other settings keeps it.
+    captureScope: environment.captureScope,
   );
 
   final int expectedDraftRevision;
@@ -6140,6 +6247,7 @@ final class EnvironmentDraftInput {
   final EnvironmentLaunchPolicy launchEnvironment;
   final EnvironmentPolicySet policySet;
   final bool clientToolAccessEnabled;
+  final EnvironmentCaptureScope? captureScope;
 
   EnvironmentDraftInput copyWith({
     int? expectedDraftRevision,
@@ -6155,6 +6263,7 @@ final class EnvironmentDraftInput {
     launchEnvironment: launchEnvironment,
     policySet: policySet,
     clientToolAccessEnabled: clientToolAccessEnabled,
+    captureScope: captureScope,
   );
 
   void validateFor(String environmentId, int expectedBaseRevision) {
@@ -6183,6 +6292,7 @@ final class EnvironmentDraftInput {
         'contentRecording': contentRecording.toJson(),
         'launchEnvironment': launchEnvironment.toJson(),
         'policySet': policySet.toJson(),
+        if (captureScope != null) 'captureScope': captureScope!.toJson(),
       },
       'environmentDraftInput',
       draftCandidate: true,
@@ -6204,6 +6314,7 @@ final class EnvironmentDraftInput {
     'contentRecording': contentRecording.toJson(),
     'launchEnvironment': launchEnvironment.toJson(),
     'policySet': policySet.toJson(),
+    if (captureScope != null) 'captureScope': captureScope!.toJson(),
   };
 }
 
