@@ -131,14 +131,13 @@ never less.
 
 ### Visibility
 
-Each bypassed flow is reported to the Runtime as metadata only (run, name or
-address, port, protocol, the rule that matched), as one more action on the
-run's control API next to heartbeat and finish, authorized by the run's
-capability. It appears with the run's connections as bypassed. No bytes are
-counted or recorded. On macOS a flow the broker declines for its address never
-reaches the run, so the broker sends a notice down the run's registration
-connection and the run reports it; the broker's own `vibermated` may not be
-the run's Runtime (`--server`).
+Bypassed flows are not recorded. They never enter ViberMate, so there are no
+bytes, decisions or outcomes to record, and the Runtime's connection records
+deliberately describe only traffic that passed through it. The Environment
+editor says so where the scope is set: what a rule keeps off ViberMate is
+neither recorded nor controlled. Reporting bypassed destinations as metadata
+would need a new connection decision and a schema revision; it can be added
+as its own decision if it is ever wanted.
 
 ## Out of scope
 
@@ -160,4 +159,4 @@ the run's Runtime (`--server`).
    including `--transparent --server`.
 3. macOS: scope in run registration, destination in the ownership query,
    name decisions in the ingress; tests on hardware.
-4. The Environment editor (App and web) and bypass reporting.
+4. The Environment editor (App and web).
