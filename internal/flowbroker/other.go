@@ -33,6 +33,10 @@ func Register(string, string, string, func(net.Conn)) (*Registration, error) {
 	return nil, errUnsupported
 }
 
+func RegisterWithScope(string, string, string, []BypassAddress, func(net.Conn)) (*Registration, error) {
+	return nil, errUnsupported
+}
+
 func (*Registration) Close() error { return nil }
 
 func (*Registration) Done() <-chan struct{} { return nil }

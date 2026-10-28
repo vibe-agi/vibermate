@@ -161,12 +161,6 @@ type registrationRequest struct {
 	Bypass []BypassAddress `json:"bypass,omitempty"`
 }
 
-// BypassAddress is one address rule of a run's capture scope.
-type BypassAddress struct {
-	Prefix string `json:"prefix"`
-	Port   uint16 `json:"port,omitempty"`
-}
-
 // bypassScope compiles a run's address rules with the same bounds as the
 // Environment's policy, plus the system DNS path the extension keeps.
 func bypassScope(addresses []BypassAddress) (capturescope.Scope, error) {

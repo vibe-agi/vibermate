@@ -108,3 +108,10 @@ func writeRequest(w io.Writer, request flowRequest) error {
 	_, err = w.Write(frame)
 	return err
 }
+
+// BypassAddress is one address rule of a run's capture scope, sent with its
+// registration (ADR 0025).
+type BypassAddress struct {
+	Prefix string `json:"prefix"`
+	Port   uint16 `json:"port,omitempty"`
+}
