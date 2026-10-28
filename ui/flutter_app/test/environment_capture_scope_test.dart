@@ -15,7 +15,12 @@ void main() {
   const scope = {
     'rules': [
       {'id': 'intranet', 'kind': 'suffix', 'value': 'corp.example'},
-      {'id': 'dashboard', 'kind': 'host', 'value': 'dash.corp.example', 'port': 443},
+      {
+        'id': 'dashboard',
+        'kind': 'host',
+        'value': 'dash.corp.example',
+        'port': 443,
+      },
     ],
     'allowUserAdditions': true,
   };
@@ -39,7 +44,10 @@ void main() {
     );
     expect(draft.toJson()['name'], 'Renamed');
     expect(draft.toJson()['captureScope'], scope);
-    expect(draft.copyWith(expectedDraftRevision: 2).toJson()['captureScope'], scope);
+    expect(
+      draft.copyWith(expectedDraftRevision: 2).toJson()['captureScope'],
+      scope,
+    );
     draft.validateFor(record.id, record.revision);
   });
 
@@ -57,9 +65,21 @@ void main() {
 
   test('a malformed capture scope is refused', () async {
     for (final malformed in [
-      {'rules': [{'id': 'r', 'kind': 'regex', 'value': '.*'}]},
-      {'rules': [{'id': 'r', 'kind': 'host', 'value': 'a.example', 'port': 0}]},
-      {'rules': [{'id': 'r', 'kind': 'host', 'value': 'a.example', 'port': 70000}]},
+      {
+        'rules': [
+          {'id': 'r', 'kind': 'regex', 'value': '.*'},
+        ],
+      },
+      {
+        'rules': [
+          {'id': 'r', 'kind': 'host', 'value': 'a.example', 'port': 0},
+        ],
+      },
+      {
+        'rules': [
+          {'id': 'r', 'kind': 'host', 'value': 'a.example', 'port': 70000},
+        ],
+      },
       {
         'rules': [
           {'id': 'r', 'kind': 'host', 'value': 'a.example'},
