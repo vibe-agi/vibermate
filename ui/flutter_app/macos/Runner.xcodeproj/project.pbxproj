@@ -111,6 +111,7 @@
 		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
+		78D33CF0BF729961BF564EED /* TransparentProxy.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = TransparentProxy.xcconfig; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
 		33E51913231747F40026EE4D /* DebugProfile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DebugProfile.entitlements; sourceTree = "<group>"; };
 		33E51914231749380026EE4D /* Release.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Release.entitlements; sourceTree = "<group>"; };
@@ -231,6 +232,7 @@
 				335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */,
 				33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */,
 				33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */,
+				78D33CF0BF729961BF564EED /* TransparentProxy.xcconfig */,
 				33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */,
 			);
 			path = Flutter;
@@ -606,7 +608,7 @@
 /* Begin XCBuildConfiguration section */
 		1871BD5FD4E141EC17661F42 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */;
+			baseConfigurationReference = 78D33CF0BF729961BF564EED /* TransparentProxy.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGNING_ALLOWED = NO;
@@ -623,10 +625,7 @@
 				);
 				MACH_O_TYPE = mh_execute;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lbsm",
-				);
+				OTHER_LDFLAGS = "-lbsm";
 				PRODUCT_BUNDLE_IDENTIFIER = "io.vibermate.desktop.transparent-proxy";
 				PRODUCT_MODULE_NAME = TransparentProxy;
 				PRODUCT_NAME = "io.vibermate.desktop.transparent-proxy";
@@ -928,7 +927,7 @@
 		};
 		4A238EB3A764F1AB514ACEA7 /* Profile */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */;
+			baseConfigurationReference = 78D33CF0BF729961BF564EED /* TransparentProxy.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGNING_ALLOWED = NO;
@@ -945,10 +944,7 @@
 				);
 				MACH_O_TYPE = mh_execute;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lbsm",
-				);
+				OTHER_LDFLAGS = "-lbsm";
 				PRODUCT_BUNDLE_IDENTIFIER = "io.vibermate.desktop.transparent-proxy";
 				PRODUCT_MODULE_NAME = TransparentProxy;
 				PRODUCT_NAME = "io.vibermate.desktop.transparent-proxy";
@@ -960,7 +956,7 @@
 		};
 		CF4B2EEBD9DB4D03B91E83CB /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */;
+			baseConfigurationReference = 78D33CF0BF729961BF564EED /* TransparentProxy.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGNING_ALLOWED = NO;
@@ -977,10 +973,7 @@
 				);
 				MACH_O_TYPE = mh_execute;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lbsm",
-				);
+				OTHER_LDFLAGS = "-lbsm";
 				PRODUCT_BUNDLE_IDENTIFIER = "io.vibermate.desktop.transparent-proxy";
 				PRODUCT_MODULE_NAME = TransparentProxy;
 				PRODUCT_NAME = "io.vibermate.desktop.transparent-proxy";

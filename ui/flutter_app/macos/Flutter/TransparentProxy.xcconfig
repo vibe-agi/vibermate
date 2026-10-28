@@ -1,0 +1,5 @@
+// The transparent proxy System Extension runs from /Library/SystemExtensions
+// with no Frameworks of its own. It takes only Flutter's generated build name
+// and number, never the app's CocoaPods settings, which would link plugin
+// frameworks it cannot load.
+#include "ephemeral/Flutter-Generated.xcconfig"
