@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -30,9 +32,11 @@ import (
 )
 
 const (
-	handoffTimeout = 10 * time.Second
-	udpIdleTimeout = 2 * time.Minute
-	maxTCPInFlight = 1024
+	realNamesCapacity  = 4096
+	realResolveTimeout = 5 * time.Second
+	handoffTimeout     = 10 * time.Second
+	udpIdleTimeout     = 2 * time.Minute
+	maxTCPInFlight     = 1024
 )
 
 // Session is one run's namespace capture: the Agent's netstack, owned by the
@@ -44,6 +48,11 @@ type Session struct {
 	tun     int
 	ingress *flowingress.Ingress
 	dns     *fakeDNS
+	// real holds names the capture scope keeps off ViberMate, by the real
+	// address they resolved to (ADR 0025).
+	real *realNames
+	// resolve looks a bypassed name up on the host, outside the namespace.
+	resolve func(context.Context, string) ([]netip.Addr, error)
 
 	mu     sync.Mutex
 	stack  *stack.Stack
@@ -83,6 +92,7 @@ func Prepare(command *exec.Cmd, ingress *flowingress.Ingress) (*Session, error) 
 	attributes.AmbientCaps = []uintptr{unix.CAP_NET_ADMIN, unix.CAP_SYS_ADMIN}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Session{control: parent, helper: child, tun: -1, ingress: ingress, dns: newFakeDNS(),
+		real: newRealNames(realNamesCapacity), resolve: hostResolve,
 		ctx: ctx, cancel: cancel}, nil
 }
 
@@ -200,7 +210,7 @@ func (session *Session) acceptTCP(request *tcp.ForwarderRequest) {
 	conn := gonet.NewTCPConn(&queue, endpoint)
 	destination := netip.AddrPortFrom(addressOf(id.LocalAddress), id.LocalPort)
 	flow := flowingress.Header{Version: 1, Protocol: "tcp", Destination: destination}
-	if name, ok := session.dns.Lookup(destination.Addr()); ok {
+	if name, ok := session.nameOf(destination.Addr()); ok {
 		flow.Host = name
 	}
 	go func() { _ = session.ingress.ServeFlow(session.ctx, conn, flow) }()
@@ -235,7 +245,7 @@ func (session *Session) serveDNS(conn *gonet.UDPConn) {
 		if err != nil {
 			return
 		}
-		if reply := session.dns.Answer(buffer[:n]); reply != nil {
+		if reply := session.dns.answer(buffer[:n], session.realAnswer); reply != nil {
 			_, _ = conn.Write(reply)
 		}
 	}
@@ -243,19 +253,37 @@ func (session *Session) serveDNS(conn *gonet.UDPConn) {
 
 func (session *Session) relayUDP(conn *gonet.UDPConn, destination netip.AddrPort) {
 	defer conn.Close()
-	host := destination.Addr().String()
-	if name, ok := session.dns.Lookup(destination.Addr()); ok {
-		host = name
-	} else if fakePrefix.Contains(destination.Addr()) {
+	name, named := session.nameOf(destination.Addr())
+	if !named && fakePrefix.Contains(destination.Addr()) {
 		return // A forgotten fake address names nothing; drop rather than guess.
 	}
-	proxy, err := session.ingress.Proxy()
-	if err != nil {
-		return
+	var upstream interface {
+		ReadDatagram() ([]byte, error)
+		WriteDatagram([]byte) error
+		Close() error
 	}
-	upstream, err := connectudp.Dial(session.ctx, proxy.Origin, proxy.Token, host, destination.Port())
-	if err != nil {
-		return
+	if _, bypass := session.ingress.Scope().Match(capturescope.Destination{
+		Name: name, Addr: destination.Addr(), Port: destination.Port(),
+	}); bypass {
+		direct, err := flowingress.DialDirectUDP(session.ctx, name, destination)
+		if err != nil {
+			return
+		}
+		upstream = direct
+	} else {
+		host := destination.Addr().String()
+		if named {
+			host = name
+		}
+		proxy, err := session.ingress.Proxy()
+		if err != nil {
+			return
+		}
+		viaRuntime, err := connectudp.Dial(session.ctx, proxy.Origin, proxy.Token, host, destination.Port())
+		if err != nil {
+			return
+		}
+		upstream = viaRuntime
 	}
 	defer upstream.Close()
 	done := make(chan struct{}, 2)
@@ -310,4 +338,35 @@ func (session *Session) Close() {
 	}
 	_ = session.helper.Close()
 	_ = session.control.Close()
+}
+
+// nameOf is the name a flow's destination address stands for: a fake address
+// from the namespace's resolver, or a real one a bypassed name resolved to.
+func (session *Session) nameOf(address netip.Addr) (string, bool) {
+	if name, ok := session.dns.Lookup(address); ok {
+		return name, true
+	}
+	return session.real.lookup(address.Unmap())
+}
+
+// realAnswer claims names the capture scope keeps off ViberMate: they resolve
+// on the host to real addresses, because their flows leave from this machine.
+func (session *Session) realAnswer(name string) ([]netip.Addr, bool, error) {
+	if _, bypass := session.ingress.Scope().MatchesName(name); !bypass {
+		return nil, false, nil
+	}
+	ctx, cancel := context.WithTimeout(session.ctx, realResolveTimeout)
+	defer cancel()
+	addresses, err := session.resolve(ctx, name)
+	if err != nil {
+		return nil, true, err
+	}
+	for _, address := range addresses {
+		session.real.remember(address.Unmap(), name)
+	}
+	return addresses, true, nil
+}
+
+func hostResolve(ctx context.Context, name string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip4", name)
 }

@@ -271,3 +271,56 @@ func TestUDPFlowBoundsItsDestinations(t *testing.T) {
 		t.Fatalf("Runtime requests = %d, want %d", got, maxDatagramSessions)
 	}
 }
+
+func TestDirectTargetUsesTheNameOnlyForSyntheticAddresses(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		address string
+		want    string
+	}{
+		{"svc.corp.example", "198.18.1.7:443", "svc.corp.example:443"},
+		{"svc.corp.example", "10.1.2.3:443", "10.1.2.3:443"},
+		{"", "192.168.1.5:22", "192.168.1.5:22"},
+		{"", "[::ffff:10.0.0.1]:80", "10.0.0.1:80"},
+	} {
+		got, err := directTarget(test.name, netip.MustParseAddrPort(test.address))
+		if err != nil || got != test.want {
+			t.Errorf("directTarget(%q, %s) = %q, %v; want %q", test.name, test.address, got, err, test.want)
+		}
+	}
+	if _, err := directTarget("", netip.MustParseAddrPort("198.18.1.7:443")); err == nil {
+		t.Error("a synthetic address without a name was dialable")
+	}
+}
+
+// ADR 0025: datagrams to a destination the scope covers leave directly; the
+// Runtime is never asked.
+func TestUDPFlowSendsBypassedDestinationsDirectly(t *testing.T) {
+	echo, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		buffer := make([]byte, 2048)
+		for {
+			n, peer, err := echo.ReadFrom(buffer)
+			if err != nil {
+				return
+			}
+			_, _ = echo.WriteTo(append([]byte("direct:"), buffer[:n]...), peer)
+		}
+	}()
+	origin, requests := fakeUDPRuntime(t, nil)
+	extension := startUDPFlow(t, origin)
+	local := netip.MustParseAddrPort(echo.LocalAddr().String())
+	go func() { _ = WriteDatagram(extension, local, []byte("ping")) }()
+	_ = extension.SetReadDeadline(time.Now().Add(10 * time.Second))
+	from, payload, err := ReadDatagram(extension)
+	if err != nil || from != local || string(payload) != "direct:ping" {
+		t.Fatalf("reply = %v %q %v", from, payload, err)
+	}
+	if seen := requests(); len(seen) != 0 {
+		t.Fatalf("the Runtime was asked about a bypassed destination: %+v", seen)
+	}
+}

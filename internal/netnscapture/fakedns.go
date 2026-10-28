@@ -90,7 +90,16 @@ func (dns *fakeDNS) addressFor(name string) netip.Addr {
 }
 
 // Answer builds the reply to one DNS query message, or nil to drop it.
-func (dns *fakeDNS) Answer(query []byte) []byte {
+func (dns *fakeDNS) Answer(query []byte) []byte { return dns.answer(query, nil) }
+
+// realResolver answers a name with real addresses instead of a fake one.
+// handled is false for names it leaves to the fake resolver.
+type realResolver func(name string) (addresses []netip.Addr, handled bool, err error)
+
+// answer builds the reply; real, when set, may claim the name (ADR 0025: a
+// name the capture scope keeps off ViberMate resolves to its real addresses,
+// because the flow will leave from this machine).
+func (dns *fakeDNS) answer(query []byte, real realResolver) []byte {
 	var parser dnsmessage.Parser
 	header, err := parser.Start(query)
 	if err != nil || header.Response {
@@ -106,12 +115,32 @@ func (dns *fakeDNS) Answer(query []byte) []byte {
 	if !validName(name) {
 		reply.RCode = dnsmessage.RCodeNameError
 	}
+	var realAddresses []netip.Addr
+	handled := false
+	isA := question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET
+	if reply.RCode == dnsmessage.RCodeSuccess && real != nil && isA {
+		var err error
+		if realAddresses, handled, err = real(name); handled && err != nil {
+			reply.RCode = dnsmessage.RCodeServerFailure
+		}
+	}
 	builder := dnsmessage.NewBuilder(nil, reply)
 	builder.EnableCompression()
 	if builder.StartQuestions() != nil || builder.Question(question) != nil || builder.StartAnswers() != nil {
 		return nil
 	}
-	if reply.RCode == dnsmessage.RCodeSuccess && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
+	if handled && reply.RCode == dnsmessage.RCodeSuccess && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
+		for _, address := range realAddresses {
+			if address = address.Unmap(); !address.Is4() {
+				continue // The namespace routes IPv4 only.
+			}
+			if builder.AResource(dnsmessage.ResourceHeader{
+				Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: fakeTTL,
+			}, dnsmessage.AResource{A: address.As4()}) != nil {
+				return nil
+			}
+		}
+	} else if !handled && reply.RCode == dnsmessage.RCodeSuccess && question.Type == dnsmessage.TypeA && question.Class == dnsmessage.ClassINET {
 		address := dns.addressFor(name).As4()
 		if builder.AResource(dnsmessage.ResourceHeader{
 			Name: question.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: fakeTTL,
@@ -143,4 +172,38 @@ func validName(name string) bool {
 		}
 	}
 	return true
+}
+
+// realNames remembers which real address a bypassed name resolved to, so a
+// flow to that address is named and decided like the name. Bounded; the
+// oldest entry goes first.
+type realNames struct {
+	mu     sync.Mutex
+	names  map[netip.Addr]string
+	order  []netip.Addr
+	bounds int
+}
+
+func newRealNames(bounds int) *realNames {
+	return &realNames{names: make(map[netip.Addr]string), bounds: bounds}
+}
+
+func (names *realNames) remember(address netip.Addr, name string) {
+	names.mu.Lock()
+	defer names.mu.Unlock()
+	if _, known := names.names[address]; !known {
+		if len(names.order) >= names.bounds {
+			delete(names.names, names.order[0])
+			names.order = names.order[1:]
+		}
+		names.order = append(names.order, address)
+	}
+	names.names[address] = name
+}
+
+func (names *realNames) lookup(address netip.Addr) (string, bool) {
+	names.mu.Lock()
+	defer names.mu.Unlock()
+	name, ok := names.names[address]
+	return name, ok
 }

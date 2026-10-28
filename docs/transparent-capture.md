@@ -176,6 +176,12 @@ enter the namespace.
   including an upstream SOCKS5 proxy; it is recorded under the run. QUIC is
   therefore carried, not refused. A datagram to a fake address the resolver
   no longer remembers is dropped rather than guessed.
+- **Capture scope** ([ADR 0025](adr/0025-decide-on-the-client-what-never-enters-vibermate.md)).
+  A flow the run's capture scope keeps off ViberMate is dialed by the
+  launcher, outside the namespace, instead of through `vibermated` (TCP and
+  UDP alike). A name a host or suffix rule covers is resolved on the host,
+  so intranet DNS works, and the namespace's resolver answers it with those
+  real addresses, remembered so that flows to them are recognized.
 - **Localhost.** The namespace has its own loopback, so the Agent cannot
   reach host services on `127.0.0.1`, and a browser sign-in callback cannot
   reach the Agent. The run says so on stderr and suggests `--managed-auth`.
@@ -217,7 +223,12 @@ It starts the real `vibermated` in a throwaway `HOME` and checks:
 - UDP to a host echo service answered through the Runtime and recorded under
   the run;
 - host loopback unreachable from the namespace;
-- the Agent's connections failing once its launcher is killed.
+- the Agent's connections failing once its launcher is killed;
+- a Runtime Server (`vibermated server`, owner set up from its recovery key):
+  capture through `--server`, an Environment whose capture scope covers this
+  machine's address reaching a local service directly over TCP and UDP with
+  nothing recorded on the Server, and the same request refused by the Server
+  without that scope.
 
 It needs unprivileged user namespaces, `/dev/net/tun`, `curl`, `python3`
 and outbound HTTPS, and is never part of `make check`.
