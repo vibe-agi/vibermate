@@ -17,6 +17,7 @@ import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
 import 'environment_dry_run_dialog.dart';
 import 'egress_profile_editor.dart';
+import 'capture_scope_editor.dart';
 import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
 import 'provider_account_facts.dart';
@@ -1587,6 +1588,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
   bool _clientToolAccessEnabled = false;
   EnvironmentLaunchPolicy _launchEnvironment =
       const EnvironmentLaunchPolicy.empty();
+  EnvironmentCaptureScope? _captureScope;
   String? _draftEnvironmentId;
   bool _idEdited = false;
   bool _submitted = false;
@@ -2057,6 +2059,15 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                       () => _launchEnvironment = policy,
                                     ),
                                   ),
+                                  const SizedBox(height: 8),
+                                  CaptureScopeEditorButton(
+                                    scope: _captureScope,
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onChanged: (scope) =>
+                                        setState(() => _captureScope = scope),
+                                  ),
                                 ],
                               ),
                             ),
@@ -2159,6 +2170,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
         clientToolAccessEnabled: _clientToolAccessEnabled,
+        captureScope: _captureScope,
       ),
     );
     if (!mounted) return;
@@ -2213,6 +2225,7 @@ final class _EnvironmentEditorDialogState
   late String _toolMode;
   late bool _clientToolAccessEnabled;
   late EnvironmentLaunchPolicy _launchEnvironment;
+  late EnvironmentCaptureScope? _captureScope;
   late List<EnvironmentClientEndpoint> _clientEndpoints;
   bool _submitted = false;
   int _selectedTab = 0;
@@ -2231,6 +2244,7 @@ final class _EnvironmentEditorDialogState
     _toolMode = environment.policySet.toolMode;
     _clientToolAccessEnabled = environment.clientToolAccessEnabled;
     _launchEnvironment = environment.launchEnvironment;
+    _captureScope = environment.captureScope;
     _clientEndpoints = environment.clientEndpoints;
   }
 
@@ -2508,6 +2522,15 @@ final class _EnvironmentEditorDialogState
                                     onChanged: (policy) => setState(
                                       () => _launchEnvironment = policy,
                                     ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  CaptureScopeEditorButton(
+                                    scope: _captureScope,
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onChanged: (scope) =>
+                                        setState(() => _captureScope = scope),
                                   ),
                                 ],
                               ),
@@ -2805,7 +2828,7 @@ final class _EnvironmentEditorDialogState
         launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
         clientToolAccessEnabled: _clientToolAccessEnabled,
-      ),
+      ).withCaptureScope(_captureScope),
       baseEnvironment: widget.environment,
     );
     if (mounted) setState(() {});
