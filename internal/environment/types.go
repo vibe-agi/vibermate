@@ -5,6 +5,7 @@ package environment
 import (
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -241,7 +242,10 @@ type Environment struct {
 	LaunchEnvironment LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	// PolicySet is nil only in canonical storage for the default Observe
 	// policy. EffectivePolicySet always returns the concrete authority.
-	PolicySet              *PolicySet              `json:"policySet,omitempty"`
+	PolicySet *PolicySet `json:"policySet,omitempty"`
+	// CaptureScope is which destinations the Environment's runs keep off
+	// ViberMate (ADR 0025). Nil is canonical for the default: built-ins only.
+	CaptureScope           *capturescope.Policy    `json:"captureScope,omitempty"`
 	ClientToolAccess       *ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
 	RetiredChildIdentities []RetiredChildIdentity  `json:"retiredChildIdentities,omitempty"`
 }

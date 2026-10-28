@@ -333,6 +333,7 @@ func (handler *Handler) create(
 			grant.ManagedCredentialAuthorities...,
 		),
 		LaunchEnvironment: grant.LaunchEnvironment.Clone(),
+		CaptureScope:      grant.CaptureScope,
 	}
 	if localRecovery && grant.ProxyDelivery == capturegrant.ProxyDeliveryLocalListener {
 		response.LocalRecovery = &LocalRecoveryView{

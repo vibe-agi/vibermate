@@ -3,6 +3,7 @@ package capturegrant
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"slices"
 	"testing"
 	"time"
@@ -90,6 +91,9 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 		}
 	}
 	aggregate.LaunchEnvironment = environment.LaunchEnvironmentPolicy{SetEnv: map[string]string{"TEAM_CONTEXT": "team-a"}}
+	aggregate.CaptureScope = &capturescope.Policy{Rules: []capturescope.Rule{
+		{ID: "intranet", Kind: capturescope.KindSuffix, Value: "corp.example"},
+	}}
 	snapshot, err := manualEnvironmentCompiler(t).Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +128,11 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 		set.AuthorityDigest() != assignment.LaunchAuthority.Digest() ||
 		set.LaunchEnvironment().SetEnv["TEAM_CONTEXT"] != "team-a" {
 		t.Fatalf("create=%+v set=%+v", assignments.create, set)
+	}
+	// The run receives exactly the launch revision's capture scope (ADR 0025).
+	scope := set.CaptureScope()
+	if scope == nil || len(scope.Rules) != 1 || scope.Rules[0].Value != "corp.example" {
+		t.Fatalf("resolved capture scope = %+v", scope)
 	}
 }
 

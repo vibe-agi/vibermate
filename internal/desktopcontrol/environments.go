@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"net/http"
 	"sort"
 	"strconv"
@@ -41,6 +42,7 @@ type EnvironmentResponse struct {
 	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet         environment.PolicySet               `json:"policySet"`
 	ClientToolAccess  *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
+	CaptureScope      *capturescope.Policy                `json:"captureScope,omitempty"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -62,6 +64,7 @@ type EnvironmentDraftInput struct {
 	LaunchEnvironment     environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet             *environment.PolicySet              `json:"policySet,omitempty"`
 	ClientToolAccess      *environment.ClientToolAccessPolicy `json:"clientToolAccess,omitempty"`
+	CaptureScope          *capturescope.Policy                `json:"captureScope,omitempty"`
 }
 
 type EnvironmentImpactResponse struct {
@@ -107,6 +110,7 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 		LaunchEnvironment: aggregate.LaunchEnvironment.Clone(),
 		PolicySet:         aggregate.EffectivePolicySet(),
 		ClientToolAccess:  aggregate.Clone().ClientToolAccess,
+		CaptureScope:      aggregate.Clone().CaptureScope,
 	}
 }
 
@@ -300,6 +304,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			ContentRecording:  input.ContentRecording,
 			LaunchEnvironment: input.LaunchEnvironment.Clone(),
 			PolicySet:         input.PolicySet,
+			CaptureScope:      input.CaptureScope,
 			ClientToolAccess:  input.ClientToolAccess,
 		}
 		if candidate.ClientToolAccess != nil {

@@ -1,6 +1,7 @@
 package runlauncher
 
 import (
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"runtime"
 	"strings"
 	"testing"
@@ -83,9 +84,24 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 			t.Fatalf("%s = %q", name, values[name])
 		}
 	}
-	if values["NO_PROXY"] != "localhost,example.org" ||
+	// ADR 0025: without an Environment that allows it, the user's own
+	// NO_PROXY counts for nothing; only the built-in set stays off ViberMate.
+	if values["NO_PROXY"] != builtinNoProxy ||
 		values["no_proxy"] != values["NO_PROXY"] {
-		t.Fatalf("filtered NO_PROXY = %q", values["NO_PROXY"])
+		t.Fatalf("NO_PROXY without a capture scope = %q", values["NO_PROXY"])
+	}
+	grant.CaptureScope = &capturescope.Policy{
+		AllowUserAdditions: true,
+		Rules:              []capturescope.Rule{{ID: "intranet", Kind: capturescope.KindSuffix, Value: "corp.example"}},
+	}
+	scoped, err := buildEnvironment(base, grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// User entries join only within the bounds: protected authorities, public
+	// addresses and a bare wildcard are dropped.
+	if got := environmentMap(scoped)["NO_PROXY"]; got != builtinNoProxy+",corp.example,example.org,10.0.0.0/8" {
+		t.Fatalf("NO_PROXY with a scope allowing user additions = %q", got)
 	}
 	if values["NODE_EXTRA_CA_CERTS"] != "/tmp/root.pem" ||
 		values["NODE_USE_ENV_PROXY"] != "1" ||
@@ -422,7 +438,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 	if values["CODEX_API_KEY"] != "ambient-codex-secret" ||
 		values["VST_PLANE_TOKEN"] != "private-plane-token" ||
 		values["UNRELATED"] != "value" ||
-		values["NO_PROXY"] != "localhost" {
+		values["NO_PROXY"] != builtinNoProxy {
 		t.Fatalf("fixed Codex environment = %+v", values)
 	}
 	if runtime.GOOS == "darwin" {
@@ -585,3 +601,7 @@ func testCaptureRunView(
 		ClientAdapter:      runAdapter,
 	}
 }
+
+// builtinNoProxy is what proxy-variable clients exclude when the Environment
+// sets no capture scope.
+var builtinNoProxy = capturescope.Compile(nil, nil, capturescope.Options{}).NoProxy()

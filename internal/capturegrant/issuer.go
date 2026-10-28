@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -672,6 +673,7 @@ type CaptureRunGrant struct {
 	ProtectedAuthorities         []string
 	ManagedCredentialAuthorities []string
 	LaunchEnvironment            environment.LaunchEnvironmentPolicy
+	CaptureScope                 *capturescope.Policy
 }
 
 func (issuer *Issuer) IssueCaptureRun(
@@ -878,6 +880,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 		LaunchEnvironment:            authorities.LaunchEnvironment(),
+		CaptureScope:                 authorities.CaptureScope(),
 		NativeToolLogin:              authorities.NativeToolLogin(),
 	}, nil
 }
