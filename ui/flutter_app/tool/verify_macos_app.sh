@@ -86,6 +86,15 @@ if [[ "${mode}" == "live" ]]; then
     echo "Transparent System Extension identity or executable is invalid" >&2
     exit 70
   fi
+  # The extension runs from /Library/SystemExtensions with no Frameworks of
+  # its own, so it may link only the system. An inherited Flutter or CocoaPods
+  # framework makes dyld kill it at launch.
+  if otool -L "${extension_executable}" | awk '/^[[:space:]]/ {print $1}' |
+    grep -vE '^/(usr/lib|System/Library)/' >/dev/null; then
+    echo "Transparent System Extension links a non-system library:" >&2
+    otool -L "${extension_executable}" >&2
+    exit 70
+  fi
   code_paths+=("${extension_executable}")
 elif [[ -e "${app}/Contents/Library/SystemExtensions" ]]; then
   echo "Preview bundle unexpectedly contains a System Extension" >&2
