@@ -86,7 +86,11 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
       return current.wasOwned(identity) ? Self.refuse(tcp) : false
     }
     if destination.isLoopback || Self.staysOnSystemPath(port: destination.port) { return false }
-    return claim(tcp, identity: identity, current: current) { socket in
+    // An IP literal lets the broker apply the run's address rules; a name is
+    // left to the run's ingress.
+    let endpoint = datagramEndpoint(host: destination.host, port: destination.port)
+    let address = parseDatagramEndpoint(endpoint) != nil ? endpoint : nil
+    return claim(tcp, identity: identity, current: current, destination: address) { socket in
       current.add(tcp, socket: socket, header: try destination.header())
     }
   }
@@ -102,11 +106,19 @@ final class TransparentProxyProvider: NETransparentProxyProvider {
   // Asks the broker who owns the flow's process. Owned flows are handed to
   // relay; unowned ones go direct.
   private func claim(_ flow: NEAppProxyFlow, identity: FlowSourceIdentity, current: ProxySession,
-                     relay: (BrokerSocket) throws -> Bool) -> Bool {
+                     destination: String? = nil, relay: (BrokerSocket) throws -> Bool) -> Bool {
     do {
-      guard let socket = try current.broker.query(pid: identity.pid) else {
+      let socket: BrokerSocket
+      switch try current.broker.ask(pid: identity.pid, destination: destination) {
+      case .unowned:
         current.recordUnowned(identity)
         return false
+      case .direct:
+        // Still the run's process: keep it known as owned for failed queries.
+        current.recordOwned(identity)
+        return false
+      case .owned(let owned):
+        socket = owned
       }
       current.recordOwned(identity)
       do {

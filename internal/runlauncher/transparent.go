@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
 	"strings"
@@ -86,8 +87,11 @@ type transparentCapture struct {
 	// process and the launcher can pause every process of its run.
 	token   string
 	ingress *flowingress.Ingress
-	ctx     context.Context
-	cancel  context.CancelFunc
+	// bypass is the run's capture scope as addresses, sent with every
+	// registration so the broker can send such flows direct.
+	bypass []flowbroker.BypassAddress
+	ctx    context.Context
+	cancel context.CancelFunc
 	// recoveryWindow bounds how long a paused Agent waits for capture to
 	// return before the run fails.
 	recoveryWindow time.Duration
@@ -96,10 +100,17 @@ type transparentCapture struct {
 	registration *flowbroker.Registration
 }
 
-func startTransparentCapture(socket, run string, proxy flowingress.Proxy) (*transparentCapture, error) {
+func startTransparentCapture(socket, run string, proxy flowingress.Proxy, scope capturescope.Scope) (*transparentCapture, error) {
 	ingress, err := flowingress.New(func() (flowingress.Proxy, error) { return proxy, nil })
 	if err != nil {
 		return nil, err
+	}
+	// The ingress decides names and UDP; the broker decides TCP by address
+	// before the extension claims the flow (ADR 0025).
+	ingress.UseScope(scope)
+	var bypass []flowbroker.BypassAddress
+	for _, rule := range scope.Prefixes() {
+		bypass = append(bypass, flowbroker.BypassAddress{Prefix: rule.Value, Port: rule.Port})
 	}
 	entropy := make([]byte, 32)
 	if _, err := rand.Read(entropy); err != nil {
@@ -108,7 +119,7 @@ func startTransparentCapture(socket, run string, proxy flowingress.Proxy) (*tran
 	ctx, cancel := context.WithCancel(context.Background())
 	capture := &transparentCapture{
 		socket: socket, run: run, token: base64.RawURLEncoding.EncodeToString(entropy),
-		ingress: ingress, ctx: ctx, cancel: cancel,
+		ingress: ingress, bypass: bypass, ctx: ctx, cancel: cancel,
 		recoveryWindow: transparentRecoveryWindow,
 	}
 	if err := capture.register(); err != nil {
@@ -119,7 +130,7 @@ func startTransparentCapture(socket, run string, proxy flowingress.Proxy) (*tran
 }
 
 func (capture *transparentCapture) register() error {
-	registration, err := flowbroker.Register(capture.socket, capture.run, capture.token, capture.serve)
+	registration, err := flowbroker.RegisterWithScope(capture.socket, capture.run, capture.token, capture.bypass, capture.serve)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrTransparentUnavailable, err)
 	}
@@ -227,5 +238,5 @@ func (launcher *Launcher) startTransparent(grant, environmentGrant capturecontro
 	return startTransparentCapture(layout.FlowRegistrationSocket, grant.Run.ID, flowingress.Proxy{
 		Origin: environmentGrant.ProxyAddress,
 		Token:  environmentGrant.ProxyToken,
-	})
+	}, runCaptureScope(launcher.config.BaseEnvironment, environmentGrant, true))
 }

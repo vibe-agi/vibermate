@@ -25,10 +25,16 @@ type Registration struct {
 // flow and owns it. A non-empty token also claims any process whose
 // environment carries TokenEnvironment=token.
 func Register(socketPath, run, token string, handle func(net.Conn)) (*Registration, error) {
-	return register(socketPath, run, token, handle, keepaliveTimeout)
+	return register(socketPath, run, token, nil, handle, keepaliveTimeout)
 }
 
-func register(socketPath, run, token string, handle func(net.Conn), timeout time.Duration) (*Registration, error) {
+// RegisterWithScope also hands the broker the run's capture scope as address
+// rules, so it can send an owned flow to such an address direct (ADR 0025).
+func RegisterWithScope(socketPath, run, token string, bypass []BypassAddress, handle func(net.Conn)) (*Registration, error) {
+	return register(socketPath, run, token, bypass, handle, keepaliveTimeout)
+}
+
+func register(socketPath, run, token string, bypass []BypassAddress, handle func(net.Conn), timeout time.Duration) (*Registration, error) {
 	if handle == nil {
 		return nil, errors.New("flow handler is required")
 	}
@@ -36,7 +42,7 @@ func register(socketPath, run, token string, handle func(net.Conn), timeout time
 	if err != nil {
 		return nil, err
 	}
-	request, _ := json.Marshal(registrationRequest{Version: 1, Run: run, Token: token})
+	request, _ := json.Marshal(registrationRequest{Version: 1, Run: run, Token: token, Bypass: bypass})
 	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
 	if _, err := conn.Write(append(request, '\n')); err != nil {
 		conn.Close()

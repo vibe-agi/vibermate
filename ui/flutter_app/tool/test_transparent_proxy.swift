@@ -128,6 +128,30 @@ final class TransparentProxyTests: XCTestCase {
     }
   }
 
+  func testAskNamesTheDestinationAndReadsTheDirectAnswer() throws {
+    let server = try LoopbackBroker { socket in
+      let frame = try readFrame(socket, limit: 512)
+      XCTAssertEqual(frame["pid"] as? Int, 8123)
+      XCTAssertEqual(frame["dst"] as? String, "192.168.1.5:22")
+      try sendAll(socket, Data([68]))
+    }
+    let broker = FlowBroker(configuration: try server.configuration())
+    guard case .direct = try broker.ask(pid: 8123, destination: "192.168.1.5:22") else {
+      return XCTFail("a direct answer was not read as direct")
+    }
+    server.finish()
+  }
+
+  func testDirectAnswerWithoutADestinationIsInvalid() throws {
+    let server = try LoopbackBroker { socket in
+      let frame = try readFrame(socket, limit: 512)
+      XCTAssertNil(frame["dst"])
+      try sendAll(socket, Data([68]))
+    }
+    XCTAssertThrowsError(try FlowBroker(configuration: server.configuration()).query(pid: 8123))
+    server.finish()
+  }
+
   func testQueryDeadlineIncludesWaitingForBrokerResponse() throws {
     let server = try LoopbackBroker { socket in
       _ = try readFrame(socket, limit: 512)

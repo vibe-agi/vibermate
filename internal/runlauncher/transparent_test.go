@@ -4,6 +4,7 @@ package runlauncher
 
 import (
 	"bytes"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
 	"net/netip"
@@ -120,11 +121,11 @@ func TestTransparentEnvironmentKeepsTrustAndDropsProxies(t *testing.T) {
 
 func TestTransparentCaptureRefusesWithoutAnActiveExtension(t *testing.T) {
 	socket := filepath.Join(shortSocketDir(t), "flows.sock")
-	if _, err := startTransparentCapture(socket, "run", flowingress.Proxy{}); err == nil {
+	if _, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, capturescope.Scope{}); err == nil {
 		t.Fatal("capture started without the app")
 	}
 	startTestBroker(t, socket, false)
-	if _, err := startTransparentCapture(socket, "run", flowingress.Proxy{}); err != ErrTransparentExtensionInactive {
+	if _, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, capturescope.Scope{}); err != ErrTransparentExtensionInactive {
 		t.Fatalf("start error = %v, want inactive extension", err)
 	}
 }
@@ -135,7 +136,7 @@ func TestTransparentCaptureForwardsADescendantsFlow(t *testing.T) {
 	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	broker := startTestBroker(t, socket, true)
 	backendOrigin, observed := echoConnectBackend(t)
-	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{Origin: backendOrigin, Token: "run-capability"})
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{Origin: backendOrigin, Token: "run-capability"}, capturescope.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func waitState(t *testing.T, pid int, want byte) {
 func TestTransparentCapturePausesTheAgentUntilCaptureReturns(t *testing.T) {
 	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	first := startTestBroker(t, socket, true)
-	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, capturescope.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestTransparentCapturePausesTheAgentUntilCaptureReturns(t *testing.T) {
 func TestTransparentCaptureFailsWhenCaptureDoesNotReturn(t *testing.T) {
 	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	broker := startTestBroker(t, socket, true)
-	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, capturescope.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +370,7 @@ func TestPauseRunStopsEveryMarkedProcess(t *testing.T) {
 func TestTransparentCaptureOwnsAnOrphanByToken(t *testing.T) {
 	socket := filepath.Join(shortSocketDir(t), "flows.sock")
 	broker := startTestBroker(t, socket, true)
-	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{})
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, capturescope.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,5 +393,35 @@ func TestTransparentCaptureOwnsAnOrphanByToken(t *testing.T) {
 	}
 	if answer := readAnswer(t, conn); answer != 'Y' {
 		t.Fatalf("orphan flow answer = %q, want owned", answer)
+	}
+}
+
+// ADR 0025: a broker-mode run registers its capture scope's addresses, so the
+// broker answers "direct" for its descendants' flows to them.
+func TestTransparentCaptureRegistersItsScopedAddresses(t *testing.T) {
+	socket := filepath.Join(shortSocketDir(t), "flows.sock")
+	broker := startTestBroker(t, socket, true)
+	scope := capturescope.Compile(&capturescope.Policy{Rules: []capturescope.Rule{
+		{ID: "lan", Kind: capturescope.KindPrefix, Value: "192.168.0.0/16"},
+	}}, nil, capturescope.Options{})
+	capture, err := startTransparentCapture(socket, "run", flowingress.Proxy{}, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.Close()
+	child := sleepCommand(t, "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	for destination, want := range map[string]byte{"192.168.7.9:443": 'D', "203.0.113.9:443": 'Y'} {
+		conn := broker.dial(t)
+		if err := flowbroker.WriteFlowRequestTo(conn, child.Process.Pid, testFlowSecret, netip.MustParseAddrPort(destination)); err != nil {
+			t.Fatal(err)
+		}
+		if answer := readAnswer(t, conn); answer != want {
+			t.Errorf("descendant flow to %s answered %q, want %q", destination, answer, want)
+		}
+		conn.Close()
 	}
 }
