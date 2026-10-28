@@ -6249,6 +6249,22 @@ final class EnvironmentDraftInput {
   final bool clientToolAccessEnabled;
   final EnvironmentCaptureScope? captureScope;
 
+  /// The same draft with exactly [scope] as its capture scope; null clears it.
+  EnvironmentDraftInput withCaptureScope(EnvironmentCaptureScope? scope) =>
+      EnvironmentDraftInput(
+        expectedDraftRevision: expectedDraftRevision,
+        name: name,
+        state: state,
+        clientEndpoints: clientEndpoints,
+        pluginBindings: pluginBindings,
+        budgetPolicy: budgetPolicy,
+        contentRecording: contentRecording,
+        launchEnvironment: launchEnvironment,
+        policySet: policySet,
+        clientToolAccessEnabled: clientToolAccessEnabled,
+        captureScope: scope,
+      );
+
   EnvironmentDraftInput copyWith({
     int? expectedDraftRevision,
     List<EnvironmentClientEndpoint>? clientEndpoints,
