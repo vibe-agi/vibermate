@@ -69,7 +69,7 @@ test("capability entitlements are exact and scoped to the app and transparent ex
 
 test("frozen release identity is coherent", () => {
   assert.equal(macOSDistributionPolicy.appVersion, "0.1.37");
-  assert.equal(macOSDistributionPolicy.appBuildNumber, "39");
+  assert.equal(macOSDistributionPolicy.appBuildNumber, "40");
   assert.equal(
     macOSDistributionPolicy.diskImageFilename,
     "ViberMate_0.1.37_universal.dmg",
@@ -82,7 +82,7 @@ test("frozen release identity is coherent", () => {
     new URL("../../.github/workflows/macos-developer-id-candidate.yml", import.meta.url),
     "utf8",
   );
-  assert.match(pubspec, /^version: 0\.1\.37\+39$/mu);
+  assert.match(pubspec, /^version: 0\.1\.37\+40$/mu);
   assert.equal(
     [...workflow.matchAll(/ViberMate_0\.1\.37_universal\.dmg/gu)].length,
     3,
@@ -296,7 +296,7 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "39",
+      bundleVersion: "40",
       minimumSystemVersion: "14.0",
       shortVersion: "0.1.37",
     }),
@@ -314,7 +314,7 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "39",
+      bundleVersion: "40",
       minimumSystemVersion: "14.0",
       shortVersion: "0.1.37",
     }),
