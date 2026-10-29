@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 )
 
 const maxRequestBytes = 512
@@ -41,6 +42,9 @@ type flowRequest struct {
 	// QueryFailures is the extension's running count of ownership queries
 	// it could not complete, reported with each hello.
 	QueryFailures uint64 `json:"queryFailures,omitempty"`
+	// Destination is a TCP flow's remote address and port (ADR 0025), so the
+	// broker can send a run's scoped destinations direct. Optional.
+	Destination string `json:"dst,omitempty"`
 }
 
 func readFlowRequest(r io.Reader) (flowRequest, error) {
@@ -58,7 +62,8 @@ func readFlowRequest(r io.Reader) (flowRequest, error) {
 	}
 	var request flowRequest
 	if err := json.Unmarshal(encoded, &request); err != nil || request.Version != 1 || (request.Hello != (request.PID == 0)) || (!request.Hello && request.PID <= 1) ||
-		(!request.Hello && (request.Stream || request.QueryFailures != 0)) {
+		(!request.Hello && (request.Stream || request.QueryFailures != 0)) ||
+		(request.Destination != "" && (request.Hello || !validDestination(request.Destination))) {
 		return flowRequest{}, errors.New("flow request is invalid")
 	}
 	return request, nil
@@ -81,6 +86,17 @@ func WriteFlowRequest(w io.Writer, pid int, secret string) error {
 	return writeRequest(w, flowRequest{Version: 1, PID: pid, Secret: secret})
 }
 
+// WriteFlowRequestTo frames an ownership query that names the flow's
+// destination, as a capture-scope-aware extension sends it.
+func WriteFlowRequestTo(w io.Writer, pid int, secret string, destination netip.AddrPort) error {
+	return writeRequest(w, flowRequest{Version: 1, PID: pid, Secret: secret, Destination: destination.String()})
+}
+
+func validDestination(value string) bool {
+	destination, err := netip.ParseAddrPort(value)
+	return err == nil && destination.Port() != 0
+}
+
 func writeRequest(w io.Writer, request flowRequest) error {
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -91,4 +107,11 @@ func writeRequest(w io.Writer, request flowRequest) error {
 	copy(frame[2:], encoded)
 	_, err = w.Write(frame)
 	return err
+}
+
+// BypassAddress is one address rule of a run's capture scope, sent with its
+// registration (ADR 0025).
+type BypassAddress struct {
+	Prefix string `json:"prefix"`
+	Port   uint16 `json:"port,omitempty"`
 }

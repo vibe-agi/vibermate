@@ -69,6 +69,16 @@ struct FlowDestination {
   }
 }
 
+// What the broker says about a flow's process.
+enum BrokerAnswer {
+  // A run owns it: relay the flow on this socket.
+  case owned(BrokerSocket)
+  // No run owns it: the system handles the flow.
+  case unowned
+  // A run owns it, but its capture scope keeps this destination off ViberMate.
+  case direct
+}
+
 struct FlowBroker {
   let configuration: FlowBrokerConfiguration
 
@@ -102,18 +112,31 @@ struct FlowBroker {
     }
   }
 
+  // An ownership query without a destination: owned or not.
+  func query(pid: pid_t) throws -> BrokerSocket? {
+    switch try ask(pid: pid, destination: nil) {
+    case .owned(let socket): return socket
+    case .unowned: return nil
+    case .direct: throw FlowBrokerError.invalidReply // Only answered when a destination is named.
+    }
+  }
+
   // handleNewFlow must answer synchronously. Use a nonblocking socket with one
   // absolute deadline, without waiting on a callback queue (including main).
-  func query(pid: pid_t) throws -> BrokerSocket? {
+  // destination is a TCP flow's "ip:port" ("[ip]:port"), so the broker can
+  // send a run's scoped addresses direct (ADR 0025).
+  func ask(pid: pid_t, destination: String?) throws -> BrokerAnswer {
     guard pid > 1 else { throw FlowBrokerError.invalidFrame }
     let deadline = DispatchTime.now() + .milliseconds(200)
     let socket = try BrokerSocket(port: configuration.port, deadline: deadline)
     do {
-      try socket.write(brokerFrame(["v": 1, "pid": pid, "secret": configuration.secret], limit: 512),
-                       deadline: deadline)
+      var fields: [String: Any] = ["v": 1, "pid": pid, "secret": configuration.secret]
+      if let destination = destination { fields["dst"] = destination }
+      try socket.write(brokerFrame(fields, limit: 512), deadline: deadline)
       switch try socket.read(maximum: 1, deadline: deadline).first {
-      case 89: return socket
-      case 78: socket.close(); return nil
+      case 89: return .owned(socket)
+      case 78: socket.close(); return .unowned
+      case 68 where destination != nil: socket.close(); return .direct
       default: throw FlowBrokerError.invalidReply
       }
     } catch {

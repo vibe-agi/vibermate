@@ -7,8 +7,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -21,7 +23,11 @@ const (
 	requestTimeout = 2 * time.Second
 	flowOwned      = 'Y'
 	flowUnowned    = 'N'
-	helloAccepted  = 'H'
+	// flowDirect answers an owned process's flow whose destination its run's
+	// capture scope keeps off ViberMate (ADR 0025): the extension declines it
+	// but still counts the process as owned.
+	flowDirect    = 'D'
+	helloAccepted = 'H'
 	// extensionFreshness is how recent a hello must be for the extension to
 	// count as active; it sends one at least every 10 seconds. It covers an
 	// extension that hangs while its liveness stream stays open.
@@ -67,6 +73,9 @@ type Stats struct {
 type runChannel struct {
 	mu   sync.Mutex
 	conn *net.UnixConn
+	// scope is the run's address rules; it decides which owned flows go
+	// direct (ADR 0025).
+	scope capturescope.Scope
 }
 
 func New(reader processlineage.Reader, allowFlowPeer func(Peer) bool) (*Broker, error) {
@@ -147,6 +156,25 @@ type registrationRequest struct {
 	// Token is the value the run set for TokenEnvironment in its Agent's
 	// environment. It is optional; without it only lineage attributes.
 	Token string `json:"token,omitempty"`
+	// Bypass is the run's capture scope as addresses (ADR 0025). The broker
+	// decides by address only; names are left to the run's ingress.
+	Bypass []BypassAddress `json:"bypass,omitempty"`
+}
+
+// bypassScope compiles a run's address rules with the same bounds as the
+// Environment's policy, plus the system DNS path the extension keeps.
+func bypassScope(addresses []BypassAddress) (capturescope.Scope, error) {
+	policy := capturescope.Policy{}
+	for i, address := range addresses {
+		policy.Rules = append(policy.Rules, capturescope.Rule{
+			ID: "address-" + strconv.Itoa(i+1), Kind: capturescope.KindPrefix,
+			Value: address.Prefix, Port: address.Port,
+		})
+	}
+	if err := policy.Validate(); err != nil {
+		return capturescope.Scope{}, err
+	}
+	return capturescope.Compile(&policy, nil, capturescope.Options{DNSOnSystemPath: true}), nil
 }
 
 type registrationReply struct {
@@ -238,6 +266,11 @@ func (broker *Broker) register(conn *net.UnixConn) {
 		reply(errors.New("registration request is invalid"))
 		return
 	}
+	scope, err := bypassScope(request.Bypass)
+	if err != nil {
+		reply(errors.New("registration capture scope is invalid"))
+		return
+	}
 	peer, err := peerOf(conn)
 	if err != nil {
 		reply(err)
@@ -270,7 +303,7 @@ func (broker *Broker) register(conn *net.UnixConn) {
 		reply(err)
 		return
 	}
-	channel := &runChannel{conn: conn}
+	channel := &runChannel{conn: conn, scope: scope}
 	broker.mu.Lock()
 	broker.channels[key] = channel
 	broker.mu.Unlock()
@@ -355,6 +388,14 @@ func (broker *Broker) flow(conn fileConn, secret []byte) {
 	if !owned || channel == nil {
 		_, _ = conn.Write([]byte{flowUnowned})
 		return
+	}
+	if destination, err := netip.ParseAddrPort(request.Destination); err == nil {
+		if _, bypass := channel.scope.Match(capturescope.Destination{
+			Addr: destination.Addr(), Port: destination.Port(),
+		}); bypass {
+			_, _ = conn.Write([]byte{flowDirect})
+			return
+		}
 	}
 	if _, err := conn.Write([]byte{flowOwned}); err != nil {
 		return

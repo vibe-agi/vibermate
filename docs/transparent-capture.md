@@ -60,6 +60,11 @@ The extension or netstack sends one header before any client bytes:
   Agent's environment (32–128 URL-safe characters).
   - The broker takes the root from the socket's peer credentials, never from
     the request. A process can therefore only claim its own descendants.
+  - A run may add `"bypass":[{"prefix":"192.168.0.0/16","port":0}, …]`, its
+    capture scope's address rules (ADR 0025). The broker checks them with
+    the same bounds as an Environment and refuses the registration
+    otherwise. UDP is never decided here: one socket may send anywhere, so
+    the run's relay decides each datagram.
     Registering again from the same process replaces its previous claim.
   - Ownership: a parent walk to the registered root first; if it finds no
     owner, membership in the process group a live Agent leads; then the
@@ -89,10 +94,13 @@ The extension or netstack sends one header before any client bytes:
     "queryFailures":<n>}`. The answer is `H`. `queryFailures` (optional) is
     the extension's running count of ownership queries it could not
     complete; Host status reports it.
-  - Flow query: `{"v":1,"pid":<source pid>,"secret":"…"}`. The answer is
-    `Y` (owned: the extension then sends the flow header and copies bytes
-    both ways on the same connection) or `N` (unowned: `handleNewFlow`
-    returns `false`).
+  - Flow query: `{"v":1,"pid":<source pid>,"secret":"…"}`, and for a TCP
+    flow to an IP literal also `"dst":"<ip>:<port>"`. The answer is `Y`
+    (owned: the extension then sends the flow header and copies bytes both
+    ways on the same connection), `N` (unowned: `handleNewFlow` returns
+    `false`) or, only when `dst` was named, `D` (owned, but the run's capture
+    scope keeps that address off ViberMate, so `handleNewFlow` returns
+    `false` and the process stays known as owned; ADR 0025).
   - A wrong secret closes the connection without an answer.
 - **Extension rules.**
   - Claim outbound TCP and UDP.

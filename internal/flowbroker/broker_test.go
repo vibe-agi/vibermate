@@ -374,7 +374,7 @@ const (
 )
 
 func registerFast(socket, run string, handle func(net.Conn)) (*Registration, error) {
-	return register(socket, run, "", handle, fastTimeout)
+	return register(socket, run, "", nil, handle, fastTimeout)
 }
 
 func serveTCPFlows(t *testing.T, broker *Broker) *net.TCPAddr {
