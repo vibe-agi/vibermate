@@ -90,15 +90,13 @@ func buildEnvironment(
 	for _, key := range grant.LaunchEnvironment.DeleteEnv {
 		deletedByEnvironment[key] = struct{}{}
 	}
-	var noProxyValues []string
 	for _, entry := range base {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok || key == "" {
 			continue
 		}
 		if strings.EqualFold(key, "NO_PROXY") {
-			noProxyValues = append(noProxyValues, value)
-			continue
+			continue // Replaced by the run's capture scope below.
 		}
 		if _, deleted := deletedByEnvironment[key]; deleted {
 			continue
@@ -120,11 +118,7 @@ func buildEnvironment(
 	}
 	// ADR 0025: the Environment's capture scope decides what stays off
 	// ViberMate; the user's own NO_PROXY counts only when it allows that.
-	noProxy := capturescope.Compile(
-		grant.CaptureScope,
-		grant.ProtectedAuthorities,
-		capturescope.Options{UserNoProxy: noProxyValues},
-	).NoProxy()
+	noProxy := runCaptureScope(base, grant, false).NoProxy()
 	preserved["HTTP_PROXY"] = proxy
 	preserved["HTTPS_PROXY"] = proxy
 	preserved["http_proxy"] = proxy
@@ -294,4 +288,21 @@ func authenticatedProxyURL(origin string, capability string) (string, error) {
 	}
 	proxy.User = url.UserPassword("capture", capability)
 	return proxy.String(), nil
+}
+
+// runCaptureScope compiles the run's capture scope (ADR 0025) from its
+// Environment, its protected authorities and the user's own NO_PROXY, which
+// counts only when the Environment allows it. Every capture mode uses this,
+// so they agree on what never enters ViberMate.
+func runCaptureScope(base []string, grant capturecontrol.LaunchGrant, dnsOnSystemPath bool) capturescope.Scope {
+	var noProxy []string
+	for _, entry := range base {
+		if key, value, ok := strings.Cut(entry, "="); ok && strings.EqualFold(key, "NO_PROXY") {
+			noProxy = append(noProxy, value)
+		}
+	}
+	return capturescope.Compile(grant.CaptureScope, grant.ProtectedAuthorities, capturescope.Options{
+		UserNoProxy:     noProxy,
+		DNSOnSystemPath: dnsOnSystemPath,
+	})
 }

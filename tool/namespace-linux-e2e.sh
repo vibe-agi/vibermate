@@ -32,6 +32,7 @@ cleanup() {
   set +e
   pkill -f "${work}/bin/" 2>/dev/null
   [[ -n "${echo_pid:-}" ]] && kill "${echo_pid}" 2>/dev/null
+  [[ -n "${http_pid:-}" ]] && kill "${http_pid}" 2>/dev/null
   if [[ "${failures}" -eq 0 ]]; then
     rm -rf "${work}"
   else
@@ -55,7 +56,7 @@ wait_for() {
 }
 
 # vibermate and the daemon find each other through HOME's cache directory.
-in_home() { (cd "${home}" && HOME="${home}" XDG_CACHE_HOME= "$@"); }
+in_home() { (cd "${home}" && HOME="${home}" XDG_CACHE_HOME= XDG_CONFIG_HOME= "$@"); }
 run_transparent() { in_home "${work}/bin/vibermate" run --transparent -- "$@"; }
 run_id() { cat "${home}/e2e/$1.id" 2>/dev/null || true; }
 
@@ -204,6 +205,117 @@ elif [[ "${code}" == *"exit=0"* ]]; then
 else
   pass "the Agent's connection failed once its launcher died (${code//$'\n'/ })"
 fi
+
+log "A Runtime Server: capture through --server, and the capture scope (ADR 0025)"
+server_data="${work}/server-data"
+"${work}/bin/vibermated" server --data-dir "${server_data}" --listen 127.0.0.1:0 \
+  >"${work}/server.out" 2>"${work}/server.err" </dev/null &
+server_ready() { test -s "${work}/server.out"; }
+wait_for "Runtime Server ready" 60 server_ready || exit 1
+server="$(python3 -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())["listenAddress"])' "${work}/server.out")"
+password="e2e-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+recovery_key="$("${work}/bin/vibermated" server recovery-key --data-dir "${server_data}")"
+python3 - "http://${server}" "${recovery_key}" "${password}" >"${work}/server-session.json" <<'PY'
+import json, sys, urllib.request
+body = json.dumps({"schema": "vibermate-web-setup-v1", "recoveryKey": sys.argv[2],
+                   "username": "owner", "password": sys.argv[3]}).encode()
+request = urllib.request.Request(sys.argv[1] + "/api/v1/server/web-setup", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+print(urllib.request.urlopen(request).read().decode())
+PY
+server_token() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${work}/server-session.json" "$1"; }
+
+# publish_environment ID SCOPE_JSON: publish a minimal Environment with a
+# capture scope (or none, when SCOPE_JSON is null).
+publish_environment() {
+  python3 - "http://${server}" "$(server_token writeToken)" "$1" "$2" <<'PY'
+import json, sys, urllib.request
+origin, token, environment, scope = sys.argv[1:]
+draft = {"expectedDraftRevision": 0, "name": environment, "state": "active",
+         "clientEndpoints": [], "pluginBindings": [], "budgetPolicy": {"id": "", "revision": 0},
+         "contentRecording": {"mode": "off", "retentionDays": 0}, "launchEnvironment": {}}
+if json.loads(scope) is not None:
+    draft["captureScope"] = json.loads(scope)
+def call(method, path, revision, key, body=None):
+    request = urllib.request.Request(origin + path, data=body, method=method, headers={
+        "Authorization": "Bearer " + token, "Content-Type": "application/json",
+        "If-Match": str(revision), "Idempotency-Key": key})
+    urllib.request.urlopen(request).read()
+call("PUT", f"/api/v1/environments/{environment}/draft", 0, f"e2e-{environment}-draft-0001", json.dumps(draft).encode())
+for action in ("preview", "publish"):
+    call("POST", f"/api/v1/environments/{environment}/draft/actions/{action}", 1, f"e2e-{environment}-{action}-0001")
+PY
+}
+publish_environment plain null && pass "published Environment 'plain' without a capture scope"
+publish_environment scoped "{\"rules\":[{\"id\":\"this-machine\",\"kind\":\"prefix\",\"value\":\"${host_ip}/32\"}]}" &&
+  pass "published Environment 'scoped' keeping ${host_ip} off ViberMate"
+
+printf 'owner\n%s\n' "${password}" | in_home "${work}/bin/vibermate" login --server "http://${server}" >"${work}/login.out" 2>&1 &&
+  pass "logged in to the Runtime Server" || fail "login: $(cat "${work}/login.out")"
+
+# server_connections TEXT RUN: recorded connections on the Server mentioning
+# TEXT under the run.
+server_connections() {
+  curl -sS -H "Authorization: Bearer $(server_token readToken)" \
+    "http://${server}/api/v1/connections?limit=200" >"${work}/server-connections.json" || return 1
+  python3 - "${work}/server-connections.json" "$1" "$2" <<'PY'
+import json, sys
+items = json.load(open(sys.argv[1])).get("items", [])
+print(sum(1 for item in items if sys.argv[2] in json.dumps(item) and sys.argv[3] and sys.argv[3] in str(item.get("ingressId", ""))))
+PY
+}
+run_server() { local environment="$1"; shift; in_home "${work}/bin/vibermate" run --server "http://${server}" --env "${environment}" --transparent -- "$@"; }
+
+python3 - "${host_ip}" >"${work}/http-service.log" 2>&1 <<'PY' &
+import http.server, sys
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"from this machine")
+    def log_message(self, *args): pass
+server = http.server.HTTPServer((sys.argv[1], 0), Handler)
+print(server.server_address[1], flush=True)
+server.serve_forever()
+PY
+http_pid=$!
+http_ready() { test -s "${work}/http-service.log"; }
+wait_for "HTTP service listening on ${host_ip}" 5 http_ready
+service="http://${host_ip}:$(head -1 "${work}/http-service.log")/"
+
+output="$(run_server plain sh -c "${probe}" server-plain "${target_url}" 2>"${work}/server-plain.err" || true)"
+[[ -n "${output}" ]] &&
+  [[ "${output}" =~ ^[23] ]] && pass "captured through the Server (${output})" || fail "captured through the Server: ${output} $(cat "${work}/server-plain.err")"
+server_recorded() { (($(server_connections "${target_host}" "$(run_id server-plain)" || echo 0) > 0)); }
+wait_for "the Server recorded ${target_host} under run $(run_id server-plain)" 10 server_recorded
+
+# The service exists only on this machine's network. Through a Server it is
+# refused (a Server does not connect to private addresses for a client); kept
+# off ViberMate by the scope, it is reached directly.
+bypass_probe='echo "$VIBERMATE_CAPTURE_RUN_ID" > "$HOME/e2e/$0.id"; curl -sS --max-time 10 "$1"'
+body="$(run_server scoped sh -c "${bypass_probe}" service-scoped "${service}" 2>"${work}/service-scoped.err" || true)"
+[[ "${body}" == "from this machine" ]] && pass "scoped: the Agent reached ${service} directly" ||
+  fail "scoped: ${body} $(cat "${work}/service-scoped.err")"
+body="$(run_server plain sh -c "${bypass_probe}" service-plain "${service}" 2>"${work}/service-plain.err" || true)"
+[[ "${body}" != "from this machine" ]] && pass "plain: the Server refused ${service}, as it should for a client's private address" ||
+  fail "plain: a Server reached the client's private service"
+sleep 2
+scoped_seen="$(server_connections "${host_ip}" "$(run_id service-scoped)" || echo error)"
+[[ "${scoped_seen}" == "0" ]] && pass "scoped: the Server recorded nothing for ${host_ip} (it left directly)" ||
+  fail "scoped: the Server recorded ${scoped_seen} connection(s) to ${host_ip}"
+plain_recorded() { (($(server_connections "${host_ip}" "$(run_id service-plain)" || echo 0) > 0)); }
+wait_for "plain: the Server recorded the refused attempt under its run" 10 plain_recorded
+
+udp_reply="$(run_server scoped python3 -c '
+import os, socket, sys
+open(os.path.expanduser("~/e2e/udp-scoped.id"), "w").write(os.environ["VIBERMATE_CAPTURE_RUN_ID"])
+client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+client.settimeout(10)
+client.sendto(b"direct over udp", (sys.argv[1], int(sys.argv[2])))
+print(client.recvfrom(100)[0].decode())' "${host_ip}" "${echo_port}" 2>/dev/null || true)"
+[[ "${udp_reply}" == "direct over udp" ]] && pass "scoped UDP answered directly" || fail "scoped UDP reply: '${udp_reply}'"
+sleep 2
+udp_seen="$(server_connections "${host_ip}" "$(run_id udp-scoped)" || echo error)"
+[[ "${udp_seen}" == "0" ]] && pass "scoped: the Server recorded no UDP flow" || fail "scoped: the Server recorded ${udp_seen} UDP flow(s)"
+kill "${http_pid}" 2>/dev/null || true
 
 log "Result"
 if ((failures == 0)); then

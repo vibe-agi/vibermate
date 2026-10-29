@@ -382,6 +382,9 @@ func (launcher *Launcher) Run(
 				launcher.finishBestEffort(control, grant)
 				return 1, err
 			}
+			// The namespace answers DNS itself, so port 53 is not a built-in
+			// exclusion here.
+			namespaceIngress.UseScope(runCaptureScope(launcher.config.BaseEnvironment, environmentGrant, false))
 			environment = withoutProxyEnvironment(environment)
 			if !request.ManagedAuth {
 				fmt.Fprintln(launcher.config.Stderr, "vibermate: transparent capture on Linux isolates localhost, so a browser sign-in callback cannot reach the Agent; use --managed-auth for sign-in.")

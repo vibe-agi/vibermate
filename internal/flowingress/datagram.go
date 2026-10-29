@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
 	"net/netip"
@@ -190,7 +191,22 @@ func (flow *datagramFlow) run(endpoint netip.AddrPort, session *datagramSession)
 	}
 }
 
-func (flow *datagramFlow) dial(endpoint netip.AddrPort) (*connectudp.Conn, error) {
+// datagramPeer is where one destination's datagrams go: a connect-udp session
+// through the run's proxy, or a direct association for a bypassed one.
+type datagramPeer interface {
+	ReadDatagram() ([]byte, error)
+	WriteDatagram([]byte) error
+	Close() error
+}
+
+func (flow *datagramFlow) dial(endpoint netip.AddrPort) (datagramPeer, error) {
+	if _, bypass := flow.ingress.scope.Match(capturescope.Destination{
+		Addr: endpoint.Addr(), Port: endpoint.Port(),
+	}); bypass {
+		ctx, cancel := context.WithTimeout(flow.ctx, datagramDialTimeout)
+		defer cancel()
+		return DialDirectUDP(ctx, "", endpoint)
+	}
 	proxy, err := flow.ingress.proxy()
 	if err != nil {
 		return nil, err

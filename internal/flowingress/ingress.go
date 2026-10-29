@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -34,6 +36,9 @@ type Proxy struct {
 // authority a flow can reach; flows never choose a run.
 type Ingress struct {
 	proxy func() (Proxy, error)
+	// scope keeps the Environment's client-only destinations off ViberMate
+	// (ADR 0025). The zero Scope keeps only the built-in set off.
+	scope capturescope.Scope
 }
 
 // New returns an ingress that reads the run's current proxy for every flow,
@@ -44,6 +49,12 @@ func New(proxy func() (Proxy, error)) (*Ingress, error) {
 	}
 	return &Ingress{proxy: proxy}, nil
 }
+
+// UseScope sets the run's compiled capture scope. Call it before serving.
+func (ingress *Ingress) UseScope(scope capturescope.Scope) { ingress.scope = scope }
+
+// Scope is the run's compiled capture scope.
+func (ingress *Ingress) Scope() capturescope.Scope { return ingress.scope }
 
 // Serve owns conn: it reads the flow header, names the destination, opens a
 // CONNECT through the run's proxy and copies bytes until both sides finish.
@@ -75,8 +86,19 @@ func (ingress *Ingress) ServeFlow(ctx context.Context, conn net.Conn, header Hea
 }
 
 func (ingress *Ingress) serve(ctx context.Context, conn net.Conn, reader *bufio.Reader, header Header) error {
-	target := Destination(header, conn, reader)
-	upstream, err := ingress.connect(ctx, target)
+	name := destinationName(header, conn, reader)
+	var upstream net.Conn
+	var err error
+	if _, bypass := ingress.scope.Match(capturescope.Destination{
+		Name: name, Addr: header.Destination.Addr(), Port: header.Destination.Port(),
+	}); bypass {
+		var target string
+		if target, err = directTarget(name, header.Destination); err == nil {
+			upstream, err = dialDirectTCP(ctx, target)
+		}
+	} else {
+		upstream, err = ingress.connect(ctx, targetOf(name, header.Destination))
+	}
 	if err != nil {
 		return err
 	}
@@ -91,14 +113,24 @@ func (ingress *Ingress) Proxy() (Proxy, error) { return ingress.proxy() }
 // Destination names the CONNECT target: a platform-reported host name, else
 // the sniffed TLS SNI or HTTP Host, else the IP address.
 func Destination(header Header, conn net.Conn, reader *bufio.Reader) string {
-	port := strconv.Itoa(int(header.Destination.Port()))
+	return targetOf(destinationName(header, conn, reader), header.Destination)
+}
+
+// destinationName is the platform-reported host name, else the sniffed TLS
+// SNI or HTTP Host, else empty.
+func destinationName(header Header, conn net.Conn, reader *bufio.Reader) string {
 	if header.Host != "" {
-		return net.JoinHostPort(header.Host, port)
+		return header.Host
 	}
-	if host := sniffHost(conn, reader); host != "" {
-		return net.JoinHostPort(host, port)
+	return sniffHost(conn, reader)
+}
+
+func targetOf(name string, destination netip.AddrPort) string {
+	port := strconv.Itoa(int(destination.Port()))
+	if name != "" {
+		return net.JoinHostPort(name, port)
 	}
-	return net.JoinHostPort(header.Destination.Addr().Unmap().String(), port)
+	return net.JoinHostPort(destination.Addr().Unmap().String(), port)
 }
 
 func (ingress *Ingress) connect(ctx context.Context, target string) (net.Conn, error) {
