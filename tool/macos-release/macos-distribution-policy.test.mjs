@@ -30,7 +30,7 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "ViberMate_0.1.37_universal.dmg";
+const archiveFilename = "ViberMate_0.1.38_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 function capabilityEntitlements(role) {
@@ -68,11 +68,11 @@ test("capability entitlements are exact and scoped to the app and transparent ex
 });
 
 test("frozen release identity is coherent", () => {
-  assert.equal(macOSDistributionPolicy.appVersion, "0.1.37");
-  assert.equal(macOSDistributionPolicy.appBuildNumber, "40");
+  assert.equal(macOSDistributionPolicy.appVersion, "0.1.38");
+  assert.equal(macOSDistributionPolicy.appBuildNumber, "41");
   assert.equal(
     macOSDistributionPolicy.diskImageFilename,
-    "ViberMate_0.1.37_universal.dmg",
+    "ViberMate_0.1.38_universal.dmg",
   );
   const pubspec = readFileSync(
     new URL("../../ui/flutter_app/pubspec.yaml", import.meta.url),
@@ -82,9 +82,9 @@ test("frozen release identity is coherent", () => {
     new URL("../../.github/workflows/macos-developer-id-candidate.yml", import.meta.url),
     "utf8",
   );
-  assert.match(pubspec, /^version: 0\.1\.37\+40$/mu);
+  assert.match(pubspec, /^version: 0\.1\.38\+41$/mu);
   assert.equal(
-    [...workflow.matchAll(/ViberMate_0\.1\.37_universal\.dmg/gu)].length,
+    [...workflow.matchAll(/ViberMate_0\.1\.38_universal\.dmg/gu)].length,
     3,
   );
   assert.doesNotMatch(workflow, /ViberMate_0\.1\.34_universal\.dmg/u);
@@ -296,9 +296,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.vibermate.desktop",
-      bundleVersion: "40",
+      bundleVersion: "41",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.37",
+      shortVersion: "0.1.38",
     }),
   );
   assert.throws(() =>
@@ -314,9 +314,9 @@ test("application metadata and Mach-O inventory are fixed", () => {
     validateInfoPlist({
       bundleExecutable: "vibermate-desktop",
       bundleIdentifier: "io.example.desktop",
-      bundleVersion: "40",
+      bundleVersion: "41",
       minimumSystemVersion: "14.0",
-      shortVersion: "0.1.37",
+      shortVersion: "0.1.38",
     }),
   );
   assert.doesNotThrow(() =>
@@ -848,7 +848,7 @@ test("private evidence has a closed secret-free schema", () => {
       sourceRevision: "4".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedArchiveSHA256: "9".repeat(64),
-      version: "0.1.37",
+      version: "0.1.38",
     },
     codeSigning: {
       certificateSHA256: "5".repeat(64),
