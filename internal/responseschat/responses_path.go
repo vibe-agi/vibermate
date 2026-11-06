@@ -138,15 +138,23 @@ func (codec responsesBackendCodec) EncodeSourceRequest(
 	}
 	report := protocolcore.TranslationReport{}
 	// The validated same-dialect wire owns native history, including encrypted
-	// reasoning and compaction. Audit projection must not delete replay state.
-	model, err := json.Marshal(request.EffectiveModel)
-	if err != nil {
-		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
-	}
-	root["model"] = model
-	body, err := json.Marshal(root)
-	if err != nil {
-		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
+	// reasoning and compaction. Preserve it verbatim unless model mapping is
+	// needed: re-encoding HTML characters can push an admitted request over
+	// the wire limit even when no message transform is configured.
+	body := sourceBody
+	if request.RequestedModel != request.EffectiveModel {
+		model, err := json.Marshal(request.EffectiveModel)
+		if err != nil {
+			return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
+		}
+		root["model"] = model
+		var output bytes.Buffer
+		encoder := json.NewEncoder(&output)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(root); err != nil {
+			return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
+		}
+		body = bytes.TrimSuffix(output.Bytes(), []byte("\n"))
 	}
 	headers := make(http.Header)
 	if request.Stream {

@@ -29,7 +29,7 @@ func TestApplyPreferencePreservesOtherFields(t *testing.T) {
 		{"invalid object preserved", "entitled", `,"access_programs":null`, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			body := []byte(`{"model":"` + test.model + `","input":[{"role":"user","content":"hello"}],"opaque_counter":9007199254740993` + test.access + `}`)
+			body := []byte(`{"model":"` + test.model + `","input":[{"role":"user","content":"hello <>&` + "\u2028\u2029" + `"}],"opaque_counter":9007199254740993` + test.access + `}`)
 			got, changed, err := ApplyPreference(body, catalog, Blue)
 			if (test.model != "entitled" && test.model != "ordinary") || test.name == "invalid object preserved" {
 				if err == nil {
