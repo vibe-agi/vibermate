@@ -67,7 +67,7 @@ dependency.
 | github.com/caddyserver/certmagic | v0.25.4 | Apache-2.0 | Permissive | Retain Apache notice and any bundled notices. |
 | github.com/dop251/goja | pinned 2026 revision | MIT | Permissive | JavaScript runtime; retain MIT notice. |
 | github.com/hashicorp/golang-lru/v2 | v2.0.7 | MPL-2.0 | File-level copyleft | Modified MPL files remain MPL-2.0; do not relicense those files. |
-| github.com/klauspost/compress | v1.19.1 | BSD-3-Clause and Apache-2.0 files | Permissive | The module contains per-file notices; retain them when distributing. |
+| github.com/klauspost/compress | v1.20.2 | BSD-3-Clause and Apache-2.0 files | Permissive | The module contains per-file notices; retain them when distributing. |
 | github.com/openai/openai-go/v3 | v3.46.0 | Apache-2.0 | Permissive | Retain Apache notice. |
 | github.com/refraction-networking/utls | v1.8.2 | BSD-3-Clause | Permissive | Includes Go Authors notice. |
 | go.uber.org/zap | v1.27.1 | MIT | Permissive | Retain MIT notice. |
