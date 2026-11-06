@@ -148,6 +148,11 @@ func ApplyPreference(body []byte, catalog Catalog, mode Preference) ([]byte, boo
 		return nil, false, err
 	}
 	root["access_programs"] = encoded
-	encoded, err = json.Marshal(root)
-	return encoded, err == nil, err
+	// The native history is already valid JSON. HTML escaping here would grow
+	// unrelated content and can push a long session past the request limit.
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	err = encoder.Encode(root)
+	return bytes.TrimSuffix(output.Bytes(), []byte("\n")), err == nil, err
 }
