@@ -9,7 +9,7 @@ require (
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/dop251/goja v0.0.0-20260822123354-58e940e0d230
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.20.2
 	github.com/openai/openai-go/v3 v3.46.0
 	github.com/refraction-networking/utls v1.8.2
 	go.uber.org/zap v1.27.1
@@ -25,7 +25,7 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/caddyserver/zerossl v0.1.5 // indirect
