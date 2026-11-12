@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,115 @@ var (
 	ErrInvalidPolicy   = errors.New("message transform policy is invalid")
 	ErrExecutionFailed = errors.New("message transform execution failed")
 	ErrInvalidOutput   = errors.New("message transform output is invalid")
+	// ErrBlocked reports a script that refused the message through
+	// runtime.block. It always accompanies ErrExecutionFailed, so callers that
+	// only know the older contract still refuse the message.
+	ErrBlocked = errors.New("message transform blocked the message")
 )
+
+// Outcome is what one script did to the messages of one stage.
+type Outcome string
+
+const (
+	OutcomeUnchanged Outcome = "unchanged"
+	OutcomeChanged   Outcome = "changed"
+	OutcomeBlocked   Outcome = "blocked"
+	OutcomeFailed    Outcome = "failed"
+)
+
+const (
+	StageRequest  = "request"
+	StageResponse = "response"
+)
+
+// StageOutcome summarizes one script's work on one stage of one Turn. It holds
+// counts and a script-declared label only, never message content. A response
+// stage runs once per streamed event, so its counts accumulate.
+type StageOutcome struct {
+	// Transform is the script's position in the Pipeline.
+	Transform   int
+	Stage       string
+	Outcome     Outcome
+	BlockReason string
+	// Applications counts executions; Changed counts those that altered the
+	// message.
+	Applications, Changed       uint32
+	HeadersChanged, BodyChanged bool
+	BytesBefore, BytesAfter     uint64
+}
+
+func (outcome *StageOutcome) record(input scriptMessage, output scriptMessage, blocked string, err error) {
+	if outcome.Applications < math.MaxUint32 {
+		outcome.Applications++
+	}
+	outcome.BytesBefore += uint64(len(input.Body))
+	switch {
+	case blocked != "":
+		outcome.Outcome, outcome.BlockReason = OutcomeBlocked, blocked
+		return
+	case err != nil:
+		outcome.Outcome = OutcomeFailed
+		return
+	}
+	outcome.BytesAfter += uint64(len(output.Body))
+	body := !bytes.Equal(input.Body, output.Body)
+	headers := !equalHeaders(input.Headers, output.Headers)
+	if body || headers {
+		if outcome.Changed < math.MaxUint32 {
+			outcome.Changed++
+		}
+		outcome.BodyChanged = outcome.BodyChanged || body
+		outcome.HeadersChanged = outcome.HeadersChanged || headers
+	}
+	if outcome.Changed != 0 {
+		outcome.Outcome = OutcomeChanged
+	} else {
+		outcome.Outcome = OutcomeUnchanged
+	}
+}
+
+// The engine lowercases names on the way in and canonicalizes them on the way
+// out, and drops framing and validator headers itself. Neither is the script's
+// doing, so neither counts as a change.
+func equalHeaders(left, right http.Header) bool {
+	comparable := func(headers http.Header) http.Header {
+		result := make(http.Header, len(headers))
+		for name, values := range headers {
+			result[textproto.CanonicalMIMEHeaderKey(name)] = values
+		}
+		stripFramingHeaders(result)
+		stripRepresentationValidators(result)
+		return result
+	}
+	left, right = comparable(left), comparable(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for name, values := range left {
+		if !slices.Equal(values, right[name]) {
+			return false
+		}
+	}
+	return true
+}
+
+// A block reason is a label the script author chose in advance. Its alphabet
+// and length keep message content from being carried out through it.
+func validBlockReason(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+		case (character == '-' || character == '_') && index != 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Policy is deliberately source-only. Compiled programs are rebuilt with an
 // immutable Environment revision and are never part of its persisted form.
@@ -446,6 +555,38 @@ type Turn struct {
 	requestApplied bool
 	requestInput   scriptMessage
 	requestOutput  scriptMessage
+
+	requestOutcome, responseOutcome StageOutcome
+}
+
+func (turn *Turn) outcomes(index int) []StageOutcome {
+	if turn == nil {
+		return nil
+	}
+	turn.mu.Lock()
+	defer turn.mu.Unlock()
+	var result []StageOutcome
+	for _, outcome := range []StageOutcome{turn.requestOutcome, turn.responseOutcome} {
+		if outcome.Applications != 0 {
+			outcome.Transform = index
+			result = append(result, outcome)
+		}
+	}
+	return result
+}
+
+// Outcomes reports what each script did so far in this Turn, request stages
+// before response stages for each script, in Pipeline order. A stage that has
+// not run is absent.
+func (turn *PipelineTurn) Outcomes() []StageOutcome {
+	if turn == nil {
+		return nil
+	}
+	var result []StageOutcome
+	for index, item := range turn.turns {
+		result = append(result, item.outcomes(index)...)
+	}
+	return result
 }
 
 func (turn *Turn) HasRequest() bool {
@@ -617,7 +758,8 @@ func (turn *Turn) apply(
 	if err != nil {
 		return scriptMessage{}, fmt.Errorf("%w: restore Runtime Metadata", ErrExecutionFailed)
 	}
-	if err := installRuntimeCapabilities(runtime, runtimeValue, turn.annotations); err != nil {
+	blocked := ""
+	if err := installRuntimeCapabilities(runtime, runtimeValue, turn.annotations, &blocked); err != nil {
 		return scriptMessage{}, fmt.Errorf("%w: install Runtime capabilities", ErrExecutionFailed)
 	}
 
@@ -653,6 +795,16 @@ func (turn *Turn) apply(
 	}
 	cancelExecution()
 	runtime.ClearInterrupt()
+	// A block is final even if the script caught its own refusal.
+	if blocked != "" {
+		stageErr = fmt.Errorf("%w: %w: %s stage", ErrExecutionFailed, ErrBlocked, stage)
+	}
+	outcome := &turn.responseOutcome
+	if stage == StageRequest {
+		outcome = &turn.requestOutcome
+	}
+	outcome.Stage = stage
+	outcome.record(canonicalInput, output, blocked, stageErr)
 	if stageErr != nil {
 		return scriptMessage{}, stageErr
 	}
@@ -775,8 +927,21 @@ func installRuntimeCapabilities(
 	runtime *goja.Runtime,
 	runtimeValue goja.Value,
 	annotations *clientannotation.Signer,
+	blocked *string,
 ) error {
 	object := runtimeValue.ToObject(runtime)
+	if err := object.Set("block", func(call goja.FunctionCall) goja.Value {
+		reason, err := scriptStringWithin(call.Argument(0), 64)
+		if err != nil || !validBlockReason(reason) {
+			panic(runtime.NewGoError(errors.New("block reason is invalid")))
+		}
+		if *blocked == "" {
+			*blocked = reason
+		}
+		panic(runtime.NewGoError(errors.New("message blocked")))
+	}); err != nil {
+		return err
+	}
 	annotationObject := runtime.NewObject()
 	if annotations != nil {
 		if err := annotationObject.Set(
