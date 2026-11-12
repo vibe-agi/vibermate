@@ -103,6 +103,7 @@ type Event struct {
 	Conversation           agentconversation.Ref
 	Diagnosis              Diagnosis
 	Transport              *TransportEvidence
+	Scripts                []ScriptOutcome
 }
 
 func (event Event) Validate() error {
@@ -278,7 +279,106 @@ func (event Event) Validate() error {
 			return err
 		}
 	}
+	if len(event.Scripts) != 0 && event.Kind != KindExchangeCompleted {
+		return fmt.Errorf(
+			"%w: script outcomes belong only to a completed Exchange",
+			ErrInvalidEvent,
+		)
+	}
+	return ValidateScriptOutcomes(event.Scripts)
+}
+
+// ScriptOutcome is what one message transform script did to one stage of a
+// request. It holds counts and a label the script author chose in advance; no
+// message content, header value, or exception text appears here.
+type ScriptOutcome struct {
+	ScriptID       string `json:"scriptId,omitempty"`
+	Revision       uint64 `json:"revision,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Stage          string `json:"stage"`
+	Outcome        string `json:"outcome"`
+	BlockReason    string `json:"blockReason,omitempty"`
+	Applications   uint32 `json:"applications"`
+	Changed        uint32 `json:"changed"`
+	HeadersChanged bool   `json:"headersChanged"`
+	BodyChanged    bool   `json:"bodyChanged"`
+	BytesBefore    uint64 `json:"bytesBefore"`
+	BytesAfter     uint64 `json:"bytesAfter"`
+}
+
+const (
+	ScriptStageRequest  = "request"
+	ScriptStageResponse = "response"
+
+	ScriptUnchanged = "unchanged"
+	ScriptChanged   = "changed"
+	ScriptBlocked   = "blocked"
+	ScriptFailed    = "failed"
+
+	// MaximumScriptOutcomes bounds one request's record; each script reports
+	// at most one request and one response stage.
+	MaximumScriptOutcomes = 128
+)
+
+func ValidateScriptOutcomes(outcomes []ScriptOutcome) error {
+	if len(outcomes) > MaximumScriptOutcomes {
+		return fmt.Errorf("%w: too many script outcomes", ErrInvalidEvent)
+	}
+	for _, outcome := range outcomes {
+		if err := outcome.validate(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (outcome ScriptOutcome) validate() error {
+	invalid := func(what string) error {
+		return fmt.Errorf("%w: script outcome %s is invalid", ErrInvalidEvent, what)
+	}
+	if len(outcome.ScriptID) > 128 || !utf8.ValidString(outcome.ScriptID) ||
+		strings.ContainsFunc(outcome.ScriptID, unicode.IsControl) {
+		return invalid("script ID")
+	}
+	if len(outcome.Name) > 256 || !utf8.ValidString(outcome.Name) ||
+		strings.ContainsFunc(outcome.Name, unicode.IsControl) {
+		return invalid("name")
+	}
+	if outcome.Stage != ScriptStageRequest && outcome.Stage != ScriptStageResponse {
+		return invalid("stage")
+	}
+	switch outcome.Outcome {
+	case ScriptUnchanged, ScriptChanged, ScriptFailed:
+		if outcome.BlockReason != "" {
+			return invalid("block reason")
+		}
+	case ScriptBlocked:
+		if !validScriptBlockReason(outcome.BlockReason) {
+			return invalid("block reason")
+		}
+	default:
+		return invalid("outcome")
+	}
+	if outcome.Applications == 0 || outcome.Changed > outcome.Applications {
+		return invalid("count")
+	}
+	return nil
+}
+
+func validScriptBlockReason(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+		case (character == '-' || character == '_') && index != 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (event Event) validateEnvironmentEvidence() (bool, error) {
@@ -704,6 +804,7 @@ type Record struct {
 	Conversation           *agentconversation.Ref `json:"conversation,omitempty"`
 	Diagnosis              *Diagnosis             `json:"diagnosis,omitempty"`
 	Transport              *TransportEvidence     `json:"transport,omitempty"`
+	Scripts                []ScriptOutcome        `json:"scripts,omitempty"`
 }
 
 // Diagnosis is what a failed request can say about itself without saying what
@@ -830,6 +931,7 @@ func (record Record) validatePrepared() error {
 		Conversation:           conversation,
 		Diagnosis:              diagnosisValue(record.Diagnosis),
 		Transport:              record.Transport,
+		Scripts:                record.Scripts,
 	}.Validate()
 }
 

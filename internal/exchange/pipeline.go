@@ -365,6 +365,7 @@ func (pipeline *Pipeline) Execute(
 		)
 		material.Release()
 	}
+	result.Scripts = transformTurn.Outcomes()
 	result.Ledger = ledger.Snapshot()
 	if err != nil {
 		switch {
@@ -1162,6 +1163,7 @@ func (pipeline *Pipeline) observeAttempt(
 		HasAdmission: hasAdmission, ConnectionID: request.connectionRef,
 		Outcome: result.Outcome, ReasonCode: ReasonOf(resultErr),
 		Presentation: result.Presentation, Transport: result.Transport,
+		Scripts:                result.Scripts,
 		Conversation:           conversation,
 		ClientProtocolEvidence: request.clientEvidence,
 	}

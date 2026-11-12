@@ -57,7 +57,9 @@ const (
 // stage runs once per streamed event, so its counts accumulate.
 type StageOutcome struct {
 	// Transform is the script's position in the Pipeline.
-	Transform   int
+	Transform int
+	// Script is empty for a Pipeline compiled without names.
+	Script      ScriptRef
 	Stage       string
 	Outcome     Outcome
 	BlockReason string
@@ -230,6 +232,24 @@ func Compile(policy Policy, limits Limits) (Program, error) {
 // request representation it produced.
 type Pipeline struct {
 	programs []Program
+	scripts  []ScriptRef
+}
+
+// ScriptRef names the published script a Policy came from, so an outcome can
+// say which script produced it.
+type ScriptRef struct {
+	ID       string
+	Revision uint64
+	Name     string
+}
+
+// Named attaches one ScriptRef per compiled Policy, in Pipeline order.
+func (pipeline Pipeline) Named(scripts []ScriptRef) (Pipeline, error) {
+	if len(scripts) != len(pipeline.programs) {
+		return Pipeline{}, fmt.Errorf("%w: script names do not match the Pipeline", ErrInvalidPolicy)
+	}
+	pipeline.scripts = slices.Clone(scripts)
+	return pipeline, nil
 }
 
 // RetainedRequestBytes covers every concrete Turn retained across the request
@@ -296,6 +316,7 @@ func CompilePipeline(policies []Policy, limits Limits) (Pipeline, error) {
 type PipelineTurn struct {
 	turns       []*Turn
 	annotations *clientannotation.Signer
+	scripts     []ScriptRef
 }
 
 func (pipeline Pipeline) NewTurn() *PipelineTurn {
@@ -327,7 +348,7 @@ func (pipeline Pipeline) newTurn(
 	for index, program := range pipeline.programs {
 		turns[index] = program.newTurn(metadata, annotations)
 	}
-	return &PipelineTurn{turns: turns, annotations: annotations}
+	return &PipelineTurn{turns: turns, annotations: annotations, scripts: pipeline.scripts}
 }
 
 func (turn *PipelineTurn) HasRequest() bool {
@@ -584,7 +605,12 @@ func (turn *PipelineTurn) Outcomes() []StageOutcome {
 	}
 	var result []StageOutcome
 	for index, item := range turn.turns {
-		result = append(result, item.outcomes(index)...)
+		for _, outcome := range item.outcomes(index) {
+			if index < len(turn.scripts) {
+				outcome.Script = turn.scripts[index]
+			}
+			result = append(result, outcome)
+		}
 	}
 	return result
 }

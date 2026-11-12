@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
@@ -163,6 +164,7 @@ func (o activityAttemptObserver) offerObserveTerminal(ctx context.Context, obser
 			observation.Presentation,
 			observation.Transport,
 		),
+		Scripts: activityScriptOutcomes(observation.Scripts),
 	}
 	return o.offerPrepared(observation.ObservationStamp, r, event, observation.ClientProtocolEvidence, observation.ProviderResponseID, o.collectUsage(observation, status))
 }
@@ -288,4 +290,26 @@ func snapshotBytes(v reflect.Value) uint64 {
 		}
 	}
 	return n
+}
+
+// A record with an unusable script outcome would be dropped whole, so one that
+// cannot be stored is left out instead: the request itself is still recorded.
+func activityScriptOutcomes(outcomes []messagetransform.StageOutcome) []activity.ScriptOutcome {
+	if len(outcomes) == 0 {
+		return nil
+	}
+	result := make([]activity.ScriptOutcome, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		result = append(result, activity.ScriptOutcome{
+			ScriptID: outcome.Script.ID, Revision: outcome.Script.Revision, Name: outcome.Script.Name,
+			Stage: outcome.Stage, Outcome: string(outcome.Outcome), BlockReason: outcome.BlockReason,
+			Applications: outcome.Applications, Changed: outcome.Changed,
+			HeadersChanged: outcome.HeadersChanged, BodyChanged: outcome.BodyChanged,
+			BytesBefore: outcome.BytesBefore, BytesAfter: outcome.BytesAfter,
+		})
+	}
+	if activity.ValidateScriptOutcomes(result) != nil {
+		return nil
+	}
+	return result
 }
