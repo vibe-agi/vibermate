@@ -138,3 +138,22 @@ func TestRecordingLowSpacePauseGatesOffersOnly(t *testing.T) {
 		t.Fatal("raw evidence not accepted after resume:", got)
 	}
 }
+
+// A stopped store no longer watches the volume, so it must not keep promising
+// an automatic resume.
+func TestRecordingLowSpacePauseIsNotReportedAfterShutdown(t *testing.T) {
+	volume := &fakeVolume{}
+	volume.free.Store(100 << 20)
+	r, err := startWithBuilders(t.Context(), testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}), runtimeBuildOverrides{filesystemAvailable: volume.available})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRecording(t, r)
+	if !r.Status().Recording.LowSpacePause {
+		t.Fatal("running store did not report the pause")
+	}
+	shutdownRuntime(t, r)
+	if r.Status().Recording.LowSpacePause {
+		t.Fatal("stopped store still reports a pause that cannot lift")
+	}
+}

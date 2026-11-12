@@ -1108,9 +1108,15 @@ func (r *Runtime) Status() RuntimeStatus {
 		status.Recording.State = RecordingDegraded
 	}
 	if r.recordingStorage != nil && r.recordingStorage.lowSpace.Load() {
-		status.Recording.LowSpacePause = true
-		if status.Recording.State == RecordingAvailable {
-			status.Recording.State = RecordingDegraded
+		// Only a running store re-checks the volume, so only it can promise
+		// that recording resumes by itself.
+		select {
+		case <-r.recordingStorage.done:
+		default:
+			status.Recording.LowSpacePause = true
+			if status.Recording.State == RecordingAvailable {
+				status.Recording.State = RecordingDegraded
+			}
 		}
 	}
 	status.EnvironmentProjection = r.environments.Health()
