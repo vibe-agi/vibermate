@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/vibermate_mark.dart';
 import '../../core/design/workbench_widgets.dart';
@@ -60,22 +61,27 @@ final class WorkbenchShell extends StatelessWidget {
               child: FocusTraversalGroup(
                 policy: ReadingOrderTraversalPolicy(),
                 child: Scaffold(
-                  body: Column(
-                    children: [
-                      _TitleBar(controller: controller, copy: copy),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            _NavigationRail(controller: controller, copy: copy),
-                            const VerticalDivider(width: 1),
-                            Expanded(child: _body(copy)),
-                          ],
+                  backgroundColor: context.viberColors.canvas,
+                  body: LayoutBuilder(
+                    builder: (context, constraints) => Row(
+                      children: [
+                        _Sidebar(
+                          controller: controller,
+                          copy: copy,
+                          labelled:
+                              constraints.maxWidth >= _sidebarLabelBreakpoint,
                         ),
-                      ),
-                      const Divider(height: 1),
-                      _StatusBar(controller: controller, copy: copy),
-                    ],
+                        Expanded(
+                          // The inset sheet belongs to the roomy layout;
+                          // narrower windows keep every pixel for content.
+                          child: _WorkArea(
+                            framed:
+                                constraints.maxWidth >= _sidebarLabelBreakpoint,
+                            child: _body(copy),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -89,6 +95,20 @@ final class WorkbenchShell extends StatelessWidget {
   Widget _body(AppCopy copy) {
     return Column(
       children: [
+        if (_runtimeAttentionLabel(copy, controller.runtimeStatus)
+            case final attention?)
+          Container(
+            key: const Key('runtime-attention'),
+            height: ViberMetrics.compactRowHeight,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.lg),
+            child: Builder(
+              builder: (context) => InlineStatus(
+                label: attention,
+                color: context.viberColors.warning,
+              ),
+            ),
+          ),
         if (controller.runtimeStatus?.storageFailure case final failure?)
           InlineNotice(
             key: const Key('runtime-storage-failure'),
@@ -231,10 +251,6 @@ final class WorkbenchShell extends StatelessWidget {
               dismissLabel: copy('common.dismiss'),
             ),
         ],
-        if (controller.section != WorkbenchSection.settings) ...[
-          _TaskNavigation(controller: controller, copy: copy),
-          const Divider(height: 1),
-        ],
         Expanded(child: body),
       ],
     );
@@ -251,140 +267,431 @@ final class _SectionIntent extends Intent {
   final WorkbenchSection section;
 }
 
-final class _TitleBar extends StatelessWidget {
-  const _TitleBar({required this.controller, required this.copy});
-
-  final WorkbenchController controller;
-  final AppCopy copy;
+final class _ViberMark extends StatelessWidget {
+  const _ViberMark();
 
   @override
   Widget build(BuildContext context) {
-    final status = controller.runtimeStatus;
-    return Container(
-      height: ViberMetrics.toolbarHeight,
-      color: context.viberColors.panel,
-      padding: const EdgeInsets.only(
-        left: ViberSpacing.lg,
-        right: ViberSpacing.md,
+    return const ViberMateMark(size: 22, framed: true);
+  }
+}
+
+/// Below this window width the labelled sidebar folds to an icon rail.
+const double _sidebarLabelBreakpoint = 1200;
+
+const double _sidebarWidth = 216;
+const double _railWidth = 52;
+
+final class _WorkArea extends StatelessWidget {
+  const _WorkArea({required this.framed, required this.child});
+
+  final bool framed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    if (!framed) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.panel,
+          border: Border(left: BorderSide(color: colors.dividerSoft)),
+        ),
+        child: child,
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        0,
+        ViberSpacing.md,
+        ViberSpacing.md,
+        ViberSpacing.md,
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Keep the global controls usable at common half-screen desktop
-          // widths. The full labels are reserved for a genuinely wide window;
-          // the compact controls retain their tooltip and semantic labels.
-          final compact = constraints.maxWidth < 1120;
-          final narrow = constraints.maxWidth < 520;
-          final recordingDegraded =
-              status?.recordingFailure != null ||
-              status?.recording?.incomplete == true;
-          final statusLabel = status?.storageFailure != null
-              ? copy('status.proxy_stopped')
-              : recordingDegraded && status?.healthy == true
-              ? copy('status.recording_degraded')
-              : status?.healthy == true
-              ? copy('status.ready')
-              : _runtimeStateLabel(copy, status?.state ?? 'starting');
-          final statusColor = status?.healthy == true && !recordingDegraded
-              ? context.viberColors.verified
-              : context.viberColors.warning;
-          return Row(
-            children: [
-              const _ViberMark(),
-              const SizedBox(width: ViberSpacing.md),
-              Flexible(
-                child: Text(
-                  copy('app.name'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              if (!compact) ...[
-                const SizedBox(width: ViberSpacing.md),
-                Text(
-                  copy('app.subtitle'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-              const Spacer(),
-              if (controller.webPrincipal case final principal?) ...[
-                WebAccountButton(
-                  principal: principal,
-                  copy: copy,
-                  compact: narrow,
-                  onChangePassword: controller.changeWebPassword,
-                  onSignOut: controller.onSignOut,
-                ),
-                const SizedBox(width: ViberSpacing.sm),
-              ],
-              if (controller.previewMode && !_productScreenshot) ...[
-                if (compact)
-                  Tooltip(
-                    message: copy('status.preview'),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: ViberSpacing.sm,
-                      ),
-                      child: Icon(
-                        Icons.science_outlined,
-                        size: 16,
-                        color: context.viberColors.warning,
-                      ),
-                    ),
-                  )
-                else
-                  StatusPill(
-                    label: copy('status.preview'),
-                    color: context.viberColors.warning,
-                    icon: Icons.science_outlined,
-                  ),
-                const SizedBox(width: ViberSpacing.sm),
-              ],
-              _ApprovalAttention(
-                controller: controller,
-                copy: copy,
-                compact: compact,
-              ),
-              const SizedBox(width: ViberSpacing.xs),
-              if (status?.healthy != true || recordingDegraded) ...[
-                if (narrow)
-                  Tooltip(
-                    message: statusLabel,
-                    child: Icon(
-                      Icons.error_outline,
-                      size: 16,
-                      color: statusColor,
-                    ),
-                  )
-                else
-                  InlineStatus(label: statusLabel, color: statusColor),
-                const SizedBox(width: ViberSpacing.xs),
-              ],
-              IconButton(
-                onPressed: controller.loading
-                    ? null
-                    : () => unawaited(controller.refresh()),
-                tooltip: '${copy('status.refresh')}  ⌘R',
-                icon: controller.loading
-                    ? const SizedBox.square(
-                        dimension: 14,
-                        child: CircularProgressIndicator(strokeWidth: 1.5),
-                      )
-                    : const Icon(Icons.refresh, size: 16),
-                constraints: const BoxConstraints.tightFor(
-                  width: ViberMetrics.controlHeight,
-                  height: ViberMetrics.controlHeight,
-                ),
-                padding: EdgeInsets.zero,
-              ),
-            ],
-          );
-        },
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: colors.panel,
+          border: Border.all(color: colors.dividerSoft),
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
+        ),
+        child: child,
       ),
     );
   }
 }
 
+typedef _NavEntry = ({
+  WorkbenchSection section,
+  IconData icon,
+  String labelKey,
+  String key,
+  String? shortcut,
+});
+
+const _watchEntries = <_NavEntry>[
+  (
+    section: WorkbenchSection.captures,
+    icon: Icons.adjust,
+    labelKey: 'nav.captures',
+    key: 'captures',
+    shortcut: '⌘1',
+  ),
+  (
+    section: WorkbenchSection.network,
+    icon: Icons.security_outlined,
+    labelKey: 'nav.network',
+    key: 'network',
+    shortcut: null,
+  ),
+];
+
+const _usageEntry = (
+  section: WorkbenchSection.usage,
+  icon: Icons.bar_chart_outlined,
+  labelKey: 'nav.usage',
+  key: 'usage',
+  shortcut: '⌘2',
+);
+
+const _controlEntries = <_NavEntry>[
+  (
+    section: WorkbenchSection.environments,
+    icon: Icons.tune,
+    labelKey: 'nav.environments',
+    key: 'environments',
+    shortcut: '⌘3',
+  ),
+  (
+    section: WorkbenchSection.routes,
+    icon: Icons.hub_outlined,
+    labelKey: 'nav.routes',
+    key: 'routes',
+    shortcut: null,
+  ),
+  (
+    section: WorkbenchSection.providerAccounts,
+    icon: Icons.key_outlined,
+    labelKey: 'nav.provider_accounts',
+    key: 'provider-accounts',
+    shortcut: null,
+  ),
+  (
+    section: WorkbenchSection.codeLibrary,
+    icon: Icons.data_object_rounded,
+    labelKey: 'nav.code_library',
+    key: 'code-library',
+    shortcut: null,
+  ),
+];
+
+/// The one navigation surface: every destination is visible and labelled, in
+/// the order a request meets them. It sits on the frame, not on a panel.
+final class _Sidebar extends StatelessWidget {
+  const _Sidebar({
+    required this.controller,
+    required this.copy,
+    required this.labelled,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final bool labelled;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final preview = controller.previewMode && !_productScreenshot;
+    Widget item(_NavEntry entry, {Widget? trailing}) => _NavItem(
+      key: Key('workbench-tab-${entry.key}'),
+      icon: entry.icon,
+      label: copy(entry.labelKey),
+      shortcut: entry.shortcut,
+      labelled: labelled,
+      selected: controller.section == entry.section,
+      trailing: trailing,
+      onPressed: () => controller.selectSection(entry.section),
+    );
+    return SizedBox(
+      width: labelled ? _sidebarWidth : _railWidth,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 48,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: labelled ? ViberSpacing.xl : 0,
+              ),
+              child: Row(
+                mainAxisAlignment: labelled
+                    ? MainAxisAlignment.start
+                    : MainAxisAlignment.center,
+                children: [
+                  const _ViberMark(),
+                  if (labelled) ...[
+                    const SizedBox(width: ViberSpacing.md),
+                    Flexible(
+                      child: Text(
+                        copy('app.name'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _NavGroupLabel(
+                    label: copy('nav.group.watch'),
+                    labelled: labelled,
+                    first: true,
+                  ),
+                  item(
+                    _watchEntries[0],
+                    // The count needs the labelled row; the rail has no room.
+                    trailing: controller.data == null || !labelled
+                        ? null
+                        : Text(
+                            copy.format('status.running', {
+                              'count': controller.runningCaptures.length,
+                            }),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colors.textFaint),
+                          ),
+                  ),
+                  item(
+                    _watchEntries[1],
+                    trailing: _ApprovalAttention(
+                      controller: controller,
+                      copy: copy,
+                      compact: !labelled,
+                    ),
+                  ),
+                  if (controller.serverManagement)
+                    KeyedSubtree(
+                      key: const Key('usage-dashboard-nav'),
+                      child: item(_usageEntry),
+                    ),
+                  _NavGroupLabel(
+                    label: copy('nav.group.control'),
+                    labelled: labelled,
+                  ),
+                  for (final entry in _controlEntries) item(entry),
+                ],
+              ),
+            ),
+          ),
+          if (preview)
+            Padding(
+              padding: const EdgeInsets.only(bottom: ViberSpacing.md),
+              child: Center(
+                child: labelled
+                    ? StatusPill(
+                        label: copy('status.preview'),
+                        color: colors.warning,
+                        icon: Icons.science_outlined,
+                      )
+                    : Tooltip(
+                        message: copy('status.preview'),
+                        child: Icon(
+                          Icons.science_outlined,
+                          size: 16,
+                          color: colors.warning,
+                        ),
+                      ),
+              ),
+            ),
+          if (controller.webPrincipal case final principal?)
+            Padding(
+              padding: const EdgeInsets.only(bottom: ViberSpacing.xs),
+              child: Center(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: WebAccountButton(
+                    principal: principal,
+                    copy: copy,
+                    compact: !labelled,
+                    onChangePassword: controller.changeWebPassword,
+                    onSignOut: controller.onSignOut,
+                  ),
+                ),
+              ),
+            ),
+          _NavItem(
+            key: const Key('workbench-settings-nav'),
+            icon: Icons.settings_outlined,
+            label: copy('nav.settings'),
+            shortcut: '⌘,',
+            labelled: labelled,
+            selected: controller.section == WorkbenchSection.settings,
+            onPressed: () =>
+                controller.selectSection(WorkbenchSection.settings),
+          ),
+          _RuntimeStatusRow(
+            controller: controller,
+            copy: copy,
+            labelled: labelled,
+          ),
+          const SizedBox(height: ViberSpacing.sm),
+        ],
+      ),
+    );
+  }
+}
+
+final class _NavGroupLabel extends StatelessWidget {
+  const _NavGroupLabel({
+    required this.label,
+    required this.labelled,
+    this.first = false,
+  });
+
+  final String label;
+  final bool labelled;
+  final bool first;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!labelled) {
+      return first
+          ? const SizedBox(height: ViberSpacing.xs)
+          : Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: ViberSpacing.lg,
+                vertical: ViberSpacing.md,
+              ),
+              child: Divider(height: 1, color: context.viberColors.dividerSoft),
+            );
+    }
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        ViberSpacing.xl + ViberSpacing.xxs,
+        first ? ViberSpacing.md : ViberSpacing.xl + ViberSpacing.xs,
+        ViberSpacing.xl,
+        ViberSpacing.sm,
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textFaint),
+      ),
+    );
+  }
+}
+
+final class _NavItem extends StatelessWidget {
+  const _NavItem({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.labelled,
+    required this.selected,
+    required this.onPressed,
+    this.shortcut,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String label;
+  final String? shortcut;
+  final bool labelled;
+  final bool selected;
+  final VoidCallback onPressed;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final hint = shortcut == null ? label : '$label  $shortcut';
+    final foreground = selected ? colors.text : colors.textMuted;
+    final iconWidget = Icon(icon, size: 17, color: foreground);
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: ViberSpacing.md,
+        vertical: 1,
+      ),
+      child: Tooltip(
+        message: hint,
+        preferBelow: false,
+        // A labelled row already says its name; only the shortcut is news.
+        triggerMode: labelled && shortcut == null
+            ? TooltipTriggerMode.manual
+            : null,
+        child: Semantics(
+          label: hint,
+          selected: selected,
+          button: true,
+          excludeSemantics: true,
+          child: Material(
+            color: selected ? colors.selection : Colors.transparent,
+            borderRadius: ViberMetrics.surfaceRadius,
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onPressed,
+              canRequestFocus: true,
+              focusColor: colors.focus.withValues(alpha: 0.18),
+              child: SizedBox(
+                height: ViberMetrics.optionRowHeight,
+                child: labelled
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: ViberSpacing.md + ViberSpacing.xxs,
+                        ),
+                        child: Row(
+                          children: [
+                            iconWidget,
+                            const SizedBox(width: ViberSpacing.md + 2),
+                            Expanded(
+                              child: Text(
+                                label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: selected
+                                          ? colors.text
+                                          : colors.text.withValues(alpha: 0.86),
+                                      fontWeight: selected
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
+                              ),
+                            ),
+                            if (trailing case final trailing?) ...[
+                              const SizedBox(width: ViberSpacing.sm),
+                              trailing,
+                            ],
+                          ],
+                        ),
+                      )
+                    : Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          iconWidget,
+                          if (trailing case final trailing?)
+                            Positioned(top: 3, right: 3, child: trailing),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pending decisions ride on the Connections row, where they are answered.
 final class _ApprovalAttention extends StatelessWidget {
   const _ApprovalAttention({
     required this.controller,
@@ -398,6 +705,7 @@ final class _ApprovalAttention extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.viberColors;
     final count = controller.pendingApprovalCount;
     final nativePending = controller.nativeApprovalAttention;
     final partialNative =
@@ -409,199 +717,49 @@ final class _ApprovalAttention extends StatelessWidget {
     if (!unavailable && !nativePending && (count == null || count == 0)) {
       return const SizedBox.shrink();
     }
-    final pending = nativePending || count != null && count > 0;
     final label = unavailable
         ? copy('approval.attention.unavailable')
         : nativePending
         ? '${copy.format('approval.attention.count', {'count': controller.pendingApprovals?.length ?? 0})} · $nativeLabel'
         : copy.format('approval.attention.count', {'count': count ?? 0});
-    final color = unavailable
-        ? context.viberColors.danger
-        : pending
-        ? context.viberColors.warning
-        : context.viberColors.verified;
-    final selected = controller.section == WorkbenchSection.network;
-    final normalSide = BorderSide(
-      color: pending
-          ? context.viberColors.warning.withValues(alpha: 0.45)
-          : context.viberColors.divider,
-    );
-    final focusSide = WidgetStateProperty.resolveWith<BorderSide?>((states) {
-      return states.contains(WidgetState.focused)
-          ? BorderSide(color: context.viberColors.focus, width: 1.5)
-          : normalSide;
-    });
-    final icon = Badge(
-      isLabelVisible: pending,
-      label: Text(
-        partialNative
-            ? '•'
-            : count == 50
-            ? '50+'
-            : '${count ?? 0}',
-      ),
-      backgroundColor: context.viberColors.warning,
-      textColor: context.viberColors.rail,
-      textStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
-        fontSize: ViberType.micro,
-        fontWeight: FontWeight.w600,
-      ),
-      smallSize: 7,
-      largeSize: 16,
-      child: Icon(
-        unavailable ? Icons.error_outline : Icons.approval_outlined,
-        size: 15,
-        color: color,
-      ),
-    );
-    void action() => controller.selectSection(WorkbenchSection.network);
-    return Semantics(
-      liveRegion: pending,
-      label: label,
-      button: true,
-      selected: selected,
-      child: compact
-          ? IconButton(
-              key: const Key('approval-attention'),
-              onPressed: action,
-              tooltip: label,
-              style: IconButton.styleFrom(
-                backgroundColor: selected
-                    ? context.viberColors.selection
-                    : Colors.transparent,
-              ).copyWith(side: focusSide),
-              icon: icon,
-              constraints: const BoxConstraints.tightFor(
-                width: ViberMetrics.controlHeight,
-                height: ViberMetrics.controlHeight,
-              ),
-              padding: EdgeInsets.zero,
-            )
-          : OutlinedButton.icon(
-              key: const Key('approval-attention'),
-              onPressed: action,
-              style: OutlinedButton.styleFrom(
-                backgroundColor: selected
-                    ? context.viberColors.selection
-                    : Colors.transparent,
-                minimumSize: const Size(0, ViberMetrics.controlHeight),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ).copyWith(side: focusSide),
-              icon: icon,
-              label: Text(
-                nativePending
-                    ? nativeLabel
-                    : pending
-                    ? copy.format('approval.attention.pending', {
-                        'count': count ?? 0,
-                      })
-                    : copy('approval.attention.none'),
-              ),
+    final color = unavailable ? colors.danger : colors.warning;
+    final text = unavailable
+        ? '!'
+        : partialNative
+        ? '•'
+        : count == 50
+        ? '50+'
+        : '${count ?? 0}';
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        key: const Key('approval-attention'),
+        liveRegion: !unavailable,
+        label: label,
+        child: ExcludeSemantics(
+          child: Container(
+            constraints: BoxConstraints(
+              minWidth: compact ? 14 : 20,
+              minHeight: compact ? 14 : 18,
             ),
-    );
-  }
-}
-
-final class _ViberMark extends StatelessWidget {
-  const _ViberMark();
-
-  @override
-  Widget build(BuildContext context) {
-    return const ViberMateMark(size: 23, framed: true);
-  }
-}
-
-enum _WorkbenchArea { traffic, insights, configuration }
-
-_WorkbenchArea _areaFor(WorkbenchSection section) => switch (section) {
-  WorkbenchSection.captures ||
-  WorkbenchSection.network => _WorkbenchArea.traffic,
-  WorkbenchSection.usage => _WorkbenchArea.insights,
-  WorkbenchSection.environments ||
-  WorkbenchSection.routes ||
-  WorkbenchSection.providerAccounts ||
-  WorkbenchSection.codeLibrary ||
-  WorkbenchSection.settings => _WorkbenchArea.configuration,
-};
-
-final class _TaskNavigation extends StatelessWidget {
-  const _TaskNavigation({required this.controller, required this.copy});
-
-  final WorkbenchController controller;
-  final AppCopy copy;
-
-  @override
-  Widget build(BuildContext context) {
-    final sections = switch (_areaFor(controller.section)) {
-      _WorkbenchArea.traffic => const [
-        (WorkbenchSection.captures, Icons.adjust, 'nav.captures', 'captures'),
-        (
-          WorkbenchSection.network,
-          Icons.security_outlined,
-          'nav.network',
-          'network',
-        ),
-      ],
-      _WorkbenchArea.insights => const [
-        (
-          WorkbenchSection.usage,
-          Icons.bar_chart_outlined,
-          'nav.usage',
-          'usage',
-        ),
-      ],
-      _WorkbenchArea.configuration => const [
-        (
-          WorkbenchSection.environments,
-          Icons.tune,
-          'nav.environments',
-          'environments',
-        ),
-        (WorkbenchSection.routes, Icons.hub_outlined, 'nav.routes', 'routes'),
-        (
-          WorkbenchSection.providerAccounts,
-          Icons.key_outlined,
-          'nav.provider_accounts',
-          'provider-accounts',
-        ),
-        (
-          WorkbenchSection.codeLibrary,
-          Icons.data_object_rounded,
-          'nav.code_library',
-          'code-library',
-        ),
-      ],
-    };
-    final selectedIndex = sections.indexWhere(
-      (item) => item.$1 == controller.section,
-    );
-    return DefaultTabController(
-      key: ValueKey(controller.section),
-      length: sections.length,
-      initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
-      child: Material(
-        color: context.viberColors.panel,
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            dividerHeight: 0,
-            onTap: (index) => controller.selectSection(sections[index].$1),
-            tabs: [
-              for (final item in sections)
-                Tab(
-                  key: Key('workbench-tab-${item.$4}'),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(item.$2, size: 15),
-                      const SizedBox(width: ViberSpacing.sm),
-                      Text(copy(item.$3)),
-                    ],
-                  ),
+            padding: EdgeInsets.symmetric(horizontal: compact ? 3 : 6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: ViberMetrics.pillRadius,
+            ),
+            child: Center(
+              widthFactor: 1,
+              heightFactor: 1,
+              child: Text(
+                text,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: color,
+                  fontSize: compact ? ViberType.micro : ViberType.utility,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
                 ),
-            ],
+              ),
+            ),
           ),
         ),
       ),
@@ -609,212 +767,117 @@ final class _TaskNavigation extends StatelessWidget {
   }
 }
 
-final class _NavigationRail extends StatelessWidget {
-  const _NavigationRail({required this.controller, required this.copy});
+/// Runtime health and the manual refresh, at the foot of the sidebar.
+final class _RuntimeStatusRow extends StatelessWidget {
+  const _RuntimeStatusRow({
+    required this.controller,
+    required this.copy,
+    required this.labelled,
+  });
 
   final WorkbenchController controller;
   final AppCopy copy;
+  final bool labelled;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 52,
-      color: context.viberColors.rail,
-      child: Column(
+    final colors = context.viberColors;
+    final status = controller.runtimeStatus;
+    final data = controller.data;
+    final recordingDegraded =
+        status?.recordingFailure != null ||
+        status?.recording?.incomplete == true;
+    final healthy = status?.healthy == true && !recordingDegraded;
+    final sourceLabel = controller.previewMode && !_productScreenshot
+        ? copy('settings.preview')
+        : controller.serverManagement
+        ? copy.format('settings.remote', {
+            'target': controller.runtimeConnectTarget,
+          })
+        : copy('settings.live');
+    final label = sourceLabel;
+    final color = healthy ? colors.verified : colors.warning;
+    final attention = _runtimeAttentionLabel(copy, status);
+    final detail = [
+      label,
+      ?attention,
+      if (data != null)
+        copy.format('status.runtime_instance', {'id': data.status.instanceId}),
+    ].join('\n');
+    final refresh = IconButton(
+      onPressed: controller.loading
+          ? null
+          : () => unawaited(controller.refresh()),
+      tooltip: '${copy('status.refresh')}  ⌘R',
+      icon: controller.loading
+          ? const SizedBox.square(
+              dimension: 14,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            )
+          : const Icon(Icons.refresh, size: 16),
+      constraints: const BoxConstraints.tightFor(
+        width: ViberMetrics.controlHeight,
+        height: ViberMetrics.controlHeight,
+      ),
+      padding: EdgeInsets.zero,
+    );
+    if (!labelled) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox(height: ViberSpacing.xs),
-          _RailButton(
-            key: const Key('workbench-area-traffic'),
-            icon: Icons.adjust,
-            label: '${copy('nav.area.traffic')}  ⌘1',
-            selected: _areaFor(controller.section) == _WorkbenchArea.traffic,
-            onPressed: () =>
-                controller.selectSection(WorkbenchSection.captures),
-          ),
-          if (controller.serverManagement)
-            KeyedSubtree(
-              key: const Key('usage-dashboard-nav'),
-              child: _RailButton(
-                key: const Key('workbench-area-insights'),
-                icon: Icons.bar_chart_outlined,
-                label: '${copy('nav.area.insights')}  ⌘2',
-                selected:
-                    _areaFor(controller.section) == _WorkbenchArea.insights,
-                onPressed: () =>
-                    controller.selectSection(WorkbenchSection.usage),
+          refresh,
+          Tooltip(
+            message: detail,
+            child: Semantics(
+              label: label,
+              child: Padding(
+                padding: const EdgeInsets.all(ViberSpacing.sm),
+                child: Icon(Icons.circle, size: 7, color: color),
               ),
             ),
-          _RailButton(
-            key: const Key('workbench-area-configuration'),
-            icon: Icons.tune,
-            label: '${copy('nav.area.configuration')}  ⌘3',
-            selected:
-                _areaFor(controller.section) == _WorkbenchArea.configuration,
-            onPressed: () =>
-                controller.selectSection(WorkbenchSection.environments),
           ),
-          const Spacer(),
-          _RailButton(
-            key: const Key('workbench-settings-nav'),
-            icon: Icons.settings_outlined,
-            label: '${copy('nav.settings')}  ⌘,',
-            selected: controller.section == WorkbenchSection.settings,
-            onPressed: () =>
-                controller.selectSection(WorkbenchSection.settings),
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: ViberSpacing.xl + ViberSpacing.xxs,
+        right: ViberSpacing.md,
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.circle, size: 7, color: color),
+          const SizedBox(width: ViberSpacing.md),
+          Expanded(
+            child: Tooltip(
+              message: detail,
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.textFaint),
+              ),
+            ),
           ),
-          const SizedBox(height: ViberSpacing.xs),
+          refresh,
         ],
       ),
     );
   }
 }
 
-final class _RailButton extends StatelessWidget {
-  const _RailButton({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: label,
-      preferBelow: false,
-      child: Semantics(
-        label: label,
-        selected: selected,
-        button: true,
-        child: Material(
-          color: selected ? context.viberColors.selection : Colors.transparent,
-          child: InkWell(
-            onTap: onPressed,
-            canRequestFocus: true,
-            focusColor: context.viberColors.focus.withValues(alpha: 0.18),
-            child: Container(
-              width: 52,
-              height: ViberMetrics.toolbarHeight,
-              decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(
-                    color: selected
-                        ? context.viberColors.route
-                        : Colors.transparent,
-                    width: 2,
-                  ),
-                ),
-              ),
-              child: Icon(
-                icon,
-                size: 19,
-                color: selected
-                    ? context.viberColors.text
-                    : context.viberColors.textMuted,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+/// The one-line runtime problem, or null while the Runtime is healthy.
+String? _runtimeAttentionLabel(AppCopy copy, RuntimeStatus? status) {
+  final recordingDegraded =
+      status?.recordingFailure != null || status?.recording?.incomplete == true;
+  if (status?.healthy == true && !recordingDegraded) return null;
+  if (status?.storageFailure != null) return copy('status.proxy_stopped');
+  if (recordingDegraded && status?.healthy == true) {
+    return copy('status.recording_degraded');
   }
-}
-
-final class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.controller, required this.copy});
-
-  final WorkbenchController controller;
-  final AppCopy copy;
-
-  @override
-  Widget build(BuildContext context) {
-    final data = controller.data;
-    return Container(
-      height: 24,
-      color: context.viberColors.rail,
-      padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.md),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 520;
-          final showInstance = constraints.maxWidth >= 720;
-          final runtimeLabel = controller.previewMode && !_productScreenshot
-              ? compact
-                    ? copy('status.preview.short')
-                    : copy('settings.preview')
-              : controller.serverManagement
-              ? compact
-                    ? copy('status.server.short')
-                    : copy.format('settings.remote', {
-                        'target': controller.runtimeConnectTarget,
-                      })
-              : compact
-              ? copy('status.live.short')
-              : copy('settings.live');
-          return Row(
-            children: [
-              Icon(Icons.circle, size: 6, color: context.viberColors.verified),
-              const SizedBox(width: ViberSpacing.xs),
-              Expanded(
-                child: Text(
-                  runtimeLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(fontSize: ViberType.utility),
-                ),
-              ),
-              if (data != null) ...[
-                const SizedBox(width: 8),
-                Text(
-                  copy.format('status.running', {
-                    'count': controller.runningCaptures.length,
-                  }),
-                  style: monoStyle.copyWith(fontSize: ViberType.micro),
-                ),
-                if (showInstance) ...[
-                  const SizedBox(width: 12),
-                  Tooltip(
-                    message: copy.format('status.runtime_instance', {
-                      'id': data.status.instanceId,
-                    }),
-                    child: Semantics(
-                      label: copy.format('status.runtime_instance', {
-                        'id': data.status.instanceId,
-                      }),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.memory_outlined,
-                            size: 11,
-                            color: context.viberColors.textFaint,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _shortRuntimeId(data.status.instanceId),
-                            style: monoStyle.copyWith(
-                              fontSize: ViberType.micro,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ],
-          );
-        },
-      ),
-    );
-  }
+  return _runtimeStateLabel(copy, status?.state ?? 'starting');
 }
 
 String _runtimeStateLabel(AppCopy copy, String value) {
@@ -823,9 +886,6 @@ String _runtimeStateLabel(AppCopy copy, String value) {
   if (localized != null) return localized;
   return value.replaceAll('_', ' ');
 }
-
-String _shortRuntimeId(String value) =>
-    value.length <= 10 ? value : value.substring(0, 8);
 
 final class _LoadingView extends StatelessWidget {
   const _LoadingView({required this.copy});

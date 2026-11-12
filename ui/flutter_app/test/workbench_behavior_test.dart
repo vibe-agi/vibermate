@@ -722,10 +722,6 @@ void main() {
     expect(find.byKey(const Key('approval-attention')), findsOneWidget);
     expect(find.byIcon(Icons.science_outlined), findsOneWidget);
     expect(find.byIcon(Icons.refresh), findsOneWidget);
-    expect(
-      tester.getSize(find.byKey(const Key('approval-attention'))).height,
-      ViberMetrics.controlHeight,
-    );
     expect(tester.takeException(), isNull);
   });
 
@@ -740,7 +736,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.bySemanticsLabel(RegExp(r'^Traffic\s+⌘1$')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Captures\s+⌘1$')), findsOneWidget);
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
     final theme = Theme.of(scaffoldContext);
     final colors = theme.brightness == Brightness.dark
@@ -769,7 +765,7 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('workbench navigation is grouped into three user task areas', (
+  testWidgets('workbench navigation shows every destination in one sidebar', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -794,56 +790,46 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('workbench-area-traffic')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-area-insights')), findsOneWidget);
-    expect(
-      find.byKey(const Key('workbench-area-configuration')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const Key('workbench-tab-captures')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-network')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-environments')), findsNothing);
+    // Every destination is one visible sidebar row, labelled or with a
+    // tooltip; nothing hides behind an area switch.
+    const destinations = [
+      'workbench-tab-captures',
+      'workbench-tab-network',
+      'usage-dashboard-nav',
+      'workbench-tab-environments',
+      'workbench-tab-routes',
+      'workbench-tab-provider-accounts',
+      'workbench-tab-code-library',
+      'workbench-settings-nav',
+    ];
+    for (final key in destinations) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
+    expect(find.text('Watch'), findsNothing, reason: 'icon rail at 1180px');
 
-    await tester.tap(find.byKey(const Key('workbench-area-configuration')));
+    await tester.tap(find.byKey(const Key('workbench-tab-environments')));
     await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('workbench-tab-environments')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-routes')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-code-library')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-settings-nav')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-captures')), findsNothing);
-    expect(find.byType(TabBar), findsOneWidget);
-    final taskTabAnchor = tester
-        .getTopLeft(find.byKey(const Key('workbench-tab-environments')))
-        .dx;
+    expect(find.byKey(const Key('environment-row-work')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('workbench-settings-nav')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
+    for (final key in destinations) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
 
-    expect(find.byKey(const Key('workbench-tab-environments')), findsNothing);
-    expect(find.byKey(const Key('workbench-tab-routes')), findsNothing);
-    expect(find.byKey(const Key('workbench-tab-code-library')), findsNothing);
-    expect(find.byType(TabBar), findsOneWidget);
-    expect(
-      tester.getTopLeft(find.byKey(const Key('settings-tab-general'))).dx,
-      taskTabAnchor,
-    );
-
-    await tester.tap(find.byKey(const Key('workbench-area-configuration')));
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
     await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('workbench-tab-environments')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-routes')), findsOneWidget);
-    expect(find.byKey(const Key('workbench-tab-code-library')), findsOneWidget);
-    await tester.binding.setSurfaceSize(const Size(390, 760));
-    await tester.pumpAndSettle();
-    expect(find.byType(TabBar), findsOneWidget);
-    expect(
-      tester.getTopLeft(find.byKey(const Key('workbench-tab-environments'))).dx,
-      taskTabAnchor,
-    );
+    expect(find.text('Watch'), findsOneWidget);
+    expect(find.text('Control'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    await tester.pumpAndSettle();
+    for (final key in destinations) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
+    expect(tester.takeException(), isNull);
     controller.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
@@ -1639,7 +1625,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('usage-dashboard')), findsOneWidget);
-    expect(find.text('Server'), findsOneWidget);
     expect(find.byKey(const Key('usage-total-api-calls')), findsOneWidget);
     expect(find.byKey(const Key('usage-active-runs')), findsNothing);
     expect(find.byKey(const Key('usage-input-tokens')), findsOneWidget);
@@ -3504,7 +3489,13 @@ void main() {
         const ViberMateApp(previewMode: true, preferChinese: false),
       );
       await tester.pumpAndSettle();
-      expect(find.text('1 pending'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('approval-attention')),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const Key('approval-attention')));
       await tester.pumpAndSettle();
 
@@ -4376,7 +4367,8 @@ void main() {
       );
       expect(clientPlan, findsOneWidget);
       expect(tester.getSize(clientPlan).width, greaterThan(1200));
-      expect(1800 - tester.getTopRight(clientPlan).dx, lessThanOrEqualTo(16));
+      // The work area is a sheet inset 8px from the window edge.
+      expect(1800 - tester.getTopRight(clientPlan).dx, lessThanOrEqualTo(25));
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -6211,24 +6203,18 @@ Future<void> _openSettingsTab(WidgetTester tester, Key key) async {
 }
 
 Future<void> _openNetwork(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('workbench-area-traffic')));
-  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('workbench-tab-network')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('network-tab-approvals')), findsOneWidget);
 }
 
 Future<void> _openUpstreamServices(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('workbench-area-configuration')));
-  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('workbench-tab-routes')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('endpoints-add')), findsOneWidget);
 }
 
 Future<void> _openUpstreamAccounts(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('workbench-area-configuration')));
-  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('workbench-tab-provider-accounts')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('provider-accounts-add')), findsOneWidget);
