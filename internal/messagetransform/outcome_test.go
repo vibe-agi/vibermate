@@ -99,6 +99,8 @@ func TestBlockIsFinalAndItsReasonIsBounded(t *testing.T) {
 		`runtime.block("` + strings.Repeat("a", 65) + `");`,
 		`runtime.block();`,
 		`runtime.block(42);`,
+		// Swallowing the complaint about the reason must not let the message through.
+		`try { runtime.block(request.body); } catch (ignored) {} request.body = "{}";`,
 	} {
 		turn := outcomePipeline(t, Policy{RequestJavaScript: source})
 		_, err := turn.ApplyRequest(context.Background(), outcomeRequest(`{"text":"private words"}`))

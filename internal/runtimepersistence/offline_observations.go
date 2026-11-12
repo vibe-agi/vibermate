@@ -19,14 +19,19 @@ import (
 // Explicit offline export validation reuses stored-format decoders. Opaque
 // provider wire bytes retain their existing byte/hash contract, not a new
 // interpretation of the provider's protocol. Each query streams one row.
-func validateOfflineObservationRows(ctx context.Context, tx *sql.Tx) error {
+// scripts is false for a file whose shape predates script outcomes.
+func validateOfflineObservationRows(ctx context.Context, tx *sql.Tx, scripts bool) error {
+	scriptOutcomes := "NULL"
+	if scripts {
+		scriptOutcomes = "script_outcomes_json"
+	}
 	scans := []struct {
 		query string
 		check func(*sql.Rows) error
 	}{
 		{connectionEventSelect, func(rows *sql.Rows) error { _, err := scanConnectionEvent(rows); return err }},
 		{egressAttemptSelect, func(rows *sql.Rows) error { _, err := scanEgressAttempt(rows); return err }},
-		{`SELECT ` + strings.ReplaceAll(searchActivityColumns, "candidate.", "") + ` FROM runtime_activities`, func(rows *sql.Rows) error { _, err := scanActivityRecord(rows); return err }},
+		{`SELECT ` + strings.ReplaceAll(searchActivityColumns, "candidate.", "") + `,` + scriptOutcomes + ` FROM runtime_activities`, func(rows *sql.Rows) error { _, err := scanActivityRecord(rows); return err }},
 		{`SELECT ` + rawEvidenceColumns + ` FROM runtime_raw_evidence_envelopes`, func(rows *sql.Rows) error {
 			record, digest, err := scanRawEvidence(rows)
 			if err != nil {

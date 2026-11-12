@@ -125,6 +125,13 @@ func equalHeaders(left, right http.Header) bool {
 	return true
 }
 
+// blockCall is what one execution asked of runtime.block. reason is the first
+// call's label when that label was valid.
+type blockCall struct {
+	called bool
+	reason string
+}
+
 // A block reason is a label the script author chose in advance. Its alphabet
 // and length keep message content from being carried out through it.
 func validBlockReason(value string) bool {
@@ -784,8 +791,8 @@ func (turn *Turn) apply(
 	if err != nil {
 		return scriptMessage{}, fmt.Errorf("%w: restore Runtime Metadata", ErrExecutionFailed)
 	}
-	blocked := ""
-	if err := installRuntimeCapabilities(runtime, runtimeValue, turn.annotations, &blocked); err != nil {
+	var block blockCall
+	if err := installRuntimeCapabilities(runtime, runtimeValue, turn.annotations, &block); err != nil {
 		return scriptMessage{}, fmt.Errorf("%w: install Runtime capabilities", ErrExecutionFailed)
 	}
 
@@ -821,9 +828,13 @@ func (turn *Turn) apply(
 	}
 	cancelExecution()
 	runtime.ClearInterrupt()
-	// A block is final even if the script caught its own refusal.
+	// Calling block is final: it refuses the message even if the script caught
+	// its own refusal, and even if the reason it gave cannot be recorded.
+	blocked := block.reason
 	if blocked != "" {
 		stageErr = fmt.Errorf("%w: %w: %s stage", ErrExecutionFailed, ErrBlocked, stage)
+	} else if block.called {
+		stageErr = fmt.Errorf("%w: %s block reason is invalid", ErrExecutionFailed, stage)
 	}
 	outcome := &turn.responseOutcome
 	if stage == StageRequest {
@@ -953,16 +964,18 @@ func installRuntimeCapabilities(
 	runtime *goja.Runtime,
 	runtimeValue goja.Value,
 	annotations *clientannotation.Signer,
-	blocked *string,
+	block *blockCall,
 ) error {
 	object := runtimeValue.ToObject(runtime)
 	if err := object.Set("block", func(call goja.FunctionCall) goja.Value {
+		first := !block.called
+		block.called = true
 		reason, err := scriptStringWithin(call.Argument(0), 64)
 		if err != nil || !validBlockReason(reason) {
 			panic(runtime.NewGoError(errors.New("block reason is invalid")))
 		}
-		if *blocked == "" {
-			*blocked = reason
+		if first {
+			block.reason = reason
 		}
 		panic(runtime.NewGoError(errors.New("message blocked")))
 	}); err != nil {
