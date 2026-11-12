@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -292,23 +293,43 @@ func snapshotBytes(v reflect.Value) uint64 {
 	return n
 }
 
-// A record with an unusable script outcome would be dropped whole, so one that
-// cannot be stored is left out instead: the request itself is still recorded.
+// A request record with an unusable script outcome would be dropped whole, so
+// an outcome that cannot be stored is left out instead. When a plan runs more
+// scripts than one record holds, the ones that did something are kept first.
 func activityScriptOutcomes(outcomes []messagetransform.StageOutcome) []activity.ScriptOutcome {
 	if len(outcomes) == 0 {
 		return nil
 	}
-	result := make([]activity.ScriptOutcome, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		result = append(result, activity.ScriptOutcome{
+	ordered := outcomes
+	if len(outcomes) > activity.MaximumScriptOutcomes {
+		ordered = slices.Clone(outcomes)
+		slices.SortStableFunc(ordered, func(left, right messagetransform.StageOutcome) int {
+			quiet := func(outcome messagetransform.StageOutcome) int {
+				if outcome.Outcome == messagetransform.OutcomeUnchanged {
+					return 1
+				}
+				return 0
+			}
+			return quiet(left) - quiet(right)
+		})
+	}
+	result := make([]activity.ScriptOutcome, 0, min(len(ordered), activity.MaximumScriptOutcomes))
+	for _, outcome := range ordered {
+		if len(result) == activity.MaximumScriptOutcomes {
+			break
+		}
+		converted := activity.ScriptOutcome{
 			ScriptID: outcome.Script.ID, Revision: outcome.Script.Revision, Name: outcome.Script.Name,
 			Stage: outcome.Stage, Outcome: string(outcome.Outcome), BlockReason: outcome.BlockReason,
 			Applications: outcome.Applications, Changed: outcome.Changed,
 			HeadersChanged: outcome.HeadersChanged, BodyChanged: outcome.BodyChanged,
 			BytesBefore: outcome.BytesBefore, BytesAfter: outcome.BytesAfter,
-		})
+		}
+		if activity.ValidateScriptOutcomes([]activity.ScriptOutcome{converted}) == nil {
+			result = append(result, converted)
+		}
 	}
-	if activity.ValidateScriptOutcomes(result) != nil {
+	if len(result) == 0 {
 		return nil
 	}
 	return result
