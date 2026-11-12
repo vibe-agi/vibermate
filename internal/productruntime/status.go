@@ -244,6 +244,9 @@ type RecordingStatus struct {
 	Dropped         uint64         `json:"dropped"`
 	Unconfirmed     uint64         `json:"unconfirmed"`
 	CleanupPending  bool           `json:"cleanupPending"`
+	// LowSpacePause is present only while recording refuses new observations
+	// because the data volume is nearly full.
+	LowSpacePause bool `json:"lowSpacePause,omitempty"`
 }
 
 func (t *statusTracker) recordingState(state RecordingState) {
