@@ -756,6 +756,7 @@ final class _CaptureConversationWorkspaceState
   final _conversationStorage = PageStorageBucket();
   String? _captureKey;
   String? _selectedSessionKey;
+  bool _ledgerWithoutBodies = false;
 
   @override
   Widget build(BuildContext context) {
@@ -766,6 +767,7 @@ final class _CaptureConversationWorkspaceState
     if (_captureKey != nextCaptureKey) {
       _captureKey = nextCaptureKey;
       _selectedSessionKey = null;
+      _ledgerWithoutBodies = false;
       _collapsed.clear();
     }
     final sessions = _captureSessionGroups(conversations);
@@ -794,11 +796,63 @@ final class _CaptureConversationWorkspaceState
     // No retained bodies: statistics only. Do not mount the conversation
     // directory, timeline, or Overview/Records chrome — those loads are wasted.
     if (withoutBodies) {
-      return CaptureRequestOverview(
-        controller: controller,
-        copy: copy,
-        withoutBodies: true,
-        onShowRecords: () {},
+      // Statistics first, as before. What the scripts did to each request is
+      // recorded without content, so the ledger is still available.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<bool>(
+                key: const Key('capture-ledger-mode'),
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: false,
+                    label: Text(
+                      copy('capture.summary.overview'),
+                      softWrap: false,
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text(
+                      copy('capture.summary.requests'),
+                      softWrap: false,
+                    ),
+                  ),
+                ],
+                selected: {_ledgerWithoutBodies},
+                onSelectionChanged: (value) =>
+                    setState(() => _ledgerWithoutBodies = value.single),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _ledgerWithoutBodies
+                ? SessionLedger(
+                    key: ValueKey(
+                      'session-ledger:${controller.selectedCaptureKey ?? 'empty'}',
+                    ),
+                    controller: controller,
+                    copy: copy,
+                    activities: const [],
+                    canLoadEarlier: false,
+                    loadingEarlier: false,
+                    onLoadEarlier: () {},
+                    onReadConversation: null,
+                    wholeSessionOnly: true,
+                  )
+                : CaptureRequestOverview(
+                    controller: controller,
+                    copy: copy,
+                    withoutBodies: true,
+                    onShowRecords: () {},
+                  ),
+          ),
+        ],
       );
     }
     final timelineTitle = selected?.exchangeScoped == true

@@ -929,6 +929,10 @@ final class WorkbenchController extends ChangeNotifier
   bool captureLedgerWholeSession = true;
   int _captureLedgerGeneration = 0;
   int _captureLedgerTick = 0;
+
+  /// How many request ledgers are on screen. A running session is only
+  /// re-read while someone is looking at its ledger.
+  int captureLedgerViewers = 0;
   bool _captureViewChosen = false;
   bool summarizeClientSession = false;
   int captureOverviewRefresh = 0;
@@ -1488,8 +1492,7 @@ final class WorkbenchController extends ChangeNotifier
         section != WorkbenchSection.captures ||
         capture == null ||
         captureLedgerPage == null ||
-        captureDetailMode != CaptureDetailMode.requests ||
-        !captureLedgerWholeSession) {
+        captureLedgerViewers <= 0) {
       return;
     }
     final pending = captureLedgerPage!.items.any(

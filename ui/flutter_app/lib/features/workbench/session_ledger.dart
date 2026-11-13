@@ -71,6 +71,7 @@ final class SessionLedger extends StatefulWidget {
     required this.loadingEarlier,
     required this.onLoadEarlier,
     required this.onReadConversation,
+    this.wholeSessionOnly = false,
     super.key,
   });
 
@@ -80,7 +81,13 @@ final class SessionLedger extends StatefulWidget {
   final bool canLoadEarlier;
   final bool loadingEarlier;
   final VoidCallback onLoadEarlier;
-  final VoidCallback onReadConversation;
+
+  /// Null when the session has no conversation to read.
+  final VoidCallback? onReadConversation;
+
+  /// A session recorded without content has no per-conversation request
+  /// list, so its ledger always covers the whole session.
+  final bool wholeSessionOnly;
 
   @override
   State<SessionLedger> createState() => _SessionLedgerState();
@@ -94,10 +101,20 @@ final class _SessionLedgerState extends State<SessionLedger> {
   String? _selectedId;
   String? _openedId;
 
+  bool get _whole =>
+      widget.wholeSessionOnly || widget.controller.captureLedgerWholeSession;
+
   @override
   void initState() {
     super.initState();
+    widget.controller.captureLedgerViewers += 1;
     _ensureSessionLoaded();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.captureLedgerViewers -= 1;
+    super.dispose();
   }
 
   @override
@@ -109,7 +126,7 @@ final class _SessionLedgerState extends State<SessionLedger> {
   // The whole-session list is fetched once, when the ledger first needs it.
   void _ensureSessionLoaded() {
     final controller = widget.controller;
-    if (!controller.captureLedgerWholeSession ||
+    if (!_whole ||
         controller.captureLedgerPage != null ||
         controller.captureLedgerLoading ||
         controller.captureLedgerFailed) {
@@ -124,9 +141,10 @@ final class _SessionLedgerState extends State<SessionLedger> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     final controller = widget.controller;
-    final whole = controller.captureLedgerWholeSession;
+    final whole = _whole;
     final sessionPage = controller.captureLedgerPage;
-    final severalConversations = controller.captureConversations.length > 1;
+    final severalConversations =
+        !widget.wholeSessionOnly && controller.captureConversations.length > 1;
     if (whole && sessionPage == null) {
       return controller.captureLedgerFailed
           ? CenteredMessage(
@@ -318,7 +336,7 @@ final class _LedgerToolbar extends StatelessWidget {
   final bool? wholeSession;
   final ValueChanged<bool> onScope;
   final ValueChanged<SessionLedgerFilter> onFilter;
-  final VoidCallback onReadConversation;
+  final VoidCallback? onReadConversation;
 
   @override
   Widget build(BuildContext context) {
@@ -443,15 +461,17 @@ final class _LedgerToolbar extends StatelessWidget {
                     },
                   ),
                 );
-          final read = TextButton(
-            key: const Key('ledger-read-conversation'),
-            onPressed: onReadConversation,
-            child: Text(
-              copy('ledger.read_conversation'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          );
+          final read = onReadConversation == null
+              ? null
+              : TextButton(
+                  key: const Key('ledger-read-conversation'),
+                  onPressed: onReadConversation,
+                  child: Text(
+                    copy('ledger.read_conversation'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                );
           // Narrow panes and large text: the tabs scroll on their own line.
           if (constraints.maxWidth < 560) {
             return Column(
@@ -465,7 +485,7 @@ final class _LedgerToolbar extends StatelessWidget {
                     ),
                     child: scope,
                   ),
-                read,
+                ?read,
               ],
             );
           }
@@ -477,7 +497,7 @@ final class _LedgerToolbar extends StatelessWidget {
                 SizedBox(width: 190, child: scope),
                 const SizedBox(width: ViberSpacing.md),
               ],
-              read,
+              ?read,
             ],
           );
         },
