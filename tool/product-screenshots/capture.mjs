@@ -21,12 +21,12 @@ const sizes = [2400, 1280];
 const labels = {
   en: {
     traffic: "Traffic", insights: "Insights", configuration: "Configuration",
-    connections: "Connections", policies: "Traffic policies",
+    connections: "Approvals", policies: "Traffic policies",
     accounts: "Upstream accounts", scripts: "Script library",
   },
   zh: {
     traffic: "\u6d41\u91cf", insights: "\u6d1e\u5bdf", configuration: "\u914d\u7f6e",
-    connections: "\u8fde\u63a5", policies: "\u6d41\u91cf\u7b56\u7565",
+    connections: "\u5ba1\u6279", policies: "\u6d41\u91cf\u7b56\u7565",
     accounts: "\u4e0a\u6e38\u8d26\u53f7", scripts: "\u811a\u672c\u5e93",
   },
 };
