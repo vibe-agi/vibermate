@@ -206,6 +206,12 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
         );
         final detail = _LibraryDetail(
           transform: _selected,
+          usage: _selected == null
+              ? const []
+              : scriptUsage(
+                  widget.controller.data?.environments ?? const [],
+                  _selected!.id,
+                ),
           copy: copy,
           enabled: !_mutating,
           onEdit: _selected == null ? null : () => unawaited(_edit(_selected!)),
@@ -1350,6 +1356,7 @@ final class _LibraryTree extends StatelessWidget {
 final class _LibraryDetail extends StatelessWidget {
   const _LibraryDetail({
     required this.transform,
+    required this.usage,
     required this.copy,
     required this.enabled,
     required this.onEdit,
@@ -1357,6 +1364,7 @@ final class _LibraryDetail extends StatelessWidget {
   });
 
   final CodeLibraryTransformRevision? transform;
+  final List<ScriptUsage> usage;
   final AppCopy copy;
   final bool enabled;
   final VoidCallback? onEdit;
@@ -1437,6 +1445,13 @@ final class _LibraryDetail extends StatelessWidget {
               ],
             );
           },
+        ),
+        const SizedBox(height: 8),
+        _ScriptUsageLine(
+          key: const Key('code-library-used-by'),
+          usage: usage,
+          current: value.revision,
+          copy: copy,
         ),
         const SizedBox(height: 14),
         if (template case final match?) ...[
@@ -2712,3 +2727,110 @@ if (response.streaming && !context.responseModelShown && context.responseModel &
 }
 response.body = JSON.stringify(payload);''',
 };
+
+/// One traffic policy that runs a script: how many of its client flows do,
+/// and which revisions of the script they are pinned to.
+final class ScriptUsage {
+  const ScriptUsage({
+    required this.environmentId,
+    required this.environmentName,
+    required this.active,
+    required this.flows,
+    required this.revisions,
+  });
+
+  final String environmentId;
+  final String environmentName;
+  final bool active;
+  final int flows;
+  final Set<int> revisions;
+}
+
+/// Which traffic policies run [transformId], active ones first. Each client
+/// flow freezes an exact revision, so a policy can lag behind the library.
+List<ScriptUsage> scriptUsage(
+  List<EnvironmentRecord> environments,
+  String transformId,
+) {
+  final usage = <ScriptUsage>[];
+  for (final environment in environments) {
+    var flows = 0;
+    final revisions = <int>{};
+    for (final endpoint in environment.clientEndpoints) {
+      for (final plan in endpoint.protocolPlans) {
+        final pinned = plan.transforms.where((t) => t.id == transformId);
+        if (pinned.isEmpty) continue;
+        flows += 1;
+        revisions.addAll(pinned.map((t) => t.revision));
+      }
+    }
+    if (flows == 0) continue;
+    usage.add(
+      ScriptUsage(
+        environmentId: environment.id,
+        environmentName: environment.name,
+        active: environment.state == 'active',
+        flows: flows,
+        revisions: revisions,
+      ),
+    );
+  }
+  usage.sort((left, right) {
+    if (left.active != right.active) return left.active ? -1 : 1;
+    return left.environmentName.compareTo(right.environmentName);
+  });
+  return usage;
+}
+
+final class _ScriptUsageLine extends StatelessWidget {
+  const _ScriptUsageLine({
+    required this.usage,
+    required this.current,
+    required this.copy,
+    super.key,
+  });
+
+  final List<ScriptUsage> usage;
+  final int current;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final text = Theme.of(context).textTheme.bodySmall;
+    if (usage.isEmpty) {
+      return Text(
+        copy('code_library.used_by.none'),
+        style: text?.copyWith(color: colors.textMuted),
+      );
+    }
+    String describe(ScriptUsage value) {
+      final parts = <String>[
+        copy.format('code_library.used_by.flows', {'count': value.flows}),
+        if (value.revisions.any((revision) => revision != current))
+          copy.format('code_library.used_by.pinned', {
+            'revisions': (value.revisions.toList()..sort())
+                .map((revision) => 'r$revision')
+                .join(', '),
+          }),
+        if (!value.active) copy('code_library.used_by.disabled'),
+      ];
+      return '${value.environmentName} · ${parts.join(' · ')}';
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: '${copy('code_library.used_by')}  ',
+            style: text?.copyWith(color: colors.textMuted),
+          ),
+          TextSpan(
+            text: usage.map(describe).join('   '),
+            style: text?.copyWith(color: colors.text),
+          ),
+        ],
+      ),
+    );
+  }
+}
