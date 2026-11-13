@@ -12378,6 +12378,7 @@ final class RuntimeRecordingStatus {
     required this.dropped,
     required this.unconfirmed,
     required this.cleanupPending,
+    this.lowSpacePause = false,
   });
   factory RuntimeRecordingStatus.fromJson(Object? json) {
     const path = 'status.runtime.recording';
@@ -12393,6 +12394,7 @@ final class RuntimeRecordingStatus {
         'unconfirmed',
         'cleanupPending',
       },
+      optional: const {'lowSpacePause'},
     );
     final state = requireString(value, 'state', path);
     if (!const {
@@ -12410,12 +12412,19 @@ final class RuntimeRecordingStatus {
       dropped: requireInteger(value, 'dropped', path),
       unconfirmed: requireInteger(value, 'unconfirmed', path),
       cleanupPending: requireBoolean(value, 'cleanupPending', path),
+      lowSpacePause:
+          value.containsKey('lowSpacePause') &&
+          requireBoolean(value, 'lowSpacePause', path),
     );
   }
   final String state;
   final int reservedRecords, reservedBytes, dropped, unconfirmed;
   final bool cleanupPending;
+
+  /// The Runtime stopped taking new records because its volume is nearly full.
+  final bool lowSpacePause;
   bool get incomplete =>
+      lowSpacePause ||
       state != 'available' ||
       dropped != 0 ||
       unconfirmed != 0 ||
@@ -12428,7 +12437,8 @@ final class RuntimeRecordingStatus {
       reservedBytes == other.reservedBytes &&
       dropped == other.dropped &&
       unconfirmed == other.unconfirmed &&
-      cleanupPending == other.cleanupPending;
+      cleanupPending == other.cleanupPending &&
+      lowSpacePause == other.lowSpacePause;
   @override
   int get hashCode => Object.hash(
     state,
@@ -12437,5 +12447,6 @@ final class RuntimeRecordingStatus {
     dropped,
     unconfirmed,
     cleanupPending,
+    lowSpacePause,
   );
 }

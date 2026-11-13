@@ -2,6 +2,7 @@ package captureadmission
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -12,6 +13,16 @@ type CurrentAuthority interface {
 	Authorizer
 	Revalidate(context.Context, Admission) (captureauthority.Validity, error)
 }
+
+// A validity read that only timed out says the control store is slow, not
+// that the Capture lost its authority. Work already running keeps its last
+// proven validity for this long while the read is retried. A read that fails
+// for any other reason, a first read, and a read prompted by a Change stay
+// fail-closed.
+const (
+	revalidationStallGrace = 30 * time.Second
+	revalidationStallRetry = time.Second
+)
 
 type retainedKey struct {
 	reference string
@@ -30,8 +41,21 @@ type retainedEntry struct {
 	validityKnown    bool
 	version, checked uint64
 	dirty            bool
-	reading          context.CancelFunc
-	subscribers      map[*subscription]struct{}
+	// hinted is set by a Change and cleared by the next successful read: an
+	// explicit revocation hint is never waited out.
+	hinted       bool
+	stalledSince time.Time
+	retryAt      time.Time
+	reading      context.CancelFunc
+	subscribers  map[*subscription]struct{}
+}
+
+// toleratesStall reports whether a failed re-read may be retried without
+// withdrawing the work that the last successful read admitted.
+func (entry *retainedEntry) toleratesStall(err error, now time.Time) bool {
+	return errors.Is(err, context.DeadlineExceeded) &&
+		entry.validityKnown && !entry.hinted &&
+		(entry.stalledSince.IsZero() || now.Sub(entry.stalledSince) < revalidationStallGrace)
 }
 
 // Retained owns connection cancellation and one deadline worker, not permission.
@@ -166,6 +190,7 @@ func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func(
 func (r *Retained) markLocked(entry *retainedEntry) {
 	entry.version++
 	entry.dirty = true
+	entry.retryAt = time.Time{}
 	if entry.reading != nil {
 		entry.reading()
 	}
@@ -201,6 +226,7 @@ func (r *Retained) BeginChange(change captureauthority.Change) func(context.Cont
 	for _, entry := range r.entries {
 		if r.accepting && matches(change, entry) {
 			r.markLocked(entry)
+			entry.hinted = true
 			t := target{entry: entry, version: entry.version}
 			for sub := range entry.subscribers {
 				t.subs = append(t.subs, sub)
@@ -280,8 +306,12 @@ func (r *Retained) run() {
 					delay = remaining
 				}
 			}
-			if selected == nil && entry.dirty {
-				key, selected = k, entry
+			if entry.dirty {
+				if wait := entry.retryAt.Sub(now); wait > 0 {
+					delay = min(delay, wait)
+				} else if selected == nil {
+					key, selected = k, entry
+				}
 			}
 		}
 		if selected == nil {
@@ -311,18 +341,29 @@ func (r *Retained) run() {
 		var cancellations []func()
 		if r.entries[key] == selected && selected.version == version && r.accepting {
 			selected.reading = nil
-			selected.checked = version
-			selected.dirty = false
-			if err != nil {
-				delete(r.entries, key)
-				for sub := range selected.subscribers {
-					sub.withdrawn = true
-					sub.receipt.withdrawn.Store(true)
-					cancellations = append(cancellations, sub.cancel)
+			if now := r.now(); err != nil && selected.toleratesStall(err, now) {
+				// Still dirty and unchecked: nothing new is admitted on this
+				// entry until a read succeeds.
+				if selected.stalledSince.IsZero() {
+					selected.stalledSince = now
 				}
+				selected.retryAt = now.Add(revalidationStallRetry)
 			} else {
-				selected.validity = validity
-				selected.validityKnown = true
+				selected.checked = version
+				selected.dirty = false
+				selected.stalledSince, selected.retryAt = time.Time{}, time.Time{}
+				if err != nil {
+					delete(r.entries, key)
+					for sub := range selected.subscribers {
+						sub.withdrawn = true
+						sub.receipt.withdrawn.Store(true)
+						cancellations = append(cancellations, sub.cancel)
+					}
+				} else {
+					selected.validity = validity
+					selected.validityKnown = true
+					selected.hinted = false
+				}
 			}
 			r.signalLocked()
 		}

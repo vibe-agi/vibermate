@@ -455,3 +455,128 @@ func TestRetainedLaterChangeJoinsOldGenerationWithoutCancelingReplacement(t *tes
 		t.Fatal("replacement lost current permission", err)
 	}
 }
+
+// stallingAuthority answers the first read, then fails every later read with
+// the given error until told to recover.
+type stallingAuthority struct {
+	validity  captureauthority.Validity
+	failure   error
+	reads     atomic.Int64
+	recovered atomic.Bool
+	stalled   chan struct{}
+	once      sync.Once
+}
+
+func (a *stallingAuthority) read(context.Context, Admission) (captureauthority.Validity, error) {
+	n := a.reads.Add(1)
+	if n == 1 {
+		return a.validity, nil
+	}
+	if a.recovered.Load() {
+		v := a.validity
+		v.ExpiresAt = time.Now().Add(time.Hour)
+		return v, nil
+	}
+	a.once.Do(func() { close(a.stalled) })
+	return captureauthority.Validity{}, a.failure
+}
+
+func stalledRead() error { return errors.Join(ErrCredentialRejected, context.DeadlineExceeded) }
+
+// A control read that only times out must not end work that was admitted by
+// the last successful read: a slow store is not a revocation.
+func TestRetainedReadTimeoutKeepsRunningWorkAndRecovers(t *testing.T) {
+	admission, validity := retainedTestAdmission(t)
+	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
+	authority := &stallingAuthority{validity: validity, failure: stalledRead(), stalled: make(chan struct{})}
+	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, time.Now)
+	canceled := make(chan struct{})
+	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release(); r.Shutdown(t.Context()) }()
+	awaitRetained(t, authority.stalled)
+	stalledReads := authority.reads.Load()
+	authority.recovered.Store(true)
+	deadline := time.After(5 * time.Second)
+	for authority.reads.Load() == stalledReads {
+		select {
+		case <-canceled:
+			t.Fatal("a timed-out validity read withdrew running work")
+		case <-deadline:
+			t.Fatal("the stalled read was never retried")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	select {
+	case <-canceled:
+		t.Fatal("running work was withdrawn after the store recovered")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRetainedReadTimeoutBeyondGraceWithdraws(t *testing.T) {
+	admission, validity := retainedTestAdmission(t)
+	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
+	authority := &stallingAuthority{validity: validity, failure: stalledRead(), stalled: make(chan struct{})}
+	var skew atomic.Int64
+	clock := func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, clock)
+	canceled := make(chan struct{})
+	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release(); r.Shutdown(t.Context()) }()
+	awaitRetained(t, authority.stalled)
+	select {
+	case <-canceled:
+		t.Fatal("withdrawn before the grace elapsed")
+	default:
+	}
+	skew.Store(int64(revalidationStallGrace + time.Second))
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a store that stayed unreadable past the grace kept its work")
+	}
+}
+
+// An explicit Change is a revocation hint. It is never waited out.
+func TestRetainedChangeDuringStallWithdraws(t *testing.T) {
+	admission, validity := retainedTestAdmission(t)
+	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
+	authority := &stallingAuthority{validity: validity, failure: stalledRead(), stalled: make(chan struct{})}
+	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, time.Now)
+	canceled := make(chan struct{})
+	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Shutdown(t.Context())
+	awaitRetained(t, authority.stalled)
+	wait := r.BeginChange(captureauthority.Change{Capture: validity.Capture})
+	awaitRetained(t, canceled)
+	release()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Only a timeout is tolerated. Any other failed read is still a withdrawal.
+func TestRetainedRejectedRereadStillWithdraws(t *testing.T) {
+	admission, validity := retainedTestAdmission(t)
+	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
+	authority := &stallingAuthority{validity: validity, failure: ErrCredentialRejected, stalled: make(chan struct{})}
+	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, time.Now)
+	canceled := make(chan struct{})
+	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release(); r.Shutdown(t.Context()) }()
+	awaitRetained(t, canceled)
+}
