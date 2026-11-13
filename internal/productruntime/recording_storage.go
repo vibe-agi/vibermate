@@ -54,6 +54,8 @@ type recordingStorage struct {
 	recordingErr        error
 	unsafeMaintenance   atomic.Bool
 	paused              atomic.Bool
+	lowSpace            atomic.Bool
+	freeBytes           func(string) (uint64, error)
 	maintenanceRequests chan recordingMaintenanceRequest
 	visibility          recording.InspectionVisibility
 	control             *runtimepersistence.ControlStore
@@ -147,6 +149,11 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 	if overrides.recoverEgress != nil {
 		s.recover = overrides.recoverEgress
 	}
+	s.freeBytes = filesystemAvailableBytes
+	if overrides.filesystemAvailable != nil {
+		s.freeBytes = overrides.filesystemAvailable
+	}
+	s.probeSpace()
 	if startupErr != nil || receiptExists || state.RequestedRevision != state.CompletedRevision || state.ActiveRevision != 0 {
 		s.markCleanupPending()
 	}
@@ -169,12 +176,37 @@ func newRecordingStorage(owner context.Context, root string, layout runtimedata.
 	if q.nativeContent == nil {
 		q.nativeContent = s
 	}
-	q.available = s.available
+	q.available = s.accepting
 	q.awaitMirror = s.awaitMirror
 	go s.run()
 	return s, nil
 }
 func (s *recordingStorage) available() bool { return s.current.Load() != nil && !s.paused.Load() }
+
+// Recording stops taking new observations while the data volume is nearly
+// full, so optional audit history never consumes the space the control store
+// needs to keep sessions admitted. Reads, cleanup and already queued records
+// are unaffected; the gap between the two limits prevents flapping.
+const (
+	recordingPauseFreeBytes  = uint64(512 << 20)
+	recordingResumeFreeBytes = storageLowSpaceThresholdBytes
+)
+
+func (s *recordingStorage) accepting() bool { return s.available() && !s.lowSpace.Load() }
+
+// An unreadable capacity keeps the previous decision: it is not evidence of
+// either state.
+func (s *recordingStorage) probeSpace() {
+	free, err := s.freeBytes(s.root)
+	if err != nil {
+		return
+	}
+	if free < recordingPauseFreeBytes {
+		s.lowSpace.Store(true)
+	} else if free >= recordingResumeFreeBytes {
+		s.lowSpace.Store(false)
+	}
+}
 func (s *recordingStorage) acquire() (*recordingSinks, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,10 +220,19 @@ func (s *recordingStorage) acquire() (*recordingSinks, func(), error) {
 	s.active++
 	return v, func() { s.mu.Lock(); s.active--; close(s.changed); s.changed = make(chan struct{}); s.mu.Unlock() }, nil
 }
+
+// acquireForOffer is acquire for the paths that take in new raw evidence.
+func (s *recordingStorage) acquireForOffer() (*recordingSinks, func(), error) {
+	if s.lowSpace.Load() {
+		return nil, nil, recording.ErrObservationDiscarded
+	}
+	return s.acquire()
+}
 func (s *recordingStorage) run() {
 	defer close(s.done)
 	// Recovery/open are optional and retry on this same fixed goroutine.
 	for s.ctx.Err() == nil {
+		s.probeSpace()
 		sinks, err := s.initialize()
 		if err != nil {
 			s.tracker.recordingState(RecordingDegraded)
@@ -222,6 +263,7 @@ func (s *recordingStorage) run() {
 			case <-s.ctx.Done():
 				break work
 			case <-ticker.C:
+				s.probeSpace()
 				if !s.unsafeMaintenance.Load() {
 					_ = s.requestRoutineRecordingCleanup(s.ctx, s.clock.Now().UTC())
 					s.performPendingCleanup(sinks)

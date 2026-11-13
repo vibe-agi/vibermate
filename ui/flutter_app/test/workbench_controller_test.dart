@@ -575,6 +575,37 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('runtime-recording-failure')), findsNothing);
+      // A nearly full disk pauses recording only: the Runtime stays healthy
+      // and the app says so in plain words.
+      expect(
+        find.byKey(const Key('runtime-recording-low-space')),
+        findsNothing,
+      );
+      api.recording = const RuntimeRecordingStatus(
+        state: 'degraded',
+        reservedRecords: 0,
+        reservedBytes: 0,
+        dropped: 3,
+        unconfirmed: 0,
+        cleanupPending: false,
+        lowSpacePause: true,
+      );
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(controller.runtimeStatus!.healthy, isTrue);
+      expect(
+        find.byKey(const Key('runtime-recording-low-space')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('runtime-recording-state')), findsNothing);
+      expect(tester.takeException(), isNull);
+      api.recording = null;
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('runtime-recording-low-space')),
+        findsNothing,
+      );
       api.recordingFailure = RuntimePersistenceFailure(
         operation: 'usage',
         reason: 'write_failed',
@@ -2848,12 +2879,16 @@ final class _DashboardRevisionApi extends _UsageTrackingApi {
   bool stopProxy = false;
   RuntimePersistenceFailure? recordingFailure;
   RecordingMaintenanceFailure? maintenanceFailure;
+  RuntimeRecordingStatus? recording;
 
   @override
   Future<DashboardData> loadDashboard() async {
     dashboardCalls++;
     var dashboard = await super.loadDashboard();
-    if (recordingFailure != null || maintenanceFailure != null || stopProxy) {
+    if (recordingFailure != null ||
+        maintenanceFailure != null ||
+        recording != null ||
+        stopProxy) {
       final old = dashboard.status;
       dashboard = DashboardData(
         status: RuntimeStatus(
@@ -2872,6 +2907,7 @@ final class _DashboardRevisionApi extends _UsageTrackingApi {
               : null,
           recordingFailure: recordingFailure,
           recordingMaintenanceFailure: maintenanceFailure,
+          recording: recording ?? old.recording,
           environmentProjection: old.environmentProjection,
           unavailableEnvironments: old.unavailableEnvironments,
           offlineHold: old.offlineHold,

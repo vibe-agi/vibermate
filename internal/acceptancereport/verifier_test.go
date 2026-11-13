@@ -46,7 +46,7 @@ func TestPinnedGoToolchainMatchesModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ExpectedGoVersion != "go1.26.10" || !strings.Contains(string(content), "\ntoolchain "+ExpectedGoVersion+"\n") {
+	if ExpectedGoVersion != "go1.26.11" || !strings.Contains(string(content), "\ntoolchain "+ExpectedGoVersion+"\n") {
 		t.Fatalf("acceptance pin %q disagrees with module", ExpectedGoVersion)
 	}
 }
@@ -624,7 +624,7 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 	}
-	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.8", "go1.26.9", "go1.26.11"} {
+	for _, version := range []string{"go1.25.13", "go1.26.0", "go1.26.8", "go1.26.9", "go1.26.10", "go1.26.12"} {
 		version := version
 		tests = append(tests, struct {
 			name   string
@@ -1033,7 +1033,7 @@ func validFixture(
 	}
 	revision, commitTime := initializeGitFixture(t, sourceRoot)
 	runtimeToolchains := ToolchainProvenance{
-		Go:      "go version go1.26.10 darwin/arm64",
+		Go:      "go version go1.26.11 darwin/arm64",
 		Flutter: expectedFlutterToolchain(),
 		Dart:    "Dart " + ExpectedDartVersion,
 		Xcode:   ExpectedXcodeVersion,
@@ -1117,9 +1117,9 @@ func validFixture(
 				Toolchains:          buildTools,
 				ConfigurationSHA256: configurationDigests,
 				GoBuildVersions: map[string]string{
-					"acceptance": "go1.26.10",
-					"daemon":     "go1.26.10",
-					"launcher":   "go1.26.10",
+					"acceptance": "go1.26.11",
+					"daemon":     "go1.26.11",
+					"launcher":   "go1.26.11",
 				},
 				GoBuildTags: map[string]string{
 					"acceptance": "",

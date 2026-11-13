@@ -102,7 +102,13 @@ final class WorkbenchShell extends StatelessWidget {
             }),
           ),
         if (controller.runtimeStatus?.recording case final recording?)
-          if (recording.incomplete)
+          if (recording.lowSpacePause)
+            InlineNotice(
+              key: const Key('runtime-recording-low-space'),
+              error: true,
+              message: copy('status.recording.low_space'),
+            )
+          else if (recording.incomplete)
             InlineNotice(
               key: const Key('runtime-recording-state'),
               message: copy.format('status.recording.evidence', {
