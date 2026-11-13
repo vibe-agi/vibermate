@@ -209,7 +209,7 @@ final class AppCopy {
         'Observation is incomplete. A size limit, interrupted stream, or missing final update can leave gaps; this does not establish the Agent’s model outcome.',
     'acp.session': 'Agent session',
     'acp.workspace_claim':
-        'Working directory reported in the ACP session request. It does not change this Capture’s launch workspace or grant file access.',
+        'Working directory reported in the ACP session request. It does not change this session’s launch workspace or grant file access.',
     'acp.awaiting_session':
         'Waiting for the editor to create or load an Agent session. Complete any Agent login in the editor.',
     'acp.no_session':
@@ -323,7 +323,7 @@ final class AppCopy {
     'status.recording.low_space':
         'Recording is paused: the Runtime\'s disk is almost full. Agents keep working, but new requests are not being recorded. Free up space and recording resumes on its own.',
     'capture.summary.authorization_observed':
-        'Recorded Capture authorization: first {first}, latest {last}. This does not establish request or model success.',
+        'Recorded session authorization: first {first}, latest {last}. This does not establish request or model success.',
     'capture.summary.unknown_time': 'unknown',
     'status.failure.storage':
         'Proxy stopped: {operation} · {reason} · first seen {at}. Check storage access and disk space, then restart the Runtime. Refreshing this page cannot recover the proxy.',
@@ -473,7 +473,7 @@ final class AppCopy {
     'environment.account_history.allow':
         'Allow /usage to read this account’s history',
     'environment.account_history.detail':
-        'Shares account-wide historical usage, beyond this Capture. Off by default; changing accounts clears this permission.',
+        'Shares account-wide historical usage, beyond this session. Off by default; changing accounts clears this permission.',
     'environment.account_history.ambiguous':
         'Account queries need one fixed route and account. Dynamic selection cannot identify an account before a turn.',
     'account_facts.resets': 'Resets {time} (local time)',
@@ -728,15 +728,15 @@ final class AppCopy {
     'approval.attention.pending': '{count} pending',
     'approval.attention.none': 'No approvals',
     'approval.attention.unavailable': 'Approval inbox unavailable',
-    'capture.search': 'Filter captures',
-    'capture.search.clear': 'Clear capture filter',
-    'capture.search.no_match': 'No loaded captures match this filter.',
+    'capture.search': 'Filter sessions',
+    'capture.search.clear': 'Clear session filter',
+    'capture.search.no_match': 'No loaded sessions match this filter.',
     'capture.search.load_hint':
-        'Load older captures to continue searching retained history.',
+        'Load older sessions to continue searching retained history.',
     'evidence_search.open': 'Search all records',
     'evidence_search.title': 'Search retained history',
     'evidence_search.boundary':
-        'Searches retained metadata across all Captures. Message bodies are not searched.',
+        'Searches retained metadata across all sessions. Message bodies are not searched.',
     'evidence_search.query':
         'Workspace, account, model, tool, status, or error',
     'evidence_search.search': 'Search',
@@ -758,12 +758,12 @@ final class AppCopy {
     'evidence_search.empty': 'No retained metadata matches these filters.',
     'evidence_search.load_more': 'Load more results',
     'evidence_search.result': 'Search result',
-    'evidence_search.open_capture': 'Open Capture',
+    'evidence_search.open_capture': 'Open session',
     'evidence_search.matches': 'Matched: {fields}',
     'evidence_search.content_unavailable':
         'Message metadata was not retained or has expired.',
     'evidence_search.match.workspace': 'workspace',
-    'evidence_search.match.capture': 'Capture',
+    'evidence_search.match.capture': 'Session',
     'evidence_search.match.conversation': 'conversation',
     'evidence_search.match.environment': 'traffic policy',
     'evidence_search.match.account': 'account',
@@ -776,15 +776,15 @@ final class AppCopy {
     'evidence_search.match.time': 'time',
     'capture.running': 'Running now',
     'capture.history': 'History',
-    'capture.empty': 'No captures yet.',
+    'capture.empty': 'No sessions yet.',
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
     'capture.empty.web.detail':
         'Start an Agent from Terminal, or create a proxy login for another client.',
     'capture.empty.action': 'Open Terminal setup',
     'capture.empty.web.action': 'Open access and launch guide',
-    'capture.load_more': 'Load older captures',
-    'capture.select': 'Select a Capture to inspect its evidence.',
+    'capture.load_more': 'Load older sessions',
+    'capture.select': 'Select a session to see its requests.',
     'capture.assignment.missing': 'No traffic policy attached',
     'capture.assignment.unavailable': 'Traffic policy information unavailable',
     'capture.detail.unavailable': 'Run details are temporarily unavailable',
@@ -794,7 +794,7 @@ final class AppCopy {
     'capture.launch_incomplete.detail':
         'No traffic policy was attached and no traffic was recorded. Check the launch error in Terminal, correct the policy if needed, then run the command again. You can delete this empty record.',
     'capture.managed': 'Managed run',
-    'capture.manual': 'Manual capture',
+    'capture.manual': 'Manual session',
     'capture.source.managed.short': 'vibermate run',
     'capture.source.manual.short': 'Dedicated proxy',
     'capture.state.created': 'Created',
@@ -814,9 +814,9 @@ final class AppCopy {
     'capture.client.compatibility.unverified':
         'Known client · release not verified',
     'capture.client.compatibility.unknown': 'Client release unknown',
-    'capture.manual.create': 'Create manual capture',
+    'capture.manual.create': 'Create manual session',
     'capture.manual.create.title': 'Create a dedicated proxy login',
-    'capture.manual.name': 'Capture name',
+    'capture.manual.name': 'Session name',
     'capture.manual.name.placeholder': 'Figma Desktop',
     'capture.manual.client_class': 'Client type',
     'capture.manual.client_class.desktop_app': 'Desktop app',
@@ -894,7 +894,7 @@ final class AppCopy {
     'capture.environment.apply_latest': 'Apply to next Turn',
     'notice.capture_environment_applied':
         'The published traffic policy will be used by the next Turn.',
-    'capture.conversation': 'Capture conversation',
+    'capture.conversation': 'Session conversation',
     'capture.conversations': 'Conversations',
     'capture.conversation_select': 'Conversation',
     'capture.session': 'View thread',
@@ -918,7 +918,7 @@ final class AppCopy {
     'deletion.confirm': 'Delete',
     'deletion.blocked': 'Nothing was deleted. This is still in use by:',
     'deletion.more_holders': 'and {count} more',
-    'deletion.holder.running_capture': 'Running Capture',
+    'deletion.holder.running_capture': 'Running session',
     'deletion.holder.environment_route': 'Traffic policy route',
     'deletion.holder.owned_account': 'Linked upstream account',
     'deletion.environment.title': 'Delete this traffic policy?',
@@ -934,17 +934,17 @@ final class AppCopy {
     'deletion.counts_incomplete':
         'Confirmed removals only; the total is incomplete.',
     'deletion.approval_ownership_unknown':
-        'Some older approvals have unknown Capture ownership and are retained.',
+        'Some older approvals have unknown session ownership and are retained.',
     'deletion.privacy_metadata_retained':
         'Privacy and duplicate-action protection metadata is retained.',
-    'deletion.capture.title': 'Delete this Capture?',
+    'deletion.capture.title': 'Delete this session?',
     'deletion.capture.consequence':
-        'This Capture and its recorded data stop appearing. Physical cleanup continues separately. '
+        'This session and its recorded data stop appearing. Physical cleanup continues separately. '
         'Older approvals with unknown ownership may remain. Identifiers needed to prevent deleted '
         'records from returning or actions from repeating may be retained indefinitely. This cannot be undone.',
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
-        'All Captures, usage statistics, approval questions and recorded evidence stop appearing. '
+        'All sessions, usage statistics, approval questions and recorded evidence stop appearing. '
         'Physical cleanup continues separately. Saved rules, traffic policies, upstream services and accounts remain. '
         'Privacy and duplicate-action identifiers may be retained indefinitely; backups and disk snapshots are unaffected.',
     'common.back': 'Back',
@@ -1083,7 +1083,7 @@ final class AppCopy {
     'conversation.exchanges': '{count} exchanges',
     'conversation.exchange': 'Exchange',
     'conversation.empty':
-        'No semantic exchanges have been observed for this Capture.',
+        'No semantic exchanges have been observed for this session.',
     'conversation.turn': 'Turn {number}',
     'conversation.route': 'Route',
     'conversation.account': 'Upstream account',
@@ -1444,7 +1444,7 @@ final class AppCopy {
     'environment.connection_only':
         'Connection-only capture. Encrypted traffic keeps its Original Destination; ViberMate records connection metadata only.',
     'environment.no_client_flows':
-        'No Client Flow is configured. New Captures keep each request\'s Original Destination and record connection metadata.',
+        'No Client Flow is configured. New sessions keep each request\'s Original Destination and record connection metadata.',
     'environment.clients': 'Client endpoints',
     'environment.client_target': 'Client target',
     'environment.mapping.client': 'Client protocol & origin',
@@ -1513,7 +1513,7 @@ final class AppCopy {
     'environment.dry_run.published': 'Published r{revision}',
     'environment.dry_run.draft': 'Draft r{revision} · not published',
     'environment.dry_run.draft_scope':
-        'This draft is not active. Running Captures keep their frozen revision.',
+        'This draft is not active. Running sessions keep their frozen revision.',
     'environment.dry_run.flow': 'Request source',
     'environment.dry_run.path': 'Path · optional query',
     'environment.dry_run.body': 'Synthetic request JSON',
@@ -1694,7 +1694,7 @@ final class AppCopy {
     'environment.account.activate_named': 'Activate {name}',
     'environment.account.active_named': 'Active account: {name}',
     'environment.account.activation_scope':
-        'Running Captures using this traffic policy switch on their next request.',
+        'Running sessions using this traffic policy switch on their next request.',
     'environment.account.script_active':
         'The published JavaScript rule selects an account for each request.',
     'environment.account.selector_scope':
@@ -1950,8 +1950,8 @@ final class AppCopy {
     'code_library.sample.clear': 'Discard local sample',
     'code_library.sample.picker.title': 'Choose a real conversation record',
     'code_library.sample.picker.detail':
-        'Choose a Capture and Conversation, then one exact API call. Its request, response, and Runtime are copied locally for this test.',
-    'code_library.sample.picker.capture': 'Capture',
+        'Choose a session and conversation, then one exact API call. Its request, response, and Runtime are copied locally for this test.',
+    'code_library.sample.picker.capture': 'Session',
     'code_library.sample.picker.conversation': 'Conversation',
     'code_library.sample.picker.calls': 'Captured API calls',
     'code_library.sample.picker.unnamed_conversation': 'Unnamed conversation',
@@ -2063,20 +2063,20 @@ final class AppCopy {
     'environment.review': 'Review impact',
     'environment.publish': 'Publish traffic policy',
     'environment.impact.title': 'What changes after publish',
-    'environment.impact.future_only': 'Future Captures only',
+    'environment.impact.future_only': 'Future sessions only',
     'environment.impact.summary': 'Configuration to publish',
     'environment.impact.description':
-        'Publishing never changes a running Capture. Each listed Capture keeps the traffic policy revision it started with; this draft is used only when a new Capture starts.',
+        'Publishing never changes a running session. Each listed session keeps the traffic policy revision it started with; this draft is used only when a new session starts.',
     'environment.impact.continuing':
-        '{count} running Captures keep their current revision',
+        '{count} running sessions keep their current revision',
     'environment.impact.unchanged': 'Unchanged',
     'environment.impact.none':
-        'No running Capture currently uses this traffic policy. The new revision will be used on the next launch.',
-    'environment.impact.more': '{count} more Captures',
+        'No running session currently uses this traffic policy. The new revision will be used on the next launch.',
+    'environment.impact.more': '{count} more sessions',
     'notice.environment.published':
         'Traffic policy published from the reviewed draft and impact boundary.',
     'notice.environment.account_activated':
-        'Account activated. Running Captures switch on their next request.',
+        'Account activated. Running sessions switch on their next request.',
     'routes.title': 'Upstream services',
     'routes.subtitle':
         'Configure service addresses and protocols, then link existing accounts',
@@ -2595,7 +2595,7 @@ final class AppCopy {
     'settings.storage.backing_up': 'Creating verified backup…',
     'settings.storage.restoring': 'Verifying and restoring backup…',
     'settings.storage.move_confirmation':
-        'Creates a ViberMate folder at this location. Copies and verifies all data, then restarts the runtime. Stop running captures first. The original folder is kept as a backup; it will not receive new records. macOS Keychain credentials stay on this Mac.',
+        'Creates a ViberMate folder at this location. Copies and verifies all data, then restarts the runtime. Stop running sessions first. The original folder is kept as a backup; it will not receive new records. macOS Keychain credentials stay on this Mac.',
     'settings.storage.moved':
         'Storage location changed. The original folder is kept as a backup.',
     'settings.storage.backup': 'Create backup',
@@ -2623,7 +2623,7 @@ final class AppCopy {
     'settings.storage.storage_target_invalid':
         'Choose a different local folder without a ViberMate subfolder, outside the current data directory.',
     'settings.storage.storage_in_use':
-        'Data is in use. Stop running captures and wait for active operations to finish, then try again.',
+        'Data is in use. Stop running sessions and wait for active operations to finish, then try again.',
     'settings.storage.storage_copy_failed':
         'Could not finish moving data. The original location remains in use. Check free space and permissions; an incomplete copy may remain at the destination.',
     'settings.storage.storage_validation_failed':
@@ -2669,13 +2669,13 @@ final class AppCopy {
     'settings.storage.cleanup_partial':
         'Confirmed removals are reported; the total remains incomplete.',
     'settings.storage.archive_preview':
-        'Stored copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes.',
+        'Stored copies: {captures} session records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes.',
     'settings.storage.archive_preview_partial':
-        'Known copies: {captures} Capture records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes. Totals are incomplete.',
+        'Known copies: {captures} session records, {exchanges} semantic records and {envelopes} Raw HTTP envelopes. Totals are incomplete.',
     'settings.storage.location_failed':
         'Storage location could not be read. Retry after checking the Runtime connection.',
     'settings.storage.move_hint':
-        'Move, back up or restore only through these verified actions after stopping captures. Never copy an open runtime.db by itself. Backups intentionally exclude provider credentials, Keychain items and external TLS files.',
+        'Move, back up or restore only through these verified actions after stopping sessions. Never copy an open runtime.db by itself. Backups intentionally exclude provider credentials, Keychain items and external TLS files.',
     'settings.storage.server_path':
         'Server deployments choose this directory with --data-dir; containers must also mount persistent storage. This is not a folder on your browser’s machine.',
     'settings.storage.retention':
@@ -2733,7 +2733,7 @@ final class AppCopy {
     'settings.root_ca.recovery':
         'If retry still fails, open Keychain Access → login → Certificates, inspect “ViberMate Local Root” against the SHA-256 fingerprint shown here, remove only that matching entry, then reopen ViberMate.',
     'settings.root_ca.active_captures':
-        'Stop all running and manual captures before replacing the Root Certificate.',
+        'Stop all running and manual sessions before replacing the Root Certificate.',
     'settings.root_ca.conflict':
         'The Root state changed or another trust action is still running. Check again, then retry.',
     'settings.root_ca.unavailable':
@@ -2754,7 +2754,7 @@ final class AppCopy {
     'updates.runtime_build': 'Runtime {build}',
     'updates.terminal_build': 'Terminal {build}',
     'updates.mismatch':
-        'ViberMate components do not match: {details}. Review the update path before starting new work; running Captures are not modified.',
+        'ViberMate components do not match: {details}. Review the update path before starting new work; running sessions are not modified.',
     'updates.mismatch_detail':
         'The App, Runtime or terminal command is on a different release. Update the older component, then restart it; no running file is replaced automatically.',
     'updates.review': 'Review versions',
@@ -2764,15 +2764,15 @@ final class AppCopy {
     'updates.unavailable':
         'The release check is unavailable. ViberMate remains usable; retry when the network is available.',
     'updates.guide.homebrew':
-        'Homebrew installation detected. Finish active Captures, then run the shown brew upgrade command.',
+        'Homebrew installation detected. Finish active sessions, then run the shown brew upgrade command.',
     'updates.guide.manual':
-        'Finish active Captures and data operations, then open the official GitHub Release for signed downloads and release notes. Keep the current package until the replacement is verified.',
+        'Finish active sessions and data operations, then open the official GitHub Release for signed downloads and release notes. Keep the current package until the replacement is verified.',
     'updates.guide.server':
         'This browser cannot replace Runtime Server files. Finish active work, update the native service or container from the official Release, then restart it.',
     'updates.copy_brew': 'Copy brew upgrade',
     'updates.release_notes': 'Release notes and downloads',
     'updates.no_auto_install':
-        'ViberMate never downloads or installs an update in the background, and never replaces files during an active Capture or data operation.',
+        'ViberMate never downloads or installs an update in the background, and never replaces files during an active session or data operation.',
     'server.access.title': 'Web & client access',
     'server.ip_allowlist.title': 'IP allowlist',
     'server.ip_allowlist.help':
@@ -2886,7 +2886,7 @@ final class AppCopy {
     'server.users.policy.count': '{count} selected',
     'server.users.policy.none_short': 'No policies granted',
     'server.users.policy.none_detail':
-        'This user cannot start a Capture until you grant at least one traffic policy.',
+        'This user cannot start a session until you grant at least one traffic policy.',
     'server.users.policy.alerts': 'Observed usage alerts',
     'server.users.policy.alerts_detail':
         'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
@@ -3089,7 +3089,7 @@ final class AppCopy {
     'usage.activity.evidence.partial': 'incomplete evidence',
     'usage.metric.users': 'Runtime users',
     'usage.metric.users.detail': '{count} enabled accounts',
-    'usage.metric.active_runs': 'Running Captures',
+    'usage.metric.active_runs': 'Running sessions',
     'usage.metric.active_runs.detail': 'Across authenticated runtime users',
     'usage.metric.api_calls': 'Agent API calls',
     'usage.metric.api_calls.detail':
@@ -3108,11 +3108,11 @@ final class AppCopy {
     'usage.ranking.count': '{visible} / {total} users',
     'usage.ranking.empty': 'No runtime user matches this search.',
     'usage.ranking.running': '{count} running',
-    'usage.ranking.idle': 'No active Capture',
+    'usage.ranking.idle': 'No active session',
     'usage.ranking.result': '{calls} calls · {succeeded} succeeded',
     'usage.user.tokens.short': 'in {input} · out {output}',
     'usage.user.activity': 'Last activity {time}',
-    'usage.user.runs': '{runs} Captures · {active} active',
+    'usage.user.runs': '{runs} sessions · {active} active',
     'usage.dimension.workspaces': 'Workspaces',
     'usage.dimension.models': 'Models',
     'usage.dimension.sessions': 'Client threads',
@@ -3131,20 +3131,20 @@ final class AppCopy {
         '{calls} calls · {succeeded} succeeded · {failed} failed · in {input} · out {output}',
     'usage.contexts.title': 'Workspaces',
     'usage.contexts.detail':
-        'The same reported Workspace is merged across Captures and Login Sessions.',
+        'The same reported Workspace is merged across sessions and sign-ins.',
     'usage.contexts.empty': 'No workspace or device evidence was reported.',
     'usage.context.latest': 'Latest context',
     'usage.context.metrics':
-        '{device} · {runs} Captures · {calls} calls · in {input} · out {output}',
+        '{device} · {runs} sessions · {calls} calls · in {input} · out {output}',
     'usage.workspace.metrics':
-        '{runs} Captures · {calls} calls · {devices} devices · in {input} · out {output}',
+        '{runs} sessions · {calls} calls · {devices} devices · in {input} · out {output}',
     'usage.context.active': '{count} active',
     'usage.sessions.title': 'Client threads',
     'usage.sessions.detail':
-        'Native Claude or Codex Session identity across Capture Runs.',
+        'Native Claude or Codex thread identity across sessions.',
     'usage.sessions.empty': 'No exact client thread identity was retained.',
     'usage.session.metrics':
-        '{runs} Captures · {calls} calls · {succeeded} succeeded · {failed} failed',
+        '{runs} sessions · {calls} calls · {succeeded} succeeded · {failed} failed',
     'usage.empty':
         'Create a runtime user, then capture Agent traffic to populate this report.',
     'usage.empty.action': 'Create runtime user',
@@ -3152,7 +3152,7 @@ final class AppCopy {
     'usage.personal.title': 'My activity',
     'usage.personal.subtitle':
         'Your own retained Claude and Codex traffic evidence on this Runtime',
-    'usage.personal.captures': 'My Captures',
+    'usage.personal.captures': 'My sessions',
     'usage.personal.active': '{count} running now',
     'usage.personal.succeeded': '{count} succeeded',
     'usage.personal.empty':
@@ -3258,7 +3258,7 @@ final class AppCopy {
     'notice.manual_capture.revoked':
         'Proxy login revoked. Conversation and Activity evidence were retained.',
     'notice.manual_capture.created':
-        'Manual Capture created with a dedicated proxy login.',
+        'Manual session created with a dedicated proxy login.',
     'notice.manual_capture.rotated':
         'Proxy credential rotated. Conversation and Activity evidence were retained.',
     'notice.network.approval_allowed':

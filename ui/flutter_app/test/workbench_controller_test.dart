@@ -465,7 +465,7 @@ void main() {
               controller.errorMessage,
               isNull,
               reason:
-                  'Optional history failures stay scoped to Capture records',
+                  'Optional history failures stay scoped to session records',
             );
             expect(
               controller.captureInspectionFailure?.messageKey,
@@ -740,7 +740,7 @@ void main() {
     },
   );
 
-  testWidgets('unavailable history stays scoped to Capture records', (
+  testWidgets('unavailable history stays scoped to session records', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1420, 1000));

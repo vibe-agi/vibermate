@@ -344,7 +344,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(clear);
     await tester.pumpAndSettle();
-    expect(find.textContaining('20 Capture records'), findsOneWidget);
+    expect(find.textContaining('20 session records'), findsOneWidget);
     expect(find.textContaining('3055 Raw HTTP envelopes'), findsOneWidget);
   });
 

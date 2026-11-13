@@ -554,14 +554,14 @@ void main() {
     await tester.enterText(search, 'not-loaded-yet');
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'filtered Capture layout');
-    expect(find.text('No loaded captures match this filter.'), findsOneWidget);
+    expect(find.text('No loaded sessions match this filter.'), findsOneWidget);
     expect(find.byKey(const Key('captures-load-more')), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Clear capture filter'));
+    await tester.tap(find.byTooltip('Clear session filter'));
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'cleared Capture layout');
     expect(tester.widget<TextField>(search).controller!.text, isEmpty);
-    expect(find.text('No loaded captures match this filter.'), findsNothing);
+    expect(find.text('No loaded sessions match this filter.'), findsNothing);
 
     await tester.tap(find.byKey(const Key('captures-load-more')));
     await tester.pumpAndSettle();
@@ -583,7 +583,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No captures yet.',
+        empty: 'No sessions yet.',
         detail: 'Start Codex or Claude through ViberMate from Terminal.',
         settings: 'Terminal command',
         web: false,
@@ -599,7 +599,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No captures yet.',
+        empty: 'No sessions yet.',
         detail:
             'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
@@ -1695,7 +1695,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await showCaptureConversation(tester);
-      expect(find.text('Capture conversation'), findsOneWidget);
+      expect(find.text('Session conversation'), findsOneWidget);
       // The Capture header is an aggregate over every proven Conversation,
       // independent of how many rows the selected timeline has paged in.
       expect(find.textContaining('224 turns'), findsOneWidget);
@@ -3384,7 +3384,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Browser Lab'), findsWidgets);
       expect(
-        find.text('Manual Capture created with a dedicated proxy login.'),
+        find.text('Manual session created with a dedicated proxy login.'),
         findsOneWidget,
       );
       expect(find.text('preview-password-1'), findsNothing);
@@ -4197,9 +4197,9 @@ void main() {
       expect(find.text('Work reviewed'), findsOneWidget);
       expect(find.textContaining('Metadata only'), findsOneWidget);
       expect(find.textContaining('Anthropic · Lab'), findsWidgets);
-      expect(find.text('Future Captures only'), findsWidgets);
+      expect(find.text('Future sessions only'), findsWidgets);
       expect(
-        find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+        find.text('6 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
         findsOneWidget,
       );
       expect(find.text('r7'), findsWidgets);
@@ -4334,7 +4334,7 @@ void main() {
       expect(selected.accountPolicy.fixedAccountId, 'anthropic-lab');
       expect(
         find.text(
-          'Account activated. Running Captures switch on their next request.',
+          'Account activated. Running sessions switch on their next request.',
         ),
         findsOneWidget,
       );
@@ -5141,7 +5141,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text('0 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+      find.text('0 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('environment-create-publish')));
@@ -5154,7 +5154,7 @@ void main() {
     expect(find.text('Revision 1'), findsOneWidget);
     expect(
       find.text(
-        "No Client Flow is configured. New Captures keep each request's Original Destination and record connection metadata.",
+        "No Client Flow is configured. New sessions keep each request's Original Destination and record connection metadata.",
       ),
       findsOneWidget,
     );
@@ -5627,7 +5627,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('environment-review')));
       await tester.pumpAndSettle();
-      expect(find.text('Future Captures only'), findsWidgets);
+      expect(find.text('Future sessions only'), findsWidgets);
       await tester.tap(find.byKey(const Key('environment-publish')));
       await tester.pumpAndSettle();
       expect(find.text('Revision 4'), findsOneWidget);
