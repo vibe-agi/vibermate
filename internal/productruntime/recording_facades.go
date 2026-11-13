@@ -29,7 +29,7 @@ func (a *recordingActivity) Prepare(e activity.Event) (activity.Record, error) {
 }
 func (a *recordingActivity) Record(ctx context.Context, e activity.Event) (activity.Record, error) {
 	q := a.owner.recorder
-	if !a.owner.available() {
+	if !a.owner.accepting() {
 		q.budget.RecordOffer(recording.Activity, recording.DroppedUnavailable, 0)
 		return activity.Record{}, nil
 	}
@@ -101,7 +101,7 @@ func (a *recordingRaw) Observe(ctx context.Context, o rawevidence.Observation) (
 	return rawevidence.Watermark{}, nil
 }
 func (a *recordingRaw) Capture(meta rawevidence.CaptureMetadata, maximum int) *rawevidence.CaptureBuffer {
-	v, done, err := a.owner.acquire()
+	v, done, err := a.owner.acquireForOffer()
 	if err != nil {
 		a.owner.recorder.budget.RecordOffer(recording.Raw, recording.DroppedUnavailable, 0)
 		return nil
@@ -113,7 +113,7 @@ func (a *recordingRaw) Capture(meta rawevidence.CaptureMetadata, maximum int) *r
 }
 
 func (a *recordingRaw) TryObserve(s recording.Stamp, o rawevidence.Observation) recording.OfferResult {
-	v, done, err := a.owner.acquire()
+	v, done, err := a.owner.acquireForOffer()
 	if err != nil {
 		a.owner.recorder.budget.RecordOffer(recording.Raw, recording.DroppedUnavailable, 0)
 		return recording.DroppedUnavailable
@@ -124,7 +124,7 @@ func (a *recordingRaw) TryObserve(s recording.Stamp, o rawevidence.Observation) 
 	}).TryObserve(s, o)
 }
 func (a *recordingRaw) BeginScope(ctx context.Context, k rawevidence.ScopeKind, id string) (rawevidence.ScopeLease, error) {
-	v, done, err := a.owner.acquire()
+	v, done, err := a.owner.acquireForOffer()
 	if err != nil {
 		return emptyRecordingScope{}, nil
 	}

@@ -19,10 +19,14 @@ import (
 
 type activityRepository struct {
 	coordinates, requireScope bool
-	database                  *sql.DB
-	reads                     *sql.DB
-	operations                *operationGate
-	identityMu                sync.Mutex
+	// scripts is set where the schema has script_outcomes_json: the
+	// observation role. The frozen combined schema does not, so this
+	// repository's own reads select NULL for it; inspection reads the column.
+	scripts    bool
+	database   *sql.DB
+	reads      *sql.DB
+	operations *operationGate
+	identityMu sync.Mutex
 }
 
 var _ activity.Repository = (*activityRepository)(nil)
@@ -141,6 +145,14 @@ func (repository *activityRepository) appendScoped(ctx context.Context, scope re
 		diagnosis.ClientPath,
 		transportEvidence, record.WorkspaceID, record.WorkspaceLabel, record.CaptureLabel,
 	}
+	if repository.scripts {
+		scriptOutcomes, err := encodeScriptOutcomes(record.Scripts)
+		if err != nil {
+			return activity.Record{}, err
+		}
+		columns += ",script_outcomes_json"
+		arguments = append(arguments, scriptOutcomes)
+	}
 	if repository.coordinates {
 		columns += ",recording_archive_epoch,recording_capture_generation"
 		arguments = append(arguments, scope.Fence.ArchiveEpoch, scope.Fence.CaptureGeneration)
@@ -199,7 +211,7 @@ func (repository *activityRepository) List(
 		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
-		     transport_evidence_json, workspace_id, workspace_label, capture_label
+		     transport_evidence_json, workspace_id, workspace_label, capture_label, NULL
 		 FROM runtime_activities
 		 WHERE (? = 0 OR sequence < ?)
 		 ORDER BY sequence DESC
@@ -248,7 +260,7 @@ func exchangeCandidateQuery(request activity.PageRequest) (string, []any) {
 			     conversation_projection_id, conversation_display_name,
 			     conversation_kind, conversation_evidence, conversation_actor,
 			     provider_status, provider_field, provider_error_code, client_field, client_path,
-			     transport_evidence_json, workspace_id, workspace_label, capture_label`)
+			     transport_evidence_json, workspace_id, workspace_label, capture_label, NULL`)
 }
 
 // exchangeSummaryCandidateQuery projects only the columns SummarizeExchanges
@@ -347,7 +359,7 @@ func (repository *activityRepository) GetExchange(
 		     provider_field, provider_error_code,
 		     client_field,
 		     client_path,
-		     transport_evidence_json, workspace_id, workspace_label, capture_label
+		     transport_evidence_json, workspace_id, workspace_label, capture_label, NULL
 		 FROM runtime_activities
 		 WHERE kind IN ('exchange.started', 'exchange.completed')
 		   AND subject_id = ?
@@ -772,7 +784,7 @@ func conversationPageQuery(request activity.ConversationIndexRequest) (string, [
 		        conversation_projection_id, conversation_display_name,
 		        conversation_kind, conversation_evidence, conversation_actor,
 		        provider_status, provider_field, provider_error_code, client_field, client_path,
-		        transport_evidence_json, workspace_id, workspace_label, capture_label
+		        transport_evidence_json, workspace_id, workspace_label, capture_label, NULL
 		 FROM selected
 		 ORDER BY first_sequence DESC,
 		          lower(preferred_display_name) ASC,
@@ -869,6 +881,7 @@ type activityScanState struct {
 	diagnosis         activity.Diagnosis
 	conversation      agentconversation.Ref
 	transportEvidence []byte
+	scriptOutcomes    []byte
 }
 
 func (state *activityScanState) targets() []any {
@@ -889,6 +902,7 @@ func (state *activityScanState) targets() []any {
 		&state.diagnosis.ProviderStatus, &state.diagnosis.ProviderField, &state.diagnosis.ProviderErrorCode,
 		&state.diagnosis.ClientField, &state.diagnosis.ClientPath,
 		&state.transportEvidence, &record.WorkspaceID, &record.WorkspaceLabel, &record.CaptureLabel,
+		&state.scriptOutcomes,
 	}
 }
 
@@ -909,6 +923,10 @@ func (state *activityScanState) finish() (activity.Record, error) {
 			"decode Activity transport evidence: %w",
 			err,
 		)
+	}
+	record.Scripts, err = decodeScriptOutcomes(state.scriptOutcomes)
+	if err != nil {
+		return activity.Record{}, fmt.Errorf("decode Activity script outcomes: %w", err)
 	}
 	if err := record.Validate(); err != nil {
 		return activity.Record{}, fmt.Errorf("validate stored Activity: %w", err)
@@ -949,6 +967,45 @@ func conversationActor(ref *agentconversation.Ref) string {
 		return ""
 	}
 	return ref.Actor
+}
+
+// Script outcomes are bounded by count and by field, so the encoding stays
+// far below the column's size check.
+func encodeScriptOutcomes(outcomes []activity.ScriptOutcome) ([]byte, error) {
+	if len(outcomes) == 0 {
+		return nil, nil
+	}
+	if err := activity.ValidateScriptOutcomes(outcomes); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(outcomes)
+	if err != nil {
+		return nil, fmt.Errorf("encode Activity script outcomes: %w", err)
+	}
+	return encoded, nil
+}
+
+func decodeScriptOutcomes(encoded []byte) ([]activity.ScriptOutcome, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var outcomes []activity.ScriptOutcome
+	if err := decoder.Decode(&outcomes); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("script outcomes contain trailing JSON")
+	}
+	if len(outcomes) == 0 {
+		return nil, fmt.Errorf("script outcomes are empty")
+	}
+	if err := activity.ValidateScriptOutcomes(outcomes); err != nil {
+		return nil, err
+	}
+	return outcomes, nil
 }
 
 func encodeTransportEvidence(

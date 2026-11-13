@@ -452,12 +452,19 @@ func compileExecution(
 				return nil, nil, fmt.Errorf("compile protocol plan %q operations: %w", plan.ID, err)
 			}
 			transformPolicies := make([]messagetransform.Policy, len(plan.Transforms))
+			transformScripts := make([]messagetransform.ScriptRef, len(plan.Transforms))
 			for index, transform := range plan.Transforms {
 				transformPolicies[index] = transform.Policy
+				transformScripts[index] = messagetransform.ScriptRef{
+					ID: string(transform.ID), Revision: uint64(transform.Revision), Name: transform.DisplayName,
+				}
 			}
 			transformPipeline, err := messagetransform.CompilePipeline(
 				transformPolicies, messagetransform.DefaultLimits(),
 			)
+			if err == nil {
+				transformPipeline, err = transformPipeline.Named(transformScripts)
+			}
 			if err != nil {
 				return nil, nil, fmt.Errorf(
 					"compile protocol plan %q message transform: %w",

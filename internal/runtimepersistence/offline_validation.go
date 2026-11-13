@@ -206,7 +206,7 @@ func ValidateOfflineRole(ctx context.Context, path, identity string, revision in
 		case identity == controlSchemaIdentity && revision == 3:
 			role = roleSchema{identity: identity, revision: revision, ddl: controlSchemaSQL, layout: layout}
 		case identity == observationSchemaIdentity && revision == 1:
-			role = roleSchema{identity: identity, revision: revision, ddl: observationSchemaSQL, layout: layout, archive: archive}
+			role = *observationRole(layout, archive)
 		default:
 			return ErrUnsupportedSchema
 		}
@@ -218,7 +218,10 @@ func ValidateOfflineRole(ctx context.Context, path, identity string, revision in
 			return err
 		}
 		defer tx.Rollback()
-		if err = role.verify(ctx, tx); err != nil {
+		// A stopped directory or an older backup may still hold a shape the
+		// next open upgrades; it is valid as it stands.
+		owed, err := role.verifyAny(ctx, tx)
+		if err != nil {
 			return err
 		}
 		if err = extractionIntegrity(ctx, tx, `PRAGMA integrity_check`); err != nil {
@@ -251,7 +254,7 @@ func ValidateOfflineRole(ctx context.Context, path, identity string, revision in
 			if _, err = readRecordingDenialCoverage(ctx, tx, "main", expected); err != nil {
 				return err
 			}
-			if err = validateOfflineObservationRows(ctx, tx); err != nil {
+			if err = validateOfflineObservationRows(ctx, tx, owed == nil); err != nil {
 				return err
 			}
 		}

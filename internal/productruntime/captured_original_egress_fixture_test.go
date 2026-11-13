@@ -63,6 +63,7 @@ type capturedOriginalConfig struct {
 	connectionEvent      func(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
 	family, choice, edge string
 	history, oauth       bool
+	filesystemAvailable  func(string) (uint64, error)
 }
 type capturedOriginalReply struct {
 	Status int
@@ -346,7 +347,7 @@ func newCapturedOriginalFixture(t *testing.T, cfg capturedOriginalConfig) *captu
 	f.options.Secrets = f.secrets
 	f.options.OriginalTransport = wire
 	f.r, err = startWithBuilders(t.Context(), f.options, runtimeBuildOverrides{
-		connectionEvent: cfg.connectionEvent, recorder: cfg.recorder, environment: cfg.environment, openObservations: cfg.openObservations,
+		connectionEvent: cfg.connectionEvent, recorder: cfg.recorder, environment: cfg.environment, openObservations: cfg.openObservations, filesystemAvailable: cfg.filesystemAvailable,
 		egressObserver: func(r *runtimeEgressRepository) egressaudit.Observer { return capturedAuditObserver{r, f} },
 		originalProber: func() (*originaltransport.TLSProber, error) {
 			return originaltransport.NewTLSProberWithBuilder(builder, roots)
