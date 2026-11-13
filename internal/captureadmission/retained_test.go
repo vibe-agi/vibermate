@@ -544,10 +544,20 @@ func TestRetainedReadTimeoutBeyondGraceWithdraws(t *testing.T) {
 		t.Fatal("withdrawn before the grace elapsed")
 	default:
 	}
+	// The stall is recorded after the failed read returns. Moving the clock
+	// before that would start the grace period at the new time, and it would
+	// never elapse. A second failed read proves the first one was recorded.
+	firstStall := authority.reads.Load()
+	for deadline := time.Now().Add(10 * time.Second); authority.reads.Load() == firstStall; {
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled read was never retried")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	skew.Store(int64(revalidationStallGrace + time.Second))
 	select {
 	case <-canceled:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("a store that stayed unreadable past the grace kept its work")
 	}
 }
