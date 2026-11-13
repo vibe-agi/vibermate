@@ -49,7 +49,7 @@ func TestServerManualSOCKSREALITYDelivery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
 	version, err := exec.CommandContext(ctx, binaryPath, "version").Output()
-	if err != nil || !bytes.Contains(version, []byte("26.3.27")) || !bytes.Contains(version, []byte("d2758a0-vibermate-reliability2")) || !bytes.Contains(version, []byte("go1.26.10")) {
+	if err != nil || !bytes.Contains(version, []byte("26.3.27")) || !bytes.Contains(version, []byte("d2758a0-vibermate-reliability2")) || !bytes.Contains(version, []byte("go1.26.11")) {
 		t.Fatal("packaged helper version identity failed")
 	}
 	t.Logf("packaged SHA256 %s; %s", qualifiedSHA256, strings.TrimSpace(string(version)))

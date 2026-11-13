@@ -2,7 +2,7 @@ module github.com/vibe-agi/vibermate
 
 go 1.26.3
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
