@@ -242,6 +242,18 @@ func TestActivityInspectionReturnsScriptOutcomes(t *testing.T) {
 	if err != nil || old.Scripts != nil {
 		t.Fatalf("archived record: %+v %v", old.Scripts, err)
 	}
+	// The list the Sessions screen reads carries the same outcomes.
+	page, err := reader.ListExchanges(context.Background(), activity.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string][]activity.ScriptOutcome{}
+	for _, item := range page.Items {
+		listed[item.SubjectID] = item.Scripts
+	}
+	if len(listed) != 2 || !reflect.DeepEqual(listed["current-only"], record.Scripts) || listed["legacy-only"] != nil {
+		t.Fatalf("listed outcomes: %+v", listed)
+	}
 }
 
 const (

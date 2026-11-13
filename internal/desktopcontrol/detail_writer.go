@@ -258,6 +258,10 @@ func writeExchangeDetailJSON(sink io.Writer, d ExchangeDetail) error {
 		w.text(",")
 	}
 	w.field("pluginRunIds", d.ProcessingTrace.PluginRunIDs)
+	if len(d.ProcessingTrace.Scripts) > 0 {
+		w.text(",")
+		w.field("scripts", d.ProcessingTrace.Scripts)
+	}
 	w.text(`,"attempts":`)
 	if d.ProcessingTrace.Attempts == nil {
 		w.text("null")
