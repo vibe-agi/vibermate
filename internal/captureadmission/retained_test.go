@@ -486,9 +486,18 @@ func stalledRead() error { return errors.Join(ErrCredentialRejected, context.Dea
 // A control read that only times out must not end work that was admitted by
 // the last successful read: a slow store is not a revocation.
 func TestRetainedReadTimeoutKeepsRunningWorkAndRecovers(t *testing.T) {
+	retainedUnansweredReadKeepsRunningWork(t, stalledRead())
+}
+
+// A read that could not reach storage is the same non-answer as a timeout.
+func TestRetainedStorageFailureKeepsRunningWorkAndRecovers(t *testing.T) {
+	retainedUnansweredReadKeepsRunningWork(t, errors.Join(ErrCredentialRejected, captureauthority.ErrUnavailable, errors.New("disk I/O error")))
+}
+
+func retainedUnansweredReadKeepsRunningWork(t *testing.T, failure error) {
 	admission, validity := retainedTestAdmission(t)
 	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
-	authority := &stallingAuthority{validity: validity, failure: stalledRead(), stalled: make(chan struct{})}
+	authority := &stallingAuthority{validity: validity, failure: failure, stalled: make(chan struct{})}
 	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, time.Now)
 	canceled := make(chan struct{})
 	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
