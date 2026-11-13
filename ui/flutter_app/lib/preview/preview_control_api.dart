@@ -3429,11 +3429,66 @@ final class PreviewControlApi
         216 => 'provider_transport_failed',
         217 => 'unsupported_client_input',
         218 => 'provider_response_idle',
+        205 when capture.id == 'run-1' => 'message_transform_failed',
         _ => null,
       };
+      // A few requests in the first preview session were touched by scripts,
+      // so the request ledger has something to show.
+      final scripts = capture.id != 'run-1'
+          ? const <ScriptOutcome>[]
+          : switch (index) {
+              197 || 209 || 211 => const [
+                ScriptOutcome(
+                  scriptId: 'transform.mask-secrets',
+                  revision: 4,
+                  name: 'Mask secrets',
+                  stage: 'request',
+                  outcome: 'changed',
+                  blockReason: null,
+                  applications: 1,
+                  changed: 1,
+                  headersChanged: false,
+                  bodyChanged: true,
+                  bytesBefore: 4812,
+                  bytesAfter: 4770,
+                ),
+              ],
+              205 => const [
+                ScriptOutcome(
+                  scriptId: 'transform.mask-secrets',
+                  revision: 4,
+                  name: 'Mask secrets',
+                  stage: 'request',
+                  outcome: 'unchanged',
+                  blockReason: null,
+                  applications: 1,
+                  changed: 0,
+                  headersChanged: false,
+                  bodyChanged: false,
+                  bytesBefore: 2210,
+                  bytesAfter: 2210,
+                ),
+                ScriptOutcome(
+                  scriptId: 'transform.block-dangerous-commands',
+                  revision: 2,
+                  name: 'Block dangerous commands',
+                  stage: 'request',
+                  outcome: 'blocked',
+                  blockReason: 'destructive-command',
+                  applications: 1,
+                  changed: 0,
+                  headersChanged: false,
+                  bodyChanged: false,
+                  bytesBefore: 2210,
+                  bytesAfter: 2210,
+                ),
+              ],
+              _ => const <ScriptOutcome>[],
+            };
       final succeeded = reasonCode == null;
       final conversation = _previewConversation(capture, index);
       return ActivityRecord(
+        scripts: scripts,
         contentAvailable: _retainConversationBodies,
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
@@ -3664,9 +3719,80 @@ final class PreviewControlApi
   }
 
   @override
+  Future<List<ApprovalRecord>> decidedApprovals() async {
+    _requireOpen();
+    ApprovalRecord past(
+      String id,
+      String host,
+      String state,
+      Duration ago, {
+      String? scope,
+      String? reason,
+    }) => ApprovalRecord(
+      id: id,
+      revision: 2,
+      kind: 'network_ask',
+      state: state,
+      risk: _pendingApproval.risk,
+      titleKey: _pendingApproval.titleKey,
+      summaryKey: _pendingApproval.summaryKey,
+      aggregateKey: 'network:$host:443',
+      exchangeId: null,
+      environmentId: null,
+      environmentRevision: null,
+      environmentDigest: null,
+      routeId: null,
+      routeRevision: null,
+      target: ApprovalTarget(host: host, port: 443),
+      subjectRefs: _pendingApproval.subjectRefs,
+      subjectLabels: ['$host:443'],
+      requestCount: 1,
+      waiterCount: 1,
+      choices: _pendingApproval.choices,
+      createdAt: _now.subtract(ago + const Duration(seconds: 20)),
+      expiresAt: _now.subtract(ago - const Duration(minutes: 5)),
+      resolvedAt: _now.subtract(ago),
+      decision: switch (state) {
+        'allowed' => 'allow-once',
+        'denied' => 'deny',
+        _ => null,
+      },
+      decisionScope: scope,
+      terminalReason: reason,
+    );
+
+    return [
+      if (_approval.state != 'pending') _approval,
+      past(
+        'approval-past-npm',
+        'registry.npmjs.org',
+        'allowed',
+        const Duration(minutes: 6),
+        scope: 'request',
+      ),
+      past(
+        'approval-past-telemetry',
+        'telemetry.example.net',
+        'denied',
+        const Duration(minutes: 31),
+        scope: 'host_port',
+        reason: 'user_denied',
+      ),
+      past(
+        'approval-past-pypi',
+        'pypi.org',
+        'expired',
+        const Duration(hours: 1),
+        reason: 'approval_expired',
+      ),
+    ];
+  }
+
+  @override
   Future<ScriptActivity> scriptActivity({int days = 7}) async {
     _requireOpen();
     final since = _now.subtract(Duration(days: days));
+    // Matches the script outcomes on the first preview session's requests.
     return ScriptActivity(
       since: since,
       coveredFrom: since,

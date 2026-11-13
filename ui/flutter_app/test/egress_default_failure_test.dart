@@ -85,13 +85,12 @@ Future<WorkbenchController> mountDefaults(
   controller.data = await workspace.loadDashboard();
   controller.loading = false;
   await workspace.close();
-  controller.selectSettingsTab(controller.settingsDestinations.length - 1);
   await tester.runAsync(() async {
     await tester.pumpWidget(
       MaterialApp(
         theme: ViberTheme.light(),
         home: Scaffold(
-          body: SettingsView(
+          body: NetworkExitsView(
             controller: controller,
             copy: AppCopy.forLanguage(AppLanguage.english),
           ),

@@ -62,7 +62,7 @@ void main() {
           .data!;
       expect(text, contains('Physical cleanup is pending'));
       expect(text, contains('Confirmed removals only'));
-      expect(text, contains('unknown Capture ownership'));
+      expect(text, contains('unknown session ownership'));
       expect(text, contains('metadata is retained'));
     },
   );
@@ -189,7 +189,7 @@ void main() {
                 context: context,
                 builder: (_) => DeletionConfirmation(
                   copy: AppCopy.forLanguage(AppLanguage.english),
-                  title: 'Delete this Capture?',
+                  title: 'Delete this session?',
                   subject: 'claude on agent-lab',
                   consequence: 'Every Exchange recorded under it is removed.',
                   onConfirm: () async => DeletionOutcome.fromJson(const {

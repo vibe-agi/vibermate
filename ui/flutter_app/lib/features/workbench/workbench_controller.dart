@@ -40,6 +40,31 @@ _AccountReadScope _accountReadScope(ProviderAccount account) => (
   origin: account.credentialOrigin,
 );
 
+/// Combines what the ledger holds with a page just read.
+///
+/// A fresh read replaces a held request with the same id: a request that was
+/// in progress may have finished, and its script outcomes arrive then. Only
+/// loading [older] requests moves the cursor, so refreshing the newest page
+/// never discards how far back the ledger already reaches.
+ActivityPage mergeLedgerPage(
+  ActivityPage? current,
+  ActivityPage page, {
+  required bool older,
+}) {
+  final unique = <String, ActivityRecord>{
+    for (final item in current?.items ?? const <ActivityRecord>[])
+      item.id: item,
+    for (final item in page.items) item.id: item,
+  };
+  return ActivityPage(
+    items: unique.values.toList(growable: false),
+    nextCursor: older || current == null ? page.nextCursor : current.nextCursor,
+  );
+}
+
+/// The views of one selected session.
+enum CaptureDetailMode { requests, conversation, overview }
+
 final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
   final Map<String, ({AccountFacts facts, int settings})>
@@ -386,7 +411,6 @@ final class WorkbenchController extends ChangeNotifier
     if (accessSettingsAvailable) SettingsDestination.access,
     if (serverManagement) SettingsDestination.users,
     SettingsDestination.safety,
-    SettingsDestination.networkExits,
   ];
 
   bool remoteConnectionGuideRequested = false;
@@ -401,6 +425,10 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStatus? get runtimeStatus => _inventoryFailureStatus ?? data?.status;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
+
+  /// Questions that were answered, expired or canceled, newest first. Null
+  /// until first read; reading it is best effort and never raises a notice.
+  List<ApprovalRecord>? decidedApprovals;
   List<NativeApproval> nativeApprovals = const [];
   List<NativeToolOperation> nativeOperations = const [];
   bool nativeOperationsLoading = false, nativeOperationsComplete = false;
@@ -893,6 +921,21 @@ final class WorkbenchController extends ChangeNotifier
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   bool showCaptureRequestRecords = false;
+  bool _captureRecordsAsLedger = true;
+
+  /// The requests of the whole selected session, across its conversations.
+  /// The request ledger reads this; the conversation views keep their own
+  /// per-conversation page.
+  ActivityPage? captureLedgerPage;
+  bool captureLedgerLoading = false;
+  bool captureLedgerFailed = false;
+  bool captureLedgerWholeSession = true;
+  int _captureLedgerGeneration = 0;
+  int _captureLedgerTick = 0;
+
+  /// How many request ledgers are on screen. A running session is only
+  /// re-read while someone is looking at its ledger.
+  int captureLedgerViewers = 0;
   bool _captureViewChosen = false;
   bool summarizeClientSession = false;
   int captureOverviewRefresh = 0;
@@ -1388,6 +1431,82 @@ final class WorkbenchController extends ChangeNotifier
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
 
+  /// Which of the three views of a session is showing. The request ledger
+  /// and the conversation are two readings of the same request records.
+  CaptureDetailMode get captureDetailMode => !showCaptureRequestRecords
+      ? CaptureDetailMode.overview
+      : _captureRecordsAsLedger
+      ? CaptureDetailMode.requests
+      : CaptureDetailMode.conversation;
+
+  void selectCaptureDetailMode(CaptureDetailMode mode) {
+    if (_disposed || captureDetailMode == mode) return;
+    _captureViewChosen = true;
+    showCaptureRequestRecords = mode != CaptureDetailMode.overview;
+    if (mode != CaptureDetailMode.overview) {
+      _captureRecordsAsLedger = mode == CaptureDetailMode.requests;
+    }
+    notifyListeners();
+  }
+
+  void selectCaptureLedgerScope(bool wholeSession) {
+    if (_disposed || captureLedgerWholeSession == wholeSession) return;
+    captureLedgerWholeSession = wholeSession;
+    notifyListeners();
+  }
+
+  /// Loads the first page of the session ledger, or the next older page with
+  /// [more]. A [quiet] call refreshes the newest page without a loading state,
+  /// for a session that is still running.
+  Future<void> loadCaptureLedger({
+    bool more = false,
+    bool quiet = false,
+  }) async {
+    final capture = selectedCapture;
+    if (_disposed || capture == null || captureLedgerLoading) return;
+    final current = captureLedgerPage;
+    final cursor = more ? current?.nextCursor : null;
+    if (more && cursor == null) return;
+    final generation = _captureLedgerGeneration;
+    captureLedgerLoading = true;
+    if (!quiet) notifyListeners();
+    try {
+      final page = await _captureActivityPage(
+        capture,
+        cursor: cursor,
+        limit: 100,
+      );
+      if (_disposed || generation != _captureLedgerGeneration) return;
+      captureLedgerPage = mergeLedgerPage(current, page, older: more);
+      captureLedgerFailed = false;
+    } catch (error) {
+      if (_disposed || generation != _captureLedgerGeneration) return;
+      // A failed quiet refresh keeps what is on screen.
+      if (!quiet) captureLedgerFailed = true;
+    }
+    captureLedgerLoading = false;
+    notifyListeners();
+  }
+
+  void _pollCaptureLedger() {
+    final capture = selectedCapture;
+    if (_disposed ||
+        !_pollingVisible ||
+        section != WorkbenchSection.captures ||
+        capture == null ||
+        captureLedgerPage == null ||
+        captureLedgerViewers <= 0) {
+      return;
+    }
+    final pending = captureLedgerPage!.items.any(
+      (item) => item.status == 'pending',
+    );
+    if (!capture.running && !pending) return;
+    _captureLedgerTick += 1;
+    if (_captureLedgerTick % 5 != 0) return;
+    unawaited(loadCaptureLedger(quiet: true));
+  }
+
   void selectCaptureRequestRecords(bool show) {
     _captureViewChosen = true;
     if (showCaptureRequestRecords == show) return;
@@ -1577,10 +1696,10 @@ final class WorkbenchController extends ChangeNotifier
     );
     // Follow the visible live conversation independently of slow inventory
     // reads. This bounded point query never reloads accounts or credentials.
-    _evidencePoller ??= Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => unawaited(_pollSelectedEvidence()),
-    );
+    _evidencePoller ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      unawaited(_pollSelectedEvidence());
+      _pollCaptureLedger();
+    });
     if (storageMoveNotice != null) {
       selectSection(WorkbenchSection.settings);
       selectSettingsTab(
@@ -2753,6 +2872,17 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<void> refreshDecidedApprovals() async {
+    try {
+      final decided = await _api.decidedApprovals();
+      if (_disposed) return;
+      decidedApprovals = decided;
+      notifyListeners();
+    } catch (_) {
+      // History is a convenience. What is waiting stays authoritative.
+    }
+  }
+
   Future<void> refreshPendingApprovals({bool quiet = false}) async {
     await refreshNativeApprovals();
     if (_disposed || pendingApprovalsLoading || networkMutating) return;
@@ -2769,6 +2899,10 @@ final class WorkbenchController extends ChangeNotifier
         updated,
       );
       pendingApprovals = updated;
+      // A question leaving the waiting list means something was decided.
+      if (changed || decidedApprovals == null) {
+        unawaited(refreshDecidedApprovals());
+      }
       final clearedError = approvalAttentionError != null;
       approvalAttentionError = null;
       pendingApprovalsLoading = false;
@@ -3919,6 +4053,13 @@ final class WorkbenchController extends ChangeNotifier
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
+    _captureLedgerGeneration += 1;
+    captureLedgerPage = null;
+    captureLedgerLoading = false;
+    captureLedgerFailed = false;
+    // Every session opens the same way: its whole request ledger.
+    _captureRecordsAsLedger = true;
+    captureLedgerWholeSession = true;
     showCaptureRequestRecords = false;
     _captureViewChosen = false;
     _summaryBodiesAbsent = false;

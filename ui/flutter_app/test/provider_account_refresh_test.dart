@@ -139,6 +139,10 @@ void main() {
           await tester.drag(accountList, const Offset(0, -80));
           await tester.pumpAndSettle();
         }
+        // Service headings move rows down; scrolling only builds the row,
+        // so bring it fully on screen before tapping.
+        await tester.ensureVisible(credentialRefresh);
+        await tester.pumpAndSettle();
         await tester.tap(credentialRefresh);
         await tester.pumpAndSettle();
         expect(

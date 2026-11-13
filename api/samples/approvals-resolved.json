@@ -1,0 +1,606 @@
+[
+  {
+    "id": "approval-network-sample-allowed-request",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "allowed",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "allow-once",
+    "decisionScope": "request"
+  },
+  {
+    "id": "approval-network-sample-denied-request",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "denied",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "deny",
+    "decisionScope": "request",
+    "terminalReason": "user_denied"
+  },
+  {
+    "id": "approval-network-sample-allowed-host_port",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "allowed",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "allow-once",
+    "decisionScope": "host_port"
+  },
+  {
+    "id": "approval-network-sample-denied-host_port",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "denied",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "deny",
+    "decisionScope": "host_port",
+    "terminalReason": "user_denied"
+  },
+  {
+    "id": "approval-network-sample-expired-",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "expired",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "approval_expired"
+  },
+  {
+    "id": "approval-network-sample-canceled-",
+    "revision": 2,
+    "kind": "network_ask",
+    "state": "canceled",
+    "risk": "medium",
+    "titleKey": "approval.networkAsk.title",
+    "summaryKey": "approval.networkAsk.summary",
+    "aggregateKey": "aggregate-network-sample",
+    "target": {
+      "host": "api.example.com",
+      "port": 443
+    },
+    "subjectRefs": [
+      "api.example.com:443"
+    ],
+    "subjectLabels": [
+      "api.example.com"
+    ],
+    "requestCount": 3,
+    "waiterCount": 3,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.allowOnce"
+      },
+      {
+        "decision": "allow-once",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.allowHostPort"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.networkAsk.choice.denyOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "host_port",
+        "labelKey": "approval.networkAsk.choice.denyHostPort"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "runtime_stopping"
+  },
+  {
+    "id": "approval-tool-sample-allowed-request",
+    "revision": 2,
+    "kind": "tool_intent",
+    "state": "allowed",
+    "risk": "high",
+    "titleKey": "approval.toolIntent.title",
+    "summaryKey": "approval.toolIntent.summary",
+    "exchangeId": "exchange-sample",
+    "environmentId": "work",
+    "environmentRevision": 4,
+    "environmentDigest": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "routeId": "claude-official",
+    "routeRevision": 2,
+    "aggregateKey": "aggregate-tool-sample",
+    "subjectRefs": [
+      "call-1",
+      "call-2"
+    ],
+    "subjectLabels": [
+      "read_file",
+      "list_directory"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.deny"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "allow-once",
+    "decisionScope": "request"
+  },
+  {
+    "id": "approval-tool-sample-denied-request",
+    "revision": 2,
+    "kind": "tool_intent",
+    "state": "denied",
+    "risk": "high",
+    "titleKey": "approval.toolIntent.title",
+    "summaryKey": "approval.toolIntent.summary",
+    "exchangeId": "exchange-sample",
+    "environmentId": "work",
+    "environmentRevision": 4,
+    "environmentDigest": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "routeId": "claude-official",
+    "routeRevision": 2,
+    "aggregateKey": "aggregate-tool-sample",
+    "subjectRefs": [
+      "call-1",
+      "call-2"
+    ],
+    "subjectLabels": [
+      "read_file",
+      "list_directory"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.deny"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "deny",
+    "decisionScope": "request",
+    "terminalReason": "user_denied"
+  },
+  {
+    "id": "approval-tool-sample-expired-",
+    "revision": 2,
+    "kind": "tool_intent",
+    "state": "expired",
+    "risk": "high",
+    "titleKey": "approval.toolIntent.title",
+    "summaryKey": "approval.toolIntent.summary",
+    "exchangeId": "exchange-sample",
+    "environmentId": "work",
+    "environmentRevision": 4,
+    "environmentDigest": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "routeId": "claude-official",
+    "routeRevision": 2,
+    "aggregateKey": "aggregate-tool-sample",
+    "subjectRefs": [
+      "call-1",
+      "call-2"
+    ],
+    "subjectLabels": [
+      "read_file",
+      "list_directory"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.deny"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "approval_expired"
+  },
+  {
+    "id": "approval-tool-sample-canceled-",
+    "revision": 2,
+    "kind": "tool_intent",
+    "state": "canceled",
+    "risk": "high",
+    "titleKey": "approval.toolIntent.title",
+    "summaryKey": "approval.toolIntent.summary",
+    "exchangeId": "exchange-sample",
+    "environmentId": "work",
+    "environmentRevision": 4,
+    "environmentDigest": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "routeId": "claude-official",
+    "routeRevision": 2,
+    "aggregateKey": "aggregate-tool-sample",
+    "subjectRefs": [
+      "call-1",
+      "call-2"
+    ],
+    "subjectLabels": [
+      "read_file",
+      "list_directory"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.toolIntent.choice.deny"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "runtime_stopping"
+  },
+  {
+    "id": "approval-client-root-sample-allowed-request",
+    "revision": 2,
+    "kind": "client_root_ask",
+    "state": "allowed",
+    "risk": "high",
+    "titleKey": "approval.clientRootAsk.title",
+    "summaryKey": "approval.clientRootAsk.summary",
+    "aggregateKey": "aggregate-client-root-sample",
+    "subjectRefs": [
+      "client-signer:developer-id-application-anthropic-pbc"
+    ],
+    "subjectLabels": [
+      "/Applications/Claude.app/Contents/MacOS/claude"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.denyOnce"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "allow-once",
+    "decisionScope": "request"
+  },
+  {
+    "id": "approval-client-root-sample-denied-request",
+    "revision": 2,
+    "kind": "client_root_ask",
+    "state": "denied",
+    "risk": "high",
+    "titleKey": "approval.clientRootAsk.title",
+    "summaryKey": "approval.clientRootAsk.summary",
+    "aggregateKey": "aggregate-client-root-sample",
+    "subjectRefs": [
+      "client-signer:developer-id-application-anthropic-pbc"
+    ],
+    "subjectLabels": [
+      "/Applications/Claude.app/Contents/MacOS/claude"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.denyOnce"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "decision": "deny",
+    "decisionScope": "request",
+    "terminalReason": "user_denied"
+  },
+  {
+    "id": "approval-client-root-sample-expired-",
+    "revision": 2,
+    "kind": "client_root_ask",
+    "state": "expired",
+    "risk": "high",
+    "titleKey": "approval.clientRootAsk.title",
+    "summaryKey": "approval.clientRootAsk.summary",
+    "aggregateKey": "aggregate-client-root-sample",
+    "subjectRefs": [
+      "client-signer:developer-id-application-anthropic-pbc"
+    ],
+    "subjectLabels": [
+      "/Applications/Claude.app/Contents/MacOS/claude"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.denyOnce"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "approval_expired"
+  },
+  {
+    "id": "approval-client-root-sample-canceled-",
+    "revision": 2,
+    "kind": "client_root_ask",
+    "state": "canceled",
+    "risk": "high",
+    "titleKey": "approval.clientRootAsk.title",
+    "summaryKey": "approval.clientRootAsk.summary",
+    "aggregateKey": "aggregate-client-root-sample",
+    "subjectRefs": [
+      "client-signer:developer-id-application-anthropic-pbc"
+    ],
+    "subjectLabels": [
+      "/Applications/Claude.app/Contents/MacOS/claude"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.denyOnce"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z",
+    "resolvedAt": "2026-08-02T09:00:30Z",
+    "terminalReason": "runtime_stopping"
+  }
+]

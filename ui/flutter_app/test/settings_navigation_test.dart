@@ -100,7 +100,6 @@ void main() {
           if (server || terminal) 'access',
           if (server) 'users',
           'safety',
-          'proxy',
         ];
         final tabs = tester.widget<DefaultTabController>(
           find.descendant(

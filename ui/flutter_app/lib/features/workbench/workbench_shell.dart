@@ -205,6 +205,10 @@ final class WorkbenchShell extends StatelessWidget {
         controller: controller,
         copy: copy,
       ),
+      WorkbenchSection.networkExits => NetworkExitsView(
+        controller: controller,
+        copy: copy,
+      ),
       WorkbenchSection.settings => SettingsView(
         controller: controller,
         copy: copy,
@@ -368,13 +372,6 @@ const _controlEntries = <_NavEntry>[
     shortcut: '⌘3',
   ),
   (
-    section: WorkbenchSection.routes,
-    icon: Icons.hub_outlined,
-    labelKey: 'nav.routes',
-    key: 'routes',
-    shortcut: null,
-  ),
-  (
     section: WorkbenchSection.providerAccounts,
     icon: Icons.key_outlined,
     labelKey: 'nav.provider_accounts',
@@ -386,6 +383,13 @@ const _controlEntries = <_NavEntry>[
     icon: Icons.data_object_rounded,
     labelKey: 'nav.code_library',
     key: 'code-library',
+    shortcut: null,
+  ),
+  (
+    section: WorkbenchSection.networkExits,
+    icon: Icons.public,
+    labelKey: 'nav.network_exits',
+    key: 'network-exits',
     shortcut: null,
   ),
 ];
@@ -413,7 +417,11 @@ final class _Sidebar extends StatelessWidget {
       label: copy(entry.labelKey),
       shortcut: entry.shortcut,
       labelled: labelled,
-      selected: controller.section == entry.section,
+      // Services are managed from Accounts, so Accounts stays selected.
+      selected:
+          controller.section == entry.section ||
+          (entry.section == WorkbenchSection.providerAccounts &&
+              controller.section == WorkbenchSection.routes),
       trailing: trailing,
       onPressed: () => controller.selectSection(entry.section),
     );

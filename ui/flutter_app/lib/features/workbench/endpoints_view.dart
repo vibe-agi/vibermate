@@ -39,13 +39,26 @@ final class _EndpointsViewState extends State<EndpointsView> {
           title: copy('routes.title'),
           help: copy('routes.subtitle'),
           dismissHelpLabel: copy('common.dismiss'),
-          trailing: FilledButton.icon(
-            key: const Key('endpoints-add'),
-            onPressed: controller.inventoryMutating
-                ? null
-                : () => _openEndpointEditor(context),
-            icon: const Icon(Icons.add, size: 14),
-            label: Text(copy('routes.add_endpoint')),
+          trailing: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const Key('endpoints-back-to-accounts'),
+                onPressed: () =>
+                    controller.selectSection(WorkbenchSection.providerAccounts),
+                icon: const Icon(Icons.arrow_back, size: 14),
+                label: Text(copy('routes.back_to_accounts')),
+              ),
+              FilledButton.icon(
+                key: const Key('endpoints-add'),
+                onPressed: controller.inventoryMutating
+                    ? null
+                    : () => _openEndpointEditor(context),
+                icon: const Icon(Icons.add, size: 14),
+                label: Text(copy('routes.add_endpoint')),
+              ),
+            ],
           ),
         ),
         const Divider(height: 1),

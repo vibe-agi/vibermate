@@ -153,6 +153,20 @@ void clientToolPermissionTests() {
   }
 }
 
+/// A session opens on its request ledger. These tests exercise the
+/// conversation, so they switch to it the way a user does.
+Future<void> showCaptureConversation(WidgetTester tester) async {
+  final mode = find.byKey(const Key('capture-evidence-mode'));
+  if (mode.evaluate().isEmpty) return;
+  for (final label in const ['Conversation', 'Request records', '对话', '请求记录']) {
+    final segment = find.descendant(of: mode, matching: find.text(label));
+    if (segment.evaluate().isEmpty) continue;
+    await tester.tap(segment.first);
+    await tester.pumpAndSettle();
+    return;
+  }
+}
+
 /// Opens a Conversation the way the product does now: through the Capture that
 /// owns it. A top-level Conversations section used to be a second path to the
 /// same timeline; it was retired because every Conversation belongs to a
@@ -170,6 +184,7 @@ Future<void> openCaptureConversation(
   await tester.ensureVisible(captureRow);
   await tester.tap(captureRow);
   await tester.pumpAndSettle();
+  await showCaptureConversation(tester);
 
   // A Capture selects the preferred main Conversation itself. Native client
   // Session IDs deliberately define Conversation identity, so a behavior test
@@ -256,17 +271,7 @@ Future<void> ensureTurnVisible(WidgetTester tester, Finder turn) async {
 }
 
 Future<void> openRetainedRequests(WidgetTester tester) async {
-  final mode = find.byKey(const Key('capture-evidence-mode'));
-  if (mode.evaluate().isNotEmpty) {
-    final widget = tester.widget<SegmentedButton<bool>>(mode);
-    if (!widget.selected.contains(true)) {
-      final label = widget.segments.singleWhere((s) => s.value).label! as Text;
-      await tester.tap(
-        find.descendant(of: mode, matching: find.text(label.data!)),
-      );
-      await tester.pumpAndSettle();
-    }
-  }
+  await showCaptureConversation(tester);
   final requests = find.byKey(const Key('reader-request-view'));
   if (requests.evaluate().isNotEmpty) {
     await tester.tap(requests);
@@ -549,14 +554,14 @@ void main() {
     await tester.enterText(search, 'not-loaded-yet');
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'filtered Capture layout');
-    expect(find.text('No loaded captures match this filter.'), findsOneWidget);
+    expect(find.text('No loaded sessions match this filter.'), findsOneWidget);
     expect(find.byKey(const Key('captures-load-more')), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Clear capture filter'));
+    await tester.tap(find.byTooltip('Clear session filter'));
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'cleared Capture layout');
     expect(tester.widget<TextField>(search).controller!.text, isEmpty);
-    expect(find.text('No loaded captures match this filter.'), findsNothing);
+    expect(find.text('No loaded sessions match this filter.'), findsNothing);
 
     await tester.tap(find.byKey(const Key('captures-load-more')));
     await tester.pumpAndSettle();
@@ -578,7 +583,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No captures yet.',
+        empty: 'No sessions yet.',
         detail: 'Start Codex or Claude through ViberMate from Terminal.',
         settings: 'Terminal command',
         web: false,
@@ -594,7 +599,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No captures yet.',
+        empty: 'No sessions yet.',
         detail:
             'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
@@ -736,7 +741,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.bySemanticsLabel(RegExp(r'^Captures\s+⌘1$')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Sessions\s+⌘1$')), findsOneWidget);
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
     final theme = Theme.of(scaffoldContext);
     final colors = theme.brightness == Brightness.dark
@@ -797,7 +802,6 @@ void main() {
       'workbench-tab-network',
       'usage-dashboard-nav',
       'workbench-tab-environments',
-      'workbench-tab-routes',
       'workbench-tab-provider-accounts',
       'workbench-tab-code-library',
       'workbench-settings-nav',
@@ -981,7 +985,6 @@ void main() {
       expect(find.text('Claude command copied'), findsOneWidget);
 
       final remove = find.byKey(const Key('terminal-command-remove'));
-      await _openSettingsTab(tester, const Key('settings-tab-proxy'));
       await _openSettingsTab(tester, const Key('settings-tab-access'));
       await tester.scrollUntilVisible(
         remove,
@@ -993,6 +996,9 @@ void main() {
             )
             .first,
       );
+      // The tab no longer resets its scroll by visiting another tab first.
+      await tester.ensureVisible(remove);
+      await tester.pumpAndSettle();
       await tester.tap(remove);
       await tester.pumpAndSettle();
       expect(find.text('Remove the Terminal command?'), findsOneWidget);
@@ -1394,7 +1400,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
-    await _openSettingsTab(tester, const Key('settings-tab-proxy'));
+    // Network exits are their own destination now, not a Settings tab.
+    await tester.tap(find.byKey(const Key('workbench-tab-network-exits')));
+    await tester.pumpAndSettle();
     expect(find.text('网络出口方案'), findsOneWidget);
     expect(
       find.byKey(const Key('egress-profile-row-profile.direct')),
@@ -1685,7 +1693,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Capture conversation'), findsOneWidget);
+      await showCaptureConversation(tester);
+      expect(find.text('Session conversation'), findsOneWidget);
       // The Capture header is an aggregate over every proven Conversation,
       // independent of how many rows the selected timeline has paged in.
       expect(find.textContaining('224 turns'), findsOneWidget);
@@ -1936,6 +1945,7 @@ void main() {
         find.byKey(const Key('capture-row-manual_capture:manual-figma')),
       );
       await tester.pumpAndSettle();
+      await showCaptureConversation(tester);
       expect(find.text('Independent exchanges'), findsOneWidget);
       expect(find.textContaining('24 exchanges'), findsOneWidget);
       expect(find.text('24 turns'), findsNothing);
@@ -2961,7 +2971,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('capture-session-selector')), findsOneWidget);
-      expect(find.text('View Session'), findsOneWidget);
+      expect(find.text('View thread'), findsOneWidget);
       expect(
         find.byTooltip(
           'Filters evidence only; does not switch the client session.',
@@ -3275,6 +3285,7 @@ void main() {
     await tester.tap(find.text('Figma Desktop').first);
     await tester.pumpAndSettle();
     expect(find.text('Revoke proxy login'), findsOneWidget);
+    await showCaptureConversation(tester);
     expect(find.text('Independent exchanges'), findsOneWidget);
     expect(
       tester.takeException(),
@@ -3372,7 +3383,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Browser Lab'), findsWidgets);
       expect(
-        find.text('Manual Capture created with a dedicated proxy login.'),
+        find.text('Manual session created with a dedicated proxy login.'),
         findsOneWidget,
       );
       expect(find.text('preview-password-1'), findsNothing);
@@ -3395,6 +3406,7 @@ void main() {
 
       await tester.tap(find.text('Figma Desktop').first);
       await tester.pumpAndSettle();
+      await showCaptureConversation(tester);
       expect(find.text('Independent exchanges'), findsOneWidget);
       await tester.tap(find.byKey(const Key('manual-capture-rotate')));
       await tester.pumpAndSettle();
@@ -3869,11 +3881,11 @@ void main() {
       await tester.pumpAndSettle();
       await _openNetwork(tester);
 
-      expect(find.text('连接'), findsWidgets);
+      expect(find.text('审批'), findsWidgets);
       final approvalsTab = find.byKey(const Key('network-tab-approvals'));
       final approvalsLabel = find.descendant(
         of: approvalsTab,
-        matching: find.text('审批'),
+        matching: find.text('待处理'),
       );
       expect(
         (tester.getCenter(approvalsTab).dy -
@@ -4184,9 +4196,9 @@ void main() {
       expect(find.text('Work reviewed'), findsOneWidget);
       expect(find.textContaining('Metadata only'), findsOneWidget);
       expect(find.textContaining('Anthropic · Lab'), findsWidgets);
-      expect(find.text('Future Captures only'), findsWidgets);
+      expect(find.text('Future sessions only'), findsWidgets);
       expect(
-        find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+        find.text('6 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
         findsOneWidget,
       );
       expect(find.text('r7'), findsWidgets);
@@ -4321,7 +4333,7 @@ void main() {
       expect(selected.accountPolicy.fixedAccountId, 'anthropic-lab');
       expect(
         find.text(
-          'Account activated. Running Captures switch on their next request.',
+          'Account activated. Running sessions switch on their next request.',
         ),
         findsOneWidget,
       );
@@ -5128,7 +5140,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text('0 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+      find.text('0 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('environment-create-publish')));
@@ -5141,7 +5153,7 @@ void main() {
     expect(find.text('Revision 1'), findsOneWidget);
     expect(
       find.text(
-        "No Client Flow is configured. New Captures keep each request's Original Destination and record connection metadata.",
+        "No Client Flow is configured. New sessions keep each request's Original Destination and record connection metadata.",
       ),
       findsOneWidget,
     );
@@ -5614,7 +5626,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('environment-review')));
       await tester.pumpAndSettle();
-      expect(find.text('Future Captures only'), findsWidgets);
+      expect(find.text('Future sessions only'), findsWidgets);
       await tester.tap(find.byKey(const Key('environment-publish')));
       await tester.pumpAndSettle();
       expect(find.text('Revision 4'), findsOneWidget);
@@ -6208,8 +6220,11 @@ Future<void> _openNetwork(WidgetTester tester) async {
   expect(find.byKey(const Key('network-tab-approvals')), findsOneWidget);
 }
 
+/// Services are managed from Accounts; the sidebar has no entry of its own.
 Future<void> _openUpstreamServices(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('workbench-tab-routes')));
+  await tester.tap(find.byKey(const Key('workbench-tab-provider-accounts')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('provider-accounts-manage-services')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('endpoints-add')), findsOneWidget);
 }

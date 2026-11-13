@@ -16,6 +16,7 @@ import 'acp_view.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
+import 'session_ledger.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
 
@@ -755,6 +756,7 @@ final class _CaptureConversationWorkspaceState
   final _conversationStorage = PageStorageBucket();
   String? _captureKey;
   String? _selectedSessionKey;
+  bool _ledgerWithoutBodies = false;
 
   @override
   Widget build(BuildContext context) {
@@ -765,6 +767,7 @@ final class _CaptureConversationWorkspaceState
     if (_captureKey != nextCaptureKey) {
       _captureKey = nextCaptureKey;
       _selectedSessionKey = null;
+      _ledgerWithoutBodies = false;
       _collapsed.clear();
     }
     final sessions = _captureSessionGroups(conversations);
@@ -793,11 +796,63 @@ final class _CaptureConversationWorkspaceState
     // No retained bodies: statistics only. Do not mount the conversation
     // directory, timeline, or Overview/Records chrome — those loads are wasted.
     if (withoutBodies) {
-      return CaptureRequestOverview(
-        controller: controller,
-        copy: copy,
-        withoutBodies: true,
-        onShowRecords: () {},
+      // Statistics first, as before. What the scripts did to each request is
+      // recorded without content, so the ledger is still available.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<bool>(
+                key: const Key('capture-ledger-mode'),
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: false,
+                    label: Text(
+                      copy('capture.summary.overview'),
+                      softWrap: false,
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    label: Text(
+                      copy('capture.summary.requests'),
+                      softWrap: false,
+                    ),
+                  ),
+                ],
+                selected: {_ledgerWithoutBodies},
+                onSelectionChanged: (value) =>
+                    setState(() => _ledgerWithoutBodies = value.single),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _ledgerWithoutBodies
+                ? SessionLedger(
+                    key: ValueKey(
+                      'session-ledger:${controller.selectedCaptureKey ?? 'empty'}',
+                    ),
+                    controller: controller,
+                    copy: copy,
+                    activities: const [],
+                    canLoadEarlier: false,
+                    loadingEarlier: false,
+                    onLoadEarlier: () {},
+                    onReadConversation: null,
+                    wholeSessionOnly: true,
+                  )
+                : CaptureRequestOverview(
+                    controller: controller,
+                    copy: copy,
+                    withoutBodies: true,
+                    onShowRecords: () {},
+                  ),
+          ),
+        ],
       );
     }
     final timelineTitle = selected?.exchangeScoped == true
@@ -822,6 +877,30 @@ final class _CaptureConversationWorkspaceState
             onLoadEarlier: () =>
                 unawaited(controller.loadMoreSelectedCapture()),
           );
+    final Widget ledger =
+        !controller.captureLedgerWholeSession &&
+            controller.captureActivitiesLoading &&
+            controller.selectedCapturePage == null
+        ? CompactLoadingMessage(label: copy('common.loading'))
+        : SessionLedger(
+            // Across the whole session the ledger keeps its filter and
+            // selection when the conversation above changes.
+            key: ValueKey(
+              controller.captureLedgerWholeSession
+                  ? 'session-ledger:${controller.selectedCaptureKey ?? 'empty'}'
+                  : 'session-ledger:${controller.selectedCaptureConversationKey ?? 'empty'}',
+            ),
+            controller: controller,
+            copy: copy,
+            activities: controller.selectedActivities,
+            canLoadEarlier: controller.selectedCapturePage?.nextCursor != null,
+            loadingEarlier: controller.captureActivitiesLoading,
+            onLoadEarlier: () =>
+                unawaited(controller.loadMoreSelectedCapture()),
+            onReadConversation: () => controller.selectCaptureDetailMode(
+              CaptureDetailMode.conversation,
+            ),
+          );
     timeline = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -833,47 +912,51 @@ final class _CaptureConversationWorkspaceState
             // arrives, and equal-width segments keep that narrow measurement.
             // A minimum width keeps either language's label whole.
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 176),
-              child: SegmentedButton<bool>(
+              constraints: const BoxConstraints(minWidth: 264),
+              child: SegmentedButton<CaptureDetailMode>(
                 key: const Key('capture-evidence-mode'),
                 showSelectedIcon: false,
                 segments: [
                   ButtonSegment(
-                    value: false,
+                    value: CaptureDetailMode.requests,
+                    label: Text(
+                      copy('capture.summary.requests'),
+                      softWrap: false,
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: CaptureDetailMode.conversation,
+                    label: Text(
+                      copy('capture.summary.records'),
+                      softWrap: false,
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: CaptureDetailMode.overview,
                     label: Text(
                       copy('capture.summary.overview'),
                       softWrap: false,
                     ),
                   ),
-                  ButtonSegment(
-                    value: true,
-                    label: Text(
-                      copy(
-                        selected?.exchangeScoped == true
-                            ? 'reader.requests'
-                            : 'capture.summary.records',
-                      ),
-                      softWrap: false,
-                    ),
-                  ),
                 ],
-                selected: {controller.showCaptureRequestRecords},
+                selected: {controller.captureDetailMode},
                 onSelectionChanged: (value) =>
-                    controller.selectCaptureRequestRecords(value.single),
+                    controller.selectCaptureDetailMode(value.single),
               ),
             ),
           ),
         ),
         Expanded(
-          child: controller.showCaptureRequestRecords
-              ? timeline
-              : CaptureRequestOverview(
-                  controller: controller,
-                  copy: copy,
-                  withoutBodies: withoutBodies,
-                  onShowRecords: () =>
-                      controller.selectCaptureRequestRecords(true),
-                ),
+          child: switch (controller.captureDetailMode) {
+            CaptureDetailMode.requests => ledger,
+            CaptureDetailMode.conversation => timeline,
+            CaptureDetailMode.overview => CaptureRequestOverview(
+              controller: controller,
+              copy: copy,
+              withoutBodies: withoutBodies,
+              onShowRecords: () => controller.selectCaptureRequestRecords(true),
+            ),
+          },
         ),
       ],
     );
