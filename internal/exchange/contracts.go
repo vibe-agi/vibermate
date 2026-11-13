@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -1188,6 +1189,9 @@ type AttemptObservation struct {
 	Conversation           agentconversation.ProjectionFacts
 	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 	ProviderResponseID     string
+	// Scripts reports what each message transform script did. It holds counts
+	// and script-declared labels, never message content.
+	Scripts []messagetransform.StageOutcome
 }
 
 type StartObservation struct {
@@ -1647,6 +1651,7 @@ type Result struct {
 	Credential           providertransport.CredentialEvidence
 	Presentation         providertransport.WirePresentationEvidence
 	Transport            transportprofile.Evidence
+	Scripts              []messagetransform.StageOutcome
 }
 
 func cloneToolIntents(

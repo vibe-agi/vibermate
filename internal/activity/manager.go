@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -114,6 +115,7 @@ func (manager *Manager) Prepare(event Event) (Record, error) {
 		transport := event.Transport.Clone()
 		record.Transport = &transport
 	}
+	record.Scripts = slices.Clone(event.Scripts)
 	return record, nil
 }
 
@@ -150,6 +152,7 @@ func (manager *Manager) GetExchange(
 		transport := record.Transport.Clone()
 		record.Transport = &transport
 	}
+	record.Scripts = slices.Clone(record.Scripts)
 	if record.Conversation != nil {
 		conversation := *record.Conversation
 		record.Conversation = &conversation
@@ -251,6 +254,7 @@ func (manager *Manager) list(
 			transport := page.Items[index].Transport.Clone()
 			page.Items[index].Transport = &transport
 		}
+		page.Items[index].Scripts = slices.Clone(page.Items[index].Scripts)
 	}
 	return page, nil
 }

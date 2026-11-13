@@ -20,8 +20,29 @@ const observationSchemaIdentity = "vibermate-observations"
 //go:embed schema/v3.sql
 var controlSchemaSQL string
 
-//go:embed schema/observations_v1.sql
+// The observation role stays at revision 1. Its schema grows only by additive
+// steps that an open applies in place, so the declared layout, backups and
+// maintenance certificates never have to change with it. observationSchemaSQL
+// is the shape this build writes; the older shapes below are upgraded on open.
+//
+//go:embed schema/observations_v2.sql
 var observationSchemaSQL string
+
+//go:embed schema/observations_v1.sql
+var observationSchemaV1SQL string
+
+//go:embed migrations/observations_001_to_002.sql
+var observationMigration001To002SQL string
+
+// observationUpgrades lists every older observation shape with the additive
+// steps that bring it to observationSchemaSQL.
+var observationUpgrades = []roleUpgrade{{from: observationSchemaV1SQL, steps: observationMigration001To002SQL}}
+
+type roleUpgrade struct{ from, steps string }
+
+func observationRole(layout, archive string) *roleSchema {
+	return &roleSchema{identity: observationSchemaIdentity, revision: 1, ddl: observationSchemaSQL, upgrades: observationUpgrades, layout: layout, archive: archive}
+}
 
 type ControlOptions struct {
 	DatabasePath, LayoutID              string
@@ -41,6 +62,7 @@ type roleSchema struct {
 	identity             string
 	revision             int64
 	ddl, layout, archive string
+	upgrades             []roleUpgrade
 }
 
 func roleID(s string) bool { return len(s) > 0 && len(s) <= 128 && utf8.ValidString(s) }
@@ -73,9 +95,28 @@ func (r *roleSchema) validateExisting(ctx context.Context, path string, timeout 
 	}
 	db := sql.OpenDB(newSQLiteReadConnector(path, timeout))
 	defer db.Close()
-	return r.verify(ctx, db)
+	_, err = r.verifyAny(ctx, db)
+	return err
+}
+
+// verifyAny accepts the current shape or one an open can upgrade. It reports
+// the upgrade that is still owed, or nil when the file is already current.
+func (r *roleSchema) verifyAny(ctx context.Context, db schemaQueryer) (*roleUpgrade, error) {
+	current := r.verify(ctx, db)
+	if current == nil {
+		return nil, nil
+	}
+	for index := range r.upgrades {
+		if r.verifyShape(ctx, db, r.upgrades[index].from) == nil {
+			return &r.upgrades[index], nil
+		}
+	}
+	return nil, current
 }
 func (r *roleSchema) verify(ctx context.Context, db schemaQueryer) error {
+	return r.verifyShape(ctx, db, r.ddl)
+}
+func (r *roleSchema) verifyShape(ctx context.Context, db schemaQueryer, ddl string) error {
 	var identity string
 	var revision int64
 	if err := db.QueryRowContext(ctx, `SELECT schema_identity,schema_revision FROM runtime_metadata WHERE singleton=1`).Scan(&identity, &revision); err != nil {
@@ -94,7 +135,7 @@ func (r *roleSchema) verify(ctx context.Context, db schemaQueryer) error {
 	}
 	defer reference.Close()
 	reference.SetMaxOpenConns(1)
-	if _, err := reference.ExecContext(ctx, r.ddl); err != nil {
+	if _, err := reference.ExecContext(ctx, ddl); err != nil {
 		return err
 	}
 	expected, err := schemaObjects(ctx, reference)
@@ -132,8 +173,20 @@ func (r *roleSchema) initialize(ctx context.Context, db *sql.DB, now time.Time) 
 		return err
 	}
 	if count != 0 {
-		if err := r.verify(ctx, tx); err != nil {
+		upgrade, err := r.verifyAny(ctx, tx)
+		if err != nil {
 			return err
+		}
+		if upgrade != nil {
+			// The steps and the proof that they produced exactly the current
+			// shape share this transaction: a file is either still the older
+			// shape or fully current, never in between.
+			if _, err := tx.ExecContext(ctx, upgrade.steps); err != nil {
+				return errors.Join(ErrUnsupportedSchema, err)
+			}
+			if err := r.verify(ctx, tx); err != nil {
+				return err
+			}
 		}
 		return tx.Commit()
 	}

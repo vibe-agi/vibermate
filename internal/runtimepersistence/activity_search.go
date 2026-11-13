@@ -40,7 +40,7 @@ func (repository *activityRepository) SearchExchanges(
 		return activity.SearchPage{}, err
 	}
 	defer finish()
-	query := `SELECT ` + searchActivityColumns + `,
+	query := `SELECT ` + searchActivityColumns + `, NULL,
 		candidate.workspace_id,
 		candidate.workspace_label,
 		COALESCE(NULLIF(candidate.capture_label, ''), candidate.source_display_name),
