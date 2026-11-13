@@ -84,7 +84,8 @@ void main() {
       displayName: 'Privacy',
     );
     final published = await api.publishCodeLibraryTransform(
-      id: 'transform.mask',
+      // The preview's recorded requests name this script.
+      id: 'transform.mask-secrets',
       expectedRevision: 0,
       collectionId: 'privacy',
       displayName: 'Mask secrets',
@@ -142,6 +143,24 @@ void main() {
     expect(text, contains('Used by'));
     expect(text, contains(running.name));
     expect(text, contains('client flows'));
+
+    // What it did to recent requests, counted per request.
+    await tester.ensureVisible(find.byKey(const Key('code-library-activity')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('code-library-activity')), findsOneWidget);
+    expect(find.text('What it did, last 7 days'), findsOneWidget);
+    String figure(String key) => tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.byType(Text),
+          ),
+        )
+        .first
+        .data!;
+    expect(figure('code-library-activity-seen'), '4');
+    expect(figure('code-library-activity-changed'), '3');
+    expect(figure('code-library-activity-blocked'), '0');
     expect(tester.takeException(), isNull);
     // Stop the controller's polling before the test ends.
     await tester.pumpWidget(const SizedBox());

@@ -48,6 +48,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
         widget.controller.capturedMessageTransformSample?.wireProtocol ??
         _testWireProtocol;
     unawaited(_load());
+    unawaited(widget.controller.refreshScriptActivity());
   }
 
   Future<void> _load() async {
@@ -206,6 +207,10 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
         );
         final detail = _LibraryDetail(
           transform: _selected,
+          activity: _selected == null
+              ? null
+              : widget.controller.scriptActivity?.forScript(_selected!.id),
+          activityWindow: widget.controller.scriptActivity,
           usage: _selected == null
               ? const []
               : scriptUsage(
@@ -1356,6 +1361,8 @@ final class _LibraryTree extends StatelessWidget {
 final class _LibraryDetail extends StatelessWidget {
   const _LibraryDetail({
     required this.transform,
+    required this.activity,
+    required this.activityWindow,
     required this.usage,
     required this.copy,
     required this.enabled,
@@ -1365,6 +1372,13 @@ final class _LibraryDetail extends StatelessWidget {
 
   final CodeLibraryTransformRevision? transform;
   final List<ScriptUsage> usage;
+
+  /// This script's counts; null when it ran on nothing or the Runtime could
+  /// not answer.
+  final ScriptTally? activity;
+
+  /// The whole answer, for the window it covers. Null when unavailable.
+  final ScriptActivity? activityWindow;
   final AppCopy copy;
   final bool enabled;
   final VoidCallback? onEdit;
@@ -1479,6 +1493,15 @@ final class _LibraryDetail extends StatelessWidget {
           emptyLabel: copy('code_library.no_changes'),
           copy: copy,
         ),
+        if (activityWindow case final window?) ...[
+          const SizedBox(height: 12),
+          _ScriptActivityPanel(
+            key: const Key('code-library-activity'),
+            tally: activity,
+            window: window,
+            copy: copy,
+          ),
+        ],
       ],
     );
   }
@@ -2833,4 +2856,117 @@ final class _ScriptUsageLine extends StatelessWidget {
       ),
     );
   }
+}
+
+/// What one script did to the last week's requests, as counts.
+final class _ScriptActivityPanel extends StatelessWidget {
+  const _ScriptActivityPanel({
+    required this.tally,
+    required this.window,
+    required this.copy,
+    super.key,
+  });
+
+  final ScriptTally? tally;
+  final ScriptActivity window;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final text = Theme.of(context).textTheme;
+    final title = window.truncated
+        ? copy.format('code_library.activity.title_since', {
+            'date': _shortDate(window.coveredFrom),
+          })
+        : copy.format('code_library.activity.title', {
+            'days': window.generatedAt.difference(window.since).inDays,
+          });
+    Widget figure(String key, int value, Color? color, String label) => Column(
+      key: Key(key),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$value',
+          style: text.titleLarge?.copyWith(
+            color: value > 0 ? color : null,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        Text(label, style: text.bodySmall?.copyWith(color: colors.textMuted)),
+      ],
+    );
+    final value = tally;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: colors.dividerSoft),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: text.titleSmall),
+          const SizedBox(height: 8),
+          if (value == null)
+            Text(
+              copy('code_library.activity.none'),
+              style: text.bodySmall?.copyWith(color: colors.textMuted),
+            )
+          else ...[
+            Wrap(
+              spacing: 28,
+              runSpacing: 8,
+              children: [
+                figure(
+                  'code-library-activity-seen',
+                  value.requests,
+                  null,
+                  copy('code_library.activity.seen'),
+                ),
+                figure(
+                  'code-library-activity-changed',
+                  value.changed,
+                  colors.route,
+                  copy('code_library.activity.changed'),
+                ),
+                figure(
+                  'code-library-activity-blocked',
+                  value.blocked,
+                  colors.danger,
+                  copy('code_library.activity.blocked'),
+                ),
+                figure(
+                  'code-library-activity-failed',
+                  value.failed,
+                  colors.warning,
+                  copy('code_library.activity.failed'),
+                ),
+              ],
+            ),
+            if (value.blockReasons.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                '${copy('code_library.activity.reasons')} '
+                '${value.blockReasons.map((r) => '${r.reason} × ${r.count}').join(' · ')}',
+                style: text.bodySmall?.copyWith(color: colors.textMuted),
+              ),
+            ],
+          ],
+          const SizedBox(height: 6),
+          Text(
+            copy('code_library.activity.scope'),
+            style: text.bodySmall?.copyWith(color: colors.textFaint),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _shortDate(DateTime value) {
+  final local = value.toLocal();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)}';
 }
