@@ -320,6 +320,8 @@ final class AppCopy {
     'status.recording.disabled': 'disabled',
     'status.recording.evidence':
         'Recording {state}. {dropped} dropped, {unconfirmed} writes unconfirmed in this Runtime session. Agent execution remains independent. Missing records do not mean no traffic.',
+    'status.recording.low_space':
+        'Recording is paused: the Runtime\'s disk is almost full. Agents keep working, but new requests are not being recorded. Free up space and recording resumes on its own.',
     'capture.summary.authorization_observed':
         'Recorded Capture authorization: first {first}, latest {last}. This does not establish request or model success.',
     'capture.summary.unknown_time': 'unknown',
@@ -2590,7 +2592,7 @@ final class AppCopy {
     'settings.storage.growth':
         'SQLite files changed {change} since the last check.',
     'settings.storage.low_space':
-        'The connected Runtime is below its free-space threshold. Free space, move App storage, or expand the server volume before recording more evidence.',
+        'The connected Runtime is below its free-space threshold. Free space, move App storage, or expand the server volume. Recording pauses automatically if space keeps falling, and agents keep working.',
     'settings.storage.capacity_unavailable':
         'The Runtime could not read free space for this volume. Database statistics are still shown.',
     'settings.storage.measurement_scope':
@@ -3429,6 +3431,8 @@ final class AppCopy {
     'status.recording.disabled': '已停用',
     'status.recording.evidence':
         '记录{state}。本次运行已丢弃 {dropped} 条，{unconfirmed} 次写入未确认。Agent 执行独立进行；缺少记录不代表没有流量。',
+    'status.recording.low_space':
+        '记录已暂停：Runtime 所在磁盘空间即将用尽。Agent 仍可正常工作，但新请求不会被记录。释放空间后会自动恢复记录。',
     'capture.summary.authorization_observed':
         '已记录 Capture 授权：首次 {first}，最近 {last}。这不能证明请求或模型成功。',
     'capture.summary.unknown_time': '未知',
@@ -5345,7 +5349,7 @@ final class AppCopy {
         '统计于 {time} · Runtime 磁盘可用 {available} · 低于 {threshold} 时提醒',
     'settings.storage.growth': '与上次检查相比，SQLite 文件变化 {change}。',
     'settings.storage.low_space':
-        '所连接 Runtime 的可用空间已低于阈值。继续记录前，请释放空间、迁移 App 数据目录或扩容服务端卷。',
+        '所连接 Runtime 的可用空间已低于阈值。请释放空间、迁移 App 数据目录或扩容服务端卷。空间继续减少时会自动暂停记录，Agent 仍可正常工作。',
     'settings.storage.capacity_unavailable': 'Runtime 无法读取该卷的剩余空间；数据库统计仍可查看。',
     'settings.storage.measurement_scope':
         '文件大小包含所有 Runtime 数据库及保留的归档。“证据占用页”是相关表实际分配的 SQLite 页面，不是解压后的正文总量。“可复用”页面仍在数据库文件内，可供后续写入；文件未必会缩小。',

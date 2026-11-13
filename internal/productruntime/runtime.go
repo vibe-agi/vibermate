@@ -150,6 +150,7 @@ type runtimeBuildOverrides struct {
 	provider            func(providerBuildRequest) (providerRuntime, error)
 	recoverEgress       func(context.Context, egressaudit.Repository, time.Time) error
 	openObservations    func(context.Context, runtimepersistence.ObservationOptions) (*runtimepersistence.ObservationStore, error)
+	filesystemAvailable func(string) (uint64, error)
 }
 
 func recoverEgressAttempts(
@@ -1105,6 +1106,18 @@ func (r *Runtime) Status() RuntimeStatus {
 	}
 	if status.Recording.State == RecordingAvailable && (status.RecordingFailure != nil || r.recordingStorage != nil && !r.recordingStorage.available()) {
 		status.Recording.State = RecordingDegraded
+	}
+	if r.recordingStorage != nil && r.recordingStorage.lowSpace.Load() {
+		// Only a running store re-checks the volume, so only it can promise
+		// that recording resumes by itself.
+		select {
+		case <-r.recordingStorage.done:
+		default:
+			status.Recording.LowSpacePause = true
+			if status.Recording.State == RecordingAvailable {
+				status.Recording.State = RecordingDegraded
+			}
+		}
 	}
 	status.EnvironmentProjection = r.environments.Health()
 	status.OfflineHold = r.offlineHold.Snapshot()
