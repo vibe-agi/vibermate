@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
-import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/session_ledger.dart';
+import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 
 ScriptOutcome _script(String outcome, {String name = 'Mask secrets'}) =>
     ScriptOutcome(
@@ -24,10 +24,11 @@ ScriptOutcome _script(String outcome, {String name = 'Mask secrets'}) =>
 
 ActivityRecord _activity(
   String status, {
+  String id = 'exchange-1',
   List<ScriptOutcome> scripts = const [],
   String? reasonCode,
 }) => ActivityRecord.fromJson({
-  'id': 'exchange-1',
+  'id': id,
   'occurredAt': '2026-11-12T09:00:00.000Z',
   'kind': 'exchange',
   'title': 'Agent exchange',
@@ -53,7 +54,7 @@ ActivityRecord _activity(
     'protocolPlanId': 'plan.system.chatgpt.responses',
     'protocolPlanRevision': 1,
   },
-  'parentRefs': {'captureRunId': 'run-1', 'exchangeId': 'exchange-1'},
+  'parentRefs': {'captureRunId': 'run-1', 'exchangeId': id},
   if (scripts.isNotEmpty)
     'scripts': [
       for (final script in scripts)
@@ -173,6 +174,40 @@ void main() {
     );
   });
 
+  test('refreshing the newest page keeps how far back the ledger reaches', () {
+    final held = ActivityPage(
+      items: [
+        _activity('pending', id: 'b'),
+        _activity('succeeded', id: 'a'),
+      ],
+      nextCursor: 'older-than-a',
+    );
+    final refreshed = mergeLedgerPage(
+      held,
+      ActivityPage(
+        items: [
+          _activity('succeeded', id: 'c'),
+          _activity('failed', id: 'b', scripts: [_script('blocked')]),
+        ],
+        nextCursor: 'older-than-b',
+      ),
+      older: false,
+    );
+    expect(refreshed.items.map((item) => item.id).toSet(), {'a', 'b', 'c'});
+    // The request that was in progress now carries its final result.
+    final b = refreshed.items.singleWhere((item) => item.id == 'b');
+    expect(ledgerResultOf(b), LedgerResult.blocked);
+    expect(refreshed.nextCursor, 'older-than-a');
+
+    final older = mergeLedgerPage(
+      refreshed,
+      ActivityPage(items: [_activity('succeeded', id: 'z')], nextCursor: null),
+      older: true,
+    );
+    expect(older.items, hasLength(4));
+    expect(older.nextCursor, isNull);
+  });
+
   for (final size in const [Size(1440, 900), Size(390, 844)]) {
     testWidgets('a session opens on its request ledger at ${size.width}px', (
       tester,
@@ -240,6 +275,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('Changed · Mask secrets'), findsWidgets);
       expect(find.textContaining('Blocked by script'), findsNothing);
+
+      // The ledger covers the whole session by default and can be narrowed
+      // to the conversation selected above it.
+      final scope = find.byKey(const Key('ledger-scope'));
+      await tester.ensureVisible(scope);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: scope, matching: find.text('Whole session')),
+        findsOneWidget,
+      );
+      await tester.tap(scope);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('This conversation').last);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: scope, matching: find.text('This conversation')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-ledger-list')), findsOneWidget);
+      expect(tester.takeException(), isNull);
 
       // The conversation is one step away and the ledger is still there after.
       await tester.tap(find.byKey(const Key('ledger-read-conversation')));

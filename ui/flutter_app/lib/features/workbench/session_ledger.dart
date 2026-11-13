@@ -95,9 +95,62 @@ final class _SessionLedgerState extends State<SessionLedger> {
   String? _openedId;
 
   @override
+  void initState() {
+    super.initState();
+    _ensureSessionLoaded();
+  }
+
+  @override
+  void didUpdateWidget(SessionLedger oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _ensureSessionLoaded();
+  }
+
+  // The whole-session list is fetched once, when the ledger first needs it.
+  void _ensureSessionLoaded() {
+    final controller = widget.controller;
+    if (!controller.captureLedgerWholeSession ||
+        controller.captureLedgerPage != null ||
+        controller.captureLedgerLoading ||
+        controller.captureLedgerFailed) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) controller.loadCaptureLedger();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final copy = widget.copy;
-    final ordered = [...widget.activities]
+    final controller = widget.controller;
+    final whole = controller.captureLedgerWholeSession;
+    final sessionPage = controller.captureLedgerPage;
+    final severalConversations = controller.captureConversations.length > 1;
+    if (whole && sessionPage == null) {
+      return controller.captureLedgerFailed
+          ? CenteredMessage(
+              icon: Icons.error_outline,
+              title: copy('ledger.load_failed'),
+              action: TextButton(
+                key: const Key('ledger-retry'),
+                onPressed: () => controller.loadCaptureLedger(),
+                child: Text(copy('common.retry')),
+              ),
+            )
+          : CompactLoadingMessage(label: copy('common.loading'));
+    }
+    final activities = whole ? sessionPage!.items : widget.activities;
+    final canLoadEarlier = whole
+        ? sessionPage!.nextCursor != null
+        : widget.canLoadEarlier;
+    final loadingEarlier = whole
+        ? controller.captureLedgerLoading
+        : widget.loadingEarlier;
+    final VoidCallback onLoadEarlier = whole
+        ? () => controller.loadCaptureLedger(more: true)
+        : widget.onLoadEarlier;
+    final ordered = [...activities]
       ..sort((left, right) => right.occurredAt.compareTo(left.occurredAt));
     final counts = {
       for (final filter in SessionLedgerFilter.values)
@@ -154,7 +207,9 @@ final class _SessionLedgerState extends State<SessionLedger> {
               copy: copy,
               filter: _filter,
               counts: counts,
-              partial: widget.canLoadEarlier,
+              partial: canLoadEarlier,
+              wholeSession: severalConversations ? whole : null,
+              onScope: controller.selectCaptureLedgerScope,
               onFilter: (filter) => setState(() => _filter = filter),
               onReadConversation: widget.onReadConversation,
             ),
@@ -175,9 +230,9 @@ final class _SessionLedgerState extends State<SessionLedger> {
                         if (index == visible.length) {
                           return _LedgerFooter(
                             copy: copy,
-                            canLoadEarlier: widget.canLoadEarlier,
-                            loading: widget.loadingEarlier,
-                            onLoadEarlier: widget.onLoadEarlier,
+                            canLoadEarlier: canLoadEarlier,
+                            loading: loadingEarlier,
+                            onLoadEarlier: onLoadEarlier,
                           );
                         }
                         final activity = visible[index];
@@ -185,7 +240,10 @@ final class _SessionLedgerState extends State<SessionLedger> {
                           key: ValueKey('ledger-row-${activity.id}'),
                           activity: activity,
                           copy: copy,
-                          subtitle: _routeLabel(activity),
+                          subtitle: _routeLabel(
+                            activity,
+                            withConversation: whole && severalConversations,
+                          ),
                           selected: activity.id == _selectedId,
                           compact: constraints.maxWidth < 560,
                           onTap: () => setState(
@@ -222,10 +280,20 @@ final class _SessionLedgerState extends State<SessionLedger> {
     );
   }
 
-  String _routeLabel(ActivityRecord activity) {
+  String _routeLabel(ActivityRecord activity, {bool withConversation = false}) {
     final endpoint = widget.controller.activityEndpointLabel(activity);
     final account = widget.controller.activityAccountLabel(activity);
-    return [endpoint, account].where((part) => part.isNotEmpty).join(' › ');
+    final route = [
+      endpoint,
+      account,
+    ].where((part) => part.isNotEmpty).join(' › ');
+    if (!withConversation) return route;
+    // Across a whole session, say whose request this was.
+    final conversation = activity.conversation.displayName;
+    return [
+      conversation,
+      route,
+    ].whereType<String>().where((part) => part.isNotEmpty).join(' · ');
   }
 }
 
@@ -235,6 +303,8 @@ final class _LedgerToolbar extends StatelessWidget {
     required this.filter,
     required this.counts,
     required this.partial,
+    required this.wholeSession,
+    required this.onScope,
     required this.onFilter,
     required this.onReadConversation,
   });
@@ -243,6 +313,10 @@ final class _LedgerToolbar extends StatelessWidget {
   final SessionLedgerFilter filter;
   final Map<SessionLedgerFilter, int> counts;
   final bool partial;
+
+  /// Null when the session has a single conversation and there is no choice.
+  final bool? wholeSession;
+  final ValueChanged<bool> onScope;
   final ValueChanged<SessionLedgerFilter> onFilter;
   final VoidCallback onReadConversation;
 
@@ -335,6 +409,40 @@ final class _LedgerToolbar extends StatelessWidget {
               ],
             ),
           );
+          final scope = wholeSession == null
+              ? null
+              : DropdownButtonHideUnderline(
+                  child: DropdownButton<bool>(
+                    key: const Key('ledger-scope'),
+                    value: wholeSession,
+                    isDense: true,
+                    // Fills the width it is given, so large text truncates
+                    // instead of overflowing.
+                    isExpanded: true,
+                    style: text.bodyMedium,
+                    items: [
+                      DropdownMenuItem(
+                        value: true,
+                        child: Text(
+                          copy('ledger.scope.session'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      DropdownMenuItem(
+                        value: false,
+                        child: Text(
+                          copy('ledger.scope.conversation'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) onScope(value);
+                    },
+                  ),
+                );
           final read = TextButton(
             key: const Key('ledger-read-conversation'),
             onPressed: onReadConversation,
@@ -348,13 +456,27 @@ final class _LedgerToolbar extends StatelessWidget {
           if (constraints.maxWidth < 560) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [tabs, read],
+              children: [
+                tabs,
+                if (scope != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: ViberSpacing.xs,
+                    ),
+                    child: scope,
+                  ),
+                read,
+              ],
             );
           }
           return Row(
             children: [
               Expanded(child: tabs),
               const SizedBox(width: ViberSpacing.lg),
+              if (scope != null) ...[
+                SizedBox(width: 190, child: scope),
+                const SizedBox(width: ViberSpacing.md),
+              ],
               read,
             ],
           );

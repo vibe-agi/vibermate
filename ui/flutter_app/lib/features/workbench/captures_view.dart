@@ -824,12 +824,17 @@ final class _CaptureConversationWorkspaceState
                 unawaited(controller.loadMoreSelectedCapture()),
           );
     final Widget ledger =
-        controller.captureActivitiesLoading &&
+        !controller.captureLedgerWholeSession &&
+            controller.captureActivitiesLoading &&
             controller.selectedCapturePage == null
         ? CompactLoadingMessage(label: copy('common.loading'))
         : SessionLedger(
+            // Across the whole session the ledger keeps its filter and
+            // selection when the conversation above changes.
             key: ValueKey(
-              'session-ledger:${controller.selectedCaptureConversationKey ?? 'empty'}',
+              controller.captureLedgerWholeSession
+                  ? 'session-ledger:${controller.selectedCaptureKey ?? 'empty'}'
+                  : 'session-ledger:${controller.selectedCaptureConversationKey ?? 'empty'}',
             ),
             controller: controller,
             copy: copy,
