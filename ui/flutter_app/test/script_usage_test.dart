@@ -1,4 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/i18n/app_copy.dart';
+import 'package:vibermate_app/features/workbench/workbench_controller.dart';
+import 'package:vibermate_app/preview/preview_terminal_command.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/features/workbench/code_library_view.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -66,5 +71,80 @@ void main() {
       disabled.id,
     );
     expect(scriptUsage([disabled, active], 'unused'), isEmpty);
+  });
+
+  testWidgets('the script detail names the traffic policies that run it', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    await api.createCodeLibraryCollection(
+      id: 'privacy',
+      displayName: 'Privacy',
+    );
+    final published = await api.publishCodeLibraryTransform(
+      id: 'transform.mask',
+      expectedRevision: 0,
+      collectionId: 'privacy',
+      displayName: 'Mask secrets',
+      policy: const TrafficTransformPolicy(
+        requestJavaScript: 'request.setJson(request.json())',
+        responseJavaScript: '',
+      ),
+    );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(api.close);
+    await controller.initialize();
+    // One traffic policy runs revision 1 of the script.
+    final data = controller.data!;
+    final running = data.environments
+        .where((environment) => _flows(environment) > 0)
+        .first;
+    controller.data = DashboardData(
+      status: data.status,
+      captures: data.captures,
+      captureNextCursor: data.captureNextCursor,
+      environments: [
+        for (final environment in data.environments)
+          environment.id == running.id
+              ? _running(environment, [published], state: 'active')
+              : environment,
+      ],
+      endpoints: data.endpoints,
+      accounts: data.accounts,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: CodeLibraryView(
+            controller: controller,
+            copy: AppCopy.forLanguage(AppLanguage.english),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final usedBy = find.byKey(const Key('code-library-used-by'));
+    expect(usedBy, findsOneWidget);
+    final text = tester
+        .widget<Text>(find.descendant(of: usedBy, matching: find.byType(Text)))
+        .textSpan!
+        .toPlainText();
+    expect(text, contains('Used by'));
+    expect(text, contains(running.name));
+    expect(text, contains('client flows'));
+    expect(tester.takeException(), isNull);
+    // Stop the controller's polling before the test ends.
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
   });
 }
