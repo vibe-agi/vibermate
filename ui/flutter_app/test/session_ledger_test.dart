@@ -212,6 +212,23 @@ void main() {
       expect(find.textContaining('Mask secrets · r4'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
+      // From the detail, the full request opens in place and comes back.
+      await tester.ensureVisible(
+        find.byKey(const Key('ledger-inspector-open')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('ledger-inspector-open')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('conversation-turn-run-1-exchange-206')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-ledger-list')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('ledger-back')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('ledger-inspector')), findsOneWidget);
+
       await tester.tap(find.byKey(const Key('ledger-inspector-close')));
       await tester.pumpAndSettle();
       // On a narrow pane the filter tabs scroll sideways.

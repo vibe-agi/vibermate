@@ -4,6 +4,7 @@ import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'conversation_timeline.dart';
 import 'workbench_controller.dart';
 
 /// What happened to one request, as the audit sees it. A script decision
@@ -91,6 +92,7 @@ final class _SessionLedgerState extends State<SessionLedger> {
 
   SessionLedgerFilter _filter = SessionLedgerFilter.all;
   String? _selectedId;
+  String? _openedId;
 
   @override
   Widget build(BuildContext context) {
@@ -109,6 +111,38 @@ final class _SessionLedgerState extends State<SessionLedger> {
     final selected = ordered
         .where((activity) => activity.id == _selectedId)
         .firstOrNull;
+
+    final opened = ordered
+        .where((activity) => activity.id == _openedId)
+        .firstOrNull;
+    if (opened != null) {
+      // The full request reuses the request-record view, so everything it
+      // offers (content, raw record, frozen routing) is available from a row.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('ledger-back'),
+              onPressed: () => setState(() => _openedId = null),
+              icon: const Icon(Icons.arrow_back, size: 16),
+              label: Text(copy('ledger.back')),
+            ),
+          ),
+          Expanded(
+            child: EvidenceConversationTimeline(
+              key: ValueKey('ledger-exchange-${opened.id}'),
+              controller: widget.controller,
+              activities: [opened],
+              copy: copy,
+              exchangeScoped: true,
+              showCount: false,
+            ),
+          ),
+        ],
+      );
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -173,7 +207,7 @@ final class _SessionLedgerState extends State<SessionLedger> {
           endpoint: widget.controller.activityEndpointLabel(selected),
           account: widget.controller.activityAccountLabel(selected),
           onClose: () => setState(() => _selectedId = null),
-          onReadConversation: widget.onReadConversation,
+          onOpen: () => setState(() => _openedId = selected.id),
         );
         if (!wide) return inspector;
         return Row(
@@ -570,7 +604,7 @@ final class _LedgerInspector extends StatelessWidget {
     required this.endpoint,
     required this.account,
     required this.onClose,
-    required this.onReadConversation,
+    required this.onOpen,
     super.key,
   });
 
@@ -579,7 +613,7 @@ final class _LedgerInspector extends StatelessWidget {
   final String endpoint;
   final String account;
   final VoidCallback onClose;
-  final VoidCallback onReadConversation;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -644,6 +678,15 @@ final class _LedgerInspector extends StatelessWidget {
               style: text.bodyMedium?.copyWith(color: colors.textMuted),
             ),
           ],
+          const SizedBox(height: ViberSpacing.lg),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton(
+              key: const Key('ledger-inspector-open'),
+              onPressed: onOpen,
+              child: Text(copy('ledger.open_exchange')),
+            ),
+          ),
           section(copy('ledger.detail.scripts')),
           if (activity.scripts.isEmpty)
             Text(copy('ledger.detail.no_scripts'), style: text.bodyMedium)
@@ -657,15 +700,6 @@ final class _LedgerInspector extends StatelessWidget {
           if (account.isNotEmpty) step(copy('ledger.detail.account'), account),
           if (activity.reasonCode != null)
             step(copy('ledger.detail.reason'), activity.reasonCode!),
-          const SizedBox(height: ViberSpacing.lg),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FilledButton(
-              key: const Key('ledger-inspector-read-conversation'),
-              onPressed: onReadConversation,
-              child: Text(copy('ledger.read_conversation')),
-            ),
-          ),
         ],
       ),
     );

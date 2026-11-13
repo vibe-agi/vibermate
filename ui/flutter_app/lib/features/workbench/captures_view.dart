@@ -868,11 +868,7 @@ final class _CaptureConversationWorkspaceState
                   ButtonSegment(
                     value: CaptureDetailMode.conversation,
                     label: Text(
-                      copy(
-                        selected?.exchangeScoped == true
-                            ? 'reader.requests'
-                            : 'capture.summary.records',
-                      ),
+                      copy('capture.summary.records'),
                       softWrap: false,
                     ),
                   ),
