@@ -718,6 +718,9 @@ final class AppCopy {
     'approval.decided.by.person': 'decided by a person',
     'approval.decided.by.nobody': 'nobody answered in time',
     'approval.decided.by.runtime': 'ended by the Runtime',
+    'nav.network_exits': 'Network exits',
+    'network_exits.subtitle':
+        'How traffic leaves after an account is chosen. Traffic policies and accounts point at an exact saved revision.',
     'nav.network': 'Approvals',
     'nav.code_library': 'Script library',
     'nav.settings': 'Settings',
@@ -3823,6 +3826,8 @@ final class AppCopy {
     'approval.decided.by.person': '由人决定',
     'approval.decided.by.nobody': '无人及时处理',
     'approval.decided.by.runtime': '由 Runtime 结束',
+    'nav.network_exits': '网络出口',
+    'network_exits.subtitle': '选定账号之后流量如何离开。流量策略和账号会固定引用某个已保存的版本。',
     'nav.network': '审批',
     'nav.code_library': '脚本库',
     'nav.settings': '设置',

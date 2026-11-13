@@ -10,6 +10,7 @@ enum WorkbenchSection {
   providerAccounts('provider_accounts'),
   network('network'),
   codeLibrary('code_library'),
+  networkExits('network_exits'),
   settings('settings');
 
   const WorkbenchSection(this.wireName);

@@ -298,7 +298,6 @@ Future<_Harness> _mount(WidgetTester tester) async {
     );
     value.data = await api.delegate.loadDashboard();
     value.loading = false;
-    value.selectSettingsTab(value.settingsDestinations.length - 1);
     addTearDown(value.dispose);
     return value;
   }
@@ -311,7 +310,7 @@ Future<_Harness> _mount(WidgetTester tester) async {
         body: StatefulBuilder(
           builder: (_, setState) {
             h.rebuild = setState;
-            return SettingsView(
+            return NetworkExitsView(
               controller: h.current,
               copy: AppCopy.forLanguage(AppLanguage.english),
             );

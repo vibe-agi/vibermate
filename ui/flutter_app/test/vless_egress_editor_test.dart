@@ -884,7 +884,6 @@ Future<_Harness> _mount(
     );
     result.data = dashboard;
     result.loading = false;
-    result.selectSettingsTab(result.settingsDestinations.length - 1);
     addTearDown(result.dispose);
     return result;
   }
@@ -899,7 +898,7 @@ Future<_Harness> _mount(
           body: StatefulBuilder(
             builder: (_, setState) {
               h.rebuild = setState;
-              return SettingsView(
+              return NetworkExitsView(
                 controller: h.current,
                 copy: AppCopy.forLanguage(language),
               );

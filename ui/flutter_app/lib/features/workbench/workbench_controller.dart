@@ -411,7 +411,6 @@ final class WorkbenchController extends ChangeNotifier
     if (accessSettingsAvailable) SettingsDestination.access,
     if (serverManagement) SettingsDestination.users,
     SettingsDestination.safety,
-    SettingsDestination.networkExits,
   ];
 
   bool remoteConnectionGuideRequested = false;

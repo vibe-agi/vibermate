@@ -205,6 +205,10 @@ final class WorkbenchShell extends StatelessWidget {
         controller: controller,
         copy: copy,
       ),
+      WorkbenchSection.networkExits => NetworkExitsView(
+        controller: controller,
+        copy: copy,
+      ),
       WorkbenchSection.settings => SettingsView(
         controller: controller,
         copy: copy,
@@ -386,6 +390,13 @@ const _controlEntries = <_NavEntry>[
     icon: Icons.data_object_rounded,
     labelKey: 'nav.code_library',
     key: 'code-library',
+    shortcut: null,
+  ),
+  (
+    section: WorkbenchSection.networkExits,
+    icon: Icons.public,
+    labelKey: 'nav.network_exits',
+    key: 'network-exits',
     shortcut: null,
   ),
 ];

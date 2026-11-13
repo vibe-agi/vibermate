@@ -106,9 +106,6 @@ void main() {
           controller.data = await workspace.loadDashboard();
           controller.loading = false;
           await workspace.close();
-          controller.selectSettingsTab(
-            controller.settingsDestinations.length - 1,
-          );
           await tester.runAsync(() async {
             await tester.pumpWidget(
               MaterialApp(
@@ -120,7 +117,7 @@ void main() {
                   child: child!,
                 ),
                 home: Scaffold(
-                  body: SettingsView(
+                  body: NetworkExitsView(
                     controller: controller,
                     copy: AppCopy.forLanguage(language),
                   ),
@@ -311,7 +308,6 @@ Future<void> _editSelectedDefault(
   controller.data = await workspace.loadDashboard();
   controller.loading = false;
   await workspace.close();
-  controller.selectSettingsTab(controller.settingsDestinations.length - 1);
   await tester.runAsync(() async {
     await tester.pumpWidget(
       MaterialApp(
@@ -323,7 +319,7 @@ Future<void> _editSelectedDefault(
           child: child!,
         ),
         home: Scaffold(
-          body: SettingsView(
+          body: NetworkExitsView(
             controller: controller,
             copy: AppCopy.forLanguage(language),
           ),
