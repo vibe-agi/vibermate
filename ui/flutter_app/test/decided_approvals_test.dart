@@ -1,0 +1,123 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/app/vibermate_app.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
+
+Map<String, Object?> _approval(
+  String id,
+  String state,
+  String resolvedAt, {
+  String? decision,
+  String? scope,
+  String? reason,
+}) => {
+  'id': id,
+  'revision': 2,
+  'kind': 'network_ask',
+  'state': state,
+  'risk': 'medium',
+  'titleKey': 'approval.networkAsk.title',
+  'summaryKey': 'approval.networkAsk.summary',
+  'aggregateKey': 'network:example.com:443',
+  'target': {'host': 'example.com', 'port': 443},
+  'subjectRefs': ['example.com:443'],
+  'subjectLabels': ['example.com:443'],
+  'requestCount': 1,
+  'waiterCount': 1,
+  // The Runtime sends the same choices whatever the state.
+  'choices': [
+    for (final (decision, scope, label) in const [
+      ('allow-once', 'request', 'allowOnce'),
+      ('allow-once', 'host_port', 'allowHostPort'),
+      ('deny', 'request', 'denyOnce'),
+      ('deny', 'host_port', 'denyHostPort'),
+    ])
+      {
+        'decision': decision,
+        'scope': scope,
+        'labelKey': 'approval.networkAsk.choice.$label',
+      },
+  ],
+  'createdAt': '2026-11-13T08:00:00.000Z',
+  'expiresAt': '2026-11-13T08:05:00.000Z',
+  if (state != 'pending') 'resolvedAt': resolvedAt,
+  'decision': ?decision,
+  'decisionScope': ?scope,
+  'terminalReason': ?reason,
+};
+
+void main() {
+  test('past decisions come back newest first without the waiting ones', () {
+    final decided = decidedApprovalsOf([
+      _approval('waiting', 'pending', ''),
+      _approval(
+        'older',
+        'allowed',
+        '2026-11-13T08:01:00.000Z',
+        decision: 'allow-once',
+        scope: 'request',
+      ),
+      _approval(
+        'newer',
+        'expired',
+        '2026-11-13T08:05:00.000Z',
+        reason: 'approval_expired',
+      ),
+    ]);
+    expect(decided.map((record) => record.id), ['newer', 'older']);
+  });
+
+  test('one unreadable record of history does not hide the rest', () {
+    final decided = decidedApprovalsOf([
+      {'id': 'broken', 'state': 'allowed'},
+      'not even an object',
+      _approval(
+        'good',
+        'denied',
+        '2026-11-13T08:02:00.000Z',
+        decision: 'deny',
+        scope: 'request',
+        reason: 'user_denied',
+      ),
+    ]);
+    expect(decided.map((record) => record.id), ['good']);
+  });
+
+  for (final size in const [Size(1440, 900), Size(390, 844)]) {
+    testWidgets('Approvals lists what was decided at ${size.width}px', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('workbench-tab-network')));
+      await tester.pumpAndSettle();
+
+      final section = find.byKey(const Key('approvals-decided'));
+      await tester.dragUntilVisible(
+        section,
+        find.byType(ListView).last,
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
+      expect(section, findsOneWidget);
+      expect(
+        find.textContaining('Allowed once · registry.npmjs.org:443'),
+        findsOneWidget,
+      );
+      // A remembered refusal reads differently from a one-off.
+      expect(
+        find.textContaining('Always refused · telemetry.example.net:443'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('decided by a person'), findsNWidgets(2));
+      // An expired question was decided by nobody.
+      expect(find.textContaining('Expired · pypi.org:443'), findsOneWidget);
+      expect(find.textContaining('nobody answered in time'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+}

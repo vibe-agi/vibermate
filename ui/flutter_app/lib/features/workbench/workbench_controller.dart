@@ -426,6 +426,10 @@ final class WorkbenchController extends ChangeNotifier
   RuntimeStatus? get runtimeStatus => _inventoryFailureStatus ?? data?.status;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
+
+  /// Questions that were answered, expired or canceled, newest first. Null
+  /// until first read; reading it is best effort and never raises a notice.
+  List<ApprovalRecord>? decidedApprovals;
   List<NativeApproval> nativeApprovals = const [];
   List<NativeToolOperation> nativeOperations = const [];
   bool nativeOperationsLoading = false, nativeOperationsComplete = false;
@@ -2869,6 +2873,17 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  Future<void> refreshDecidedApprovals() async {
+    try {
+      final decided = await _api.decidedApprovals();
+      if (_disposed) return;
+      decidedApprovals = decided;
+      notifyListeners();
+    } catch (_) {
+      // History is a convenience. What is waiting stays authoritative.
+    }
+  }
+
   Future<void> refreshPendingApprovals({bool quiet = false}) async {
     await refreshNativeApprovals();
     if (_disposed || pendingApprovalsLoading || networkMutating) return;
@@ -2885,6 +2900,10 @@ final class WorkbenchController extends ChangeNotifier
         updated,
       );
       pendingApprovals = updated;
+      // A question leaving the waiting list means something was decided.
+      if (changed || decidedApprovals == null) {
+        unawaited(refreshDecidedApprovals());
+      }
       final clearedError = approvalAttentionError != null;
       approvalAttentionError = null;
       pendingApprovalsLoading = false;
