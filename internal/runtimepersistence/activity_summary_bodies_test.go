@@ -17,7 +17,9 @@ func TestActivitySummaryReportsLaunchContentBodyPresence(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "summary-bodies.db"))
 	defer shutdownTestStore(t, store)
 	ctx := context.Background()
-	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	// The summary compares content expiry with the real clock, so the sample
+	// must be recent: a fixed date makes this test fail once it is 30 days old.
+	now := time.Now().UTC().Truncate(time.Second)
 	seedCaptureGraph(t, store, "managed_run", "run-bodies", 1)
 
 	appendTerminal := func(exchangeID, run string) {
