@@ -331,7 +331,13 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                     final table = constraints.maxWidth >= 1100;
                     final entries = <Object>[
                       if (table) const _AccountTableHeaderEntry(),
-                      ..._groupedEntries(filtered, endpoints),
+                      // Grouped by service in the default order. Any other
+                      // order is a ranking across all accounts, so it stays
+                      // one list.
+                      if (_sort == _ProviderAccountSort.defaultOrder)
+                        ..._groupedEntries(filtered, endpoints)
+                      else
+                        ...filtered,
                     ];
                     final count = entries.length;
                     final list = ListView.separated(

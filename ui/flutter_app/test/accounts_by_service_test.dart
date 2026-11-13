@@ -96,4 +96,43 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('another order ranks all accounts in one list', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi(seedCaptures: false);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.providerAccounts,
+        language: AppLanguage.english,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final groups = find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith(
+            'provider-accounts-group-',
+          ),
+    );
+    expect(groups, findsWidgets);
+    await tester.tap(find.byKey(const Key('provider-accounts-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Needs attention').last);
+    await tester.pumpAndSettle();
+    expect(groups, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
