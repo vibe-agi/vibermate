@@ -53,7 +53,11 @@ type retainedEntry struct {
 // toleratesStall reports whether a failed re-read may be retried without
 // withdrawing the work that the last successful read admitted.
 func (entry *retainedEntry) toleratesStall(err error, now time.Time) bool {
-	return errors.Is(err, context.DeadlineExceeded) &&
+	// A read that timed out or could not reach storage learned nothing about
+	// the credential. A rejection, or a read after an explicit change hint, is
+	// never waited out.
+	unanswered := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, captureauthority.ErrUnavailable)
+	return unanswered &&
 		entry.validityKnown && !entry.hinted &&
 		(entry.stalledSince.IsZero() || now.Sub(entry.stalledSince) < revalidationStallGrace)
 }

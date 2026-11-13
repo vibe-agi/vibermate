@@ -96,6 +96,7 @@ const (
 	ReasonUnsupportedUpgrade              ReasonCode = "unsupported_upgrade"
 	ReasonConnectionDenied                ReasonCode = "connection_denied"
 	ReasonCaptureEnvironmentUnavailable   ReasonCode = "capture_environment_unavailable"
+	ReasonCaptureAuthorityUnavailable     ReasonCode = "capture_authority_unavailable"
 	ReasonRawEvidenceUnavailable          ReasonCode = "raw_evidence_unavailable"
 )
 
@@ -945,6 +946,14 @@ func (handler *Handler) serveInner(
 		Revalidate(context.Context, captureadmission.Admission) (captureauthority.Validity, error)
 	}); ok {
 		if _, err := authority.Revalidate(request.Context(), admission); err != nil {
+			// The request is refused either way. When the authority could not
+			// be read at all, the credential was not rejected: say so, so the
+			// agent retries instead of ending the conversation.
+			if errors.Is(err, captureauthority.ErrUnavailable) {
+				writer.Header().Set("Retry-After", "1")
+				writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureAuthorityUnavailable, "")
+				return
+			}
 			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 			return
 		}

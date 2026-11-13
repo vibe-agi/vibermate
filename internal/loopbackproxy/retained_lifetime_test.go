@@ -117,9 +117,10 @@ func TestRetainedTransportShutdownJoinsInnerHandlers(t *testing.T) {
 
 type faultedCurrentAuthority struct {
 	captureadmission.CurrentAuthority
-	fail         atomic.Bool
-	entered      chan struct{}
-	cancelLookup bool
+	fail           atomic.Bool
+	entered        chan struct{}
+	cancelLookup   bool
+	storageFailure bool
 }
 
 func (a *faultedCurrentAuthority) Revalidate(ctx context.Context, admission captureadmission.Admission) (captureauthority.Validity, error) {
@@ -131,7 +132,49 @@ func (a *faultedCurrentAuthority) Revalidate(ctx context.Context, admission capt
 		<-ctx.Done()
 		return captureauthority.Validity{}, ctx.Err()
 	}
+	if a.storageFailure {
+		return captureauthority.Validity{}, errors.Join(captureauthority.ErrUnavailable, errors.New("synthetic storage failure"))
+	}
 	return captureauthority.Validity{}, errors.New("synthetic authority read unavailable")
+}
+
+// A storage failure while re-reading the capture is not a rejected credential.
+// The request is still refused, but as a retryable error, and the same
+// conversation continues once storage answers again.
+func TestRetainedOperationStorageFailureIsRetryableAndRecovers(t *testing.T) {
+	var authority *faultedCurrentAuthority
+	f := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), nil, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), configureProxy: func(options *loopbackproxy.Options) {
+		authority = &faultedCurrentAuthority{CurrentAuthority: options.Admissions.(captureadmission.CurrentAuthority), entered: make(chan struct{}), storageFailure: true}
+		options.Admissions = authority
+	}})
+	defer f.Close(t)
+	conn := f.ConnectTLS(t, f.grant.ProxyCapability.Value(), "api.anthropic.com:443", "api.anthropic.com")
+	defer conn.Close()
+	send := func() *http.Response {
+		r, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", strings.NewReader(`{"model":"client"}`))
+		r.URL.Scheme = ""
+		r.URL.Host = ""
+		r.Header.Set("Content-Type", "application/json")
+		return writeInnerRequest(t, conn, r)
+	}
+	authority.fail.Store(true)
+	response := send()
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Retry-After") != "1" ||
+		!strings.Contains(string(body), `"capture_authority_unavailable"`) {
+		t.Fatalf("storage failure answered %d retry-after=%q body=%s", response.StatusCode, response.Header.Get("Retry-After"), body)
+	}
+	if len(f.exchanges.Requests()) != 0 || f.original.Count() != 0 {
+		t.Fatal("a request was forwarded while the capture could not be re-read")
+	}
+	authority.fail.Store(false)
+	response = send()
+	io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(f.exchanges.Requests()) != 1 {
+		t.Fatalf("the conversation did not continue after storage recovered: %d, %d forwarded", response.StatusCode, len(f.exchanges.Requests()))
+	}
 }
 func TestRetainedOperationAuthorityFailureDeniesBeforeDispatch(t *testing.T) {
 	for _, cancelLookup := range []bool{false, true} {

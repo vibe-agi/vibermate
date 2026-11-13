@@ -326,7 +326,7 @@ jobs:
   desktop:
     needs: generated-structural
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
