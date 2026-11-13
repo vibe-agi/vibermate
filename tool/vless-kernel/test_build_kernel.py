@@ -232,7 +232,7 @@ class Contracts(unittest.TestCase):
 
     def test_failed_build_leaves_no_binary_or_manifest(self):
         go = self.root / "go"
-        go.write_text("#!/bin/sh\ncase \"$1\" in\nversion) printf 'go version go1.26.10 darwin/arm64\\n';;\nenv) printf 'go1.26.10\\n';;\nbuild) exit 3;;\nesac\n")
+        go.write_text("#!/bin/sh\ncase \"$1\" in\nversion) printf 'go version go1.26.11 darwin/arm64\\n';;\nenv) printf 'go1.26.11\\n';;\nbuild) exit 3;;\nesac\n")
         go.chmod(0o755)
         f = self.fixture()
         output = self.root / "out"
@@ -249,8 +249,8 @@ class Contracts(unittest.TestCase):
         trace = self.root / "trace.json"
         go.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
                       "args=sys.argv[1:]\n"
-                      "if args==['version']: print('go version go1.26.10 darwin/arm64')\n"
-                      "elif args==['env','GOVERSION']: print('go1.26.10')\n"
+                      "if args==['version']: print('go version go1.26.11 darwin/arm64')\n"
+                      "elif args==['env','GOVERSION']: print('go1.26.11')\n"
                       "elif args[0]=='build':\n"
                       f" Path({str(trace)!r}).write_text(json.dumps(args))\n"
                       " Path(args[args.index('-o')+1]).write_bytes(b'rejected output')\n"
@@ -342,10 +342,10 @@ class SetupFailures(unittest.TestCase):
             "args=sys.argv[1:]\n"
             f"bad={malformed!r}\n"
             "if args==['version']:\n"
-            " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='version' else b'go version go1.26.10 darwin/arm64\\n')\n"
+            " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='version' else b'go version go1.26.11 darwin/arm64\\n')\n"
             "elif args==['env','GOVERSION']:\n"
             + (f" Path({str(self.output)!r}).mkdir()\n Path({str(self.output / 'sentinel')!r}).write_bytes(b'competitor-owned')\n" if competing else "")
-            + " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='goversion' else b'go1.26.10\\n')\n"
+            + " sys.stdout.buffer.write(b'\\xffhttps://user:secret@example.invalid\\n' if bad=='goversion' else b'go1.26.11\\n')\n"
         )
         go.chmod(0o755)
         return go
