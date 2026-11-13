@@ -16,6 +16,7 @@ import 'acp_view.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
+import 'session_ledger.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
 
@@ -822,6 +823,25 @@ final class _CaptureConversationWorkspaceState
             onLoadEarlier: () =>
                 unawaited(controller.loadMoreSelectedCapture()),
           );
+    final Widget ledger =
+        controller.captureActivitiesLoading &&
+            controller.selectedCapturePage == null
+        ? CompactLoadingMessage(label: copy('common.loading'))
+        : SessionLedger(
+            key: ValueKey(
+              'session-ledger:${controller.selectedCaptureConversationKey ?? 'empty'}',
+            ),
+            controller: controller,
+            copy: copy,
+            activities: controller.selectedActivities,
+            canLoadEarlier: controller.selectedCapturePage?.nextCursor != null,
+            loadingEarlier: controller.captureActivitiesLoading,
+            onLoadEarlier: () =>
+                unawaited(controller.loadMoreSelectedCapture()),
+            onReadConversation: () => controller.selectCaptureDetailMode(
+              CaptureDetailMode.conversation,
+            ),
+          );
     timeline = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -833,20 +853,20 @@ final class _CaptureConversationWorkspaceState
             // arrives, and equal-width segments keep that narrow measurement.
             // A minimum width keeps either language's label whole.
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 176),
-              child: SegmentedButton<bool>(
+              constraints: const BoxConstraints(minWidth: 264),
+              child: SegmentedButton<CaptureDetailMode>(
                 key: const Key('capture-evidence-mode'),
                 showSelectedIcon: false,
                 segments: [
                   ButtonSegment(
-                    value: false,
+                    value: CaptureDetailMode.requests,
                     label: Text(
-                      copy('capture.summary.overview'),
+                      copy('capture.summary.requests'),
                       softWrap: false,
                     ),
                   ),
                   ButtonSegment(
-                    value: true,
+                    value: CaptureDetailMode.conversation,
                     label: Text(
                       copy(
                         selected?.exchangeScoped == true
@@ -856,24 +876,32 @@ final class _CaptureConversationWorkspaceState
                       softWrap: false,
                     ),
                   ),
+                  ButtonSegment(
+                    value: CaptureDetailMode.overview,
+                    label: Text(
+                      copy('capture.summary.overview'),
+                      softWrap: false,
+                    ),
+                  ),
                 ],
-                selected: {controller.showCaptureRequestRecords},
+                selected: {controller.captureDetailMode},
                 onSelectionChanged: (value) =>
-                    controller.selectCaptureRequestRecords(value.single),
+                    controller.selectCaptureDetailMode(value.single),
               ),
             ),
           ),
         ),
         Expanded(
-          child: controller.showCaptureRequestRecords
-              ? timeline
-              : CaptureRequestOverview(
-                  controller: controller,
-                  copy: copy,
-                  withoutBodies: withoutBodies,
-                  onShowRecords: () =>
-                      controller.selectCaptureRequestRecords(true),
-                ),
+          child: switch (controller.captureDetailMode) {
+            CaptureDetailMode.requests => ledger,
+            CaptureDetailMode.conversation => timeline,
+            CaptureDetailMode.overview => CaptureRequestOverview(
+              controller: controller,
+              copy: copy,
+              withoutBodies: withoutBodies,
+              onShowRecords: () => controller.selectCaptureRequestRecords(true),
+            ),
+          },
         ),
       ],
     );

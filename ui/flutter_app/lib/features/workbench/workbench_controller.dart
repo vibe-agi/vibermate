@@ -40,6 +40,9 @@ _AccountReadScope _accountReadScope(ProviderAccount account) => (
   origin: account.credentialOrigin,
 );
 
+/// The views of one selected session.
+enum CaptureDetailMode { requests, conversation, overview }
+
 final class WorkbenchController extends ChangeNotifier
     with WidgetsBindingObserver {
   final Map<String, ({AccountFacts facts, int settings})>
@@ -893,6 +896,7 @@ final class WorkbenchController extends ChangeNotifier
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   bool showCaptureRequestRecords = false;
+  bool _captureRecordsAsLedger = true;
   bool _captureViewChosen = false;
   bool summarizeClientSession = false;
   int captureOverviewRefresh = 0;
@@ -1387,6 +1391,24 @@ final class WorkbenchController extends ChangeNotifier
 
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
+
+  /// Which of the three views of a session is showing. The request ledger
+  /// and the conversation are two readings of the same request records.
+  CaptureDetailMode get captureDetailMode => !showCaptureRequestRecords
+      ? CaptureDetailMode.overview
+      : _captureRecordsAsLedger
+      ? CaptureDetailMode.requests
+      : CaptureDetailMode.conversation;
+
+  void selectCaptureDetailMode(CaptureDetailMode mode) {
+    if (_disposed || captureDetailMode == mode) return;
+    _captureViewChosen = true;
+    showCaptureRequestRecords = mode != CaptureDetailMode.overview;
+    if (mode != CaptureDetailMode.overview) {
+      _captureRecordsAsLedger = mode == CaptureDetailMode.requests;
+    }
+    notifyListeners();
+  }
 
   void selectCaptureRequestRecords(bool show) {
     _captureViewChosen = true;
