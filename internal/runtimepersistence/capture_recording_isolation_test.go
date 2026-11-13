@@ -7,6 +7,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -135,6 +136,7 @@ func TestObservationRoleActivitySearchHasNoControlDependency(t *testing.T) {
 	record := activity.Record{ID: "activity-search", OccurredAt: now, Kind: activity.KindExchangeCompleted, SubjectID: "exchange-search", Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun, SourceDisplayName: "frozen-agent", SourceRecognition: activity.SourceRecognitionConfigured, CaptureRunID: "run-search", ConnectionID: "connection-search"}
 	record.WorkspaceID, record.WorkspaceLabel, record.CaptureLabel = "workspace-frozen", "Frozen workspace", "frozen-executable"
 	setFrozenExecutionEvidence(&record, "search")
+	record.Scripts = []activity.ScriptOutcome{{ScriptID: "transform.guard", Revision: 2, Name: "Guard", Stage: activity.ScriptStageRequest, Outcome: activity.ScriptBlocked, BlockReason: "secret-in-prompt", Applications: 1, BytesBefore: 64, BytesAfter: 64}}
 	if _, err := observations.ActivityRepository().(activity.ScopedRepository).AppendScoped(ctx, scope, record); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +158,10 @@ func TestObservationRoleActivitySearchHasNoControlDependency(t *testing.T) {
 		page, err := observations.ActivityRepository().SearchExchanges(ctx, activity.SearchRequest{Query: activity.SearchQuery{Text: needle, Limit: 1}, ContentAvailableAt: now})
 		if err != nil || len(page.Items) != 1 {
 			t.Fatalf("real observation search %q: %+v %v", needle, page, err)
+		}
+		// A search hit reports the same script outcomes as the request list.
+		if !reflect.DeepEqual(page.Items[0].Record.Scripts, record.Scripts) {
+			t.Fatalf("search %q script outcomes = %+v", needle, page.Items[0].Record.Scripts)
 		}
 	}
 }

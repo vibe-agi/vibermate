@@ -40,7 +40,12 @@ func (repository *activityRepository) SearchExchanges(
 		return activity.SearchPage{}, err
 	}
 	defer finish()
-	query := `SELECT ` + searchActivityColumns + `, NULL,
+	// The combined test schema has no script outcome column.
+	scriptOutcomes := "NULL"
+	if repository.scripts {
+		scriptOutcomes = "candidate.script_outcomes_json"
+	}
+	query := `SELECT ` + searchActivityColumns + `, ` + scriptOutcomes + `,
 		candidate.workspace_id,
 		candidate.workspace_label,
 		COALESCE(NULLIF(candidate.capture_label, ''), candidate.source_display_name),
