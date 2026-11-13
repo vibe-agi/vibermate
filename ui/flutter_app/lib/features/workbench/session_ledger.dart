@@ -679,7 +679,7 @@ String ledgerResultText(AppCopy copy, ActivityRecord activity) {
       final reason = activity.reasonCode;
       return reason == null
           ? copy('ledger.result.failed')
-          : '${copy('ledger.result.failed')} · $reason';
+          : '${copy('ledger.result.failed')} · ${ledgerReasonText(copy, reason)}';
     case LedgerResult.canceled:
       return copy('ledger.result.canceled');
     case LedgerResult.inProgress:
@@ -687,6 +687,16 @@ String ledgerResultText(AppCopy copy, ActivityRecord activity) {
     case LedgerResult.forwarded:
       return copy('ledger.result.forwarded');
   }
+}
+
+/// A failure reason in words, using the same explanations as the
+/// conversation view. An unknown code is shown as it is.
+String ledgerReasonText(AppCopy copy, String reasonCode) {
+  final title = copy.maybe('exchange.failure.$reasonCode.title');
+  if (title == null) return reasonCode;
+  return title.endsWith('.') || title.endsWith('。')
+      ? title.substring(0, title.length - 1)
+      : title;
 }
 
 String ledgerClockTime(DateTime timestamp) {
@@ -840,8 +850,13 @@ final class _LedgerInspector extends StatelessWidget {
           if (endpoint.isNotEmpty)
             step(copy('ledger.detail.service'), endpoint),
           if (account.isNotEmpty) step(copy('ledger.detail.account'), account),
-          if (activity.reasonCode != null)
-            step(copy('ledger.detail.reason'), activity.reasonCode!),
+          if (activity.reasonCode case final reason?)
+            step(
+              copy('ledger.detail.reason'),
+              ledgerReasonText(copy, reason) == reason
+                  ? reason
+                  : '${ledgerReasonText(copy, reason)} ($reason)',
+            ),
         ],
       ),
     );
