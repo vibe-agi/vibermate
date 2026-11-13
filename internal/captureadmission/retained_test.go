@@ -486,9 +486,18 @@ func stalledRead() error { return errors.Join(ErrCredentialRejected, context.Dea
 // A control read that only times out must not end work that was admitted by
 // the last successful read: a slow store is not a revocation.
 func TestRetainedReadTimeoutKeepsRunningWorkAndRecovers(t *testing.T) {
+	retainedUnansweredReadKeepsRunningWork(t, stalledRead())
+}
+
+// A read that could not reach storage is the same non-answer as a timeout.
+func TestRetainedStorageFailureKeepsRunningWorkAndRecovers(t *testing.T) {
+	retainedUnansweredReadKeepsRunningWork(t, errors.Join(ErrCredentialRejected, captureauthority.ErrUnavailable, errors.New("disk I/O error")))
+}
+
+func retainedUnansweredReadKeepsRunningWork(t *testing.T, failure error) {
 	admission, validity := retainedTestAdmission(t)
 	validity.ExpiresAt = time.Now().Add(40 * time.Millisecond)
-	authority := &stallingAuthority{validity: validity, failure: stalledRead(), stalled: make(chan struct{})}
+	authority := &stallingAuthority{validity: validity, failure: failure, stalled: make(chan struct{})}
 	r := NewRetained(t.Context(), controlledAuthority{read: authority.read}, time.Now)
 	canceled := make(chan struct{})
 	release, err := r.Retain(t.Context(), admission, func() { close(canceled) })
@@ -535,10 +544,20 @@ func TestRetainedReadTimeoutBeyondGraceWithdraws(t *testing.T) {
 		t.Fatal("withdrawn before the grace elapsed")
 	default:
 	}
+	// The stall is recorded after the failed read returns. Moving the clock
+	// before that would start the grace period at the new time, and it would
+	// never elapse. A second failed read proves the first one was recorded.
+	firstStall := authority.reads.Load()
+	for deadline := time.Now().Add(10 * time.Second); authority.reads.Load() == firstStall; {
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled read was never retried")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	skew.Store(int64(revalidationStallGrace + time.Second))
 	select {
 	case <-canceled:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("a store that stayed unreadable past the grace kept its work")
 	}
 }
