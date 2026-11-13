@@ -108,7 +108,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'Searches retained metadata across all Captures. Message bodies are not searched.',
+        'Searches retained metadata across all sessions. Message bodies are not searched.',
       ),
       findsOneWidget,
     );

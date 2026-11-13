@@ -67,7 +67,7 @@ void main() {
               ),
               CompactSearchField(
                 key: const Key('compact-search'),
-                hintText: 'Filter captures',
+                hintText: 'Filter sessions',
                 onChanged: (_) {},
               ),
               const SizedBox(

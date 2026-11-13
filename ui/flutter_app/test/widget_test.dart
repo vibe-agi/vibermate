@@ -41,7 +41,7 @@ void main() {
     expect(find.byKey(const Key('session-ledger-list')), findsOneWidget);
     await tester.tap(find.byKey(const Key('ledger-read-conversation')));
     await tester.pumpAndSettle();
-    expect(find.text('Capture conversation'), findsOneWidget);
+    expect(find.text('Session conversation'), findsOneWidget);
     expect(
       find.byKey(const Key('capture-conversation-selector')),
       findsOneWidget,
