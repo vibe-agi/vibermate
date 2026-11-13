@@ -142,6 +142,7 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		{http.MethodGet, "/api/v1/provider-accounts", session.ControlCredential, ""},
 		{http.MethodGet, "/api/v1/capture-runs", session.ControlCredential, ""},
 		{http.MethodGet, "/api/v1/activities/summary?captureRunId=run-test", session.ControlCredential, ""},
+		{http.MethodGet, "/api/v1/scripts/activity?days=7", session.ControlCredential, ""},
 	} {
 		response := controlRequest(t, app.BaseURL, probe.method, probe.path, probe.token, probe.origin)
 		response.Body.Close()
