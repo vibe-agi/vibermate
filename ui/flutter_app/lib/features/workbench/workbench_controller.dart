@@ -4057,6 +4057,9 @@ final class WorkbenchController extends ChangeNotifier
     captureLedgerPage = null;
     captureLedgerLoading = false;
     captureLedgerFailed = false;
+    // Every session opens the same way: its whole request ledger.
+    _captureRecordsAsLedger = true;
+    captureLedgerWholeSession = true;
     showCaptureRequestRecords = false;
     _captureViewChosen = false;
     _summaryBodiesAbsent = false;
