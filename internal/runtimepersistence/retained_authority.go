@@ -15,7 +15,7 @@ import (
 func (repository *captureRunRepository) ProxyValidity(ctx context.Context, digest capturerun.CapabilityDigest, now time.Time) (captureauthority.Validity, error) {
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
-		return captureauthority.Validity{}, err
+		return captureauthority.Validity{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	defer finish()
 	var validity captureauthority.Validity
@@ -28,10 +28,11 @@ func (repository *captureRunRepository) ProxyValidity(ctx context.Context, diges
  FROM capture_runs WHERE proxy_capability_hash = ? AND state IN ('created', 'attached') AND expires_at_unix_ms > ? AND `+captureRunIdentityActive,
 		digest[:], toUnixMillis(now), toUnixMillis(now)).Scan(&validity.Capture.ID, &validity.UserID, &sessionDigest, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = capturerun.ErrCapabilityRejected
+		return captureauthority.Validity{}, capturerun.ErrCapabilityRejected
 	}
 	if err != nil {
-		return captureauthority.Validity{}, err
+		// The read failed; nothing was learned about the capability.
+		return captureauthority.Validity{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	validity.Capture.Kind = captureidentity.KindManagedRun
 	validity.CredentialRevision = 1
@@ -43,7 +44,7 @@ func (repository *captureRunRepository) ProxyValidity(ctx context.Context, diges
 func (repository *manualCaptureRepository) ProxyValidity(ctx context.Context, digest manualcapture.CredentialDigest, now time.Time) (captureauthority.Validity, error) {
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
-		return captureauthority.Validity{}, err
+		return captureauthority.Validity{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	defer finish()
 	var validity captureauthority.Validity
@@ -51,10 +52,11 @@ func (repository *manualCaptureRepository) ProxyValidity(ctx context.Context, di
 	err = repository.database.QueryRowContext(operation, `SELECT capture_id, credential_revision, expires_at_unix_ms FROM manual_captures
  WHERE proxy_credential_hash = ? AND state = 'active' AND (expires_at_unix_ms IS NULL OR expires_at_unix_ms > ?)`, digest[:], toUnixMillis(now)).Scan(&validity.Capture.ID, &validity.CredentialRevision, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = manualcapture.ErrCredentialRejected
+		return captureauthority.Validity{}, manualcapture.ErrCredentialRejected
 	}
 	if err != nil {
-		return captureauthority.Validity{}, err
+		// The read failed; nothing was learned about the credential.
+		return captureauthority.Validity{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	validity.Capture.Kind = captureidentity.KindManualCapture
 	if expires.Valid {
