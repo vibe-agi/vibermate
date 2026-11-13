@@ -89,9 +89,10 @@ must remain available without making opaque identifiers the visual headline.
   rounded silhouette; timeline nodes align with the first header row.
 - New requests auto-follow only while reading near the bottom and not
   inspecting another object. Otherwise show a deliberate jump-to-latest action.
-- Captures is the operational authority; Conversations is the cross-Capture
-  derived audit index. Captures and search results reuse the same conversation,
-  content-block and raw-evidence renderers and retain a route back to Capture.
+- Sessions (Captures in code) is the operational authority; a session opens on
+  its request ledger, with the conversation and overview beside it. Sessions and
+  search results reuse the same conversation, content-block and raw-evidence
+  renderers and retain a route back to the session.
 
 ## Acceptance views
 

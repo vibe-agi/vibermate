@@ -372,13 +372,6 @@ const _controlEntries = <_NavEntry>[
     shortcut: '⌘3',
   ),
   (
-    section: WorkbenchSection.routes,
-    icon: Icons.hub_outlined,
-    labelKey: 'nav.routes',
-    key: 'routes',
-    shortcut: null,
-  ),
-  (
     section: WorkbenchSection.providerAccounts,
     icon: Icons.key_outlined,
     labelKey: 'nav.provider_accounts',
@@ -424,7 +417,11 @@ final class _Sidebar extends StatelessWidget {
       label: copy(entry.labelKey),
       shortcut: entry.shortcut,
       labelled: labelled,
-      selected: controller.section == entry.section,
+      // Services are managed from Accounts, so Accounts stays selected.
+      selected:
+          controller.section == entry.section ||
+          (entry.section == WorkbenchSection.providerAccounts &&
+              controller.section == WorkbenchSection.routes),
       trailing: trailing,
       onPressed: () => controller.selectSection(entry.section),
     );

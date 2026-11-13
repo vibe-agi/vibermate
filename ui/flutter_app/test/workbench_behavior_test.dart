@@ -802,7 +802,6 @@ void main() {
       'workbench-tab-network',
       'usage-dashboard-nav',
       'workbench-tab-environments',
-      'workbench-tab-routes',
       'workbench-tab-provider-accounts',
       'workbench-tab-code-library',
       'workbench-settings-nav',
@@ -6221,8 +6220,11 @@ Future<void> _openNetwork(WidgetTester tester) async {
   expect(find.byKey(const Key('network-tab-approvals')), findsOneWidget);
 }
 
+/// Services are managed from Accounts; the sidebar has no entry of its own.
 Future<void> _openUpstreamServices(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('workbench-tab-routes')));
+  await tester.tap(find.byKey(const Key('workbench-tab-provider-accounts')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('provider-accounts-manage-services')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('endpoints-add')), findsOneWidget);
 }
