@@ -50,9 +50,9 @@ func TestRetainedManualValidityIsReadOnlyAndHonorsExpiryAndRotation(t *testing.T
 	}
 }
 
-// A rejected credential and a failed read are different answers. Only the
-// second may be retried by the agent, so it must never be reported for a
-// credential storage actually looked up and did not find.
+// A refusal and a failed read are different answers. Only a failed read may
+// be retried by the agent, so a lookup that completed and matched no active
+// capture must never be reported as one.
 func TestRetainedManualValidityTellsAStorageFailureFromARejection(t *testing.T) {
 	clock := &manualCaptureClock{now: time.Now().UTC().Truncate(time.Millisecond)}
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
