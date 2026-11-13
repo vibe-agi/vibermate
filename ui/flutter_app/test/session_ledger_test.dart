@@ -170,7 +170,19 @@ void main() {
         copy,
         _activity('failed', reasonCode: 'provider_transport_failed'),
       ),
-      'Failed · provider_transport_failed',
+      startsWith('Failed · '),
+    );
+    // Reasons read as words; an unknown code is shown as it is.
+    expect(
+      ledgerResultText(
+        copy,
+        _activity('failed', reasonCode: 'provider_transport_failed'),
+      ),
+      isNot(contains('provider_transport_failed')),
+    );
+    expect(
+      ledgerResultText(copy, _activity('failed', reasonCode: 'brand_new_code')),
+      'Failed · brand_new_code',
     );
   });
 
@@ -303,4 +315,26 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('every session opens on its whole request ledger', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('capture-row-managed_run:run-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('ledger-read-conversation')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-ledger-list')), findsNothing);
+
+    // Choosing the conversation for one session does not carry over.
+    await tester.tap(find.byKey(const Key('capture-row-managed_run:run-2')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-ledger-list')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
