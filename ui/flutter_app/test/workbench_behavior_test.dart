@@ -153,6 +153,20 @@ void clientToolPermissionTests() {
   }
 }
 
+/// A session opens on its request ledger. These tests exercise the
+/// conversation, so they switch to it the way a user does.
+Future<void> showCaptureConversation(WidgetTester tester) async {
+  final mode = find.byKey(const Key('capture-evidence-mode'));
+  if (mode.evaluate().isEmpty) return;
+  for (final label in const ['Conversation', 'Request records', '对话', '请求记录']) {
+    final segment = find.descendant(of: mode, matching: find.text(label));
+    if (segment.evaluate().isEmpty) continue;
+    await tester.tap(segment.first);
+    await tester.pumpAndSettle();
+    return;
+  }
+}
+
 /// Opens a Conversation the way the product does now: through the Capture that
 /// owns it. A top-level Conversations section used to be a second path to the
 /// same timeline; it was retired because every Conversation belongs to a
@@ -170,6 +184,7 @@ Future<void> openCaptureConversation(
   await tester.ensureVisible(captureRow);
   await tester.tap(captureRow);
   await tester.pumpAndSettle();
+  await showCaptureConversation(tester);
 
   // A Capture selects the preferred main Conversation itself. Native client
   // Session IDs deliberately define Conversation identity, so a behavior test
@@ -256,17 +271,7 @@ Future<void> ensureTurnVisible(WidgetTester tester, Finder turn) async {
 }
 
 Future<void> openRetainedRequests(WidgetTester tester) async {
-  final mode = find.byKey(const Key('capture-evidence-mode'));
-  if (mode.evaluate().isNotEmpty) {
-    final widget = tester.widget<SegmentedButton<bool>>(mode);
-    if (!widget.selected.contains(true)) {
-      final label = widget.segments.singleWhere((s) => s.value).label! as Text;
-      await tester.tap(
-        find.descendant(of: mode, matching: find.text(label.data!)),
-      );
-      await tester.pumpAndSettle();
-    }
-  }
+  await showCaptureConversation(tester);
   final requests = find.byKey(const Key('reader-request-view'));
   if (requests.evaluate().isNotEmpty) {
     await tester.tap(requests);
@@ -736,7 +741,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.bySemanticsLabel(RegExp(r'^Captures\s+⌘1$')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Sessions\s+⌘1$')), findsOneWidget);
     final scaffoldContext = tester.element(find.byType(Scaffold).first);
     final theme = Theme.of(scaffoldContext);
     final colors = theme.brightness == Brightness.dark
@@ -1685,6 +1690,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await showCaptureConversation(tester);
       expect(find.text('Capture conversation'), findsOneWidget);
       // The Capture header is an aggregate over every proven Conversation,
       // independent of how many rows the selected timeline has paged in.
@@ -1936,6 +1942,7 @@ void main() {
         find.byKey(const Key('capture-row-manual_capture:manual-figma')),
       );
       await tester.pumpAndSettle();
+      await showCaptureConversation(tester);
       expect(find.text('Independent exchanges'), findsOneWidget);
       expect(find.textContaining('24 exchanges'), findsOneWidget);
       expect(find.text('24 turns'), findsNothing);
@@ -2961,7 +2968,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('capture-session-selector')), findsOneWidget);
-      expect(find.text('View Session'), findsOneWidget);
+      expect(find.text('View thread'), findsOneWidget);
       expect(
         find.byTooltip(
           'Filters evidence only; does not switch the client session.',
@@ -3275,6 +3282,7 @@ void main() {
     await tester.tap(find.text('Figma Desktop').first);
     await tester.pumpAndSettle();
     expect(find.text('Revoke proxy login'), findsOneWidget);
+    await showCaptureConversation(tester);
     expect(find.text('Independent exchanges'), findsOneWidget);
     expect(
       tester.takeException(),
@@ -3395,6 +3403,7 @@ void main() {
 
       await tester.tap(find.text('Figma Desktop').first);
       await tester.pumpAndSettle();
+      await showCaptureConversation(tester);
       expect(find.text('Independent exchanges'), findsOneWidget);
       await tester.tap(find.byKey(const Key('manual-capture-rotate')));
       await tester.pumpAndSettle();

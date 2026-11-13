@@ -206,6 +206,27 @@ void main() {
           );
           expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
           expect(controller.showCaptureRequestRecords, isFalse);
+          // What scripts did is recorded without content, so the request
+          // ledger is still offered, one step from the statistics.
+          await tester.tap(
+            find.descendant(
+              of: find.byKey(const Key('capture-ledger-mode')),
+              matching: find.text('Requests'),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('session-ledger-list')), findsOneWidget);
+          expect(
+            find.byKey(const Key('ledger-read-conversation')),
+            findsNothing,
+          );
+          await tester.tap(find.byKey(const Key('ledger-filter-blocked')));
+          await tester.pumpAndSettle();
+          expect(find.textContaining('Blocked by script'), findsOneWidget);
+          // It never becomes a conversation view.
+          expect(controller.showCaptureRequestRecords, isFalse);
+          expect(find.byKey(const Key('capture-evidence-mode')), findsNothing);
+          expect(tester.takeException(), isNull);
         } else {
           // Recorded bodies must not hide the statistics entry point.
           await tester.tap(

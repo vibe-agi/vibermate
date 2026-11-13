@@ -3428,11 +3428,66 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
         216 => 'provider_transport_failed',
         217 => 'unsupported_client_input',
         218 => 'provider_response_idle',
+        205 when capture.id == 'run-1' => 'message_transform_failed',
         _ => null,
       };
+      // A few requests in the first preview session were touched by scripts,
+      // so the request ledger has something to show.
+      final scripts = capture.id != 'run-1'
+          ? const <ScriptOutcome>[]
+          : switch (index) {
+              197 || 209 || 211 => const [
+                ScriptOutcome(
+                  scriptId: 'transform.mask-secrets',
+                  revision: 4,
+                  name: 'Mask secrets',
+                  stage: 'request',
+                  outcome: 'changed',
+                  blockReason: null,
+                  applications: 1,
+                  changed: 1,
+                  headersChanged: false,
+                  bodyChanged: true,
+                  bytesBefore: 4812,
+                  bytesAfter: 4770,
+                ),
+              ],
+              205 => const [
+                ScriptOutcome(
+                  scriptId: 'transform.mask-secrets',
+                  revision: 4,
+                  name: 'Mask secrets',
+                  stage: 'request',
+                  outcome: 'unchanged',
+                  blockReason: null,
+                  applications: 1,
+                  changed: 0,
+                  headersChanged: false,
+                  bodyChanged: false,
+                  bytesBefore: 2210,
+                  bytesAfter: 2210,
+                ),
+                ScriptOutcome(
+                  scriptId: 'transform.block-dangerous-commands',
+                  revision: 2,
+                  name: 'Block dangerous commands',
+                  stage: 'request',
+                  outcome: 'blocked',
+                  blockReason: 'destructive-command',
+                  applications: 1,
+                  changed: 0,
+                  headersChanged: false,
+                  bodyChanged: false,
+                  bytesBefore: 2210,
+                  bytesAfter: 2210,
+                ),
+              ],
+              _ => const <ScriptOutcome>[],
+            };
       final succeeded = reasonCode == null;
       final conversation = _previewConversation(capture, index);
       return ActivityRecord(
+        scripts: scripts,
         contentAvailable: _retainConversationBodies,
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
