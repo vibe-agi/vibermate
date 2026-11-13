@@ -130,10 +130,13 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
           dismissHelpLabel: copy('common.dismiss'),
           trailing: LayoutBuilder(
             builder: (context, constraints) {
+              // The heading gives its actions unbounded width, so three
+              // labelled buttons only fit beside the title on a wide window.
               final compactActions =
                   constraints.maxWidth < 360 ||
                   (!constraints.hasBoundedWidth &&
-                      MediaQuery.textScalerOf(context).scale(12) > 18);
+                      (MediaQuery.textScalerOf(context).scale(12) > 18 ||
+                          MediaQuery.sizeOf(context).width < 1200));
               final onRefresh =
                   _refreshingAccounts || controller.inventoryMutating
                   ? null
@@ -177,11 +180,30 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                       icon: const Icon(Icons.add, size: 16),
                       label: Text(copy('routes.add_account')),
                     );
+              void openServices() =>
+                  controller.selectSection(WorkbenchSection.routes);
               return Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
+                  Tooltip(
+                    message: copy('provider_accounts.manage_services'),
+                    child: compactActions
+                        ? IconButton.outlined(
+                            key: const Key('provider-accounts-manage-services'),
+                            onPressed: openServices,
+                            icon: const Icon(Icons.hub_outlined, size: 16),
+                          )
+                        : OutlinedButton.icon(
+                            key: const Key('provider-accounts-manage-services'),
+                            onPressed: openServices,
+                            icon: const Icon(Icons.hub_outlined, size: 16),
+                            label: Text(
+                              copy('provider_accounts.manage_services'),
+                            ),
+                          ),
+                  ),
                   Tooltip(
                     message: copy('provider_accounts.refresh_all.hint'),
                     child: refresh,
@@ -307,7 +329,11 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
               : LayoutBuilder(
                   builder: (context, constraints) {
                     final table = constraints.maxWidth >= 1100;
-                    final count = filtered.length + (table ? 1 : 0);
+                    final entries = <Object>[
+                      if (table) const _AccountTableHeaderEntry(),
+                      ..._groupedEntries(filtered, endpoints),
+                    ];
+                    final count = entries.length;
                     final list = ListView.separated(
                       key: const Key('provider-accounts-list'),
                       padding: table
@@ -321,10 +347,31 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                             )
                           : const SizedBox.shrink(),
                       itemBuilder: (context, index) {
-                        if (table && index == 0) {
+                        final entry = entries[index];
+                        if (entry is _AccountTableHeaderEntry) {
                           return _accountTableHeader(context);
                         }
-                        final account = filtered[index - (table ? 1 : 0)];
+                        if (entry is _ServiceGroupEntry) {
+                          return _ServiceGroupHeader(
+                            key: Key(
+                              'provider-accounts-group-${entry.endpoint?.id ?? 'unlinked'}',
+                            ),
+                            endpoint: entry.endpoint,
+                            count: entry.count,
+                            copy: copy,
+                            onSettings: entry.endpoint == null
+                                ? null
+                                : () {
+                                    controller.selectEndpoint(
+                                      entry.endpoint!.id,
+                                    );
+                                    controller.selectSection(
+                                      WorkbenchSection.routes,
+                                    );
+                                  },
+                          );
+                        }
+                        final account = entry as ProviderAccount;
                         final linkedEndpoints = endpoints
                             .where((value) => account.isLinkedTo(value.id))
                             .toList(growable: false);
@@ -354,6 +401,40 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
         ),
       ],
     );
+  }
+
+  /// Accounts under the service they belong to, in the order the services
+  /// are listed, then the accounts no service uses yet. An account linked to
+  /// several services is listed once, under the first; its service cell
+  /// names all of them.
+  List<Object> _groupedEntries(
+    List<ProviderAccount> accounts,
+    List<UpstreamEndpoint> endpoints,
+  ) {
+    final placed = <String>{};
+    final entries = <Object>[];
+    for (final endpoint in endpoints) {
+      final members = accounts
+          .where(
+            (account) =>
+                !placed.contains(account.id) && account.isLinkedTo(endpoint.id),
+          )
+          .toList(growable: false);
+      if (members.isEmpty) continue;
+      placed.addAll(members.map((account) => account.id));
+      entries
+        ..add(_ServiceGroupEntry(endpoint, members.length))
+        ..addAll(members);
+    }
+    final unlinked = accounts
+        .where((account) => !placed.contains(account.id))
+        .toList(growable: false);
+    if (unlinked.isNotEmpty) {
+      entries
+        ..add(_ServiceGroupEntry(null, unlinked.length))
+        ..addAll(unlinked);
+    }
+    return entries;
   }
 
   Widget _accountTableHeader(BuildContext context) {
@@ -1134,4 +1215,71 @@ int _compareNullableDate(DateTime? left, DateTime? right) {
   if (left == null) return right == null ? 0 : 1;
   if (right == null) return -1;
   return left.compareTo(right);
+}
+
+final class _AccountTableHeaderEntry {
+  const _AccountTableHeaderEntry();
+}
+
+final class _ServiceGroupEntry {
+  const _ServiceGroupEntry(this.endpoint, this.count);
+
+  /// Null for the accounts no service uses yet.
+  final UpstreamEndpoint? endpoint;
+  final int count;
+}
+
+/// One service as a heading over its accounts.
+final class _ServiceGroupHeader extends StatelessWidget {
+  const _ServiceGroupHeader({
+    required this.endpoint,
+    required this.count,
+    required this.copy,
+    required this.onSettings,
+    super.key,
+  });
+
+  final UpstreamEndpoint? endpoint;
+  final int count;
+  final AppCopy copy;
+  final VoidCallback? onSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final text = Theme.of(context).textTheme;
+    final endpoint = this.endpoint;
+    final detail = endpoint == null
+        ? copy('provider_accounts.group.unlinked.detail')
+        : endpoint.origin.host;
+    return Container(
+      color: colors.panelRaised,
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 4,
+        children: [
+          Text(
+            endpoint?.displayName ?? copy('provider_accounts.group.unlinked'),
+            style: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          Text(
+            '$count',
+            style: text.bodySmall?.copyWith(color: colors.textMuted),
+          ),
+          Text(
+            detail,
+            style: text.bodySmall?.copyWith(color: colors.textMuted),
+          ),
+          if (onSettings != null)
+            TextButton(
+              key: Key('provider-accounts-service-settings-${endpoint!.id}'),
+              onPressed: onSettings,
+              child: Text(copy('provider_accounts.group.service_settings')),
+            ),
+        ],
+      ),
+    );
+  }
 }
