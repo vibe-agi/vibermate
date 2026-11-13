@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -114,6 +116,15 @@ func (f *codexProviderNativeFixture) serveHTTP(w http.ResponseWriter, r *http.Re
 	secure := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{f.leaf}, MinVersion: tls.VersionTLS12})
 	defer secure.Close()
 	if err := secure.Handshake(); err != nil {
+		// The native client sometimes opens a tunnel and drops it before
+		// sending a TLS hello, then delivers the request on another one. An
+		// abandoned tunnel carries nothing; assertRequest still requires
+		// exactly one delivered request. Any other handshake failure, such as
+		// the client rejecting the certificate, remains a test failure.
+		if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) {
+			f.t.Logf("native fixture: client abandoned a tunnel before TLS: %v", err)
+			return
+		}
 		f.t.Errorf("native fixture TLS: %v", err)
 		return
 	}
