@@ -3718,6 +3718,76 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
   }
 
   @override
+  Future<List<ApprovalRecord>> decidedApprovals() async {
+    _requireOpen();
+    ApprovalRecord past(
+      String id,
+      String host,
+      String state,
+      Duration ago, {
+      String? scope,
+      String? reason,
+    }) => ApprovalRecord(
+      id: id,
+      revision: 2,
+      kind: 'network_ask',
+      state: state,
+      risk: _pendingApproval.risk,
+      titleKey: _pendingApproval.titleKey,
+      summaryKey: _pendingApproval.summaryKey,
+      aggregateKey: 'network:$host:443',
+      exchangeId: null,
+      environmentId: null,
+      environmentRevision: null,
+      environmentDigest: null,
+      routeId: null,
+      routeRevision: null,
+      target: ApprovalTarget(host: host, port: 443),
+      subjectRefs: _pendingApproval.subjectRefs,
+      subjectLabels: ['$host:443'],
+      requestCount: 1,
+      waiterCount: 1,
+      choices: _pendingApproval.choices,
+      createdAt: _now.subtract(ago + const Duration(seconds: 20)),
+      expiresAt: _now.subtract(ago - const Duration(minutes: 5)),
+      resolvedAt: _now.subtract(ago),
+      decision: switch (state) {
+        'allowed' => 'allow-once',
+        'denied' => 'deny',
+        _ => null,
+      },
+      decisionScope: scope,
+      terminalReason: reason,
+    );
+
+    return [
+      if (_approval.state != 'pending') _approval,
+      past(
+        'approval-past-npm',
+        'registry.npmjs.org',
+        'allowed',
+        const Duration(minutes: 6),
+        scope: 'request',
+      ),
+      past(
+        'approval-past-telemetry',
+        'telemetry.example.net',
+        'denied',
+        const Duration(minutes: 31),
+        scope: 'host_port',
+        reason: 'user_denied',
+      ),
+      past(
+        'approval-past-pypi',
+        'pypi.org',
+        'expired',
+        const Duration(hours: 1),
+        reason: 'approval_expired',
+      ),
+    ];
+  }
+
+  @override
   Future<NetworkData> loadNetwork() async {
     _requireOpen();
     return NetworkData(

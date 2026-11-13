@@ -245,6 +245,11 @@ abstract interface class ControlApi {
 
   Future<List<ApprovalRecord>> pendingApprovals();
 
+  /// Questions that are no longer waiting: answered, expired or canceled,
+  /// most recently resolved first. History is best effort; a record this
+  /// build cannot read is left out.
+  Future<List<ApprovalRecord>> decidedApprovals();
+
   Future<RuntimeServerAccess> serverAccess();
 
   /// The networks allowed to connect to this Runtime Server.
@@ -1836,6 +1841,16 @@ final class HttpControlApi
       );
     }
     return records;
+  }
+
+  @override
+  Future<List<ApprovalRecord>> decidedApprovals() async {
+    final page = requireObject(
+      await _read('/api/v1/approvals?limit=100'),
+      'approvals',
+    );
+    requireFields(page, 'approvals', required: const {'items'});
+    return decidedApprovalsOf(requireList(page['items'], 'approvals.items'));
   }
 
   @override
@@ -3547,4 +3562,23 @@ final class _WireHeaders {
   final Map<String, String> _values;
 
   String? value(String name) => _values[name.toLowerCase()];
+}
+
+/// Reads the resolved records out of an approvals page, newest first. A
+/// record that cannot be read is skipped: one odd row of history must not
+/// hide the rest.
+List<ApprovalRecord> decidedApprovalsOf(List<Object?> items) {
+  final records = <ApprovalRecord>[];
+  for (final (index, item) in items.indexed) {
+    try {
+      final record = ApprovalRecord.fromJson(item, 'approvals.items[$index]');
+      if (record.state != 'pending' && record.resolvedAt != null) {
+        records.add(record);
+      }
+    } on ControlContractException {
+      continue;
+    }
+  }
+  records.sort((left, right) => right.resolvedAt!.compareTo(left.resolvedAt!));
+  return records;
 }

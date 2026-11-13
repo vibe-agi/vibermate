@@ -3878,11 +3878,11 @@ void main() {
       await tester.pumpAndSettle();
       await _openNetwork(tester);
 
-      expect(find.text('连接'), findsWidgets);
+      expect(find.text('审批'), findsWidgets);
       final approvalsTab = find.byKey(const Key('network-tab-approvals'));
       final approvalsLabel = find.descendant(
         of: approvalsTab,
-        matching: find.text('审批'),
+        matching: find.text('待处理'),
       );
       expect(
         (tester.getCenter(approvalsTab).dy -

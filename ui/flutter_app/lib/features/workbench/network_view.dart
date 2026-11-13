@@ -10,7 +10,7 @@ import 'control_failure_notice.dart';
 import 'workbench_controller.dart';
 import 'native_tool_approval_row.dart';
 
-enum _NetworkPanel { approvals, connections, egress, rules }
+enum _NetworkPanel { approvals, rules, connections, egress }
 
 final class NetworkView extends StatefulWidget {
   const NetworkView({required this.controller, required this.copy, super.key});
@@ -269,7 +269,9 @@ final class _ApprovalsPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (approvals.isEmpty &&
+    final decided = controller.decidedApprovals ?? const <ApprovalRecord>[];
+    if (decided.isEmpty &&
+        approvals.isEmpty &&
         !controller.nativeApprovalAttention &&
         (controller.selectedCaptureKey == null ||
             controller.nativeApprovalScanComplete &&
@@ -291,6 +293,12 @@ final class _ApprovalsPane extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.only(bottom: 16),
             children: [
+              // Nothing to decide, but past decisions follow below.
+              if (approvals.isEmpty && !controller.nativeApprovalAttention)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(copy('network.approval.empty.title')),
+                ),
               for (final approval in approvals)
                 _ApprovalRow(
                   key: ValueKey(approval.id),
@@ -336,6 +344,21 @@ final class _ApprovalsPane extends StatelessWidget {
                       : () => unawaited(controller.refreshNativeApprovals()),
                   child: Text(copy('native.loadMore')),
                 ),
+              if (decided.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                SectionLabel(
+                  key: const Key('approvals-decided'),
+                  label: copy('approval.decided.title'),
+                  count: decided.length,
+                ),
+                const Divider(height: 1),
+                for (final approval in decided)
+                  _DecidedApprovalRow(
+                    key: ValueKey('decided-${approval.id}'),
+                    approval: approval,
+                    copy: copy,
+                  ),
+              ],
             ],
           ),
         ),
@@ -2745,3 +2768,99 @@ Color _outcomeColor(BuildContext context, String? outcome) => switch (outcome) {
   'canceled' => context.viberColors.warning,
   _ => context.viberColors.route,
 };
+
+/// Who or what settled a question. Until an automatic reviewer exists, an
+/// answer always came from a person and everything else from the Runtime.
+enum ApprovalDecider { person, nobody, runtime }
+
+ApprovalDecider approvalDeciderOf(ApprovalRecord approval) =>
+    switch (approval.state) {
+      'allowed' || 'denied' => ApprovalDecider.person,
+      'expired' => ApprovalDecider.nobody,
+      _ => ApprovalDecider.runtime,
+    };
+
+/// The outcome of a settled question in words, e.g. "Always refused".
+String approvalOutcomeLabel(AppCopy copy, ApprovalRecord approval) {
+  final remembered = approval.decisionScope == 'host_port';
+  return copy(switch (approval.state) {
+    'allowed' =>
+      remembered
+          ? 'approval.decided.always_allowed'
+          : 'approval.decided.allowed',
+    'denied' =>
+      remembered
+          ? 'approval.decided.always_refused'
+          : 'approval.decided.refused',
+    'expired' => 'approval.decided.expired',
+    _ => 'approval.decided.canceled',
+  });
+}
+
+final class _DecidedApprovalRow extends StatelessWidget {
+  const _DecidedApprovalRow({
+    required this.approval,
+    required this.copy,
+    super.key,
+  });
+
+  final ApprovalRecord approval;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final text = Theme.of(context).textTheme;
+    final target = approval.target;
+    final subject = target != null
+        ? '${target.host}:${target.port}'
+        : approval.subjectLabels.join(', ');
+    final color = switch (approval.state) {
+      'allowed' => colors.verified,
+      'denied' => colors.danger,
+      _ => colors.textMuted,
+    };
+    final resolved = approval.resolvedAt?.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final when = resolved == null
+        ? ''
+        : '${resolved.year}-${two(resolved.month)}-${two(resolved.day)} '
+              '${two(resolved.hour)}:${two(resolved.minute)}';
+    final by = copy('approval.decided.by.${approvalDeciderOf(approval).name}');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 7, right: 8),
+            child: Icon(Icons.circle, size: 6, color: color),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${approvalOutcomeLabel(copy, approval)} · $subject',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.bodyMedium,
+                ),
+                Text(
+                  [
+                    copy('network.approval.kind.${approval.kind}'),
+                    by,
+                    if (when.isNotEmpty) when,
+                  ].join(' · '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: text.bodySmall?.copyWith(color: colors.textMuted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
