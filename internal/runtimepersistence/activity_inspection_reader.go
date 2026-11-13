@@ -139,6 +139,13 @@ func activityInspectionColumns(ordinal int, source InspectionSource) string {
 			result = append(result, `CASE WHEN length(CAST(`+value+` AS BLOB))<=4096 THEN `+value+` END`)
 		}
 	}
+	// Script outcomes exist only in the current observation schema; an older
+	// archive never recorded them.
+	if source.Current {
+		result = append(result, `CASE WHEN a.script_outcomes_json IS NULL OR length(a.script_outcomes_json) BETWEEN 2 AND 131072 THEN a.script_outcomes_json ELSE CAST('invalid scripts' AS BLOB) END`)
+	} else {
+		result = append(result, "NULL")
+	}
 	if source.Current {
 		result = append(result, "a.recording_archive_epoch", "a.recording_capture_generation")
 	} else {

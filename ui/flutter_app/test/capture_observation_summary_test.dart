@@ -58,7 +58,18 @@ void main() {
         }).incomplete,
         isTrue,
       );
+      final paused = RuntimeRecordingStatus.fromJson({
+        ...value('degraded'),
+        'lowSpacePause': true,
+      });
+      expect(paused.lowSpacePause, isTrue);
+      expect(paused.incomplete, isTrue);
+      expect(
+        RuntimeRecordingStatus.fromJson(value('available')).lowSpacePause,
+        isFalse,
+      );
       for (final malformed in [
+        {...value('degraded'), 'lowSpacePause': 'yes'},
         value('healthy'),
         {...value('available'), 'reservedRecords': -1},
         {...value('available'), 'crashLoss': 123},

@@ -101,6 +101,8 @@ func writeMessageTransformTestProblem(writer http.ResponseWriter, err error) {
 		detail = stage + " · invalid JavaScript"
 	case errors.Is(err, messagetransform.ErrInvalidOutput):
 		detail = stage + " · invalid transform output"
+	case errors.Is(err, messagetransform.ErrBlocked):
+		detail = stage + " · blocked by runtime.block"
 	case errors.Is(err, messagetransform.ErrExecutionFailed):
 		detail = stage + " · JavaScript execution failed"
 	case stage == "response":

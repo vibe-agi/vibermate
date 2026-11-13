@@ -157,6 +157,7 @@ func (hit SearchHit) Clone() SearchHit {
 		transport := hit.Record.Transport.Clone()
 		cloned.Record.Transport = &transport
 	}
+	cloned.Record.Scripts = slices.Clone(hit.Record.Scripts)
 	return cloned
 }
 

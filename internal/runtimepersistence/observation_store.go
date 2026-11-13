@@ -22,7 +22,7 @@ func OpenObservations(ctx context.Context, o ObservationOptions) (*ObservationSt
 	if !roleID(o.LayoutID) || !roleID(o.ArchiveID) {
 		return nil, ErrInvalidDatabasePath
 	}
-	role := &roleSchema{identity: observationSchemaIdentity, revision: 1, ddl: observationSchemaSQL, layout: o.LayoutID, archive: o.ArchiveID}
+	role := observationRole(o.LayoutID, o.ArchiveID)
 	s, err := openStore(ctx, Options{DatabasePath: o.DatabasePath, BusyTimeout: o.BusyTimeout, CommitReconcileTimeout: o.CommitReconcileTimeout, ContentLimits: o.ContentLimits}, role)
 	if err != nil {
 		return nil, err

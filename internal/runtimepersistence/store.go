@@ -256,6 +256,7 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 	activityRepo := newActivityRepository(database, reads, operations)
 	activityRepo.coordinates = role == nil || role.identity == observationSchemaIdentity
 	activityRepo.requireScope = role != nil && role.identity == observationSchemaIdentity
+	activityRepo.scripts = activityRepo.requireScope
 	exchangeContents := newExchangeContentRepository(database, reads, operations, contentLimits)
 	exchangeContents.coordinates = role == nil || role.identity == observationSchemaIdentity
 	exchangeContents.requireScope = role != nil && role.identity == observationSchemaIdentity
