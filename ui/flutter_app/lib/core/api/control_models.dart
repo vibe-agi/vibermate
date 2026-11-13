@@ -7868,6 +7868,7 @@ final class ActivityRecord {
     required this.parentRefs,
     this.requestPreview,
     this.contentAvailable,
+    this.scripts = const [],
   });
 
   factory ActivityRecord.fromJson(Object? json, String path) {
@@ -7886,7 +7887,12 @@ final class ActivityRecord {
         'environment',
         'parentRefs',
       },
-      optional: const {'reasonCode', 'requestPreview', 'contentAvailable'},
+      optional: const {
+        'reasonCode',
+        'requestPreview',
+        'contentAvailable',
+        'scripts',
+      },
     );
     final id = requireString(value, 'id', path);
     final status = requireString(value, 'status', path);
@@ -7936,8 +7942,11 @@ final class ActivityRecord {
       ),
       parentRefs: parents,
       requestPreview: preview,
+      scripts: ScriptOutcome.listFromJson(value['scripts'], '$path.scripts'),
     );
   }
+
+  final List<ScriptOutcome> scripts;
 
   final String id;
   final DateTime occurredAt;
@@ -10728,12 +10737,109 @@ final class ExchangeContentDetail {
   final ExchangeContentPaging? page;
 }
 
+/// What one message script did to a request or to its response. It carries
+/// counts and names only, never message content.
+final class ScriptOutcome {
+  const ScriptOutcome({
+    required this.scriptId,
+    required this.revision,
+    required this.name,
+    required this.stage,
+    required this.outcome,
+    required this.blockReason,
+    required this.applications,
+    required this.changed,
+    required this.headersChanged,
+    required this.bodyChanged,
+    required this.bytesBefore,
+    required this.bytesAfter,
+  });
+
+  factory ScriptOutcome.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'stage',
+        'outcome',
+        'applications',
+        'changed',
+        'headersChanged',
+        'bodyChanged',
+        'bytesBefore',
+        'bytesAfter',
+      },
+      optional: const {'scriptId', 'revision', 'name', 'blockReason'},
+    );
+    final stage = requireString(value, 'stage', path);
+    final outcome = requireString(value, 'outcome', path);
+    if (!const {'request', 'response'}.contains(stage) ||
+        !const {
+          'unchanged',
+          'changed',
+          'blocked',
+          'failed',
+        }.contains(outcome)) {
+      throw ControlContractException('$path script outcome is not recognised');
+    }
+    return ScriptOutcome(
+      scriptId: optionalString(value, 'scriptId', path),
+      revision: optionalInteger(value, 'revision', path),
+      name: optionalString(value, 'name', path),
+      stage: stage,
+      outcome: outcome,
+      blockReason: optionalString(value, 'blockReason', path),
+      applications: requireInteger(value, 'applications', path),
+      changed: requireInteger(value, 'changed', path),
+      headersChanged: requireBoolean(value, 'headersChanged', path),
+      bodyChanged: requireBoolean(value, 'bodyChanged', path),
+      bytesBefore: requireInteger(value, 'bytesBefore', path),
+      bytesAfter: requireInteger(value, 'bytesAfter', path),
+    );
+  }
+
+  /// Script outcomes describe a request; they never decide whether the
+  /// request itself can be shown. A list this build cannot read is dropped.
+  static List<ScriptOutcome> listFromJson(Object? json, String path) {
+    if (json == null) return const [];
+    try {
+      return requireList(json, path).indexed
+          .map(
+            (entry) => ScriptOutcome.fromJson(entry.$2, '$path[${entry.$1}]'),
+          )
+          .toList(growable: false);
+    } on ControlContractException {
+      return const [];
+    }
+  }
+
+  final String? scriptId;
+  final int? revision;
+  final String? name;
+  final String stage;
+  final String outcome;
+  final String? blockReason;
+  final int applications;
+  final int changed;
+  final bool headersChanged;
+  final bool bodyChanged;
+  final int bytesBefore;
+  final int bytesAfter;
+
+  bool get isRequestStage => stage == 'request';
+  bool get blocked => outcome == 'blocked';
+  bool get failed => outcome == 'failed';
+  bool get changedMessage => outcome == 'changed';
+}
+
 final class ExchangeProcessingTrace {
   const ExchangeProcessingTrace({
     required this.egressProxyId,
     required this.pluginRunIds,
     required this.attempts,
     required this.result,
+    this.scripts = const [],
   });
 
   factory ExchangeProcessingTrace.fromJson(Object? json, String path) {
@@ -10742,7 +10848,7 @@ final class ExchangeProcessingTrace {
       value,
       path,
       required: const {'pluginRunIds', 'attempts', 'result'},
-      optional: const {'egressProxyId'},
+      optional: const {'egressProxyId', 'scripts'},
     );
     final rawAttempts = requireList(value['attempts'], '$path.attempts');
     return ExchangeProcessingTrace(
@@ -10757,9 +10863,11 @@ final class ExchangeProcessingTrace {
           )
           .toList(growable: false),
       result: requireString(value, 'result', path),
+      scripts: ScriptOutcome.listFromJson(value['scripts'], '$path.scripts'),
     );
   }
 
+  final List<ScriptOutcome> scripts;
   final String? egressProxyId;
   final List<String> pluginRunIds;
   final List<EgressAttemptRecord> attempts;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,9 @@ type ActivitySummary struct {
 	RequestPreview *exchangecontent.RequestPreview `json:"requestPreview,omitempty"`
 	// nil means availability could not be determined, not absence of bodies.
 	ContentAvailable *bool `json:"contentAvailable,omitempty"`
+	// Scripts reports what each message script did to this request and its
+	// response. It carries counts and names only, never message content.
+	Scripts []activity.ScriptOutcome `json:"scripts,omitempty"`
 }
 
 // ActivityConversationRef is a flat, structural projection boundary. It does
@@ -295,10 +299,12 @@ const (
 )
 
 type ExchangeProcessingTrace struct {
-	EgressProxyID string             `json:"egressProxyId,omitempty"`
-	PluginRunIDs  []string           `json:"pluginRunIds"`
-	Attempts      []egressaudit.View `json:"attempts"`
-	Result        string             `json:"result"`
+	EgressProxyID string   `json:"egressProxyId,omitempty"`
+	PluginRunIDs  []string `json:"pluginRunIds"`
+	// Scripts is the same body-free record the Activity summary carries.
+	Scripts  []activity.ScriptOutcome `json:"scripts,omitempty"`
+	Attempts []egressaudit.View       `json:"attempts"`
+	Result   string                   `json:"result"`
 }
 
 type activityListQuery struct {
@@ -414,6 +420,7 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 			Source:       ActivitySourceRef{Kind: string(record.SourceKind), DisplayName: record.SourceDisplayName, Recognition: string(record.SourceRecognition)},
 			Conversation: activityConversationRefOf(record),
 			Environment:  frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
+			Scripts: slices.Clone(record.Scripts),
 		}
 		if summary.Validate() != nil {
 			return ActivityPage{}, errors.New("Activity Exchange projection is invalid")
@@ -464,7 +471,7 @@ func exchangeDetailWithin(ctx context.Context, limits *exchangecontent.SourceLim
 	}
 	detail := ExchangeDetail{
 		ID: record.SubjectID, Status: string(record.Status), Environment: frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
-		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, Attempts: ordered, Result: result},
+		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, Scripts: slices.Clone(record.Scripts), Attempts: ordered, Result: result},
 		Content:         ExchangeContentDetail{State: ExchangeContentNotRecorded},
 	}
 	if record.Diagnosis != nil && !record.Diagnosis.Empty() {
