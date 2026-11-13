@@ -554,6 +554,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
 	handler.mux.HandleFunc("GET /api/v1/activities/summary", handler.summarizeActivities)
+	handler.mux.HandleFunc("GET /api/v1/scripts/activity", handler.summarizeScriptActivity)
 	handler.mux.HandleFunc("GET /api/v1/evidence/search", handler.searchActivities)
 	handler.mux.HandleFunc("GET /api/v1/conversations", handler.listConversations)
 	handler.mux.HandleFunc(

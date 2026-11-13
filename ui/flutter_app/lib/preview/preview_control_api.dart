@@ -10,7 +10,8 @@ import '../core/api/native_tool_models.dart';
 import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
-final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
+final class PreviewControlApi
+    implements ControlApi, RuntimeStatusReader, ScriptActivityReader {
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       throw const ControlContractException(
@@ -3660,6 +3661,41 @@ final class PreviewControlApi implements ControlApi, RuntimeStatusReader {
   Future<List<ApprovalRecord>> pendingApprovals() async {
     _requireOpen();
     return _approval.state == 'pending' ? [_approval] : const [];
+  }
+
+  @override
+  Future<ScriptActivity> scriptActivity({int days = 7}) async {
+    _requireOpen();
+    final since = _now.subtract(Duration(days: days));
+    return ScriptActivity(
+      since: since,
+      coveredFrom: since,
+      generatedAt: _now,
+      requests: 224,
+      truncated: false,
+      scripts: const [
+        ScriptTally(
+          scriptId: 'transform.block-dangerous-commands',
+          name: 'Block dangerous commands',
+          revision: 2,
+          requests: 1,
+          changed: 0,
+          blocked: 1,
+          failed: 0,
+          blockReasons: [(reason: 'destructive-command', count: 1)],
+        ),
+        ScriptTally(
+          scriptId: 'transform.mask-secrets',
+          name: 'Mask secrets',
+          revision: 4,
+          requests: 4,
+          changed: 3,
+          blocked: 0,
+          failed: 0,
+          blockReasons: [],
+        ),
+      ],
+    );
   }
 
   @override
