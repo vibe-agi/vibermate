@@ -10833,6 +10833,136 @@ final class ScriptOutcome {
   bool get changedMessage => outcome == 'changed';
 }
 
+/// What message scripts did to recent requests, from the Runtime's request
+/// records. Counts requests: a script that ran on both the request and the
+/// response of one request counts once, with its most severe outcome.
+final class ScriptActivity {
+  const ScriptActivity({
+    required this.since,
+    required this.coveredFrom,
+    required this.generatedAt,
+    required this.requests,
+    required this.truncated,
+    required this.scripts,
+  });
+
+  factory ScriptActivity.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'since',
+        'coveredFrom',
+        'generatedAt',
+        'requests',
+        'truncated',
+        'scripts',
+      },
+    );
+    final since = requireTimestamp(value, 'since', path);
+    final coveredFrom = requireTimestamp(value, 'coveredFrom', path);
+    if (coveredFrom.isBefore(since)) {
+      throw ControlContractException('$path covers more than it was asked');
+    }
+    return ScriptActivity(
+      since: since,
+      coveredFrom: coveredFrom,
+      generatedAt: requireTimestamp(value, 'generatedAt', path),
+      requests: requireInteger(value, 'requests', path),
+      truncated: requireBoolean(value, 'truncated', path),
+      scripts: requireList(value['scripts'], '$path.scripts').indexed
+          .map(
+            (entry) =>
+                ScriptTally.fromJson(entry.$2, '$path.scripts[${entry.$1}]'),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  final DateTime since;
+
+  /// Later than [since] when the read bound was reached first.
+  final DateTime coveredFrom;
+  final DateTime generatedAt;
+  final int requests;
+  final bool truncated;
+  final List<ScriptTally> scripts;
+
+  ScriptTally? forScript(String scriptId) =>
+      scripts.where((tally) => tally.scriptId == scriptId).firstOrNull;
+}
+
+final class ScriptTally {
+  const ScriptTally({
+    required this.scriptId,
+    required this.name,
+    required this.revision,
+    required this.requests,
+    required this.changed,
+    required this.blocked,
+    required this.failed,
+    required this.blockReasons,
+  });
+
+  factory ScriptTally.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'scriptId',
+        'requests',
+        'changed',
+        'blocked',
+        'failed',
+        'blockReasons',
+      },
+      optional: const {'name', 'revision'},
+    );
+    final requests = requireInteger(value, 'requests', path, minimum: 1);
+    final changed = requireInteger(value, 'changed', path);
+    final blocked = requireInteger(value, 'blocked', path);
+    final failed = requireInteger(value, 'failed', path);
+    if (changed + blocked + failed > requests) {
+      throw ControlContractException('$path counts exceed its requests');
+    }
+    return ScriptTally(
+      scriptId: requireString(value, 'scriptId', path),
+      name: optionalString(value, 'name', path),
+      revision: optionalInteger(value, 'revision', path),
+      requests: requests,
+      changed: changed,
+      blocked: blocked,
+      failed: failed,
+      blockReasons: requireList(value['blockReasons'], '$path.blockReasons')
+          .indexed
+          .map((entry) {
+            final reason = requireObject(
+              entry.$2,
+              '$path.blockReasons[${entry.$1}]',
+            );
+            final at = '$path.blockReasons[${entry.$1}]';
+            requireFields(reason, at, required: const {'reason', 'count'});
+            return (
+              reason: requireString(reason, 'reason', at),
+              count: requireInteger(reason, 'count', at, minimum: 1),
+            );
+          })
+          .toList(growable: false),
+    );
+  }
+
+  final String scriptId;
+  final String? name;
+  final int? revision;
+  final int requests;
+  final int changed;
+  final int blocked;
+  final int failed;
+  final List<({String reason, int count})> blockReasons;
+}
+
 final class ExchangeProcessingTrace {
   const ExchangeProcessingTrace({
     required this.egressProxyId,

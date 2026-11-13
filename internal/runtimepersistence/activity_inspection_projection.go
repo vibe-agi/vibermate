@@ -312,5 +312,10 @@ func activityProjectionColumns(ordinal int, source InspectionSource, columns str
 		columns = strings.ReplaceAll(columns, "{{"+name+"}}", activityDisplaySQL(ordinal, source, name))
 	}
 	epoch, generation, kind, id := activityScopeSQL(source, "a.")
-	return strings.NewReplacer("{{epoch}}", epoch, "{{generation}}", generation, "{{scope_kind}}", kind, "{{scope_id}}", id).Replace(columns)
+	// Script outcomes exist only in the current observation schema.
+	scripts := "NULL AS script_outcomes"
+	if source.Current {
+		scripts = "a.script_outcomes_json AS script_outcomes"
+	}
+	return strings.NewReplacer("{{epoch}}", epoch, "{{generation}}", generation, "{{scope_kind}}", kind, "{{scope_id}}", id, "{{script_outcomes}}", scripts).Replace(columns)
 }

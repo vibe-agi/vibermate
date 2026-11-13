@@ -23,6 +23,12 @@ abstract interface class RuntimeStatusReader {
   Future<RuntimeStatus> loadRuntimeStatus();
 }
 
+/// What each message script did to recent requests. Optional: a Runtime
+/// that cannot answer leaves the counts out and nothing else changes.
+abstract interface class ScriptActivityReader {
+  Future<ScriptActivity> scriptActivity({int days = 7});
+}
+
 abstract interface class ControlApi {
   Future<ProductUpdateMetadata> checkProductUpdate();
   Future<NativeToolOperationPage> nativeToolOperations(
@@ -542,7 +548,11 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi
-    implements ControlApi, ACPObservationApi, RuntimeStatusReader {
+    implements
+        ControlApi,
+        ACPObservationApi,
+        RuntimeStatusReader,
+        ScriptActivityReader {
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       ProductUpdateMetadata.fromJson(
@@ -1815,6 +1825,13 @@ final class HttpControlApi
     }
     return RetainedImagePreview.fromJson(response.payload, fingerprint);
   }
+
+  @override
+  Future<ScriptActivity> scriptActivity({int days = 7}) async =>
+      ScriptActivity.fromJson(
+        await _read('/api/v1/scripts/activity?days=$days'),
+        'scriptActivity',
+      );
 
   @override
   Future<List<ApprovalRecord>> pendingApprovals() async {

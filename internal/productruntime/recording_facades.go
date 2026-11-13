@@ -19,6 +19,19 @@ type recordingActivity struct {
 	owner *recordingStorage
 }
 
+// SummarizeScripts forwards to the inspection reader. The embedded field is
+// an interface, so methods beyond it are not promoted on their own; without
+// this the control API would always report the counts as unavailable.
+func (a *recordingActivity) SummarizeScripts(ctx context.Context, q activity.ScriptActivityQuery) (activity.ScriptActivity, error) {
+	reader, ok := a.InspectionReader.(interface {
+		SummarizeScripts(context.Context, activity.ScriptActivityQuery) (activity.ScriptActivity, error)
+	})
+	if !ok {
+		return activity.ScriptActivity{}, recording.ErrInspectionUnavailable
+	}
+	return reader.SummarizeScripts(ctx, q)
+}
+
 func (a *recordingActivity) Prepare(e activity.Event) (activity.Record, error) {
 	v, done, err := a.owner.acquire()
 	if err != nil {

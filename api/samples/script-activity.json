@@ -1,0 +1,34 @@
+{
+  "since": "2026-11-06T12:00:00Z",
+  "coveredFrom": "2026-11-06T12:00:00Z",
+  "generatedAt": "2026-11-13T12:00:00Z",
+  "requests": 41,
+  "truncated": false,
+  "scripts": [
+    {
+      "scriptId": "transform.guard",
+      "name": "Block dangerous commands",
+      "revision": 2,
+      "requests": 2,
+      "changed": 0,
+      "blocked": 1,
+      "failed": 1,
+      "blockReasons": [
+        {
+          "reason": "destructive-command",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "scriptId": "transform.mask",
+      "name": "Mask secrets",
+      "revision": 4,
+      "requests": 2,
+      "changed": 1,
+      "blocked": 0,
+      "failed": 0,
+      "blockReasons": []
+    }
+  ]
+}
