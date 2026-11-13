@@ -986,7 +986,6 @@ void main() {
       expect(find.text('Claude command copied'), findsOneWidget);
 
       final remove = find.byKey(const Key('terminal-command-remove'));
-      await _openSettingsTab(tester, const Key('settings-tab-proxy'));
       await _openSettingsTab(tester, const Key('settings-tab-access'));
       await tester.scrollUntilVisible(
         remove,
@@ -998,6 +997,9 @@ void main() {
             )
             .first,
       );
+      // The tab no longer resets its scroll by visiting another tab first.
+      await tester.ensureVisible(remove);
+      await tester.pumpAndSettle();
       await tester.tap(remove);
       await tester.pumpAndSettle();
       expect(find.text('Remove the Terminal command?'), findsOneWidget);
@@ -1399,7 +1401,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('settings-section-picker')), findsOneWidget);
-    await _openSettingsTab(tester, const Key('settings-tab-proxy'));
+    // Network exits are their own destination now, not a Settings tab.
+    await tester.tap(find.byKey(const Key('workbench-tab-network-exits')));
+    await tester.pumpAndSettle();
     expect(find.text('网络出口方案'), findsOneWidget);
     expect(
       find.byKey(const Key('egress-profile-row-profile.direct')),

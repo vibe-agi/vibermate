@@ -1,6 +1,6 @@
 import '../../core/api/control_models.dart';
 
-enum SettingsDestination { preferences, access, users, safety, networkExits }
+enum SettingsDestination { preferences, access, users, safety }
 
 enum ServerConnectionSecurity { unavailable, loopbackHttp, remoteHttp, https }
 

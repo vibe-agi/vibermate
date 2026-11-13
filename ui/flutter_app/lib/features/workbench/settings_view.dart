@@ -115,11 +115,6 @@ final class SettingsView extends StatelessWidget {
                                 icon: Icons.shield_outlined,
                                 label: copy('settings.tab.safety'),
                               ),
-                              SettingsDestination.networkExits => _SettingsTab(
-                                key: const Key('settings-tab-proxy'),
-                                icon: Icons.alt_route,
-                                label: copy('settings.tab.proxy'),
-                              ),
                             },
                         ],
                       ),
@@ -148,11 +143,6 @@ final class SettingsView extends StatelessWidget {
                       controller: controller,
                       copy: copy,
                     ),
-                    SettingsDestination.networkExits =>
-                      _EgressProfilesSettingsPane(
-                        controller: controller,
-                        copy: copy,
-                      ),
                   },
               ],
             ),
@@ -171,7 +161,6 @@ String _settingsDestinationLabel(
   SettingsDestination.access => 'settings.tab.access',
   SettingsDestination.users => 'settings.tab.users',
   SettingsDestination.safety => 'settings.tab.safety',
-  SettingsDestination.networkExits => 'settings.tab.proxy',
 });
 
 final class _SettingsTab extends StatelessWidget {
@@ -291,22 +280,52 @@ final class _SettingsSurface extends StatelessWidget {
   );
 }
 
-final class _EgressProfilesSettingsPane extends StatefulWidget {
-  const _EgressProfilesSettingsPane({
+/// Network exits as their own destination: how traffic leaves after an
+/// account is chosen. Routing and accounts point at a saved revision.
+final class NetworkExitsView extends StatelessWidget {
+  const NetworkExitsView({
     required this.controller,
     required this.copy,
+    super.key,
   });
 
   final WorkbenchController controller;
   final AppCopy copy;
 
   @override
-  State<_EgressProfilesSettingsPane> createState() =>
-      _EgressProfilesSettingsPaneState();
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PageHeading(
+          title: copy('nav.network_exits'),
+          help: copy('network_exits.subtitle'),
+          dismissHelpLabel: copy('common.dismiss'),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: NetworkExitsPane(controller: controller, copy: copy),
+        ),
+      ],
+    );
+  }
 }
 
-final class _EgressProfilesSettingsPaneState
-    extends State<_EgressProfilesSettingsPane> {
+final class NetworkExitsPane extends StatefulWidget {
+  const NetworkExitsPane({
+    required this.controller,
+    required this.copy,
+    super.key,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<NetworkExitsPane> createState() => _NetworkExitsPaneState();
+}
+
+final class _NetworkExitsPaneState extends State<NetworkExitsPane> {
   List<EgressProfileRevision> _profiles = const [];
   EgressDefaultSetting? _default;
   bool _loading = true;
@@ -327,7 +346,7 @@ final class _EgressProfilesSettingsPaneState
   }
 
   @override
-  void didUpdateWidget(covariant _EgressProfilesSettingsPane oldWidget) {
+  void didUpdateWidget(covariant NetworkExitsPane oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.controller, widget.controller)) {
       _runtimeGeneration++;
