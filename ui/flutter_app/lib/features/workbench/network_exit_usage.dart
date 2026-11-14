@@ -14,7 +14,7 @@ final class NetworkExitUsage {
 }
 
 NetworkExitUsage networkExitUsage(
-  String profileId,
+  String exitId,
   List<EnvironmentRecord> environments,
   List<ProviderAccount> accounts,
 ) {
@@ -23,7 +23,7 @@ NetworkExitUsage networkExitUsage(
     var flows = 0;
     final revisions = <int>{};
     void count(EgressChoice choice) {
-      if (choice is EgressProfileRevision && choice.id == profileId) {
+      if (choice is EgressProfileRevision && choice.id == exitId) {
         flows += 1;
         revisions.add(choice.revision);
       }
@@ -48,8 +48,7 @@ NetworkExitUsage networkExitUsage(
   policies.sort((left, right) => left.name.compareTo(right.name));
   final pinned = <({String name, int revision})>[
     for (final account in accounts)
-      if (account.egressProfile case final profile?
-          when profile.id == profileId)
+      if (account.egressProfile case final profile? when profile.id == exitId)
         (name: account.displayName, revision: profile.revision),
   ]..sort((left, right) => left.name.compareTo(right.name));
   return NetworkExitUsage(policies: policies, accounts: pinned);
