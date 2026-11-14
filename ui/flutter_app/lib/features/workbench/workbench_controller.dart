@@ -2872,6 +2872,23 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
+  /// What each message script did to the last week's requests. Null until
+  /// read, and stays null when the Runtime cannot answer.
+  ScriptActivity? scriptActivity;
+
+  Future<void> refreshScriptActivity() async {
+    final api = _api;
+    if (api is! ScriptActivityReader) return;
+    try {
+      final value = await (api as ScriptActivityReader).scriptActivity();
+      if (_disposed) return;
+      scriptActivity = value;
+      notifyListeners();
+    } catch (_) {
+      // The counts are a convenience; the script library works without them.
+    }
+  }
+
   Future<void> refreshDecidedApprovals() async {
     try {
       final decided = await _api.decidedApprovals();
