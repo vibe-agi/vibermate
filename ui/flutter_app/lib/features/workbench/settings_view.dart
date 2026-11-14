@@ -19,6 +19,7 @@ import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
 import 'runtime_connection_guide.dart';
 import 'server_deployment_guide.dart';
+import 'network_exit_usage.dart';
 import 'workbench_controller.dart';
 
 final class SettingsView extends StatelessWidget {
@@ -591,6 +592,27 @@ final class _NetworkExitsPaneState extends State<NetworkExitsPane> {
           builtIn
               ? Text(copy('settings.egress.builtin'))
               : Text(egressPolicySummary(copy, profile.policy)),
+          // The built-in exit is also the fallback, so who "uses" it is not
+          // a list anyone pinned.
+          if (!builtIn)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                networkExitUsageText(
+                  copy,
+                  networkExitUsage(
+                    profile.id,
+                    widget.controller.data?.environments ?? const [],
+                    widget.controller.data?.accounts ?? const [],
+                  ),
+                  profile.revision,
+                ),
+                key: Key('egress-profile-used-by-${profile.id}'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textMuted,
+                ),
+              ),
+            ),
           if (newerThanDefault)
             Padding(
               padding: const EdgeInsets.only(top: 8),
