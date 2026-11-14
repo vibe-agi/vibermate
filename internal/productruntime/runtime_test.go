@@ -427,6 +427,14 @@ func TestProductRuntimeAppliesInternalShutdownDeadline(t *testing.T) {
 	if status.State != RuntimeStateStopFailed || status.StopReasonCode != StopReasonShutdownFailed || status.StoppedAt != nil {
 		t.Fatalf("failed shutdown status = %+v", status)
 	}
+	// The bounded call returned, but the shutdown itself continues in the
+	// background and still closes files in the data directory. Wait for it,
+	// or removing the test's temporary directory races with those writes.
+	select {
+	case <-runtime.ShutdownDone():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the background shutdown never finished after its budget expired")
+	}
 }
 
 func testOptions(t *testing.T, host hostcontract.Contract, coordinator offlinehold.RuntimeCoordinator) Options {
