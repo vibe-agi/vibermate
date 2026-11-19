@@ -378,6 +378,9 @@ final class AppCopy {
     'nav.usage': 'Usage and cost',
     'capture.summary.requests': 'Requests',
     'ledger.filter.all': 'All',
+    'ledger.detail.compare': 'Compare before and after',
+    'ledger.detail.compare_unavailable':
+        'This request was not recorded in full, so there is nothing to compare.',
     'ledger.filter.changed': 'Changed',
     'ledger.filter.blocked': 'Blocked',
     'ledger.filter.failed': 'Failed',
@@ -3578,6 +3581,8 @@ final class AppCopy {
     'nav.usage': '用量与费用',
     'capture.summary.requests': '请求',
     'ledger.filter.all': '全部',
+    'ledger.detail.compare': '比较前后',
+    'ledger.detail.compare_unavailable': '此请求未完整记录，无可比较的内容。',
     'ledger.filter.changed': '已改写',
     'ledger.filter.blocked': '已拦截',
     'ledger.filter.failed': '失败',
