@@ -773,10 +773,30 @@ final class WorkbenchController extends ChangeNotifier
   int _nativeApprovalEpoch = 0;
   String _nativeApprovalCursor = '';
   int _nativeDecisions = 0;
-  Set<String> _nativePendingIDs = {};
-  bool get nativeApprovalAttention => _nativePendingIDs.isNotEmpty;
+
+  /// Each pending question's ID and the session it waits in. Only these
+  /// body-free facts outlive a hidden list; each is revalidated through its
+  /// own session.
+  Map<String, String> _nativePending = {};
+
+  /// The name each session with a listed question shows under.
+  Map<String, String> _nativeSessionNames = {};
+
+  /// Whether tool questions are listed for every session at once. A Runtime
+  /// from before that list answers only for the selected session, and the
+  /// list then follows the selection as it always did.
+  bool nativeApprovalsForAllSessions = true;
+  bool get nativeApprovalAttention => _nativePending.isNotEmpty;
   int? get nativePendingCount =>
-      nativeApprovalScanComplete ? _nativePendingIDs.length : null;
+      nativeApprovalScanComplete ? _nativePending.length : null;
+
+  /// The name a session with a waiting tool question shows under.
+  String? nativeSessionName(String captureKey) =>
+      _nativeSessionNames[captureKey] ??
+      data?.captures
+          .where((capture) => capture.key == captureKey)
+          .firstOrNull
+          ?.displayName;
 
   void setNativeApprovalsVisible(bool visible) {
     _nativeApprovalVisible = visible;
@@ -796,34 +816,39 @@ final class WorkbenchController extends ChangeNotifier
     nativeApprovalScanComplete = false;
     nativeApprovalsLoading = false;
     nativeApprovalError = null;
-    _nativePendingIDs = {};
+    _nativePending = {};
+    _nativeSessionNames = {};
   }
 
   Future<void> refreshNativeApprovals() async {
+    var allSessions = nativeApprovalsForAllSessions;
     final capture = selectedCaptureKey;
     if (_disposed ||
-        capture == null ||
+        !allSessions && capture == null ||
         nativeApprovalsLoading ||
         _nativeDecisions != 0) {
       return;
     }
     final epoch = _nativeApprovalEpoch;
-    final previousIDs = _nativePendingIDs;
+    final previousIDs = _nativePending;
     final previousComplete = nativeApprovalScanComplete;
     final previousError = nativeApprovalError;
     bool current() =>
         !_disposed &&
         epoch == _nativeApprovalEpoch &&
-        capture == selectedCaptureKey;
+        allSessions == nativeApprovalsForAllSessions &&
+        (allSessions || capture == selectedCaptureKey);
     nativeApprovalsLoading = true;
     try {
       final updated = <String, NativeApproval>{};
-      final pendingIDs = <String>{};
-      // Revalidate known pending questions directly. The discovery cursor
-      // traverses the current set and restarts after every exhausted scan.
-      for (final id in _nativePendingIDs) {
+      final pending = <String, String>{};
+      final names = <String, String>{};
+      // Revalidate known pending questions directly, each in its own session.
+      // The discovery cursor traverses the current set and restarts after
+      // every exhausted scan.
+      for (final MapEntry(key: id, value: owner) in _nativePending.entries) {
         try {
-          final approval = await _api.nativeApproval(capture, id);
+          final approval = await _api.nativeApproval(owner, id);
           if (!current()) return;
           final previous = nativeApprovals
               .where((item) => item.id == id)
@@ -834,27 +859,49 @@ final class WorkbenchController extends ChangeNotifier
             );
           }
           if (approval.pending) {
-            pendingIDs.add(approval.id);
+            pending[approval.id] = owner;
+            if (_nativeSessionNames[owner] case final name?) {
+              names[owner] = name;
+            }
             if (_nativeApprovalVisible) updated[approval.id] = approval;
           }
         } on ControlProblem catch (error) {
           if (error.status != 404) rethrow;
         }
       }
-      final page = await _api.nativeApprovals(
-        capture,
-        cursor: _nativeApprovalCursor,
-      );
+      List<NativeApproval> discovered;
+      String next;
+      try {
+        (discovered, next) = await _nativeApprovalPage(
+          allSessions,
+          capture,
+          into: names,
+        );
+      } on ControlProblem catch (error) {
+        if (!allSessions ||
+            error.status != 404 ||
+            error.reasonCode != 'control_route_not_found') {
+          rethrow;
+        }
+        if (!current()) return;
+        // This Runtime predates the list across sessions.
+        allSessions = nativeApprovalsForAllSessions = false;
+        _nativeApprovalCursor = '';
+        (discovered, next) = capture == null
+            ? (const <NativeApproval>[], '')
+            : await _nativeApprovalPage(false, capture, into: names);
+      }
       if (!current()) return;
-      for (final approval in page.items) {
+      for (final approval in discovered) {
         if (approval.pending) {
-          pendingIDs.add(approval.id);
+          pending[approval.id] = approval.captureKey;
           if (_nativeApprovalVisible) updated[approval.id] = approval;
         }
       }
-      nativeApprovalScanComplete = page.nextCursor.isEmpty;
-      _nativeApprovalCursor = page.nextCursor;
-      _nativePendingIDs = pendingIDs;
+      nativeApprovalScanComplete = next.isEmpty;
+      _nativeApprovalCursor = next;
+      _nativePending = pending;
+      _nativeSessionNames = names;
       nativeApprovals = _nativeApprovalVisible
           ? List.unmodifiable(updated.values)
           : const [];
@@ -864,7 +911,8 @@ final class WorkbenchController extends ChangeNotifier
       nativeApprovals = const [];
       nativeApprovalScanComplete = false;
       _nativeApprovalCursor = '';
-      _nativePendingIDs = {};
+      _nativePending = {};
+      _nativeSessionNames = {};
       nativeApprovalError = _describeError(error);
     } finally {
       if (current()) {
@@ -872,12 +920,35 @@ final class WorkbenchController extends ChangeNotifier
         if (_nativeApprovalVisible ||
             previousComplete != nativeApprovalScanComplete ||
             previousError != nativeApprovalError ||
-            previousIDs.length != _nativePendingIDs.length ||
-            previousIDs.any((id) => !_nativePendingIDs.contains(id))) {
+            previousIDs.length != _nativePending.length ||
+            previousIDs.keys.any((id) => !_nativePending.containsKey(id))) {
           notifyListeners();
         }
       }
     }
+  }
+
+  /// One discovery page: across sessions, or the selected session's own.
+  /// Session names delivered with the page are added to [into].
+  Future<(List<NativeApproval>, String)> _nativeApprovalPage(
+    bool allSessions,
+    String? capture, {
+    Map<String, String>? into,
+  }) async {
+    if (!allSessions) {
+      final page = await _api.nativeApprovals(
+        capture!,
+        cursor: _nativeApprovalCursor,
+      );
+      return (page.items, page.nextCursor);
+    }
+    final page = await _api.nativeApprovalsAcrossSessions(
+      cursor: _nativeApprovalCursor,
+    );
+    for (final item in page.items) {
+      into?[item.approval.captureKey] = item.captureDisplayName;
+    }
+    return ([for (final item in page.items) item.approval], page.nextCursor);
   }
 
   Future<void> decideNativeApproval(
@@ -886,7 +957,8 @@ final class WorkbenchController extends ChangeNotifier
   ) async {
     if (_disposed ||
         !_nativeApprovalVisible ||
-        approval.captureKey != selectedCaptureKey ||
+        !nativeApprovalsForAllSessions &&
+            approval.captureKey != selectedCaptureKey ||
         !nativeApprovals.any((item) => identical(item, approval)) ||
         !approval.pending ||
         decision == NativeDecision.allowOnce && !approval.canAllow) {
@@ -904,9 +976,10 @@ final class WorkbenchController extends ChangeNotifier
     _nativeDecisions++;
     notifyListeners();
     try {
+      // Decided in the question's own session, whichever one is selected.
       await _api.decideNativeApproval(approval.captureKey, approval, decision);
       if (!_disposed && epoch == _nativeApprovalEpoch) {
-        _nativePendingIDs.remove(approval.id);
+        _nativePending.remove(approval.id);
       }
     } catch (error) {
       if (!_disposed && epoch == _nativeApprovalEpoch) {
@@ -4057,7 +4130,8 @@ final class WorkbenchController extends ChangeNotifier
 
   void _resetCaptureDetail() {
     _discardNativeReader();
-    _discardNativeApprovals();
+    // Tool questions listed for every session do not follow the selection.
+    if (!nativeApprovalsForAllSessions) _discardNativeApprovals();
     _selectionGeneration += 1;
     selectedAssignment = null;
     selectedCaptureLaunchIncomplete = false;

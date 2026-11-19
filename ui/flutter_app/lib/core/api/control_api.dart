@@ -52,6 +52,14 @@ abstract interface class ControlApi {
     int limit = 50,
   });
   Future<NativeApproval> nativeApproval(String captureKey, String approvalId);
+
+  /// The tool questions waiting in every session this caller manages, oldest
+  /// first. Each is still read and decided through its own session. A Runtime
+  /// from before this list answers 404 `control_route_not_found`.
+  Future<NativeSessionApprovalPage> nativeApprovalsAcrossSessions({
+    String cursor = '',
+    int limit = 50,
+  });
   Future<NativeApproval> decideNativeApproval(
     String captureKey,
     NativeApproval approval,
@@ -648,24 +656,45 @@ final class HttpControlApi
     return result.payload;
   }
 
-  @override
-  Future<NativeApprovalPage> nativeApprovals(
-    String captureKey, {
-    String cursor = '',
-    int limit = 50,
-  }) async {
+  String _nativeApprovalPageQuery(String cursor, int limit) {
     if (cursor.length > 256 ||
         (cursor.isNotEmpty && !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) ||
         limit < 1 ||
         limit > 199) {
       throw const ControlContractException('Invalid native page request');
     }
+    return 'limit=$limit${cursor.isEmpty ? '' : '&cursor=${Uri.encodeQueryComponent(cursor)}'}';
+  }
+
+  @override
+  Future<NativeApprovalPage> nativeApprovals(
+    String captureKey, {
+    String cursor = '',
+    int limit = 50,
+  }) async {
+    final query = _nativeApprovalPageQuery(cursor, limit);
     final payload = await _readNativePreview(
-      '${_nativeApprovalsPath(captureKey)}?limit=$limit${cursor.isEmpty ? '' : '&cursor=${Uri.encodeQueryComponent(cursor)}'}',
+      '${_nativeApprovalsPath(captureKey)}?$query',
     );
     return NativeApprovalPage.fromJson(
       payload,
       captureKey,
+      cursor: cursor,
+      limit: limit,
+    );
+  }
+
+  @override
+  Future<NativeSessionApprovalPage> nativeApprovalsAcrossSessions({
+    String cursor = '',
+    int limit = 50,
+  }) async {
+    final query = _nativeApprovalPageQuery(cursor, limit);
+    final payload = await _readNativePreview(
+      '/api/v1/native-tools/approvals?$query',
+    );
+    return NativeSessionApprovalPage.fromJson(
+      payload,
       cursor: cursor,
       limit: limit,
     );

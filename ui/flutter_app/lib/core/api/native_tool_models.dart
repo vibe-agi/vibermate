@@ -755,3 +755,84 @@ final class NativeApprovalPage {
   final List<NativeApproval> items;
   final String nextCursor;
 }
+
+/// One tool question waiting in any session the caller manages, and the name
+/// that session shows under in the session list. The question itself is
+/// exactly what that session's own list returns for it.
+final class NativeSessionApproval {
+  NativeSessionApproval.fromJson(Object? raw) {
+    final map = requireObject(raw, 'native.sessionApproval');
+    requireFields(
+      map,
+      'native.sessionApproval',
+      required: const {'captureDisplayName', 'approval'},
+    );
+    captureDisplayName = requireString(
+      map,
+      'captureDisplayName',
+      'native.sessionApproval',
+    );
+    if (captureDisplayName.trim() != captureDisplayName ||
+        utf8.encode(captureDisplayName).length > 256 ||
+        captureDisplayName.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+      throw const ControlContractException('Invalid native session name');
+    }
+    final inner = requireObject(map['approval'], 'native.approval');
+    final capture = inner['captureKey'];
+    if (capture is! String) {
+      throw const ControlContractException('Invalid native Capture');
+    }
+    // Parsed against its own Capture: the question names where it is decided.
+    approval = NativeApproval.fromJson(inner, capture);
+  }
+  late final String captureDisplayName;
+  late final NativeApproval approval;
+}
+
+/// A page of the tool questions waiting across sessions, oldest first.
+final class NativeSessionApprovalPage {
+  const NativeSessionApprovalPage(this.items, this.nextCursor);
+  factory NativeSessionApprovalPage.fromJson(
+    Object? raw, {
+    required String cursor,
+    required int limit,
+  }) {
+    final map = requireObject(raw, 'native.sessionApprovals');
+    requireFields(
+      map,
+      'native.sessionApprovals',
+      required: const {'items', 'nextCursor'},
+    );
+    final next = requireStringValue(
+      map,
+      'nextCursor',
+      'native.sessionApprovals',
+    );
+    final items = requireList(
+      map['items'],
+      'native.sessionApprovals.items',
+    ).map(NativeSessionApproval.fromJson).toList(growable: false);
+    final names = <String, String>{};
+    if (next.length > 256 ||
+        (next.isNotEmpty &&
+            (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(next) || next == cursor)) ||
+        items.length > limit ||
+        items.any((item) => item.approval.state != 'pending') ||
+        items.map((item) => item.approval.id).toSet().length != items.length ||
+        items.any(
+          (item) =>
+              names.putIfAbsent(
+                item.approval.captureKey,
+                () => item.captureDisplayName,
+              ) !=
+              item.captureDisplayName,
+        )) {
+      throw const ControlContractException(
+        'Invalid native session approval page',
+      );
+    }
+    return NativeSessionApprovalPage(List.unmodifiable(items), next);
+  }
+  final List<NativeSessionApproval> items;
+  final String nextCursor;
+}

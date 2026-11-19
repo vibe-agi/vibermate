@@ -296,7 +296,7 @@ void main() {
     }
   }
   test(
-    'hidden pending attention counts selected Capture without retaining preview',
+    'hidden pending attention counts every session without retaining preview',
     () async {
       var pages = 0;
       final api = await nativeApi(
@@ -333,20 +333,23 @@ void main() {
         ),
         inspectSession: false,
         client: MockClient(
-          (r) async => http.Response(
-            jsonEncode(
-              r.url.path.endsWith('/approvals')
-                  ? {
-                      'items': [nativeApprovalFixture()],
-                      'nextCursor': '',
-                    }
-                  : nativeApprovalFixture(),
+          (r) async => listedAcrossSessions(
+            r,
+            http.Response(
+              jsonEncode(
+                r.url.path.endsWith('/approvals')
+                    ? {
+                        'items': [nativeApprovalFixture()],
+                        'nextCursor': '',
+                      }
+                    : nativeApprovalFixture(),
+              ),
+              200,
+              headers: {
+                'content-type': 'application/json',
+                'cache-control': 'no-store',
+              },
             ),
-            200,
-            headers: {
-              'content-type': 'application/json',
-              'cache-control': 'no-store',
-            },
           ),
         ),
       );
@@ -605,22 +608,69 @@ void main() {
     },
   );
   test(
-    'Capture switch discards old pending response and starts a fresh traversal',
+    'session switch keeps every session’s questions and their traversal',
+    () async {
+      final requests = <http.Request>[];
+      var pages = 0;
+      final api = await nativeApi((r) async {
+        requests.add(r);
+        if (r.url.path.endsWith('/approvals')) {
+          return nativeResponse({
+            'items': ++pages == 1 ? [nativeApprovalFixture()] : [],
+            'nextCursor': '',
+          });
+        }
+        return nativeResponse(nativeApprovalFixture());
+      });
+      addTearDown(api.close);
+      final controller = nativeController(api);
+      addTearDown(controller.dispose);
+      controller.setNativeApprovalsVisible(true);
+      while (controller.nativeApprovalsLoading) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final listed = controller.nativeApprovals.single;
+      expect(controller.nativeSessionName(nativeCapture), nativeSessionName);
+      await controller.selectCapture('manual_capture:other');
+      expect(identical(controller.nativeApprovals.single, listed), isTrue);
+      expect(controller.nativePendingCount, 1);
+      requests.clear();
+      await controller.refreshNativeApprovals();
+      // Revalidated in its own session; discovery stays across sessions.
+      expect(requests.map((r) => Uri.decodeComponent(r.url.path)), [
+        '/api/v1/captures/$nativeCapture/native-tools/approvals/$nativeApprovalID',
+        nativeAllSessionsPath,
+      ]);
+      expect(controller.nativeApprovals.single.id, nativeApprovalID);
+      expect(controller.nativePendingCount, 1);
+      expect(controller.nativeSessionName(nativeCapture), nativeSessionName);
+    },
+  );
+  test(
+    'a Runtime without the list across sessions keeps the selected session’s list',
     () async {
       final held = Completer<http.Response>();
       final requests = <http.Request>[];
       final api = await nativeApi((r) async {
         requests.add(r);
-        if (requests.length == 1) return held.future;
+        if (r.url.path == nativeAllSessionsPath) return routeNotFound();
+        if (requests.length == 2) return held.future;
         return nativeResponse({'items': [], 'nextCursor': ''});
       });
       addTearDown(api.close);
       final controller = nativeController(api);
       addTearDown(controller.dispose);
       controller.setNativeApprovalsVisible(true);
-      while (requests.isEmpty) {
+      while (requests.length < 2) {
         await Future<void>.delayed(Duration.zero);
       }
+      expect(controller.nativeApprovalsForAllSessions, isFalse);
+      expect(
+        Uri.decodeComponent(requests[1].url.path),
+        contains(nativeCapture),
+      );
+      // As before the list across sessions: a switch discards the old
+      // session's pending response and starts a fresh traversal.
       await controller.selectCapture('manual_capture:other');
       held.complete(
         nativeResponse({
@@ -637,6 +687,9 @@ void main() {
         contains('manual_capture:other'),
       );
       expect(requests.last.url.queryParameters['cursor'], isNull);
+      expect(requests.where((r) => r.url.path == nativeAllSessionsPath), [
+        requests.first,
+      ]);
     },
   );
   testWidgets('missing details disables Allow but keeps Deny available', (
@@ -762,7 +815,42 @@ Future<HttpControlApi> nativeApi(
     expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
   ),
   inspectSession: false,
-  client: MockClient(handler),
+  client: MockClient(
+    (request) async => listedAcrossSessions(request, await handler(request)),
+  ),
+);
+
+const nativeAllSessionsPath = '/api/v1/native-tools/approvals';
+const nativeSessionName = 'Synthetic session';
+
+/// Fixtures describe one session's page; the list across sessions sends the
+/// same questions, each with the name of the session it waits in.
+http.Response listedAcrossSessions(
+  http.Request request,
+  http.Response response,
+) {
+  if (request.url.path != nativeAllSessionsPath || response.statusCode != 200) {
+    return response;
+  }
+  final page = jsonDecode(response.body) as Map<String, Object?>;
+  return nativeResponse({
+    ...page,
+    'items': [
+      for (final item in page['items']! as List<Object?>)
+        {'captureDisplayName': nativeSessionName, 'approval': item},
+    ],
+  });
+}
+
+http.Response routeNotFound() => http.Response(
+  jsonEncode({
+    'type': 'urn:vibermate:error:control-route-not-found',
+    'title': 'Not found',
+    'status': 404,
+    'code': 'control_route_not_found',
+  }),
+  404,
+  headers: {'content-type': 'application/problem+json'},
 );
 WorkbenchController nativeController(ControlApi api) => WorkbenchController(
   api: api,

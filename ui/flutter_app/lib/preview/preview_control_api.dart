@@ -49,6 +49,11 @@ final class PreviewControlApi
   Future<NativeApproval> nativeApproval(String captureKey, String approvalId) =>
       throw UnsupportedError('No native approvals in preview');
   @override
+  Future<NativeSessionApprovalPage> nativeApprovalsAcrossSessions({
+    String cursor = '',
+    int limit = 50,
+  }) async => const NativeSessionApprovalPage([], '');
+  @override
   Future<NativeApproval> decideNativeApproval(
     String captureKey,
     NativeApproval approval,

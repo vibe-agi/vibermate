@@ -724,8 +724,17 @@ final class _ApprovalAttention extends StatelessWidget {
     final nativePending = controller.nativeApprovalAttention;
     final partialNative =
         nativePending && !controller.nativeApprovalScanComplete;
-    final nativeLabel =
-        '${controller.selectedCapture?.displayName ?? copy('native.selectedCapture')} · ${controller.nativeApprovalScanComplete ? copy.format('native.pendingCount', {'count': controller.nativePendingCount!}) : copy('native.pending')}';
+    // Across every session, unless the Runtime lists only the selected one.
+    final nativeLabel = [
+      if (!controller.nativeApprovalsForAllSessions)
+        controller.selectedCapture?.displayName ??
+            copy('native.selectedCapture'),
+      controller.nativeApprovalScanComplete
+          ? copy.format('native.pendingCount', {
+              'count': controller.nativePendingCount!,
+            })
+          : copy('native.pending'),
+    ].join(' · ');
     final unavailable =
         count == null && controller.approvalAttentionError != null;
     if (!unavailable && !nativePending && (count == null || count == 0)) {
