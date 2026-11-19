@@ -5039,8 +5039,7 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.anthropic_messages': 'POST /v1/messages',
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
-    'routes.endpoint.boundary':
-        '这里配置服务地址与支持的协议。凭据在「账号」中统一添加，再关联地址和认证类型兼容的账号。',
+    'routes.endpoint.boundary': '这里配置服务地址与支持的协议。凭据在「账号」中统一添加，再关联地址和认证类型兼容的账号。',
     'routes.endpoint.cleartext_warning': 'HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。',
     'routes.validation.protocol': '请至少选择一种上游协议。',
     'routes.endpoint.create.action': '创建上游服务',
