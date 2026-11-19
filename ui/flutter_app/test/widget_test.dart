@@ -49,7 +49,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.tune).first);
     await tester.pumpAndSettle();
-    expect(find.text('Traffic policies'), findsWidgets);
+    expect(find.text('Routing'), findsWidgets);
     expect(find.text('Work'), findsWidgets);
 
     await tester.pumpWidget(const SizedBox.shrink());

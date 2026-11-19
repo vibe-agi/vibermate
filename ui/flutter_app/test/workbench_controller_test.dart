@@ -731,7 +731,7 @@ void main() {
       expect(find.text('inspection_changed (409)'), findsNothing);
       expect(find.textContaining('0 turns'), findsNothing);
       expect(
-        find.text('Traffic policy information is temporarily unavailable'),
+        find.text('Routing set information is temporarily unavailable'),
         findsNothing,
       );
       expect(tester.takeException(), isNull);
@@ -1007,7 +1007,7 @@ void main() {
       find.text('Run details are temporarily unavailable'),
       findsOneWidget,
     );
-    expect(find.text('No traffic policy attached'), findsNothing);
+    expect(find.text('No routing set attached'), findsNothing);
     expect(find.textContaining('0 turns'), findsNothing);
     expect(
       find.byKey(const Key('capture-client-compatibility-managed_run:run-2')),
@@ -1182,7 +1182,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.text('Launch did not complete'), findsOneWidget);
-        expect(find.text('No traffic policy attached'), findsOneWidget);
+        expect(find.text('No routing set attached'), findsOneWidget);
         expect(
           find.textContaining('capture_assignment_not_found'),
           findsNothing,

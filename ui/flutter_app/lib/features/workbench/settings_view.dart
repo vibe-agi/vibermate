@@ -537,7 +537,7 @@ final class _NetworkExitsPaneState extends State<NetworkExitsPane> {
     ],
   );
 
-  /// The exit used when neither the account nor the traffic policy names one.
+  /// The exit used when neither the account nor the routing set names one.
   Widget _defaultBand(BuildContext context) {
     final colors = context.viberColors;
     final theme = Theme.of(context).textTheme;

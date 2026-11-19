@@ -2855,7 +2855,7 @@ void main() {
       await tester.tap(copySample);
       await tester.pumpAndSettle();
 
-      expect(find.text('Script library'), findsWidgets);
+      expect(find.text('Scripts'), findsWidgets);
       expect(
         find.byKey(const Key('code-library-captured-sample')),
         findsOneWidget,
@@ -3158,7 +3158,7 @@ void main() {
       expect(find.text('Inspect r7'), findsNothing);
       expect(
         tester.widget<IconButton>(inspect).tooltip,
-        'Inspect frozen traffic policy r7',
+        'Inspect frozen routing set r7',
       );
       await tester.tap(inspect);
       await tester.pumpAndSettle();
@@ -4209,7 +4209,7 @@ void main() {
       expect(find.text('Revision 8'), findsOneWidget);
       expect(
         find.text(
-          'Traffic policy published from the reviewed draft and impact boundary.',
+          'Routing set published from the reviewed draft and impact boundary.',
         ),
         findsOneWidget,
       );
@@ -5901,7 +5901,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          'Upstream account saved. Link it to a compatible service before using it in a traffic policy.',
+          'Upstream account saved. Link it to a compatible service before using it in a routing set.',
         ),
         findsOneWidget,
       );
@@ -6136,7 +6136,7 @@ void main() {
 
     expect(
       find.text(
-        'The runtime refused deletion because traffic policy routes still reference this account.',
+        'The runtime refused deletion because routing paths still reference this account.',
       ),
       findsOneWidget,
     );

@@ -87,7 +87,7 @@ final class PreviewControlApi
   @override
   Future<EnvironmentDryRun> dryRunEnvironment(EnvironmentDryRunInput input) =>
       Future<EnvironmentDryRun>.error(
-        UnsupportedError('The design preview does not run traffic policies'),
+        UnsupportedError('The design preview does not run routing sets'),
       );
 
   @override

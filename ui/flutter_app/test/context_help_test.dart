@@ -18,7 +18,7 @@ void main() {
               children: [
                 PageHeading(
                   title: 'Accounts',
-                  help: 'Credentials can be reused across traffic policies.',
+                  help: 'Credentials can be reused across routing sets.',
                   dismissHelpLabel: 'Close',
                 ),
                 InlineNotice(message: 'Connection failed. Retry.', error: true),
@@ -35,7 +35,7 @@ void main() {
         ),
       );
       expect(
-        find.text('Credentials can be reused across traffic policies.'),
+        find.text('Credentials can be reused across routing sets.'),
         findsNothing,
       );
       expect(
@@ -49,7 +49,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
-        find.text('Credentials can be reused across traffic policies.'),
+        find.text('Credentials can be reused across routing sets.'),
         findsOneWidget,
       );
       await tester.tap(find.text('Close'));

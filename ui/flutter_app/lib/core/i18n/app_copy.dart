@@ -253,7 +253,7 @@ final class AppCopy {
     'error.account_scope_mismatch':
         'This account is not linked to the service, or its address or sign-in type does not match. Check the linked accounts under Upstream services.',
     'error.account_in_use':
-        'This account is still used by a traffic policy or an active request. Update the affected policies and wait for requests to finish before unlinking or deleting it.',
+        'This account is still used by a routing set or an active request. Update the affected routing sets and wait for requests to finish before unlinking or deleting it.',
     'error.account_busy':
         'Another operation is updating this account. Wait a moment and try again.',
     'error.account_conflict':
@@ -286,7 +286,7 @@ final class AppCopy {
         'The IP allowlist could not be saved. Try again.',
     'error.invalid_ip_allowlist': 'The IP allowlist request was invalid.',
     'error.runtime_user_policy_invalid':
-        'The user policy is invalid. Select at least one traffic policy or allow all, and use non-negative warning values.',
+        'The user policy is invalid. Select at least one routing set or allow all, and use non-negative warning values.',
     'error.runtime_user_policy_unavailable':
         'The user policy could not be saved. Refresh the user list and try again.',
     'error.dry_run_flow_not_matched':
@@ -294,7 +294,7 @@ final class AppCopy {
     'error.dry_run_input_invalid':
         'The synthetic request is not valid for this protocol. Check the JSON body and required fields.',
     'error.dry_run_environment_disabled':
-        'This version disables the traffic policy. Choose an active version before trying a request.',
+        'This version disables the routing set. Choose an active version before trying a request.',
     'error.dry_run_selector_failed':
         'The account selector could not choose an account. Check its script and candidate accounts.',
     'error.dry_run_transform_failed':
@@ -422,7 +422,7 @@ final class AppCopy {
     'ledger.outcome.blocked': 'Blocked',
     'ledger.outcome.failed': 'Failed',
     'nav.captures': 'Sessions',
-    'nav.environments': 'Traffic policies',
+    'nav.environments': 'Routing',
     'nav.routes': 'Upstream services',
     'nav.provider_accounts': 'Accounts',
     'provider_accounts.title': 'Accounts',
@@ -706,9 +706,9 @@ final class AppCopy {
         'Too many Codex logins are pending. Cancel one or wait for it to expire.',
     'provider_accounts.unlink': 'Unlink account',
     'provider_accounts.unlink_hint':
-        'The account and its credentials will be kept. If a traffic policy still uses this link, update that policy before unlinking.',
+        'The account and its credentials will be kept. If a routing set still uses this link, update that routing set before unlinking.',
     'notice.inventory.account_linked':
-        'Account linked. It can now be selected in this service’s traffic policies.',
+        'Account linked. It can now be selected in this service’s routing sets.',
     'notice.inventory.account_unlinked':
         'Account unlinked. Its credentials and other service links are unchanged.',
     'approval.decided.title': 'Decided recently',
@@ -723,24 +723,23 @@ final class AppCopy {
     'approval.decided.by.runtime': 'ended by the Runtime',
     'nav.network_exits': 'Network exits',
     'network_exits.subtitle':
-        'How traffic leaves after an account is chosen. Traffic policies and accounts point at an exact saved revision.',
+        'How traffic leaves after an account is chosen. Routing sets and accounts point at an exact saved revision.',
     'provider_accounts.manage_services': 'Manage services',
     'provider_accounts.group.unlinked': 'Not linked to a service',
     'provider_accounts.group.unlinked.detail':
-        'Traffic policies cannot use these until they are linked.',
+        'Routing sets cannot use these until they are linked.',
     'provider_accounts.group.service_settings': 'Service settings',
     'routes.back_to_accounts': 'Back to accounts',
     'network_exits.used_by': 'Used by',
     'network_exits.default': 'Default exit',
     'network_exits.column.exit': 'Exit',
     'network_exits.column.connection': 'Connection',
-    'network_exits.used_by.none':
-        'No traffic policy or account uses this exit.',
+    'network_exits.used_by.none': 'No routing set or account uses this exit.',
     'network_exits.used_by.flows': '{count} client flows',
     'network_exits.used_by.pinned': 'pinned to {revisions}',
     'network_exits.used_by.accounts': '{count} accounts',
     'code_library.used_by': 'Used by',
-    'code_library.used_by.none': 'No traffic policy runs this script yet.',
+    'code_library.used_by.none': 'No routing set runs this script yet.',
     'code_library.used_by.flows': '{count} client flows',
     'code_library.used_by.pinned': 'pinned to {revisions}',
     'code_library.used_by.disabled': 'disabled',
@@ -756,7 +755,7 @@ final class AppCopy {
     'code_library.activity.scope':
         'Recorded, completed requests that are still kept.',
     'nav.network': 'Approvals',
-    'nav.code_library': 'Script library',
+    'nav.code_library': 'Scripts',
     'nav.settings': 'Settings',
     'approval.attention.count': '{count} pending approvals',
     'approval.attention.pending': '{count} pending',
@@ -783,7 +782,7 @@ final class AppCopy {
     'evidence_search.period.day': 'Last 24 hours',
     'evidence_search.period.week': 'Last 7 days',
     'evidence_search.period.month': 'Last 30 days',
-    'evidence_search.environment': 'Traffic policy ID',
+    'evidence_search.environment': 'Routing set ID',
     'evidence_search.account': 'Account ID',
     'evidence_search.model': 'Model',
     'evidence_search.tool': 'Tool name',
@@ -799,7 +798,7 @@ final class AppCopy {
     'evidence_search.match.workspace': 'workspace',
     'evidence_search.match.capture': 'Session',
     'evidence_search.match.conversation': 'conversation',
-    'evidence_search.match.environment': 'traffic policy',
+    'evidence_search.match.environment': 'routing set',
     'evidence_search.match.account': 'account',
     'evidence_search.match.model': 'model',
     'evidence_search.match.tool': 'tool',
@@ -819,14 +818,14 @@ final class AppCopy {
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older sessions',
     'capture.select': 'Select a session to see its requests.',
-    'capture.assignment.missing': 'No traffic policy attached',
-    'capture.assignment.unavailable': 'Traffic policy information unavailable',
+    'capture.assignment.missing': 'No routing set attached',
+    'capture.assignment.unavailable': 'Routing set information unavailable',
     'capture.detail.unavailable': 'Run details are temporarily unavailable',
     'capture.detail.unavailable.detail':
         'The runtime could not load these details. Retry to read them again; this does not mean the run has no requests.',
     'capture.launch_incomplete': 'Launch did not complete',
     'capture.launch_incomplete.detail':
-        'No traffic policy was attached and no traffic was recorded. Check the launch error in Terminal, correct the policy if needed, then run the command again. You can delete this empty record.',
+        'No routing set was attached and no traffic was recorded. Check the launch error in Terminal, correct the routing set if needed, then run the command again. You can delete this empty record.',
     'capture.managed': 'Managed run',
     'capture.manual': 'Manual session',
     'capture.source.managed.short': 'vibermate run',
@@ -916,18 +915,18 @@ final class AppCopy {
         'Started by vibermate run; its conversation stays with this run.',
     'capture.source.manual':
         'Dedicated proxy login; Exchanges stay separate without a client session identifier.',
-    'capture.environment': 'Traffic policy',
+    'capture.environment': 'Routing set',
     'capture.environment.help':
-        'Each Turn freezes the traffic policy revision it starts with. Applying a published revision affects only the next Turn; launch environment changes still require a restart.',
+        'Each Turn freezes the routing set revision it starts with. Applying a published revision affects only the next Turn; launch environment changes still require a restart.',
     'capture.environment.history':
-        'This run has ended. Each Turn keeps the traffic policy actually used for that request.',
-    'capture.environment.current': 'Traffic policy',
+        'This run has ended. Each Turn keeps the routing set actually used for that request.',
+    'capture.environment.current': 'Routing set',
     'capture.environment.revisions': 'Started r{launch} · using r{current}',
     'capture.environment.revisions_update':
         'Started r{launch} · using r{current} · published r{latest}',
     'capture.environment.apply_latest': 'Apply to next Turn',
     'notice.capture_environment_applied':
-        'The published traffic policy will be used by the next Turn.',
+        'The published routing set will be used by the next Turn.',
     'capture.conversation': 'Session conversation',
     'capture.conversations': 'Conversations',
     'capture.conversation_select': 'Conversation',
@@ -953,9 +952,9 @@ final class AppCopy {
     'deletion.blocked': 'Nothing was deleted. This is still in use by:',
     'deletion.more_holders': 'and {count} more',
     'deletion.holder.running_capture': 'Running session',
-    'deletion.holder.environment_route': 'Traffic policy route',
+    'deletion.holder.environment_route': 'Routing path',
     'deletion.holder.owned_account': 'Linked upstream account',
-    'deletion.environment.title': 'Delete this traffic policy?',
+    'deletion.environment.title': 'Delete this routing set?',
     'deletion.environment.consequence':
         'It stops being available for new runs. Evidence already recorded '
         'against it keeps the exact revision each Turn ran under.',
@@ -979,7 +978,7 @@ final class AppCopy {
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
         'All sessions, usage statistics, approval questions and recorded evidence stop appearing. '
-        'Physical cleanup continues separately. Saved rules, traffic policies, upstream services and accounts remain. '
+        'Physical cleanup continues separately. Saved rules, routing sets, upstream services and accounts remain. '
         'Privacy and duplicate-action identifiers may be retained indefinitely; backups and disk snapshots are unaffected.',
     'common.back': 'Back',
     'common.loading': 'Loading…',
@@ -1104,7 +1103,7 @@ final class AppCopy {
     'account.password.error.unavailable':
         'The password could not be changed. Try again.',
     'flow.capture': 'Capture',
-    'flow.environment': 'Traffic policy',
+    'flow.environment': 'Routing set',
     'flow.endpoint': 'Upstream service',
     'flow.protocol': 'Protocol',
     'flow.route': 'Route',
@@ -1230,7 +1229,7 @@ final class AppCopy {
     'exchange.content.not_recorded':
         'No saved conversation content is available. Check this Exchange\'s frozen recording policy and request status; routing and attempt details remain available.',
     'exchange.environment.frozen':
-        '{environment} · frozen traffic policy r{revision}',
+        '{environment} · frozen routing set r{revision}',
     'exchange.model.requested': 'Requested',
     'exchange.model.effective': 'Effective',
     'exchange.max_output': 'Max output',
@@ -1472,7 +1471,7 @@ final class AppCopy {
         'Only a body prefix was saved. The remaining bytes are not available here.',
     'exchange.raw.state.metadata_only': 'Metadata only',
     'exchange.raw.state.unavailable': 'Unavailable',
-    'environment.title': 'Traffic policies',
+    'environment.title': 'Routing',
     'environment.subtitle':
         'Choose where each Claude or Codex request goes and which rules apply',
     'environment.connection_only':
@@ -1491,23 +1490,22 @@ final class AppCopy {
     'environment.live.none':
         'No session is running on it. Changes apply when one starts.',
     'environment.live.started_on': 'started on revision {revision}',
-    'environment.select': 'Select a traffic policy.',
-    'environment.history.loading':
-        'Loading the frozen traffic policy revision…',
+    'environment.select': 'Select a routing set.',
+    'environment.history.loading': 'Loading the frozen routing set revision…',
     'environment.history.frozen': 'Frozen evidence',
     'environment.history.current': 'Back to current',
-    'environment.history.inspect': 'Inspect frozen traffic policy r{revision}',
+    'environment.history.inspect': 'Inspect frozen routing set r{revision}',
     'environment.history.detail':
-        'Read-only traffic policy revision {revision}. Current configuration is unchanged.',
+        'Read-only routing set revision {revision}. Current configuration is unchanged.',
     'environment.history.semantics':
-        'Read-only frozen traffic policy revision {revision}',
+        'Read-only frozen routing set revision {revision}',
     'environment.system_managed': 'Built-in · read-only',
     'environment.route.default': 'Default',
     'environment.route.fallback': 'Candidate',
     'environment.account.invalid':
         'This account does not belong to the selected upstream service.',
-    'environment.create': 'New traffic policy',
-    'environment.create.title': 'New traffic policy',
+    'environment.create': 'New routing set',
+    'environment.create.title': 'New routing set',
     'environment.create.scope':
         'Start with capture-only forwarding, or choose where requests come from and where to send them.',
     'environment.create.authority': 'Starting upstream service',
@@ -1544,7 +1542,7 @@ final class AppCopy {
         'Capture-only · Requests are forwarded unchanged.',
     'environment.dry_run.open': 'Check configuration',
     'environment.dry_run.menu': 'Configuration check · no upstream request',
-    'environment.dry_run.title': 'Check this traffic policy',
+    'environment.dry_run.title': 'Check this routing set',
     'environment.dry_run.intro':
         'Evaluate one synthetic request. No provider call or evidence is saved.',
     'environment.dry_run.source': 'Configuration version',
@@ -1584,7 +1582,7 @@ final class AppCopy {
     'environment.dry_run.no_flow':
         'Add a request source before trying this policy.',
     'environment.dry_run.invalid_json': 'Enter a valid JSON request body.',
-    'environment.field.name': 'Traffic policy name',
+    'environment.field.name': 'Routing set name',
     'environment.field.state': 'Runtime state',
     'environment.state.active': 'Active',
     'environment.state.disabled': 'Disabled',
@@ -1694,7 +1692,7 @@ final class AppCopy {
         'Routing, proxy, trust, credential, and ViberMate variables remain runtime-owned.',
     'environment.launch.set': 'Set variables',
     'environment.launch.set_detail':
-        'Exact name and value for this traffic policy revision.',
+        'Exact name and value for this routing set revision.',
     'environment.launch.delete': 'Delete variables',
     'environment.launch.delete_detail':
         'Remove inherited values before the Agent starts.',
@@ -1732,7 +1730,7 @@ final class AppCopy {
     'environment.account.activate_named': 'Activate {name}',
     'environment.account.active_named': 'Active account: {name}',
     'environment.account.activation_scope':
-        'Running sessions using this traffic policy switch on their next request.',
+        'Running sessions using this routing set switch on their next request.',
     'environment.account.script_active':
         'The published JavaScript rule selects an account for each request.',
     'environment.account.selector_scope':
@@ -1890,7 +1888,7 @@ final class AppCopy {
     'environment.transform.sample.invalid':
         'Enter valid bounded request, response, and Runtime values.',
     'environment.transform.sample.save': 'Use test inputs',
-    'code_library.title': 'Script library',
+    'code_library.title': 'Scripts',
     'code_library.subtitle':
         'Publish reusable message transforms and account selection rules',
     'code_library.error.load':
@@ -1906,11 +1904,11 @@ final class AppCopy {
     'code_library.kind.account_selectors': 'Account selection rules',
     'code_library.selector.empty': 'No account selection rules yet',
     'code_library.selector.empty.detail':
-        'Publish one rule, then choose its revision in a traffic policy.',
+        'Publish one rule, then choose its revision in a routing set.',
     'code_library.selector.starters.title':
         'Choose an upstream account with code',
     'code_library.selector.starters.detail':
-        'Start with a visible JavaScript example. A traffic policy freezes the published revision and exposes only accounts from its upstream service.',
+        'Start with a visible JavaScript example. A routing set freezes the published revision and exposes only accounts from its upstream service.',
     'code_library.selector.starter.loginUser': 'Choose by ViberMate login',
     'code_library.selector.starter.loginUser.detail':
         'Map the authenticated ViberMate login username to one exact account ID; fail locally when no login or mapping exists.',
@@ -2099,20 +2097,20 @@ final class AppCopy {
         'Enter a name without leading or trailing spaces.',
     'environment.validation.retention': 'Enter 1–3650 days.',
     'environment.review': 'Review impact',
-    'environment.publish': 'Publish traffic policy',
+    'environment.publish': 'Publish routing set',
     'environment.impact.title': 'What changes after publish',
     'environment.impact.future_only': 'Future sessions only',
     'environment.impact.summary': 'Configuration to publish',
     'environment.impact.description':
-        'Publishing never changes a running session. Each listed session keeps the traffic policy revision it started with; this draft is used only when a new session starts.',
+        'Publishing never changes a running session. Each listed session keeps the routing set revision it started with; this draft is used only when a new session starts.',
     'environment.impact.continuing':
         '{count} running sessions keep their current revision',
     'environment.impact.unchanged': 'Unchanged',
     'environment.impact.none':
-        'No running session currently uses this traffic policy. The new revision will be used on the next launch.',
+        'No running session currently uses this routing set. The new revision will be used on the next launch.',
     'environment.impact.more': '{count} more sessions',
     'notice.environment.published':
-        'Traffic policy published from the reviewed draft and impact boundary.',
+        'Routing set published from the reviewed draft and impact boundary.',
     'notice.environment.account_activated':
         'Account activated. Running sessions switch on their next request.',
     'routes.title': 'Upstream services',
@@ -2198,10 +2196,10 @@ final class AppCopy {
     'routes.account.replace.action': 'Replace credential',
     'routes.account.delete.title': 'Delete {name}?',
     'routes.account.delete.detail':
-        'This removes the account and its credential only when no traffic policy route references it. It does not delete captured evidence.',
+        'This removes the account and its credential only when no routing path references it. It does not delete captured evidence.',
     'routes.account.delete.action': 'Delete account',
     'routes.account.delete.blocked':
-        'The runtime refused deletion because traffic policy routes still reference this account.',
+        'The runtime refused deletion because routing paths still reference this account.',
     'routes.account.delete.reference':
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
@@ -2271,7 +2269,7 @@ final class AppCopy {
     'network.connections.load_more': 'Load more connections',
     'network.connections.source': 'Source',
     'network.connections.destination': 'Destination',
-    'network.connections.environment': 'Traffic policy',
+    'network.connections.environment': 'Routing set',
     'network.connections.decision': 'Decision',
     'network.connections.phase': 'Phase',
     'network.connections.started': 'Started',
@@ -2318,14 +2316,14 @@ final class AppCopy {
     'network.value.decryption.cleartext': 'Cleartext HTTP visible',
     'network.value.decryption.none': 'Not determined',
     'network.value.scope.network': 'Network',
-    'network.value.scope.environment': 'Traffic policy',
+    'network.value.scope.environment': 'Routing set',
     'network.value.source.network_rule': 'Connection rule',
     'network.value.caller.core': 'ViberMate runtime',
     'network.value.purpose.provider_attempt': 'Provider request',
     'network.value.purpose.route_operation': 'Route operation',
     'network.value.purpose.upstream_account_read': 'Upstream account query',
     'network.value.purpose.blind_tunnel': 'Uninspected forwarding',
-    'network.value.authority.environment': 'Traffic policy',
+    'network.value.authority.environment': 'Routing set',
     'network.value.authority.network': 'Network',
     'network.value.payload.client_semantic': 'Agent request',
     'network.value.payload.control': 'Control traffic',
@@ -2579,7 +2577,7 @@ final class AppCopy {
         'Root CA export requested. Importing and trusting it is a separate client step.',
     'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
-        'Publish reusable VLESS, SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
+        'Publish reusable VLESS, SOCKS5 and DNS choices. Routing sets freeze an exact revision.',
     'settings.egress.add': 'New network exit',
     'settings.egress.create': 'New network exit',
     'settings.egress.edit': 'Edit network exit',
@@ -2592,7 +2590,7 @@ final class AppCopy {
     'settings.egress.revision': 'Revision {revision}',
     'settings.egress.default_revision': 'Default setting revision {revision}',
     'settings.egress.default_detail':
-        'Used when no account or traffic policy selects an exit. Applies to new operations, not work already in progress.',
+        'Used when no account or routing set selects an exit. Applies to new operations, not work already in progress.',
     'settings.egress.remote_detail':
         'For a remote Runtime, proxy addresses refer to that server.',
     'settings.egress.clear_default': 'Clear default',
@@ -2724,8 +2722,8 @@ final class AppCopy {
     'settings.storage.server_path':
         'Server deployments choose this directory with --data-dir; containers must also mount persistent storage. This is not a folder on your browser’s machine.',
     'settings.storage.retention':
-        'New traffic policies keep full-content evidence for 30 days. Recording '
-        'mode and retention are owned by each traffic policy.',
+        'New routing sets keep full-content evidence for 30 days. Recording '
+        'mode and retention are owned by each routing set.',
     'settings.storage.credentials':
         'Credential header values (Authorization, API key, Cookie) are removed '
         'before anything is written. Request and response bodies, tool '
@@ -2925,13 +2923,13 @@ final class AppCopy {
     'server.users.policy.action': 'Access and usage alerts',
     'server.users.policy.title': 'Access and alerts · {username}',
     'server.users.policy.detail':
-        'Choose which published traffic policies this user may launch. Accounts are usable only through those policies.',
-    'server.users.policy.all': 'Allow every published traffic policy',
+        'Choose which published routing sets this user may launch. Accounts are usable only through those routing sets.',
+    'server.users.policy.all': 'Allow every published routing set',
     'server.users.policy.all_short': 'All policies',
     'server.users.policy.count': '{count} selected',
     'server.users.policy.none_short': 'No policies granted',
     'server.users.policy.none_detail':
-        'This user cannot start a session until you grant at least one traffic policy.',
+        'This user cannot start a session until you grant at least one routing set.',
     'server.users.policy.alerts': 'Observed usage alerts',
     'server.users.policy.alerts_detail':
         'Optional daily thresholds over retained ViberMate evidence. 0 disables a warning; these are not provider quota, billing, or a hard budget.',
@@ -3016,13 +3014,13 @@ final class AppCopy {
     'usage.empty.window':
         'No usage collected in this period. This does not mean the account was unused.',
     'usage.members': 'Member details',
-    'usage.group.profiles': 'Traffic policy',
+    'usage.group.profiles': 'Routing set',
     'usage.group.accounts': 'Account',
     'usage.group.models': 'Model',
     'usage.group.sources': 'Traffic source',
     'usage.group.callers': 'Caller',
     'usage.group.projects': 'Git project',
-    'usage.path.profiles': 'Traffic policy › Model',
+    'usage.path.profiles': 'Routing set › Model',
     'usage.path.accounts': 'Account › Model',
     'usage.path.models': 'Model › Caller',
     'usage.path.sources': 'Traffic source › Model',
@@ -3236,7 +3234,7 @@ final class AppCopy {
     'terminal.run.copied': '{client} command copied',
     'terminal.run.copy_failed': 'Could not copy command',
     'terminal.run.environment':
-        'Specific traffic policy · vibermate run --env <environment-id> -- <command>',
+        'Specific routing set · vibermate run --env <environment-id> -- <command>',
     'terminal.refresh_status': 'Inspect Terminal command',
     'terminal.unavailable':
         'The packaged command could not be inspected. Rebuild or reinstall ViberMate.',
@@ -3320,7 +3318,7 @@ final class AppCopy {
     'notice.inventory.endpoint_created':
         'Upstream service created. Link existing accounts to use them here.',
     'notice.inventory.account_created':
-        'Upstream account saved. Link it to a compatible service before using it in a traffic policy.',
+        'Upstream account saved. Link it to a compatible service before using it in a routing set.',
     'notice.inventory.account_created.action': 'Link to an upstream service',
     'notice.inventory.credential_replaced':
         'Credential replaced with its previous epoch as the CAS boundary.',

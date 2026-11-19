@@ -1,6 +1,6 @@
 # Child process environment
 
-Open a traffic policy's child-process environment editor. **Do not pass to Agent** lists names observed in the launching CLI and lets you add exact-name blocking rules. **Add / override** configures explicit values. Apply the editor, then save/publish the parent policy. Changes take effect on the next launch; existing processes and system environment are unchanged.
+Open a routing set's child-process environment editor. **Do not pass to Agent** lists names observed in the launching CLI and lets you add exact-name blocking rules. **Add / override** configures explicit values. Apply the editor, then save/publish the parent policy. Changes take effect on the next launch; existing processes and system environment are unchanged.
 
 ## Snapshot boundary
 

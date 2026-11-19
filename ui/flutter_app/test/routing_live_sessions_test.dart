@@ -12,7 +12,7 @@ void main() {
       const ViberMateApp(previewMode: true, preferChinese: false),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Traffic policies').first);
+    await tester.tap(find.text('Routing').first);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('environment-row-work')));
     await tester.pumpAndSettle();
@@ -33,7 +33,7 @@ void main() {
     expect(tester.takeException(), isNull);
 
     // Research has the other running session; a set nobody uses says so.
-    await tester.tap(find.text('Traffic policies').first);
+    await tester.tap(find.text('Routing').first);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('environment-row-research')));
     await tester.pumpAndSettle();

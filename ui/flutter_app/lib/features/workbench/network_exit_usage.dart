@@ -1,7 +1,7 @@
 import '../../core/api/control_models.dart';
 import '../../core/i18n/app_copy.dart';
 
-/// Who uses one network exit: traffic policies whose client flows or tool
+/// Who uses one network exit: routing sets whose client flows or tool
 /// route name it, and accounts that pin it. Each user freezes an exact
 /// revision, so a user can lag behind the latest saved one.
 final class NetworkExitUsage {
