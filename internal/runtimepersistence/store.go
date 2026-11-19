@@ -256,13 +256,11 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 	}
 	// Whether an agent may open or keep a connection is read on connections of
 	// its own, so neither the writer nor a long screen read can hold it up.
+	// They open on first use: the read pool above has already proven the file
+	// opens read-only, and a store that admits no connections never pays.
 	authority := sql.OpenDB(newSQLiteReadConnector(options.DatabasePath, options.BusyTimeout))
 	authority.SetMaxOpenConns(2)
 	authority.SetMaxIdleConns(2)
-	if err := authority.PingContext(ctx); err != nil {
-		operations.closeAdmission()
-		return fail(errors.Join(err, authority.Close(), reads.Close()))
-	}
 	captureRepo.reads = authority
 	manualCaptureRepo.reads = authority
 	activityRepo := newActivityRepository(database, reads, operations)
