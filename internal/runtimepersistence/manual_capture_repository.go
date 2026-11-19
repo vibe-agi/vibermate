@@ -320,9 +320,9 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		return manualcapture.DurableRecord{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	defer finish()
-	// Admission only reads. A temporary capture past its expiry is refused by
-	// the query itself; its stored state turns to expired on the owner's next
-	// read or at recovery, so opening a connection never waits for the writer.
+	// An admitted connection only reads, so it never waits for the writer. A
+	// temporary capture past its expiry is refused by the query itself; only
+	// then is its stored state turned to expired.
 	var original recording.Fence
 	record, err := scanManualCapture(captureObservationScan{row: authorityReads(repository.database, repository.reads).QueryRowContext(
 		operation,
@@ -333,6 +333,19 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		digest[:], toUnixMillis(now),
 	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
+		// The credential is refused whether or not this write lands.
+		_, _ = repository.database.ExecContext(
+			operation,
+			`UPDATE manual_captures
+			 SET state = 'expired', updated_at_unix_ms = ?
+			 WHERE proxy_credential_hash = ?
+			   AND state = 'active'
+			   AND lifetime = 'temporary'
+			   AND expires_at_unix_ms <= ?`,
+			toUnixMillis(now),
+			digest[:],
+			toUnixMillis(now),
+		)
 		return manualcapture.DurableRecord{}, manualcapture.ErrCredentialRejected
 	}
 	if err != nil {
