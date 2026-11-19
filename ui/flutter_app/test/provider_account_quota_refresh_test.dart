@@ -427,6 +427,11 @@ final class _QuotaApi extends Fake implements ControlApi {
     int limit = 50,
   }) async => NativeApprovalPage(const [], '');
   @override
+  Future<NativeSessionApprovalPage> nativeApprovalsAcrossSessions({
+    String cursor = '',
+    int limit = 50,
+  }) async => const NativeSessionApprovalPage([], '');
+  @override
   Future<List<ApprovalRecord>> pendingApprovals() async => const [];
 
   AccountFacts facts(String id, {int percent = 20}) {

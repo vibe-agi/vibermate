@@ -296,7 +296,7 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		rawEvidence:        rawEvidence,
 		runtimeUsers:       runtimeUsers,
 		operations:         operations,
-		nativeTools:        &nativeToolRepository{database: database, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery), legacyHistory: role == nil},
+		nativeTools:        &nativeToolRepository{database: database, reads: reads, operations: operations, committer: sqlTransactionCommitter{}, issuer: issuer, streamLifetime: options.NativeStreamLifetime, streams: make(map[nativetool.StreamAuthority]*nativeObservedStream), recovery: make(map[nativetool.ID]nativeRecovery), legacyHistory: role == nil},
 		closeDone:          make(chan struct{}),
 		observationOnly:    role != nil && role.identity == observationSchemaIdentity,
 	}, nil

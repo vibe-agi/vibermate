@@ -244,7 +244,11 @@ func TestServerOwnerWebSessionCanManageManualCapture(t *testing.T) {
 		t.Fatal(createErr)
 	}
 	waitServerRecording(t, host.Runtime())
-	ownerReadURLs = append(ownerReadURLs, "http://"+host.Status().ListenAddress+"/api/v1/captures/manual_capture:"+nativeCapture.Capture.ID+"/native-tools/approvals")
+	ownerReadURLs = append(ownerReadURLs,
+		"http://"+host.Status().ListenAddress+"/api/v1/captures/manual_capture:"+nativeCapture.Capture.ID+"/native-tools/approvals",
+		// Every session's waiting questions together: still owner-only.
+		"http://"+host.Status().ListenAddress+"/api/v1/native-tools/approvals",
+	)
 	for _, ownerReadURL := range ownerReadURLs {
 		for _, trial := range []struct {
 			label      string

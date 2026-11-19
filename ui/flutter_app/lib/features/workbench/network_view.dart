@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/api/control_models.dart';
+import '../../core/api/native_tool_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
@@ -270,10 +271,19 @@ final class _ApprovalsPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final decided = controller.decidedApprovals ?? const <ApprovalRecord>[];
+    // Tool questions come from every session, or, on a Runtime that lists
+    // only one session's, from the selected one.
+    final nativeListed =
+        controller.nativeApprovalsForAllSessions ||
+        controller.selectedCaptureKey != null;
+    final nativeBySession = <String, List<NativeApproval>>{};
+    for (final approval in controller.nativeApprovals) {
+      (nativeBySession[approval.captureKey] ??= []).add(approval);
+    }
     if (decided.isEmpty &&
         approvals.isEmpty &&
         !controller.nativeApprovalAttention &&
-        (controller.selectedCaptureKey == null ||
+        (!nativeListed ||
             controller.nativeApprovalScanComplete &&
                 controller.nativeApprovalError == null)) {
       return CenteredMessage(
@@ -286,7 +296,7 @@ final class _ApprovalsPane extends StatelessWidget {
       children: [
         SectionLabel(
           label: copy('network.tab.approvals'),
-          count: approvals.length,
+          count: approvals.length + controller.nativeApprovals.length,
         ),
         const Divider(height: 1),
         Expanded(
@@ -306,38 +316,41 @@ final class _ApprovalsPane extends StatelessWidget {
                   controller: controller,
                   copy: copy,
                 ),
-              if (controller.selectedCaptureKey != null)
+              for (final MapEntry(key: session, value: questions)
+                  in nativeBySession.entries) ...[
                 Padding(
-                  padding: const EdgeInsets.all(12),
+                  key: Key('native-session-$session'),
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                   child: Text(
-                    '${controller.selectedCapture?.displayName ?? copy('native.selectedCapture')} · ${controller.nativeApprovalScanComplete ? copy.format('native.pendingCount', {'count': controller.nativeApprovals.length}) : copy('native.pending')}',
+                    _nativeSessionLabel(session, questions.length),
+                    style: Theme.of(context).textTheme.titleSmall,
                   ),
                 ),
-              for (final approval in controller.nativeApprovals)
-                NativeToolApprovalRow(
-                  key: ValueKey('native-${approval.id}'),
-                  approval: approval,
-                  profileName:
-                      controller.data?.environments
-                          .where(
-                            (environment) =>
-                                environment.id == approval.environment.id,
-                          )
-                          .firstOrNull
-                          ?.name ??
-                      copy('native.profile'),
-                  copy: copy,
-                  onDecision: (decision) => unawaited(
-                    controller.decideNativeApproval(approval, decision),
+                for (final approval in questions)
+                  NativeToolApprovalRow(
+                    key: ValueKey('native-${approval.id}'),
+                    approval: approval,
+                    profileName:
+                        controller.data?.environments
+                            .where(
+                              (environment) =>
+                                  environment.id == approval.environment.id,
+                            )
+                            .firstOrNull
+                            ?.name ??
+                        copy('native.profile'),
+                    copy: copy,
+                    onDecision: (decision) => unawaited(
+                      controller.decideNativeApproval(approval, decision),
+                    ),
                   ),
-                ),
+              ],
               if (controller.nativeApprovalError != null)
                 Padding(
                   padding: const EdgeInsets.all(12),
                   child: Text(copy('native.unavailable')),
                 ),
-              if (controller.selectedCaptureKey != null &&
-                  !controller.nativeApprovalScanComplete)
+              if (nativeListed && !controller.nativeApprovalScanComplete)
                 TextButton(
                   onPressed: controller.nativeApprovalsLoading
                       ? null
@@ -364,6 +377,23 @@ final class _ApprovalsPane extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  /// The session a group of tool questions waits in, as the session list
+  /// names it; its workspace tells apart two runs of the same client.
+  String _nativeSessionLabel(String captureKey, int count) {
+    final capture = controller.data?.captures
+        .where((value) => value.key == captureKey)
+        .firstOrNull;
+    final workspace = capture?.managedRun?.workspaceLabel;
+    return [
+      controller.nativeSessionName(captureKey) ??
+          copy('native.selectedCapture'),
+      if (workspace != null && workspace.isNotEmpty) workspace,
+      controller.nativeApprovalScanComplete
+          ? copy.format('native.pendingCount', {'count': count})
+          : copy('native.pending'),
+    ].join(' · ');
   }
 }
 

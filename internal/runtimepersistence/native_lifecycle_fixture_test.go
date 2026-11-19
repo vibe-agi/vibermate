@@ -90,9 +90,34 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 		capture = create(store, now)
 		source = captureassignment.SourceLaunch
 	}
-	assignment := captureAssignmentFixture(capture, aggregate.ID, 1, source)
+	operation, revision := nativeFixtureCapture(t, store, mode, execute, plan, capture, source, now, defaultNativeFixtureIDs)
+	return store, operation, revision
+}
+
+// nativeFixtureIDs names the rows one fixture Capture creates, so several
+// Captures can share one store.
+type nativeFixtureIDs struct {
+	session, initialize, initialized, list, call nativetool.ID
+}
+
+var defaultNativeFixtureIDs = nativeFixtureIDs{
+	session:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	initialize:  "11111111111111111111111111111111",
+	initialized: "22222222222222222222222222222222",
+	list:        "33333333333333333333333333333333",
+	call:        "44444444444444444444444444444444",
+}
+
+// nativeFixtureCapture assigns plan's published Environment to capture and
+// drives one native session to a bound tools/call, returned with the scope
+// revision.
+func nativeFixtureCapture(t *testing.T, store *Store, mode environment.ToolPolicyMode, execute bool, plan environment.ClientToolPlan, capture captureidentity.Reference, source captureassignment.Source, now time.Time, ids nativeFixtureIDs) (nativetool.ID, uint64) {
+	t.Helper()
+	ctx := context.Background()
+	assignment := captureAssignmentFixture(capture, plan.EnvironmentID(), 1, source)
 	assignment.EnvironmentDigest = plan.EnvironmentDigest()
-	assignment.LaunchAuthority, err = environment.NewLaunchAuthorityBoundaryFromScopes(aggregate.ID, 1, plan.EnvironmentDigest(), []string{"chatgpt.com:443"}, nil)
+	var err error
+	assignment.LaunchAuthority, err = environment.NewLaunchAuthorityBoundaryFromScopes(plan.EnvironmentID(), 1, plan.EnvironmentDigest(), []string{"chatgpt.com:443"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +130,7 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := nativetool.ID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	session := ids.session
 	if err := repo.RegisterSession(ctx, nativetool.SessionInput{ID: session, Capture: capture, Plan: plan, AssignmentRevision: 1, ExpectedAuthorityRevision: revision, OwnerEpoch: 1, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +158,7 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 		}
 		return b
 	}
-	initialize := nativetool.ID("11111111111111111111111111111111")
+	initialize := ids.initialize
 	bind(initialize, nativetool.RequestInitialize, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`, nil)
 	handshakeAttempt := 0
 	complete := func(id nativetool.ID) {
@@ -163,16 +188,16 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 		}
 	}
 	complete(initialize)
-	bind("22222222222222222222222222222222", nativetool.RequestInitialized, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, nil)
+	bind(ids.initialized, nativetool.RequestInitialized, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, nil)
 	if execute {
-		complete("22222222222222222222222222222222")
+		complete(ids.initialized)
 	}
 	sessionRevision, err := repo.ReadySession(ctx, session, 1, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	input.SessionRevision = sessionRevision
-	list := nativetool.ID("33333333333333333333333333333333")
+	list := ids.list
 	bind(list, nativetool.RequestToolsList, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`, nil)
 	complete(list)
 	observer, err := nativetool.NewCatalogObserver(nativetool.CatalogScope{Capture: capture, Plan: plan, AssignmentRevision: 1, OwnerEpoch: 1, SessionID: session, SessionRevision: sessionRevision + 1, CatalogGeneration: 1})
@@ -194,9 +219,9 @@ func nativeFixtureOnStore(t *testing.T, mode environment.ToolPolicyMode, recordi
 	args, _ := protocolcore.NewJSONObject([]byte(`{"path":"a"}`), 1024)
 	key, _ := protocolcore.NewCallKey("native", "3")
 	intents := []protocolcore.ToolIntent{{ResponseID: "rpc-3", Ordinal: 0, Call: protocolcore.ToolCall{Key: key, Name: "read_file", Arguments: args}}}
-	operation := nativetool.ID("44444444444444444444444444444444")
+	operation := ids.call
 	bind(operation, nativetool.RequestToolsCall, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"a"}}}`, intents)
-	return store, operation, revision
+	return operation, revision
 }
 
 // HISTORICAL SYNTHETIC DATA: constrained datastore history only. No execution,

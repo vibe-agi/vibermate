@@ -172,11 +172,23 @@ type AuthorityRepository interface {
 	LifecycleAuthority
 	ExecutionAuthority
 	ListPendingApprovals(context.Context, PendingApprovalRequest) (PendingApprovalPage, error)
+	ListAllPendingApprovals(context.Context, AllPendingApprovalRequest) (PendingApprovalPage, error)
 }
 type PendingApprovalRequest struct {
 	Capture        captureidentity.Reference
 	AfterCreatedAt time.Time
 	AfterID        ID
+	Limit          int
+}
+
+// AllPendingApprovalRequest pages the questions still waiting in every
+// Capture, oldest first, omitting those expired at ObservedAt. It carries no
+// caller: whoever lists across Captures must decide which of them the caller
+// may see, exactly as it would for one Capture.
+type AllPendingApprovalRequest struct {
+	AfterCreatedAt time.Time
+	AfterID        ID
+	ObservedAt     time.Time
 	Limit          int
 }
 type PendingApprovalItem struct {

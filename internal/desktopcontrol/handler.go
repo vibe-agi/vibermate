@@ -593,6 +593,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
+	handler.mux.HandleFunc("GET "+NativeAllApprovalsPath, handler.listAllNativeApprovals)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals", handler.listNativeApprovals)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations", handler.listNativeOperations)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/operations/{operationId}", handler.getNativeOperation)
