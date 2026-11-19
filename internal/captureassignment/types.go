@@ -114,6 +114,10 @@ type CommitResult struct {
 
 type Repository interface {
 	Load(context.Context, captureidentity.Reference) (Assignment, bool, error)
+	// LoadMany reads the stored assignments of up to MaxListLimit distinct
+	// Captures in one query. A Capture without an assignment is simply
+	// absent from the result; order is unspecified.
+	LoadMany(context.Context, []captureidentity.Reference) ([]Assignment, error)
 	ListByEnvironment(context.Context, environment.EnvironmentID, int) ([]Assignment, error)
 	Write(context.Context, Revision, Assignment) (CommitResult, error)
 }
@@ -173,6 +177,10 @@ type Controller interface {
 		CreateCommand,
 	) (Assignment, environment.LaunchEnvironmentPolicy, error)
 	Resolve(context.Context, captureidentity.Reference) (Assignment, error)
+	// ResolveMany is the list-screen form of Resolve: one repository read for
+	// a whole page. Captures without a readable assignment are left out of the
+	// map rather than failing the batch.
+	ResolveMany(context.Context, []captureidentity.Reference) (map[captureidentity.Reference]Assignment, error)
 	ApplyLatest(context.Context, captureidentity.Reference, Revision) (Assignment, error)
 }
 

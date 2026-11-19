@@ -1073,8 +1073,32 @@ final class PreviewControlApi
     }
     final requestedEnd = offset + limit;
     final end = requestedEnd < values.length ? requestedEnd : values.length;
+    // Like the Runtime, each listed capture says which routing set it is on.
+    CaptureRecord withRoutingSet(CaptureRecord capture) {
+      final assignment = _assignments[capture.key];
+      if (assignment == null) return capture;
+      return CaptureRecord(
+        key: capture.key,
+        id: capture.id,
+        kind: capture.kind,
+        displayName: capture.displayName,
+        state: capture.state,
+        observation: capture.observation,
+        createdAt: capture.createdAt,
+        updatedAt: capture.updatedAt,
+        activityAt: capture.activityAt,
+        managedRun: capture.managedRun,
+        manualCapture: capture.manualCapture,
+        transport: capture.transport,
+        environment: CaptureEnvironmentRef(
+          id: assignment.environmentId,
+          revision: assignment.environmentRevision,
+        ),
+      );
+    }
+
     return CapturePage(
-      items: List.unmodifiable(values.sublist(offset, end)),
+      items: List.unmodifiable(values.sublist(offset, end).map(withRoutingSet)),
       nextCursor: end < values.length ? 'preview-captures-$end' : null,
     );
   }

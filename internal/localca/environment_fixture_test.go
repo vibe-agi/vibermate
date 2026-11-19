@@ -250,6 +250,21 @@ func (repository *localAssignmentRepository) Load(
 	return assignment, exists, nil
 }
 
+func (repository *localAssignmentRepository) LoadMany(
+	_ context.Context,
+	references []captureidentity.Reference,
+) ([]captureassignment.Assignment, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	result := make([]captureassignment.Assignment, 0, len(references))
+	for _, reference := range references {
+		if assignment, exists := repository.assignments[reference]; exists {
+			result = append(result, assignment)
+		}
+	}
+	return result, nil
+}
+
 func (repository *localAssignmentRepository) ListByEnvironment(
 	_ context.Context,
 	id environment.EnvironmentID,

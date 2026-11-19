@@ -289,6 +289,66 @@ func (manager *Manager) Resolve(ctx context.Context, reference captureidentity.R
 	return assignment, nil
 }
 
+// ResolveMany reads the current assignments of one page of Captures with a
+// single repository query. It never registers per-Capture state: listing old
+// history must not grow the set of Captures that shutdown revokes. Rows that
+// Resolve would refuse (invalid, not requested, or behind a write whose
+// outcome is unknown) are left out instead of failing the whole page.
+func (manager *Manager) ResolveMany(
+	ctx context.Context,
+	references []captureidentity.Reference,
+) (map[captureidentity.Reference]Assignment, error) {
+	finish, err := manager.lifecycle.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	if len(references) > MaxListLimit {
+		return nil, ErrInvalidAssignment
+	}
+	wanted := make(map[captureidentity.Reference]bool, len(references))
+	unique := make([]captureidentity.Reference, 0, len(references))
+	for _, reference := range references {
+		if reference.Validate() != nil {
+			return nil, ErrInvalidAssignment
+		}
+		if !wanted[reference] {
+			wanted[reference] = true
+			unique = append(unique, reference)
+		}
+	}
+	result := make(map[captureidentity.Reference]Assignment, len(unique))
+	if len(unique) == 0 {
+		return result, nil
+	}
+	assignments, err := manager.repository.LoadMany(ctx, unique)
+	if err != nil {
+		return nil, err
+	}
+	for _, assignment := range assignments {
+		if !wanted[assignment.Capture] || assignment.Validate() != nil ||
+			manager.poisoned(assignment.Capture) {
+			continue
+		}
+		result[assignment.Capture] = assignment
+	}
+	return result, nil
+}
+
+// poisoned reports whether this process lost track of a Capture's last
+// assignment write, without registering state for Captures it never wrote.
+func (manager *Manager) poisoned(reference captureidentity.Reference) bool {
+	manager.statesMu.Lock()
+	state := manager.states[reference.Key()]
+	manager.statesMu.Unlock()
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.poisoned
+}
+
 func (manager *Manager) finishWrite(state *captureState, expected Assignment, result CommitResult, writeErr error) (Assignment, error) {
 	switch result.Outcome {
 	case CommitOutcomeCommitted:
