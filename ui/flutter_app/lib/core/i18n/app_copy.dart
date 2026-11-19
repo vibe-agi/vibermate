@@ -261,7 +261,7 @@ final class AppCopy {
     'error.account_disabled':
         'This account is disabled. Select an active account before continuing.',
     'error.account_credential_unavailable':
-        'The account credential is unavailable. Check its status under Upstream accounts, then try again.',
+        'The account credential is unavailable. Check its status under Accounts, then try again.',
     'error.account_not_found':
         'This account no longer exists. Refresh the page and select another account.',
     'error.upstream_not_found':
@@ -421,8 +421,8 @@ final class AppCopy {
     'nav.captures': 'Sessions',
     'nav.environments': 'Routing',
     'nav.routes': 'Upstream services',
-    'nav.provider_accounts': 'Upstream accounts',
-    'provider_accounts.title': 'Upstream accounts',
+    'nav.provider_accounts': 'Accounts',
+    'provider_accounts.title': 'Accounts',
     'provider_accounts.refresh_all': 'Refresh all accounts',
     'provider_accounts.refresh_all.hint':
         'Reload account status and upstream quota',
@@ -1197,7 +1197,7 @@ final class AppCopy {
     'exchange.failure.provider_credential_unavailable.title':
         'The selected upstream account has no usable credential.',
     'exchange.failure.provider_credential_unavailable.action':
-        'Refresh or reconnect that account under Upstream accounts, then retry.',
+        'Refresh or reconnect that account under Accounts, then retry.',
     'exchange.failure.account_selector_failed.title':
         'No usable upstream account was selected.',
     'exchange.failure.account_selector_failed.action':
@@ -1647,7 +1647,7 @@ final class AppCopy {
         'The snapshot is partial. You can still add rules for missing names.',
     'environment.launch.no_matches': 'No matching variables',
     'environment.launch.set_help':
-        'These values are saved as policy settings. Use Upstream accounts for account credentials.',
+        'These values are saved as policy settings. Use Accounts for account credentials.',
     'environment.launch.blocked_count': '{count} blocked',
     'environment.launch.detail':
         'Applied by vibermate run before the Agent starts.',
@@ -2131,7 +2131,7 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
     'routes.endpoint.boundary':
-        'Configure the destination and supported protocols here. Create credentials in Upstream accounts, then link compatible accounts to this service.',
+        'Configure the destination and supported protocols here. Create credentials in Accounts, then link compatible accounts to this service.',
     'routes.endpoint.cleartext_warning':
         'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
     'routes.validation.protocol': 'Choose at least one upstream protocol.',
@@ -3482,7 +3482,7 @@ final class AppCopy {
     'error.account_busy': '账号正在处理另一项操作，请稍后重试。',
     'error.account_conflict': '账号信息已更新，本次修改未保存。请刷新账号信息后重试。',
     'error.account_disabled': '此账号已停用，请选择可用账号后继续。',
-    'error.account_credential_unavailable': '账号凭据暂不可用。请在「上游账号」中检查凭据状态后重试。',
+    'error.account_credential_unavailable': '账号凭据暂不可用。请在「账号」中检查凭据状态后重试。',
     'error.account_not_found': '此账号已不存在。请刷新页面，重新选择账号。',
     'error.upstream_not_found': '此上游服务已不存在。请刷新页面，重新选择服务。',
     'error.inspection_changed': '保留的历史记录已变化，请刷新此视图。',
@@ -3619,8 +3619,8 @@ final class AppCopy {
     'nav.captures': '运行记录',
     'nav.environments': '流量策略',
     'nav.routes': '上游服务',
-    'nav.provider_accounts': '上游账号',
-    'provider_accounts.title': '上游账号',
+    'nav.provider_accounts': '账号',
+    'provider_accounts.title': '账号',
     'provider_accounts.refresh_all': '刷新全部账号',
     'provider_accounts.refresh_all.hint': '重新读取账号状态与上游额度',
     'provider_accounts.quota.refresh': '刷新额度',
@@ -4260,7 +4260,7 @@ final class AppCopy {
         '检查该账号的额度，或等待服务商重置后再试。',
     'exchange.failure.provider_credential_unavailable.title': '所选上游账号没有可用凭据。',
     'exchange.failure.provider_credential_unavailable.action':
-        '在「上游账号」中刷新或重新连接该账号，然后重试。',
+        '在「账号」中刷新或重新连接该账号，然后重试。',
     'exchange.failure.account_selector_failed.title': '未能选出可用的上游账号。',
     'exchange.failure.account_selector_failed.action':
         '检查路由关联的账号和账号选择规则，重新测试规则后再试。',
@@ -4647,7 +4647,7 @@ final class AppCopy {
         '这里只过滤子进程继承的变量，不限制文件或网络访问，并非沙箱。疑似凭据仅按名称识别，未识别或新增的密钥不会自动屏蔽。运行时管理的变量由路由和凭据策略处理。',
     'environment.launch.truncated': '快照不完整，仍可按名称添加未列出的变量。',
     'environment.launch.no_matches': '没有匹配的变量',
-    'environment.launch.set_help': '此处填写的值会保存到策略中，并非密钥存储；账号凭据请在「上游账号」中管理。',
+    'environment.launch.set_help': '此处填写的值会保存到策略中，并非密钥存储；账号凭据请在「账号」中管理。',
     'environment.launch.blocked_count': '已屏蔽 {count} 项',
     'environment.launch.detail': '由 vibermate run 在 Agent 启动前应用。',
     'environment.launch.summary': '设置 {set} · 删除 {delete}',
@@ -5043,8 +5043,7 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.anthropic_messages': 'POST /v1/messages',
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
-    'routes.endpoint.boundary':
-        '这里配置服务地址与支持的协议。凭据在「上游账号」中统一添加，再关联地址和认证类型兼容的账号。',
+    'routes.endpoint.boundary': '这里配置服务地址与支持的协议。凭据在「账号」中统一添加，再关联地址和认证类型兼容的账号。',
     'routes.endpoint.cleartext_warning': 'HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。',
     'routes.validation.protocol': '请至少选择一种上游协议。',
     'routes.endpoint.create.action': '创建上游服务',
