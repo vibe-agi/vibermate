@@ -580,6 +580,9 @@ void main() {
               findsNothing,
             );
             await tester.ensureVisible(refresh);
+            // ensureVisible only scrolls; lay out the new position before
+            // tapping, or the tap lands where the button used to be.
+            await tester.pump();
             await tester.tap(refresh);
             await tester.pump();
             expect(api.pending.length, 4);
