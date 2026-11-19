@@ -36,3 +36,34 @@ func TestNativeApprovalCursorBindsStrictPendingTraversal(t *testing.T) {
 		t.Fatalf("fresh traversal: %+v %v", first, err)
 	}
 }
+
+// The list across Captures and each Capture's own list traverse different
+// sets; a cursor from one must never resume the other.
+func TestNativeApprovalCursorsStayInTheirTraversal(t *testing.T) {
+	capture := captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: "capture"}
+	at := time.Date(2026, 11, 19, 1, 2, 3, 456000000, time.UTC)
+	now := at.Add(time.Minute)
+	id := nativetool.ID("22222222222222222222222222222222")
+	all, err := encodeNativeApprovalCursor(nativeAllCapturesCursorDomain, at, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := parseAllNativeApprovalQuery(url.Values{"cursor": {all}, "limit": {"3"}}.Encode(), now)
+	if err != nil || !query.AfterCreatedAt.Equal(at) || query.AfterID != id || query.Limit != 3 || !query.ObservedAt.Equal(now) {
+		t.Fatalf("all-Captures roundtrip: %+v %v", query, err)
+	}
+	if _, err := parseNativeApprovalQuery("cursor="+all, capture); err == nil {
+		t.Fatal("all-Captures cursor resumed one Capture's list")
+	}
+	one, err := nativeApprovalCursor(capture, at, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseAllNativeApprovalQuery("cursor="+one, now); err == nil {
+		t.Fatal("one Capture's cursor resumed the all-Captures list")
+	}
+	fresh, err := parseAllNativeApprovalQuery("", now)
+	if err != nil || !fresh.AfterCreatedAt.IsZero() || fresh.AfterID != "" || fresh.Limit != 50 {
+		t.Fatalf("fresh traversal: %+v %v", fresh, err)
+	}
+}

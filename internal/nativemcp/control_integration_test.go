@@ -112,6 +112,15 @@ func TestNativeApprovalRequiresAuthenticatedCaptureAndExactIntent(t *testing.T) 
 				if err = json.Unmarshal(first.Body.Bytes(), &page); err != nil || len(page.Items) != 1 || page.Items[0].ID != a.ID.String() || page.NextCursor != "" {
 					t.Fatalf("direct pending page %+v %v", page, err)
 				}
+				// The same question in the list across sessions, answered by the
+				// same authority and leaking nothing more.
+				everyone := request("GET", desktopcontrol.NativeAllApprovalsPath, read, "", "", "")
+				check(everyone, 200)
+				var all desktopcontrol.NativeSessionApprovalPageDTO
+				if err = json.Unmarshal(everyone.Body.Bytes(), &all); err != nil || len(all.Items) != 1 || all.Items[0].Approval.ID != a.ID.String() || all.Items[0].Approval.CaptureKey != capture.Key() || all.Items[0].CaptureDisplayName == "" || all.NextCursor != "" {
+					t.Fatalf("all-sessions pending page %+v %v", all, err)
+				}
+				check(request("GET", desktopcontrol.NativeAllApprovalsPath, "", "", "", ""), 401)
 				for _, query := range []string{"?limit=0", "?limit=200", "?limit=1&limit=2", "?afterSequence=0", "?afterSequence=999999", "?afterSequence=0&afterSequence=1", "?unknown=1", "?afterSequence=-1", "?cursor=", "?cursor=foreign", "?cursor=a&cursor=b"} {
 					check(request("GET", collection+query, read, "", "", ""), 422)
 				}

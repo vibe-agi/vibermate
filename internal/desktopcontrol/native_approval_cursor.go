@@ -16,8 +16,22 @@ import (
 
 const nativeApprovalCursorBytes = 41
 
+// A cursor is bound to the traversal that issued it: one Capture's, or the
+// list across every Capture. Neither is accepted by the other.
+func nativeCaptureCursorDomain(c captureidentity.Reference) string {
+	return "native-approval-cursor\x00" + c.Key()
+}
+
+const nativeAllCapturesCursorDomain = "native-approval-cursor-all-captures\x00"
+
 func nativeApprovalCursor(c captureidentity.Reference, at time.Time, id nativetool.ID) (string, error) {
-	if c.Validate() != nil || at.IsZero() || at.UnixMilli() <= 0 {
+	if c.Validate() != nil {
+		return "", nativetool.ErrInvalid
+	}
+	return encodeNativeApprovalCursor(nativeCaptureCursorDomain(c), at, id)
+}
+func encodeNativeApprovalCursor(domain string, at time.Time, id nativetool.ID) (string, error) {
+	if at.IsZero() || at.UnixMilli() <= 0 {
 		return "", nativetool.ErrInvalid
 	}
 	if _, err := nativetool.NewID(string(id)); err != nil {
@@ -29,13 +43,29 @@ func nativeApprovalCursor(c captureidentity.Reference, at time.Time, id nativeto
 	if _, err := hex.Decode(payload[9:25], []byte(id)); err != nil {
 		return "", nativetool.ErrInvalid
 	}
-	digest := sha256.Sum256([]byte("native-approval-cursor\x00" + c.Key()))
+	digest := sha256.Sum256([]byte(domain))
 	copy(payload[25:], digest[:16])
 	return base64.RawURLEncoding.EncodeToString(payload[:]), nil
 }
 func parseNativeApprovalQuery(raw string, c captureidentity.Reference) (nativetool.PendingApprovalRequest, error) {
 	q := nativetool.PendingApprovalRequest{Capture: c, Limit: 50}
-	if c.Validate() != nil || len(raw) > 512 {
+	if c.Validate() != nil {
+		return q, nativetool.ErrInvalid
+	}
+	page, err := parseNativeApprovalPage(raw, nativeCaptureCursorDomain(c))
+	q.AfterCreatedAt, q.AfterID, q.Limit = page.AfterCreatedAt, page.AfterID, page.Limit
+	return q, err
+}
+func parseAllNativeApprovalQuery(raw string, now time.Time) (nativetool.AllPendingApprovalRequest, error) {
+	q, err := parseNativeApprovalPage(raw, nativeAllCapturesCursorDomain)
+	q.ObservedAt = now
+	return q, err
+}
+
+// parseNativeApprovalPage reads limit and cursor, nothing else.
+func parseNativeApprovalPage(raw, domain string) (nativetool.AllPendingApprovalRequest, error) {
+	q := nativetool.AllPendingApprovalRequest{Limit: 50}
+	if len(raw) > 512 {
 		return q, nativetool.ErrInvalid
 	}
 	values, err := url.ParseQuery(raw)
@@ -64,7 +94,7 @@ func parseNativeApprovalQuery(raw string, c captureidentity.Reference) (nativeto
 	if err != nil || len(payload) != nativeApprovalCursorBytes || payload[0] != 1 || base64.RawURLEncoding.EncodeToString(payload) != value {
 		return q, nativetool.ErrInvalid
 	}
-	digest := sha256.Sum256([]byte("native-approval-cursor\x00" + c.Key()))
+	digest := sha256.Sum256([]byte(domain))
 	if subtle.ConstantTimeCompare(payload[25:], digest[:16]) != 1 {
 		return q, nativetool.ErrInvalid
 	}

@@ -21,6 +21,7 @@ type nativeToolRepository struct {
 	history         nativetool.HistoryRecorder
 	recordingScopes recording.ScopeIssuer
 	database        *sql.DB
+	reads           *sql.DB // screen reads: listings across Captures
 	operations      *operationGate
 	committer       transactionCommitter
 	issuerMu        sync.Mutex

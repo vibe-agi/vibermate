@@ -1,0 +1,57 @@
+{
+  "items": [
+    {
+      "captureDisplayName": "claude",
+      "approval": {
+        "id": "00000000000000000000000000000001",
+        "operationId": "000000000000000000000000000003e9",
+        "captureKey": "managed_run:same-id",
+        "environment": {
+          "id": "native.synthetic",
+          "revision": 3,
+          "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "revision": 1,
+        "state": "pending",
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "bindingDigest": "0100000000000000000000000000000000000000000000000000000000000000",
+        "preview": {
+          "intents": [
+            {
+              "toolName": "read_file",
+              "action": "tool_call",
+              "target": "https://chatgpt.com",
+              "arguments": {
+                "path": "notes.txt"
+              },
+              "truncated": false
+            }
+          ],
+          "truncated": false
+        },
+        "previewState": "available",
+        "credentialOwner": "original_client"
+      }
+    },
+    {
+      "captureDisplayName": "Manual app",
+      "approval": {
+        "id": "00000000000000000000000000000002",
+        "operationId": "000000000000000000000000000003ea",
+        "captureKey": "manual_capture:same-id",
+        "environment": {
+          "id": "native.synthetic",
+          "revision": 3,
+          "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "revision": 1,
+        "state": "pending",
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "bindingDigest": "0200000000000000000000000000000000000000000000000000000000000000",
+        "previewState": "unavailable",
+        "credentialOwner": "original_client"
+      }
+    }
+  ],
+  "nextCursor": ""
+}
