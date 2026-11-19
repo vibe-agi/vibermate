@@ -558,22 +558,102 @@ final class _EnvironmentDetail extends StatelessWidget {
                 )
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
-                  itemCount: value.clientEndpoints.length,
-                  itemBuilder: (context, index) => _ClientEndpointPlan(
-                    controller: controller,
-                    environment: value,
-                    clientEndpoint: value.clientEndpoints[index],
-                    endpoints: endpoints,
-                    accounts: accounts,
-                    copy: copy,
-                    activationEnabled:
-                        !historical &&
-                        !value.systemOwned &&
-                        !controller.environmentMutating,
-                  ),
+                  itemCount:
+                      value.clientEndpoints.length + (historical ? 0 : 1),
+                  itemBuilder: (context, index) => !historical && index == 0
+                      ? _LiveSessions(
+                          controller: controller,
+                          environment: value,
+                          copy: copy,
+                        )
+                      : _ClientEndpointPlan(
+                          controller: controller,
+                          environment: value,
+                          clientEndpoint: value
+                              .clientEndpoints[historical ? index : index - 1],
+                          endpoints: endpoints,
+                          accounts: accounts,
+                          copy: copy,
+                          activationEnabled:
+                              !historical &&
+                              !value.systemOwned &&
+                              !controller.environmentMutating,
+                        ),
                 ),
         ),
       ],
+    );
+  }
+}
+
+/// The sessions running on this routing set right now, so an edit's reach is
+/// visible before it is made. Each keeps the revision it started with.
+final class _LiveSessions extends StatelessWidget {
+  const _LiveSessions({
+    required this.controller,
+    required this.environment,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final EnvironmentRecord environment;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final theme = Theme.of(context).textTheme;
+    final muted = theme.bodySmall?.copyWith(color: colors.textMuted);
+    final sessions = [
+      for (final capture in controller.runningCaptures)
+        if (capture.environment?.id == environment.id) capture,
+    ];
+    return Padding(
+      key: const Key('environment-live-sessions'),
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            copy.format('environment.live.title', {
+              'count': '${sessions.length}',
+            }),
+            style: theme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          if (sessions.isEmpty)
+            Text(copy('environment.live.none'), style: muted)
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final capture in sessions)
+                  ActionChip(
+                    key: Key('environment-live-${capture.key}'),
+                    avatar: Icon(Icons.circle, size: 8, color: colors.verified),
+                    label: Text(
+                      [
+                        capture.displayName,
+                        if ((capture.managedRun?.workspaceLabel ?? '')
+                            .isNotEmpty)
+                          capture.managedRun!.workspaceLabel!,
+                        if (capture.environment!.revision !=
+                            environment.revision)
+                          copy.format('environment.live.started_on', {
+                            'revision': '${capture.environment!.revision}',
+                          }),
+                      ].join(' · '),
+                    ),
+                    onPressed: () {
+                      controller.selectSection(WorkbenchSection.captures);
+                      unawaited(controller.selectCapture(capture.key));
+                    },
+                  ),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }
