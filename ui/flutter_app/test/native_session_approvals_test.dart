@@ -127,6 +127,79 @@ void main() {
     );
   });
 
+  test('a failed refresh keeps the questions already verified', () async {
+    final items = sampleItems();
+    final approvals = {
+      for (final item in items)
+        (item['approval']! as Map<String, Object?>)['id']! as String:
+            item['approval']! as Map<String, Object?>,
+    };
+    var failing = false;
+    final client = MockClient((request) async {
+      if (failing) {
+        return json({
+          'reasonCode': 'native_tool_approval_unavailable',
+          'messageKey': 'error.native_tool_approval_unavailable',
+        }, status: 503);
+      }
+      final path = Uri.decodeComponent(request.url.path);
+      if (path == allSessionsPath) {
+        return json({'items': items, 'nextCursor': ''});
+      }
+      final id = path.split('/').where((part) => part.length == 32).last;
+      return json(approvals[id]!);
+    });
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:43129'),
+        readToken: 'R' * 43,
+        writeToken: 'W' * 43,
+        instanceId: 'synthetic',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+      inspectSession: false,
+      client: client,
+    );
+    addTearDown(api.close);
+    final fixture = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    Future<void> settle() async {
+      for (
+        var wait = 0;
+        controller.nativeApprovalsLoading && wait < 2000;
+        wait++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    }
+
+    controller.setNativeApprovalsVisible(true);
+    await settle();
+    expect(controller.nativeApprovals, hasLength(2));
+
+    // Storage or the network failing says nothing about who is still
+    // waiting: both questions stay, with the failure noted.
+    failing = true;
+    await controller.refreshNativeApprovals();
+    await settle();
+    expect(controller.nativeApprovals, hasLength(2));
+    expect(controller.nativePendingCount, isNull);
+    expect(controller.nativeApprovalError, isNotNull);
+
+    failing = false;
+    await controller.refreshNativeApprovals();
+    await settle();
+    expect(controller.nativeApprovals, hasLength(2));
+    expect(controller.nativePendingCount, 2);
+    expect(controller.nativeApprovalError, isNull);
+  });
+
   testWidgets(
     'Waiting lists two sessions’ tool questions, counts both, and decides each in its own session',
     (tester) async {

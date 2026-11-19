@@ -906,13 +906,23 @@ final class WorkbenchController extends ChangeNotifier
           ? List.unmodifiable(updated.values)
           : const [];
       nativeApprovalError = null;
-    } catch (error) {
+    } on ControlContractException catch (error) {
+      // A question whose intent changed, or a response that breaks the
+      // contract, cannot be shown or answered: start over from a fresh read.
       if (!current()) return;
       nativeApprovals = const [];
       nativeApprovalScanComplete = false;
       _nativeApprovalCursor = '';
       _nativePending = {};
       _nativeSessionNames = {};
+      nativeApprovalError = _describeError(error);
+    } catch (error) {
+      // A failed read says nothing about the questions already verified.
+      // Keep them on screen, since each one is an agent waiting, and retry on
+      // the next refresh; a decision is still checked by its own session.
+      if (!current()) return;
+      nativeApprovalScanComplete = false;
+      _nativeApprovalCursor = '';
       nativeApprovalError = _describeError(error);
     } finally {
       if (current()) {
