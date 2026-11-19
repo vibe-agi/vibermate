@@ -476,6 +476,30 @@ func (handler *Handler) ServeHTTP(
 		handler.admissions,
 		rawCapability,
 	)
+	if err != nil && errors.Is(err, captureauthority.ErrUnavailable) {
+		// Storage could not answer, so the credential was not rejected: tell
+		// the agent to retry instead of failing as if it had been revoked.
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			connectionevent.Source{
+				Confidence: connectionevent.SourceConfidenceUnknown,
+			},
+			ReasonCaptureAuthorityUnavailable,
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return
+		}
+		terminal = true
+		writer.Header().Set("Retry-After", "1")
+		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureAuthorityUnavailable, "")
+		return
+	}
 	if err != nil {
 		if handler.denyConnection(
 			request.Context(),
@@ -507,6 +531,11 @@ func (handler *Handler) ServeHTTP(
 		active.retainedRelease = release
 		handler.mu.Unlock()
 		if retainErr != nil {
+			if errors.Is(retainErr, captureauthority.ErrUnavailable) {
+				writer.Header().Set("Retry-After", "1")
+				writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureAuthorityUnavailable, "")
+				return
+			}
 			writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 			return
 		}

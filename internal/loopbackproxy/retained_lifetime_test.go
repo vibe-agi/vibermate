@@ -230,3 +230,43 @@ func TestRetainedOperationAuthorityFailureDeniesBeforeDispatch(t *testing.T) {
 		})
 	}
 }
+
+type unavailableAdmissions struct {
+	captureadmission.CurrentAuthority
+	fail atomic.Bool
+}
+
+func (a *unavailableAdmissions) Authorize(ctx context.Context, credential captureadmission.ProxyCredential) (captureadmission.Admission, error) {
+	if a.fail.Load() {
+		return captureadmission.Admission{}, errors.Join(captureadmission.ErrCredentialRejected, captureauthority.ErrUnavailable, errors.New("synthetic storage failure"))
+	}
+	return a.CurrentAuthority.Authorize(ctx, credential)
+}
+
+// Opening a connection while storage cannot say whether the credential is
+// still good is not a refusal. The agent gets a retryable answer and connects
+// once storage answers again.
+func TestConnectAdmissionStorageFailureIsRetryableAndRecovers(t *testing.T) {
+	var authority *unavailableAdmissions
+	f := newProxyFixtureConfigured(t, protocolspec.DialectAnthropicMessages, nil, allowEverythingTestPolicy(t), nil, "", &proxyFixtureComposition{compiler: testEnvironmentCompiler(t, protocolspec.DialectAnthropicMessages), configureProxy: func(options *loopbackproxy.Options) {
+		authority = &unavailableAdmissions{CurrentAuthority: options.Admissions.(captureadmission.CurrentAuthority)}
+		options.Admissions = authority
+	}})
+	defer f.Close(t)
+	authority.fail.Store(true)
+	conn, response := f.Connect(t, f.grant.ProxyCapability.Value(), "api.anthropic.com:443")
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	conn.Close()
+	if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Retry-After") != "1" ||
+		!strings.Contains(string(body), `"capture_authority_unavailable"`) {
+		t.Fatalf("storage failure at CONNECT answered %d retry-after=%q body=%s", response.StatusCode, response.Header.Get("Retry-After"), body)
+	}
+	authority.fail.Store(false)
+	conn, response = f.Connect(t, f.grant.ProxyCapability.Value(), "api.anthropic.com:443")
+	response.Body.Close()
+	conn.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT after storage recovered answered %d", response.StatusCode)
+	}
+}

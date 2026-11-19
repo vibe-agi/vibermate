@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"time"
 )
 
 type Target struct {
@@ -188,11 +189,13 @@ type session struct {
 	credential captureadmission.ProxyCredential
 	admission  captureadmission.Admission
 	reference  captureidentity.Reference
-	udp        *net.UDPConn
-	bridge     net.Conn
-	flows      map[Target]*udpFlow
-	workers    sync.WaitGroup
-	done       chan struct{}
+	// authorizedAt is when storage last confirmed the credential.
+	authorizedAt time.Time
+	udp          *net.UDPConn
+	bridge       net.Conn
+	flows        map[Target]*udpFlow
+	workers      sync.WaitGroup
+	done         chan struct{}
 }
 
 func (x *session) close() {

@@ -34,6 +34,9 @@ type subscription struct {
 	cancel    func()
 	done      chan struct{}
 	withdrawn bool
+	// unanswered is set when the withdrawal came from a read that storage
+	// could not answer, so a waiting Retain can say so instead of rejecting.
+	unanswered bool
 }
 type retainedEntry struct {
 	admission        Admission
@@ -162,7 +165,11 @@ func (r *Retained) Retain(ctx context.Context, admission Admission, cancel func(
 	for {
 		r.mu.Lock()
 		if sub.withdrawn || !r.accepting {
+			unanswered := sub.unanswered
 			r.mu.Unlock()
+			if unanswered {
+				return release, errors.Join(ErrCredentialRejected, captureauthority.ErrUnavailable)
+			}
 			return release, ErrCredentialRejected
 		}
 		if entry.checked >= version && !entry.dirty {
@@ -358,8 +365,10 @@ func (r *Retained) run() {
 				selected.stalledSince, selected.retryAt = time.Time{}, time.Time{}
 				if err != nil {
 					delete(r.entries, key)
+					unanswered := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, captureauthority.ErrUnavailable)
 					for sub := range selected.subscribers {
 						sub.withdrawn = true
+						sub.unanswered = unanswered
 						sub.receipt.withdrawn.Store(true)
 						cancellations = append(cancellations, sub.cancel)
 					}

@@ -3,7 +3,9 @@ package socksproxy
 import (
 	"bufio"
 	"encoding/base64"
+	"errors"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"io"
 	"time"
 )
@@ -95,6 +97,7 @@ func (x *session) authenticate(r *bufio.Reader) (string, bool) {
 	x.credential = credential
 	x.admission = admission
 	x.reference = ref
+	x.authorizedAt = time.Now()
 	x.mu.Unlock()
 	if _, e := x.control.Write([]byte{1, 0}); e != nil {
 		return "", false
@@ -102,8 +105,22 @@ func (x *session) authenticate(r *bufio.Reader) (string, bool) {
 	basic := base64.StdEncoding.EncodeToString(append(append([]byte(captureadmission.ProxyUsername), ':'), password...))
 	return basic, true
 }
+
+// reauthorizeStallGrace is how long an association that was authorized keeps
+// running while storage cannot answer. It matches the grace of retained TCP
+// connections; a rejection still closes the association at once.
+const reauthorizeStallGrace = 30 * time.Second
+
 func (x *session) reauthorize() bool {
 	a, e := x.server.options.Authorizer.Authorize(x.ctx, x.credential)
+	if e != nil && errors.Is(e, captureauthority.ErrUnavailable) {
+		x.mu.Lock()
+		within := !x.authorizedAt.IsZero() && time.Since(x.authorizedAt) < reauthorizeStallGrace
+		x.mu.Unlock()
+		if within {
+			return true
+		}
+	}
 	if e != nil || a.Validate() != nil {
 		x.close()
 		return false
@@ -113,5 +130,8 @@ func (x *session) reauthorize() bool {
 		x.close()
 		return false
 	}
+	x.mu.Lock()
+	x.authorizedAt = time.Now()
+	x.mu.Unlock()
 	return true
 }

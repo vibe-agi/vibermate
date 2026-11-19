@@ -54,6 +54,7 @@ type Store struct {
 	databasePath       string
 	database           *sql.DB
 	reads              *sql.DB
+	authorityReads     *sql.DB
 	repo               *Repository
 	activityRepo       *activityRepository
 	exchangeContents   *exchangeContentRepository
@@ -253,6 +254,15 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		operations.closeAdmission()
 		return fail(errors.Join(err, reads.Close()))
 	}
+	// Whether an agent may open or keep a connection is read on connections of
+	// its own, so neither the writer nor a long screen read can hold it up.
+	// They open on first use: the read pool above has already proven the file
+	// opens read-only, and a store that admits no connections never pays.
+	authority := sql.OpenDB(newSQLiteReadConnector(options.DatabasePath, options.BusyTimeout))
+	authority.SetMaxOpenConns(2)
+	authority.SetMaxIdleConns(2)
+	captureRepo.reads = authority
+	manualCaptureRepo.reads = authority
 	activityRepo := newActivityRepository(database, reads, operations)
 	activityRepo.coordinates = role == nil || role.identity == observationSchemaIdentity
 	activityRepo.requireScope = role != nil && role.identity == observationSchemaIdentity
@@ -264,6 +274,7 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		databasePath:       options.DatabasePath,
 		database:           database,
 		reads:              reads,
+		authorityReads:     authority,
 		repo:               repository,
 		activityRepo:       activityRepo,
 		exchangeContents:   exchangeContents,
@@ -443,7 +454,7 @@ func (s *Store) Shutdown(ctx context.Context) error {
 			_ = tx.Rollback()
 		}
 	}
-	closeErr := errors.Join(nativeErr, s.reads.Close(), s.database.Close())
+	closeErr := errors.Join(nativeErr, s.authorityReads.Close(), s.reads.Close(), s.database.Close())
 	s.closeMu.Lock()
 	s.closeErr = closeErr
 	s.closed = true
