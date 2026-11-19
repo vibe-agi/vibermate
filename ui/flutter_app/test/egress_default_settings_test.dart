@@ -399,9 +399,9 @@ Future<void> _editSelectedDefault(
   expect(
     find.descendant(
       of: row,
-      matching: find.text(
-        english ? 'VLESS · DoH · Through VLESS' : 'VLESS · DoH · 经 VLESS',
-      ),
+      // The table puts the transport under Target DNS; the narrow list
+      // keeps the one-line summary.
+      matching: find.textContaining(english ? 'Through VLESS' : '经 VLESS'),
     ),
     findsOneWidget,
   );
