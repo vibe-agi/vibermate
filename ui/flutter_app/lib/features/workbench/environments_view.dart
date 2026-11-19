@@ -289,6 +289,8 @@ final class _EnvironmentDirectory extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         '${copy.format('common.revision', {'revision': environment.revision})} · ${copy.format('environment.routes', {'count': '$routes'})}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: monoStyle,
                       ),
                     ],
