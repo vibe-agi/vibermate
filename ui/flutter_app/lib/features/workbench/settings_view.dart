@@ -31,128 +31,235 @@ final class SettingsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final destinations = controller.settingsDestinations;
-    return DefaultTabController(
-      key: ValueKey('settings-tab-${controller.settingsTab}'),
-      length: destinations.length,
-      initialIndex: controller.settingsTab,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          PageHeading(
-            title: copy('settings.title'),
-            help: copy(
-              controller.serverManagement
-                  ? 'settings.subtitle.server'
-                  : 'settings.subtitle',
-            ),
-            dismissHelpLabel: copy('common.dismiss'),
-          ),
-          Material(
-            color: context.viberColors.panel,
-            child: LayoutBuilder(
-              builder: (context, constraints) => constraints.maxWidth < 600
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Semantics(
-                        label: copy('settings.section'),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<SettingsDestination>(
-                            key: const Key('settings-section-picker'),
-                            isExpanded: true,
-                            value: destinations[controller.settingsTab],
-                            items: [
-                              for (final destination in destinations)
-                                DropdownMenuItem(
-                                  key: Key(
-                                    'settings-option-${destination.name}',
-                                  ),
-                                  value: destination,
-                                  child: Text(
-                                    _settingsDestinationLabel(
-                                      copy,
-                                      destination,
-                                    ),
-                                  ),
+    return LayoutBuilder(
+      builder: (context, viewport) {
+        final wide = viewport.maxWidth >= 1000;
+        final panes = TabBarView(
+          physics: wide ? const NeverScrollableScrollPhysics() : null,
+          children: [
+            for (final destination in destinations)
+              switch (destination) {
+                SettingsDestination.preferences => _GeneralSettingsPane(
+                  controller: controller,
+                  copy: copy,
+                ),
+                SettingsDestination.access => _AccessSettingsPane(
+                  controller: controller,
+                  copy: copy,
+                ),
+                SettingsDestination.users => _UsersSettingsPane(
+                  controller: controller,
+                  copy: copy,
+                ),
+                SettingsDestination.safety => _SafetyDataSettingsPane(
+                  controller: controller,
+                  copy: copy,
+                ),
+              },
+          ],
+        );
+        return DefaultTabController(
+          key: ValueKey('settings-tab-${controller.settingsTab}'),
+          length: destinations.length,
+          initialIndex: controller.settingsTab,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              PageHeading(
+                title: copy('settings.title'),
+                help: copy(
+                  controller.serverManagement
+                      ? 'settings.subtitle.server'
+                      : 'settings.subtitle',
+                ),
+                dismissHelpLabel: copy('common.dismiss'),
+              ),
+              if (!wide)
+                Material(
+                  color: context.viberColors.panel,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) =>
+                        constraints.maxWidth < 600
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Semantics(
+                              label: copy('settings.section'),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<SettingsDestination>(
+                                  key: const Key('settings-section-picker'),
+                                  isExpanded: true,
+                                  value: destinations[controller.settingsTab],
+                                  items: [
+                                    for (final destination in destinations)
+                                      DropdownMenuItem(
+                                        key: Key(
+                                          'settings-option-${destination.name}',
+                                        ),
+                                        value: destination,
+                                        child: Text(
+                                          _settingsDestinationLabel(
+                                            copy,
+                                            destination,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                  onChanged: (destination) {
+                                    if (destination != null) {
+                                      controller.selectSettingsTab(
+                                        destinations.indexOf(destination),
+                                      );
+                                    }
+                                  },
                                 ),
-                            ],
-                            onChanged: (destination) {
-                              if (destination != null) {
-                                controller.selectSettingsTab(
-                                  destinations.indexOf(destination),
-                                );
-                              }
-                            },
+                              ),
+                            ),
+                          )
+                        : Align(
+                            alignment: Alignment.centerLeft,
+                            child: TabBar(
+                              isScrollable: true,
+                              tabAlignment: TabAlignment.start,
+                              dividerHeight: 0,
+                              onTap: controller.selectSettingsTab,
+                              tabs: <Widget>[
+                                for (final destination in destinations)
+                                  switch (destination) {
+                                    SettingsDestination.preferences =>
+                                      _SettingsTab(
+                                        key: const Key('settings-tab-general'),
+                                        icon: Icons.tune,
+                                        label: copy('settings.tab.preferences'),
+                                      ),
+                                    SettingsDestination.access => _SettingsTab(
+                                      key: const Key('settings-tab-access'),
+                                      icon: Icons.link,
+                                      label: copy('settings.tab.access'),
+                                    ),
+                                    SettingsDestination.users => _SettingsTab(
+                                      key: const Key('settings-tab-users'),
+                                      icon: Icons.group_outlined,
+                                      label: copy('settings.tab.users'),
+                                    ),
+                                    SettingsDestination.safety => _SettingsTab(
+                                      key: const Key('settings-tab-safety'),
+                                      icon: Icons.shield_outlined,
+                                      label: copy('settings.tab.safety'),
+                                    ),
+                                  },
+                              ],
+                            ),
                           ),
-                        ),
-                      ),
-                    )
-                  : Align(
-                      alignment: Alignment.centerLeft,
-                      child: TabBar(
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        dividerHeight: 0,
-                        onTap: controller.selectSettingsTab,
-                        tabs: <Widget>[
-                          for (final destination in destinations)
-                            switch (destination) {
-                              SettingsDestination.preferences => _SettingsTab(
-                                key: const Key('settings-tab-general'),
-                                icon: Icons.tune,
-                                label: copy('settings.tab.preferences'),
-                              ),
-                              SettingsDestination.access => _SettingsTab(
-                                key: const Key('settings-tab-access'),
-                                icon: Icons.link,
-                                label: copy('settings.tab.access'),
-                              ),
-                              SettingsDestination.users => _SettingsTab(
-                                key: const Key('settings-tab-users'),
-                                icon: Icons.group_outlined,
-                                label: copy('settings.tab.users'),
-                              ),
-                              SettingsDestination.safety => _SettingsTab(
-                                key: const Key('settings-tab-safety'),
-                                icon: Icons.shield_outlined,
-                                label: copy('settings.tab.safety'),
-                              ),
-                            },
+                  ),
+                ),
+              const Divider(height: 1),
+              Expanded(
+                child: wide
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 264,
+                            child: _SettingsSectionList(
+                              destinations: destinations,
+                              selected: controller.settingsTab,
+                              copy: copy,
+                              onSelect: controller.selectSettingsTab,
+                            ),
+                          ),
+                          Expanded(child: panes),
                         ],
-                      ),
-                    ),
-            ),
+                      )
+                    : panes,
+              ),
+            ],
           ),
-          const Divider(height: 1),
-          Expanded(
-            child: TabBarView(
-              children: [
-                for (final destination in destinations)
-                  switch (destination) {
-                    SettingsDestination.preferences => _GeneralSettingsPane(
-                      controller: controller,
-                      copy: copy,
-                    ),
-                    SettingsDestination.access => _AccessSettingsPane(
-                      controller: controller,
-                      copy: copy,
-                    ),
-                    SettingsDestination.users => _UsersSettingsPane(
-                      controller: controller,
-                      copy: copy,
-                    ),
-                    SettingsDestination.safety => _SafetyDataSettingsPane(
-                      controller: controller,
-                      copy: copy,
-                    ),
-                  },
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
+
+/// Settings sections as a list beside the content on wide windows, each with
+/// one line saying what it holds.
+final class _SettingsSectionList extends StatelessWidget {
+  const _SettingsSectionList({
+    required this.destinations,
+    required this.selected,
+    required this.copy,
+    required this.onSelect,
+  });
+
+  final List<SettingsDestination> destinations;
+  final int selected;
+  final AppCopy copy;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final theme = Theme.of(context).textTheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 14, 8, 14),
+      children: [
+        for (final (index, destination) in destinations.indexed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Semantics(
+              button: true,
+              selected: index == selected,
+              child: Material(
+                color: index == selected
+                    ? colors.panelRaised
+                    : Colors.transparent,
+                borderRadius: ViberMetrics.controlRadius,
+                child: InkWell(
+                  key: Key('settings-tab-${_settingsTabKey(destination)}'),
+                  borderRadius: ViberMetrics.controlRadius,
+                  onTap: () => onSelect(index),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _settingsDestinationLabel(copy, destination),
+                          style: theme.bodyMedium?.copyWith(
+                            fontWeight: index == selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          copy(
+                            'settings.section_detail.${_settingsTabKey(destination)}',
+                          ),
+                          style: theme.bodySmall?.copyWith(
+                            color: colors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _settingsTabKey(SettingsDestination destination) =>
+    switch (destination) {
+      SettingsDestination.preferences => 'general',
+      SettingsDestination.access => 'access',
+      SettingsDestination.users => 'users',
+      SettingsDestination.safety => 'safety',
+    };
 
 String _settingsDestinationLabel(
   AppCopy copy,
@@ -219,32 +326,13 @@ final class _SettingsPaneHeader extends StatelessWidget {
   final String dismissHelpLabel;
 
   @override
-  Widget build(BuildContext context) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Container(
-        width: ViberMetrics.controlHeight,
-        height: ViberMetrics.controlHeight,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: context.viberColors.route.withValues(alpha: 0.09),
-          border: Border.all(
-            color: context.viberColors.route.withValues(alpha: 0.28),
-          ),
-          borderRadius: ViberMetrics.controlRadius,
-        ),
-        child: Icon(icon, size: 16, color: context.viberColors.route),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: ContextHelpHeading(
-          title: title,
-          message: detail,
-          dismissLabel: dismissHelpLabel,
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-      ),
-    ],
+  Widget build(BuildContext context) => ContextHelpHeading(
+    title: title,
+    message: detail,
+    dismissLabel: dismissHelpLabel,
+    style: Theme.of(
+      context,
+    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
   );
 }
 
@@ -252,31 +340,17 @@ final class _SettingsSurface extends StatelessWidget {
   const _SettingsSurface({required this.child, this.accent = false, super.key});
 
   final Widget child;
+  // Kept for callers; sections no longer draw an accent stripe.
   final bool accent;
 
   @override
-  Widget build(BuildContext context) => Container(
-    clipBehavior: Clip.antiAlias,
+  Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
-      color: context.viberColors.panelRaised,
-      border: Border.all(color: context.viberColors.dividerSoft),
-      borderRadius: ViberMetrics.surfaceRadius,
+      border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
     ),
-    child: Stack(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(accent ? 16 : 12, 11, 12, 12),
-          child: child,
-        ),
-        if (accent)
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 4,
-            child: ColoredBox(color: context.viberColors.route),
-          ),
-      ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: child,
     ),
   );
 }
@@ -2051,11 +2125,9 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
     final localDesktop = controller.rootTrustManagement;
     return Container(
       key: const Key('root-ca-settings-panel'),
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+      padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
-        color: context.viberColors.panelRaised,
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
+        border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -87,11 +87,9 @@ final class _RuntimeRootCAPanelState extends State<RuntimeRootCAPanel> {
     ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
     return Container(
       key: const Key('runtime-root-ca-settings-panel'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
-        color: context.viberColors.panelRaised,
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
+        border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
