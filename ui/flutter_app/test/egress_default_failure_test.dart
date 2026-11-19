@@ -172,7 +172,7 @@ void main() {
           tester
               .widget<Text>(find.byKey(const Key('egress-default-summary')))
               .data,
-          'Current default: Current Runtime',
+          'Current Runtime',
         );
         expect(writes, lateMutation ? 1 : 0);
         expect(tester.takeException(), isNull);
@@ -200,10 +200,7 @@ void main() {
         return jsonResponse(settingWire(7, profile(1)));
       }, profiles: [EgressProfileRevision.direct, profile(2)]);
       final summary = find.byKey(const Key('egress-default-summary'));
-      expect(
-        tester.widget<Text>(summary).data,
-        'Current default: Pinned proxy',
-      );
+      expect(tester.widget<Text>(summary).data, 'Pinned proxy');
       expect(
         find.descendant(
           of: find.byKey(const Key('egress-profile-row-profile.pinned')),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/api/control_models.dart';
@@ -5,6 +7,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'conversation_timeline.dart';
+import 'raw_evidence_diff_dialog.dart';
 import 'workbench_controller.dart';
 
 /// What happened to one request, as the audit sees it. A script decision
@@ -94,6 +97,36 @@ final class SessionLedger extends StatefulWidget {
 }
 
 final class _SessionLedgerState extends State<SessionLedger> {
+  bool _comparing = false;
+
+  /// Opens the stage comparison for one request: what the agent sent next to
+  /// what reached the provider, and the response both ways.
+  Future<void> _compare(ActivityRecord activity) async {
+    if (_comparing) return;
+    _comparing = true;
+    try {
+      final page = await widget.controller.loadRawEvidence(activity.id);
+      if (!mounted) return;
+      if (page == null || page.items.isEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(widget.copy('ledger.detail.compare_unavailable')),
+          ),
+        );
+        return;
+      }
+      await showRawEvidenceDiffDialog(
+        context,
+        controller: widget.controller,
+        exchangeId: activity.id,
+        page: page,
+        copy: widget.copy,
+      );
+    } finally {
+      _comparing = false;
+    }
+  }
+
   static const _inspectorWidth = 340.0;
   static const _wideLayout = 900.0;
 
@@ -284,6 +317,7 @@ final class _SessionLedgerState extends State<SessionLedger> {
           account: widget.controller.activityAccountLabel(selected),
           onClose: () => setState(() => _selectedId = null),
           onOpen: () => setState(() => _openedId = selected.id),
+          onCompare: () => unawaited(_compare(selected)),
         );
         if (!wide) return inspector;
         return Row(
@@ -757,6 +791,7 @@ final class _LedgerInspector extends StatelessWidget {
     required this.account,
     required this.onClose,
     required this.onOpen,
+    required this.onCompare,
     super.key,
   });
 
@@ -766,6 +801,7 @@ final class _LedgerInspector extends StatelessWidget {
   final String account;
   final VoidCallback onClose;
   final VoidCallback onOpen;
+  final VoidCallback onCompare;
 
   @override
   Widget build(BuildContext context) {
@@ -842,9 +878,22 @@ final class _LedgerInspector extends StatelessWidget {
           section(copy('ledger.detail.scripts')),
           if (activity.scripts.isEmpty)
             Text(copy('ledger.detail.no_scripts'), style: text.bodyMedium)
-          else
+          else ...[
             for (final script in activity.scripts)
               _LedgerScriptOutcome(script: script, copy: copy),
+            // What a script changed is the difference between what the agent
+            // sent and what went to the provider (or back).
+            if (activity.scripts.any((script) => script.changed > 0))
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const Key('ledger-inspector-compare'),
+                  onPressed: onCompare,
+                  icon: const Icon(Icons.difference_outlined, size: 15),
+                  label: Text(copy('ledger.detail.compare')),
+                ),
+              ),
+          ],
           section(copy('ledger.detail.path')),
           step(copy('ledger.detail.agent'), activity.sourceName),
           if (endpoint.isNotEmpty)
