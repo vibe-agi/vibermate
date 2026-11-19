@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
@@ -59,7 +60,11 @@ const captureRunColumns = `
 	git_json`
 
 type captureRunRepository struct {
-	database        *sql.DB
+	database *sql.DB
+	// reads serves the per-connection authority reads, so a slow or locked
+	// writer never holds up an agent opening a connection. Nil in tests that
+	// build the repository directly; they read through database.
+	reads           *sql.DB
 	operations      *operationGate
 	stopCommitter   transactionCommitter
 	controlOnly     bool
@@ -230,11 +235,11 @@ func (repository *captureRunRepository) AuthorizeProxy(
 ) (capturerun.DurableRecord, error) {
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
-		return capturerun.DurableRecord{}, err
+		return capturerun.DurableRecord{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	defer finish()
 	var original recording.Fence
-	record, err := scanCaptureRun(captureObservationScan{row: repository.database.QueryRowContext(
+	record, err := scanCaptureRun(captureObservationScan{row: authorityReads(repository.database, repository.reads).QueryRowContext(
 		operation,
 		`SELECT `+captureRunColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='managed_run' AND capture_id=capture_runs.run_id AND deleted=0),0)
 		 FROM capture_runs
@@ -249,7 +254,7 @@ func (repository *captureRunRepository) AuthorizeProxy(
 		return capturerun.DurableRecord{}, capturerun.ErrCapabilityRejected
 	}
 	if err != nil {
-		return capturerun.DurableRecord{}, fmt.Errorf("authorize CaptureRun proxy: %w", err)
+		return capturerun.DurableRecord{}, authorityReadFailure(fmt.Errorf("authorize CaptureRun proxy: %w", err), capturerun.ErrCapabilityRejected)
 	}
 	// Authentication depends only on current control facts. Traffic display is
 	// optional evidence published by the admitted connection/exchange producer.

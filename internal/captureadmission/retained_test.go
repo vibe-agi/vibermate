@@ -599,3 +599,33 @@ func TestRetainedRejectedRereadStillWithdraws(t *testing.T) {
 	defer func() { release(); r.Shutdown(t.Context()) }()
 	awaitRetained(t, canceled)
 }
+
+// A new connection whose first validity read cannot reach storage was not
+// rejected. Retain says so, so the proxy answers with a retryable error, and a
+// rejection on the first read stays a plain rejection.
+func TestRetainedFirstReadStorageFailureIsUnavailableNotRejected(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		failure     error
+		unavailable bool
+	}{
+		{"storage failure", errors.Join(ErrCredentialRejected, captureauthority.ErrUnavailable, errors.New("disk I/O error")), true},
+		{"timed-out read", stalledRead(), true},
+		{"rejection", ErrCredentialRejected, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, _ := retainedTestAdmission(t)
+			r := NewRetained(t.Context(), controlledAuthority{read: func(context.Context, Admission) (captureauthority.Validity, error) {
+				return captureauthority.Validity{}, test.failure
+			}}, time.Now)
+			defer r.Shutdown(t.Context())
+			release, err := r.Retain(t.Context(), admission, func() {})
+			if release != nil {
+				defer release()
+			}
+			if !errors.Is(err, ErrCredentialRejected) || errors.Is(err, captureauthority.ErrUnavailable) != test.unavailable {
+				t.Fatalf("first read %s: Retain error %v", test.name, err)
+			}
+		})
+	}
+}

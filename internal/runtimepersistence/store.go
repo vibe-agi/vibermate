@@ -253,6 +253,8 @@ func openStore(ctx context.Context, options Options, role *roleSchema) (*Store, 
 		operations.closeAdmission()
 		return fail(errors.Join(err, reads.Close()))
 	}
+	captureRepo.reads = reads
+	manualCaptureRepo.reads = reads
 	activityRepo := newActivityRepository(database, reads, operations)
 	activityRepo.coordinates = role == nil || role.identity == observationSchemaIdentity
 	activityRepo.requireScope = role != nil && role.identity == observationSchemaIdentity

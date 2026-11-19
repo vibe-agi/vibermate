@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/recording"
 	"time"
 
@@ -29,7 +30,9 @@ const manualCaptureColumns = `
 	last_observed_at_unix_ms`
 
 type manualCaptureRepository struct {
-	database        *sql.DB
+	database *sql.DB
+	// reads serves the per-connection authority reads; see captureRunRepository.
+	reads           *sql.DB
 	operations      *operationGate
 	stopCommitter   transactionCommitter
 	controlOnly     bool
@@ -314,35 +317,14 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
-		return manualcapture.DurableRecord{}, err
+		return manualcapture.DurableRecord{}, errors.Join(captureauthority.ErrUnavailable, err)
 	}
 	defer finish()
-	transaction, err := repository.database.BeginTx(operation, nil)
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("begin ManualCapture authorization: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-	expireResult, err := transaction.ExecContext(
-		operation,
-		`UPDATE manual_captures
-		 SET state = 'expired', updated_at_unix_ms = ?
-		 WHERE proxy_credential_hash = ?
-		   AND state = 'active'
-		   AND lifetime = 'temporary'
-		   AND expires_at_unix_ms <= ?`,
-		toUnixMillis(now),
-		digest[:],
-		toUnixMillis(now),
-	)
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("expire ManualCapture authorization: %w", err)
-	}
-	expired, err := expireResult.RowsAffected()
-	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("read ManualCapture expiry result: %w", err)
-	}
+	// Admission only reads. A temporary capture past its expiry is refused by
+	// the query itself; its stored state turns to expired on the owner's next
+	// read or at recovery, so opening a connection never waits for the writer.
 	var original recording.Fence
-	record, err := scanManualCapture(captureObservationScan{row: transaction.QueryRowContext(
+	record, err := scanManualCapture(captureObservationScan{row: authorityReads(repository.database, repository.reads).QueryRowContext(
 		operation,
 		`SELECT `+manualCaptureColumns+`,`+captureObservationEpoch+`, COALESCE((SELECT generation FROM recording_capture_fences WHERE capture_kind='manual_capture' AND capture_id=manual_captures.capture_id AND deleted=0),0)
 		 FROM manual_captures WHERE proxy_credential_hash = ?
@@ -351,18 +333,10 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		digest[:], toUnixMillis(now),
 	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
-		if expired > 0 {
-			if err := transaction.Commit(); err != nil {
-				return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture expiry: %w", err)
-			}
-		}
 		return manualcapture.DurableRecord{}, manualcapture.ErrCredentialRejected
 	}
 	if err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("read authorized ManualCapture: %w", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		return manualcapture.DurableRecord{}, fmt.Errorf("commit ManualCapture authorization: %w", err)
+		return manualcapture.DurableRecord{}, authorityReadFailure(fmt.Errorf("read authorized ManualCapture: %w", err), manualcapture.ErrCredentialRejected)
 	}
 	record.RecordingScope = recording.Scope{Capture: captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, Fence: original}
 	observeCapture(repository.captureObserver, repository.recordingScopes, captureidentity.Reference{Kind: captureidentity.KindManualCapture, ID: record.ID.String()}, uint64(record.CredentialRevision), now, original)

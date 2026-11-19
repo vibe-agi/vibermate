@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/vibe-agi/vibermate/internal/captureauthority"
 	"github.com/vibe-agi/vibermate/internal/connectudp"
 	"github.com/vibe-agi/vibermate/internal/socksproxy"
 )
@@ -48,6 +49,11 @@ func (handler *Handler) serveConnectUDP(writer http.ResponseWriter, request *htt
 	}
 	ctx := request.Context()
 	admission, err := authorizeCaptureAdmission(ctx, handler.admissions, rawCapability)
+	if err != nil && errors.Is(err, captureauthority.ErrUnavailable) {
+		writer.Header().Set("Retry-After", "1")
+		writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureAuthorityUnavailable, "")
+		return
+	}
 	if err != nil {
 		writeReason(writer, http.StatusProxyAuthRequired, ReasonCaptureAdmissionRejected, "")
 		return
