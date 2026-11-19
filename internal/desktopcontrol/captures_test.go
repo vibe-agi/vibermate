@@ -158,6 +158,180 @@ func assertCaptureKeys(
 	}
 }
 
+func TestCaptureListAnnotatesEachPageWithOneEnvironmentLookup(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	managed := []capturerun.View{
+		{ID: "managed-running", ExecutableLabel: "codex", CWD: "/workspace/a", State: capturerun.StateAttached, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ActivityAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), ProcessID: 42},
+		{ID: "managed-old", ExecutableLabel: "claude", CWD: "/workspace/c", State: capturerun.StateFinished, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(time.Hour)},
+	}
+	manual := []manualcapture.View{
+		{ID: "manual-running", DisplayName: "IDE proxy", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateActive, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ActivityAt: now},
+	}
+	assignments := &assignmentFixture{items: map[string]captureassignment.Assignment{}}
+	assignments.put(captureidentity.KindManagedRun, "managed-running", "work", 7)
+	assignments.put(captureidentity.KindManagedRun, "managed-old", "personal", 3)
+	application := pagedCaptureApplicationWith(t, managed, manual, assignments)
+
+	first := readCapturePage(t, application, "/api/v1/captures?limit=2")
+	assertCaptureKeys(t, first.Items, "manual_capture:manual-running", "managed_run:managed-running")
+	assignments.assertLastBatch(t, 1, first.Items)
+	assertCaptureEnvironment(t, first.Items[0], "", 0)
+	assertCaptureEnvironment(t, first.Items[1], "work", 7)
+
+	second := readCapturePage(t, application, "/api/v1/captures?limit=2&cursor="+url.QueryEscape(first.NextCursor))
+	assertCaptureKeys(t, second.Items, "managed_run:managed-old")
+	assignments.assertLastBatch(t, 2, second.Items)
+	assertCaptureEnvironment(t, second.Items[0], "personal", 3)
+
+	raw := environmentRequest(t, application, http.MethodGet, "/api/v1/captures?limit=2", 0, "", nil)
+	var wire struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw.Body.Bytes(), &wire); err != nil || len(wire.Items) != 2 {
+		t.Fatalf("raw Capture page = %s, %v", raw.Body.Bytes(), err)
+	}
+	if _, present := wire.Items[0]["environment"]; present {
+		t.Fatalf("unassigned Capture carries an environment: %s", raw.Body.Bytes())
+	}
+	if string(wire.Items[1]["environment"]) != `{"id":"work","revision":7}` {
+		t.Fatalf("assigned Capture environment = %s", wire.Items[1]["environment"])
+	}
+}
+
+func TestCaptureListReadsAssignmentsThroughTheProductRuntime(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	t.Cleanup(func() { shutdownRuntime(t, runtime) })
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		CaptureRuns: runtime.CaptureRunReader(), ManualCaptures: runtime.ManualCaptures(),
+		Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	create := func(name string) captureidentity.Reference {
+		t.Helper()
+		grant, err := runtime.ManualCaptures().Create(ctx, manualcapture.CreateCommand{
+			Owner: manualcapture.NewLocalOwnerScope(), DisplayName: name,
+			ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reference, err := captureidentity.New(captureidentity.KindManualCapture, grant.Capture.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reference
+	}
+	assigned, unassigned := create("Assigned proxy"), create("Unassigned proxy")
+	assignment, err := runtime.CaptureAssignments().Create(ctx, captureassignment.CreateCommand{
+		Capture: assigned, EnvironmentID: environment.SystemTransparentID,
+		Source: captureassignment.SourceManualCreate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := readCapturePage(t, application, "/api/v1/captures?limit=10")
+	if len(page.Items) != 2 {
+		t.Fatalf("Capture page = %+v", page.Items)
+	}
+	for _, item := range page.Items {
+		switch item.Key {
+		case assigned.Key():
+			assertCaptureEnvironment(t, item, environment.SystemTransparentID, assignment.EnvironmentRevision)
+		case unassigned.Key():
+			assertCaptureEnvironment(t, item, "", 0)
+		default:
+			t.Fatalf("unexpected Capture %s", item.Key)
+		}
+	}
+}
+
+func TestCaptureListReportsTheRevisionAppliedAfterLaunch(t *testing.T) {
+	t.Parallel()
+	assignments := newAssignmentFixture()
+	application := unifiedCaptureApplication(t, assignments)
+	applied := environmentRequest(
+		t, application, http.MethodPost,
+		"/api/v1/captures/managed_run:same-id/environment-assignment/actions/apply-latest",
+		1, "apply-latest-before-list", nil,
+	)
+	if applied.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", applied.Code, applied.Body.Bytes())
+	}
+	page := readCapturePage(t, application, "/api/v1/captures?limit=10")
+	for _, item := range page.Items {
+		switch item.Key {
+		case "managed_run:same-id":
+			assertCaptureEnvironment(t, item, "system_transparent", 2)
+		case "manual_capture:same-id":
+			assertCaptureEnvironment(t, item, "system_transparent", 1)
+		default:
+			t.Fatalf("unexpected Capture %s", item.Key)
+		}
+	}
+	single := environmentRequest(t, application, http.MethodGet, "/api/v1/captures/managed_run:same-id", 0, "", nil)
+	if single.Code != http.StatusOK || bytes.Contains(single.Body.Bytes(), []byte(`"environment"`)) {
+		t.Fatalf("single Capture read changed shape: status=%d body=%s", single.Code, single.Body.Bytes())
+	}
+}
+
+func TestCaptureListOmitsEnvironmentWhenTheLookupFails(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "storage error", err: errors.Join(captureassignment.ErrAssignmentUnavailable, errors.New("database is locked"))},
+		{name: "timeout", err: context.DeadlineExceeded},
+		{name: "runtime stopping", err: captureassignment.ErrRuntimeStopping},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			assignments := newAssignmentFixture()
+			assignments.batchErr = test.err
+			application := unifiedCaptureApplication(t, assignments)
+			response := environmentRequest(t, application, http.MethodGet, "/api/v1/captures?limit=10", 0, "", nil)
+			if response.Code != http.StatusOK {
+				t.Fatalf("list status=%d body=%s", response.Code, response.Body.Bytes())
+			}
+			if bytes.Contains(response.Body.Bytes(), []byte(`"environment"`)) {
+				t.Fatalf("failed lookup still annotated the page: %s", response.Body.Bytes())
+			}
+			page := readCapturePage(t, application, "/api/v1/captures?limit=10")
+			assertCaptureKeys(t, page.Items, "manual_capture:same-id", "managed_run:same-id")
+			if assignments.batchCalls != 2 || !assignments.batchDeadline {
+				t.Fatalf("lookup calls=%d bounded=%t", assignments.batchCalls, assignments.batchDeadline)
+			}
+		})
+	}
+}
+
+func assertCaptureEnvironment(
+	t *testing.T,
+	item desktopcontrol.CaptureResponse,
+	id environment.EnvironmentID,
+	revision environment.Revision,
+) {
+	t.Helper()
+	if id == "" {
+		if item.Environment != nil {
+			t.Fatalf("%s environment = %+v, want none", item.Key, *item.Environment)
+		}
+		return
+	}
+	if item.Environment == nil || item.Environment.ID != id || item.Environment.Revision != revision {
+		t.Fatalf("%s environment = %+v, want %s@%d", item.Key, item.Environment, id, revision)
+	}
+}
+
 func TestCaptureAssignmentRouteIsReadOnlyAfterLaunch(t *testing.T) {
 	t.Parallel()
 	assignments := newAssignmentFixture()
@@ -257,11 +431,21 @@ func pagedCaptureApplication(
 	manual []manualcapture.View,
 ) http.Handler {
 	t.Helper()
+	return pagedCaptureApplicationWith(t, managed, manual, newAssignmentFixture())
+}
+
+func pagedCaptureApplicationWith(
+	t *testing.T,
+	managed []capturerun.View,
+	manual []manualcapture.View,
+	assignments captureassignment.Controller,
+) http.Handler {
+	t.Helper()
 	runtime := startRuntime(t)
 	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: newAssignmentFixture(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Assignments: assignments, Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
 		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
 		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
 		CaptureRuns:    capturePageReaderFixture{items: managed},
@@ -439,6 +623,54 @@ func (fixture manualCaptureFixture) List(context.Context, manualcapture.PageRequ
 type assignmentFixture struct {
 	mu    sync.Mutex
 	items map[string]captureassignment.Assignment
+	// The batch fields record how the list used ResolveMany and let a test
+	// fail it.
+	batchErr        error
+	batchCalls      int
+	batchReferences []captureidentity.Reference
+	batchDeadline   bool
+}
+
+func (fixture *assignmentFixture) put(
+	kind captureidentity.Kind,
+	id string,
+	environmentID environment.EnvironmentID,
+	revision environment.Revision,
+) {
+	reference, _ := captureidentity.New(kind, id)
+	var launchDigest, currentDigest environment.CandidateDigest
+	launchDigest[0], currentDigest[0] = 1, byte(revision)
+	authority, _ := environment.NewLaunchAuthorityBoundaryFromScopes(environmentID, 1, launchDigest, nil, nil)
+	if revision == 1 {
+		currentDigest = launchDigest
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	fixture.items[reference.Key()] = captureassignment.Assignment{
+		Capture: reference, EnvironmentID: environmentID,
+		EnvironmentRevision: revision, EnvironmentDigest: currentDigest,
+		Revision: 1, Source: captureassignment.SourceLaunch, LaunchAuthority: authority,
+		UpdatedAt: time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC),
+	}
+}
+
+func (fixture *assignmentFixture) assertLastBatch(
+	t *testing.T,
+	calls int,
+	items []desktopcontrol.CaptureResponse,
+) {
+	t.Helper()
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.batchCalls != calls || !fixture.batchDeadline || len(fixture.batchReferences) != len(items) {
+		t.Fatalf("lookup calls=%d bounded=%t references=%v, want %d call(s) for %d items",
+			fixture.batchCalls, fixture.batchDeadline, fixture.batchReferences, calls, len(items))
+	}
+	for index, item := range items {
+		if fixture.batchReferences[index].Key() != item.Key {
+			t.Fatalf("lookup references=%v do not match the page", fixture.batchReferences)
+		}
+	}
 }
 
 func newAssignmentFixture() *assignmentFixture {
@@ -483,6 +715,26 @@ func (fixture *assignmentFixture) Resolve(_ context.Context, reference captureid
 		return captureassignment.Assignment{}, captureassignment.ErrAssignmentNotFound
 	}
 	return assignment, nil
+}
+func (fixture *assignmentFixture) ResolveMany(
+	ctx context.Context,
+	references []captureidentity.Reference,
+) (map[captureidentity.Reference]captureassignment.Assignment, error) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	fixture.batchCalls++
+	fixture.batchReferences = append([]captureidentity.Reference(nil), references...)
+	_, fixture.batchDeadline = ctx.Deadline()
+	if fixture.batchErr != nil {
+		return nil, fixture.batchErr
+	}
+	result := make(map[captureidentity.Reference]captureassignment.Assignment, len(references))
+	for _, reference := range references {
+		if assignment, exists := fixture.items[reference.Key()]; exists {
+			result[reference] = assignment
+		}
+	}
+	return result, nil
 }
 func (fixture *assignmentFixture) ApplyLatest(
 	_ context.Context,

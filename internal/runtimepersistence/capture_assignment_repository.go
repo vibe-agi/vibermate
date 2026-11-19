@@ -15,7 +15,10 @@ import (
 )
 
 type captureAssignmentRepository struct {
-	database         *sql.DB
+	database *sql.DB
+	// reads serves list-screen batches (LoadMany) so a page of Captures never
+	// queues behind the serialized writer. Nil falls back to database.
+	reads            *sql.DB
 	operations       *operationGate
 	reconcileTimeout time.Duration
 	committer        transactionCommitter
@@ -40,6 +43,73 @@ func (repository *captureAssignmentRepository) Load(ctx context.Context, referen
 	}
 	defer permit.finish()
 	return loadCaptureAssignment(permit.context, repository.database, reference)
+}
+
+// captureAssignmentBatchQuery probes the (capture_kind, capture_id) primary
+// key once per wanted pair. CROSS JOIN keeps the bound list as the outer loop,
+// so the cost follows the page size rather than the retained history.
+const captureAssignmentBatchQuery = `SELECT assignments.capture_kind, assignments.capture_id,
+        assignments.environment_id, assignments.environment_revision,
+        assignments.environment_digest, assignments.assignment_revision, assignments.source,
+        assignments.launch_environment_id, assignments.launch_environment_revision,
+        assignments.launch_environment_digest,
+        assignments.protected_authorities_json, assignments.managed_authorities_json,
+        assignments.launch_authority_digest, assignments.client_target_origin,
+        assignments.client_target_canonical_origin, assignments.updated_at_unix_ms
+ FROM json_each(?) AS wanted
+ CROSS JOIN capture_environment_assignments AS assignments
+ WHERE assignments.capture_kind = json_extract(wanted.value, '$[0]')
+   AND assignments.capture_id = json_extract(wanted.value, '$[1]')
+ LIMIT ?`
+
+func (repository *captureAssignmentRepository) LoadMany(ctx context.Context, references []captureidentity.Reference) ([]captureassignment.Assignment, error) {
+	if len(references) > captureassignment.MaxListLimit {
+		return nil, captureassignment.ErrInvalidAssignment
+	}
+	seen := make(map[captureidentity.Reference]bool, len(references))
+	pairs := make([][2]string, 0, len(references))
+	for _, reference := range references {
+		if reference.Validate() != nil {
+			return nil, captureassignment.ErrInvalidAssignment
+		}
+		if !seen[reference] {
+			seen[reference] = true
+			pairs = append(pairs, [2]string{string(reference.Kind), reference.ID})
+		}
+	}
+	result := make([]captureassignment.Assignment, 0, len(pairs))
+	if len(pairs) == 0 {
+		return result, nil
+	}
+	wanted, err := json.Marshal(pairs)
+	if err != nil {
+		return nil, captureassignment.ErrInvalidAssignment
+	}
+	permit, err := repository.operations.admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer permit.finish()
+	reads := repository.reads
+	if reads == nil {
+		reads = repository.database
+	}
+	rows, err := reads.QueryContext(permit.context, captureAssignmentBatchQuery, string(wanted), len(pairs))
+	if err != nil {
+		return nil, fmt.Errorf("load Capture Environment assignments: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		assignment, scanErr := scanCaptureAssignment(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Capture Environment assignments: %w", err)
+	}
+	return result, nil
 }
 
 func (repository *captureAssignmentRepository) ListByEnvironment(ctx context.Context, environmentID environment.EnvironmentID, limit int) ([]captureassignment.Assignment, error) {

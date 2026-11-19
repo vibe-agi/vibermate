@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,106 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	recovered, exists, err := reopened.CaptureAssignmentRepository().Load(context.Background(), capture)
 	if err != nil || !exists || recovered != updated {
 		t.Fatalf("recovered = %+v, exists=%t, err=%v", recovered, exists, err)
+	}
+}
+
+func TestCaptureAssignmentRepositoryLoadsAPageInOneBatch(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	if store.captureAssignments.reads == nil || store.captureAssignments.reads != store.reads {
+		t.Fatal("batched assignment reads are not on the store's read pool")
+	}
+	repository := store.CaptureAssignmentRepository()
+	managed := captureAssignmentReference(t, captureidentity.KindManagedRun, "same.id")
+	manual := captureAssignmentReference(t, captureidentity.KindManualCapture, "same.id")
+	updated := captureAssignmentReference(t, captureidentity.KindManagedRun, "run.updated")
+	missing := captureAssignmentReference(t, captureidentity.KindManagedRun, "run.missing")
+	stored := map[captureidentity.Reference]captureassignment.Assignment{
+		managed: captureAssignmentFixture(managed, "work", 1, captureassignment.SourceLaunch),
+		manual:  captureAssignmentFixture(manual, "personal", 1, captureassignment.SourceManualCreate),
+		updated: captureAssignmentFixture(updated, "work", 1, captureassignment.SourceLaunch),
+	}
+	for _, assignment := range stored {
+		if result, err := repository.Write(context.Background(), 0, assignment); err != nil ||
+			result.Outcome != captureassignment.CommitOutcomeCommitted {
+			t.Fatalf("create %s = %+v, %v", assignment.Capture.Key(), result, err)
+		}
+	}
+	next := stored[updated]
+	next.Revision = 2
+	next.EnvironmentRevision = 7
+	next.EnvironmentDigest[0] = 7
+	next.UpdatedAt = next.UpdatedAt.Add(time.Second)
+	if result, err := repository.Write(context.Background(), 1, next); err != nil ||
+		result.Outcome != captureassignment.CommitOutcomeCommitted {
+		t.Fatalf("update = %+v, %v", result, err)
+	}
+	stored[updated] = next
+
+	// The read pool must see the writer's commit straight away.
+	loaded, err := repository.LoadMany(context.Background(), []captureidentity.Reference{
+		managed, manual, missing, updated, managed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != len(stored) {
+		t.Fatalf("loaded %d assignments, want %d: %+v", len(loaded), len(stored), loaded)
+	}
+	for _, assignment := range loaded {
+		if want, exists := stored[assignment.Capture]; !exists || assignment != want {
+			t.Fatalf("loaded %s = %+v, want %+v", assignment.Capture.Key(), assignment, want)
+		}
+	}
+	empty, err := repository.LoadMany(context.Background(), nil)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty batch = %+v, %v", empty, err)
+	}
+	if _, err := repository.LoadMany(
+		context.Background(), []captureidentity.Reference{{Kind: "unknown", ID: "x"}},
+	); !errors.Is(err, captureassignment.ErrInvalidAssignment) {
+		t.Fatalf("invalid reference = %v", err)
+	}
+	oversized := make([]captureidentity.Reference, captureassignment.MaxListLimit+1)
+	for index := range oversized {
+		oversized[index] = managed
+	}
+	if _, err := repository.LoadMany(context.Background(), oversized); !errors.Is(err, captureassignment.ErrInvalidAssignment) {
+		t.Fatalf("oversized batch = %v", err)
+	}
+
+	// One primary-key probe per wanted pair: the retained history of finished
+	// Captures must not turn a page read into a table scan.
+	rows, err := store.reads.Query(
+		"EXPLAIN QUERY PLAN "+captureAssignmentBatchQuery,
+		`[["managed_run","same.id"],["manual_capture","same.id"]]`, 2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "SEARCH assignments USING INDEX") || strings.Contains(plan, "SCAN assignments") {
+		t.Fatalf("batched assignment read does not probe the primary key:\n%s", plan)
+	}
+
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadMany(
+		context.Background(), []captureidentity.Reference{managed},
+	); !errors.Is(err, ErrStoreClosing) {
+		t.Fatalf("batch after shutdown = %v", err)
 	}
 }
 
