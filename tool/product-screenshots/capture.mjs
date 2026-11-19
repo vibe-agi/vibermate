@@ -22,7 +22,7 @@ const labels = {
   en: {
     traffic: "Traffic", insights: "Insights", configuration: "Configuration",
     connections: "Approvals", policies: "Traffic policies",
-    accounts: "Upstream accounts", scripts: "Script library",
+    accounts: "Accounts", scripts: "Script library",
   },
   zh: {
     traffic: "\u6d41\u91cf", insights: "\u6d1e\u5bdf", configuration: "\u914d\u7f6e",
