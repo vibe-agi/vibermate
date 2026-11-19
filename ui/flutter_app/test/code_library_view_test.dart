@@ -231,7 +231,7 @@ void main() {
   for (final languageCase in [
     (
       language: AppLanguage.english,
-      title: 'Script library',
+      title: 'Scripts',
       transforms: 'Message transforms',
       selectors: 'Account selection rules',
       createTransform: 'New message transform',

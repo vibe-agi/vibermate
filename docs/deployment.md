@@ -25,13 +25,13 @@ address, or a certificate warning page.
 
 `vibermate run -- codex`, `vibermate run -- codex resume` and
 `vibermate run -- codex fork` start work with this capture's own backend and
-traffic policy. Supported clients receive `--no-daemon` automatically; the
+routing set. Supported clients receive `--no-daemon` automatically; the
 verified 0.145.0 launch recipe uses config overrides that prevent daemon reuse.
 Ordinary `codex exec`, `codex review` and foreground `codex app-server` keep
 their native startup behavior.
 
 Connecting with `--remote`, `codex agents` or `app-server daemon/proxy` would
-reuse a backend whose traffic policy belongs to another process. These modes
+reuse a backend whose routing set belongs to another process. These modes
 and unproven session controls are rejected before launch. Use a Codex version
 supporting `--no-daemon` and run one of the independent commands above without
 those modes. ViberMate leaves existing backends and session locks in place;
@@ -81,9 +81,9 @@ vibermate run --server http://127.0.0.1:9666 -- codex
 ```
 
 A local `vibermate run` without `--server` connects to the App. The default
-traffic policy, System Transparent, records conversations (kept for 30 days by
+routing set, System Transparent, records conversations (kept for 30 days by
 default) and keeps the original destination and credentials. When you want
-different routing, recording or retention, publish your own traffic policy and
+different routing, recording or retention, publish your own routing set and
 select it with `--env <policy ID>`.
 
 New Runtime databases enable body-free usage collection with 365-day retention.
@@ -101,7 +101,7 @@ account-history permission.
 ### Create a manual capture login for other clients in the Web workbench
 
 The owner signs in to the Web workbench and opens **Traffic → Captures**, then
-**Create manual capture**. Choose the traffic policy, client type and lifetime,
+**Create manual capture**. Choose the routing set, client type and lifetime,
 check the address and the inspected AI domains, and create it. The proxy
 username and password are shown only once, after creation or rotation. Rotating
 invalidates the old password immediately. Revoking stops new traffic but does

@@ -2751,7 +2751,7 @@ if (response.streaming && !context.responseModelShown && context.responseModel &
 response.body = JSON.stringify(payload);''',
 };
 
-/// One traffic policy that runs a script: how many of its client flows do,
+/// One routing set that runs a script: how many of its client flows do,
 /// and which revisions of the script they are pinned to.
 final class ScriptUsage {
   const ScriptUsage({
@@ -2769,7 +2769,7 @@ final class ScriptUsage {
   final Set<int> revisions;
 }
 
-/// Which traffic policies run [transformId], active ones first. Each client
+/// Which routing sets run [transformId], active ones first. Each client
 /// flow freezes an exact revision, so a policy can lag behind the library.
 List<ScriptUsage> scriptUsage(
   List<EnvironmentRecord> environments,

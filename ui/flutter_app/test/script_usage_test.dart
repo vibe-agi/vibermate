@@ -21,7 +21,7 @@ CodeLibraryTransformRevision _script(String id, int revision) =>
       publishedAt: DateTime.utc(2026, 11, 13),
     );
 
-/// The same traffic policy with [scripts] on every client flow.
+/// The same routing set with [scripts] on every client flow.
 EnvironmentRecord _running(
   EnvironmentRecord environment,
   List<CodeLibraryTransformRevision> scripts, {
@@ -44,7 +44,7 @@ int _flows(EnvironmentRecord environment) => environment.clientEndpoints
     .length;
 
 void main() {
-  test('a script lists the traffic policies that run it', () async {
+  test('a script lists the routing sets that run it', () async {
     final api = PreviewControlApi();
     addTearDown(api.close);
     final environments = (await api.loadDashboard()).environments
@@ -73,7 +73,7 @@ void main() {
     expect(scriptUsage([disabled, active], 'unused'), isEmpty);
   });
 
-  testWidgets('the script detail names the traffic policies that run it', (
+  testWidgets('the script detail names the routing sets that run it', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1280, 800));
@@ -102,7 +102,7 @@ void main() {
     );
     addTearDown(api.close);
     await controller.initialize();
-    // One traffic policy runs revision 1 of the script.
+    // One routing set runs revision 1 of the script.
     final data = controller.data!;
     final running = data.environments
         .where((environment) => _flows(environment) > 0)

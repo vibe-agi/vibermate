@@ -21,7 +21,7 @@ const sizes = [2400, 1280];
 const labels = {
   en: {
     traffic: "Traffic", insights: "Insights", configuration: "Configuration",
-    connections: "Approvals", policies: "Traffic policies",
+    connections: "Approvals", policies: "Routing",
     accounts: "Upstream accounts", scripts: "Script library",
   },
   zh: {

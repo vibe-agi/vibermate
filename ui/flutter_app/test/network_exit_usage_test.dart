@@ -13,7 +13,7 @@ EgressProfileRevision _tokyo(int revision) => EgressProfileRevision(
   publishedAt: DateTime.utc(2026, 11, 13),
 );
 
-/// The same traffic policy with every client flow leaving through [exit].
+/// The same routing set with every client flow leaving through [exit].
 EnvironmentRecord _through(EnvironmentRecord environment, EgressChoice exit) =>
     environment.copyWith(
       clientEndpoints: [
@@ -32,47 +32,40 @@ int _flows(EnvironmentRecord environment) => environment.clientEndpoints
     .length;
 
 void main() {
-  test(
-    'an exit lists the traffic policies that send traffic through it',
-    () async {
-      final api = PreviewControlApi();
-      addTearDown(api.close);
-      final environments = (await api.loadDashboard()).environments
-          .where((environment) => _flows(environment) > 0)
-          .toList();
-      expect(environments.length, greaterThanOrEqualTo(2));
-      final current = _through(environments[0], _tokyo(3));
-      final lagging = _through(environments[1], _tokyo(2));
+  test('an exit lists the routing sets that send traffic through it', () async {
+    final api = PreviewControlApi();
+    addTearDown(api.close);
+    final environments = (await api.loadDashboard()).environments
+        .where((environment) => _flows(environment) > 0)
+        .toList();
+    expect(environments.length, greaterThanOrEqualTo(2));
+    final current = _through(environments[0], _tokyo(3));
+    final lagging = _through(environments[1], _tokyo(2));
 
-      final usage = networkExitUsage('profile.tokyo', [lagging, current], []);
-      expect(usage.policies.map((policy) => policy.name).toSet(), {
-        current.name,
-        lagging.name,
-      });
-      final pinned = usage.policies.singleWhere(
-        (policy) => policy.name == lagging.name,
-      );
-      expect(pinned.flows, _flows(lagging));
-      expect(pinned.revisions, {2});
+    final usage = networkExitUsage('profile.tokyo', [lagging, current], []);
+    expect(usage.policies.map((policy) => policy.name).toSet(), {
+      current.name,
+      lagging.name,
+    });
+    final pinned = usage.policies.singleWhere(
+      (policy) => policy.name == lagging.name,
+    );
+    expect(pinned.flows, _flows(lagging));
+    expect(pinned.revisions, {2});
 
-      final copy = AppCopy.forLanguage(AppLanguage.english);
-      final text = networkExitUsageText(copy, usage, 3);
-      expect(text, startsWith('Used by '));
-      expect(text, contains('pinned to r2'));
-      expect(text.split('pinned').length, 2, reason: 'only the lagging policy');
+    final copy = AppCopy.forLanguage(AppLanguage.english);
+    final text = networkExitUsageText(copy, usage, 3);
+    expect(text, startsWith('Used by '));
+    expect(text, contains('pinned to r2'));
+    expect(text.split('pinned').length, 2, reason: 'only the lagging policy');
 
-      expect(
-        networkExitUsage('profile.other', [lagging, current], []).isEmpty,
-        isTrue,
-      );
-      expect(
-        networkExitUsageText(
-          copy,
-          networkExitUsage('profile.other', [], []),
-          1,
-        ),
-        'No traffic policy or account uses this exit.',
-      );
-    },
-  );
+    expect(
+      networkExitUsage('profile.other', [lagging, current], []).isEmpty,
+      isTrue,
+    );
+    expect(
+      networkExitUsageText(copy, networkExitUsage('profile.other', [], []), 1),
+      'No routing set or account uses this exit.',
+    );
+  });
 }

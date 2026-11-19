@@ -10,7 +10,7 @@ connections.
 | Uninspected CONNECT or generic cleartext forwarding | Connection, destination, decision/rule, and transfer byte counts | No request Body, Body digest, decoded upload, or local path. `blind` means **not inspected**, not necessarily encrypted. |
 | Traffic bypassing the proxy | None | Absence of a record is not evidence of absence of traffic. |
 
-New traffic policies default to **Full** recording. The policy editor shows its
+New routing sets default to **Full** recording. The policy editor shows its
 retention period and lets the owner choose `Metadata only` or `Off`. The
 outbound-audit view does not create a second copy of retained bodies. Raw
 evidence access is owner-only on Server Web; recognized credential Header

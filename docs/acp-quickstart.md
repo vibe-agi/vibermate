@@ -115,7 +115,7 @@ is self-reported and is not a release-signature assertion.
   the ACP editor to launch the command with pipes; this also keeps the editor's
   separate interactive authentication process usable.
 - No text: metadata-only is the default; loaded history is not newly recorded.
-- No HTTP traffic policies: intentional in ACP-only mode. `--env` is rejected so
+- No HTTP routing sets: intentional in ACP-only mode. `--env` is rejected so
   a configured policy cannot appear to be enforced when it is not.
 
 The fixed VS Code Extension Host completed synthetic login, new session,
