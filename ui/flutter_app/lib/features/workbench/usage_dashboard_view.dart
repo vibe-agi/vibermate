@@ -185,41 +185,22 @@ final class _UsageDashboardState extends State<_UsageDashboard> {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      _ReportScope(
+                      const SizedBox(height: 8),
+                      _UsageStatusLine(
                         report: report,
                         copy: copy,
+                        personal: controller == null,
                         refreshing: widget.loading,
                         onRefresh: widget.onRefresh,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        report.collection.enabled
-                            ? copy.format('usage.collection.since', {
-                                'time': _timestamp(
-                                  report.collection.collectingSince!,
-                                ),
-                                'days': report.collection.retentionDays
-                                    .toString(),
-                              })
-                            : copy(
-                                controller == null
-                                    ? 'usage.personal.collection_off'
-                                    : 'usage.collection.disabled',
-                              ),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: context.viberColors.textMuted,
-                        ),
                       ),
                       if (widget.error != null)
                         InlineNotice(
                           message: copy('usage.refresh.failed'),
                           error: true,
                         ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
                       _UsageOverview(report: report, copy: copy),
-                      UsagePricingNote(report: report, copy: copy),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 28),
                       _UsageTrend(
                         report: report,
                         copy: copy,
@@ -233,13 +214,15 @@ final class _UsageDashboardState extends State<_UsageDashboard> {
                               )
                             : null,
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 28),
                       UsageGroupTable(
                         report: report,
                         copy: copy,
                         loadPage: widget.loadPage,
                         onRefresh: widget.onRefresh,
                       ),
+                      const SizedBox(height: 8),
+                      UsagePricingNote(report: report, copy: copy),
                     ],
                   ),
                 ),
@@ -406,26 +389,39 @@ final class _UsageTrendState extends State<_UsageTrend> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Align(
-        alignment: Alignment.centerRight,
-        child: SegmentedButton<bool>(
-          key: const Key('usage-trend-metric'),
-          showSelectedIcon: false,
-          segments: [
-            ButtonSegment(
-              value: false,
-              label: Text(widget.copy('usage.trend.requests')),
+      Wrap(
+        spacing: ViberSpacing.md,
+        runSpacing: ViberSpacing.sm,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            widget.copy(
+              _periodDates(widget.report.period).length > 90
+                  ? 'usage.per_month'
+                  : 'usage.per_day',
             ),
-            ButtonSegment(
-              value: true,
-              label: Text(widget.copy('usage.cost.short')),
-            ),
-          ],
-          selected: {_cost},
-          onSelectionChanged: (value) => setState(() => _cost = value.single),
-        ),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          SegmentedButton<bool>(
+            key: const Key('usage-trend-metric'),
+            showSelectedIcon: false,
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: [
+              ButtonSegment(
+                value: false,
+                label: Text(widget.copy('usage.trend.requests')),
+              ),
+              ButtonSegment(
+                value: true,
+                label: Text(widget.copy('usage.cost.short')),
+              ),
+            ],
+            selected: {_cost},
+            onSelectionChanged: (value) => setState(() => _cost = value.single),
+          ),
+        ],
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 12),
       if (!_cost && widget.annual != null)
         widget.annual!
       else
@@ -477,11 +473,6 @@ final class _UsageDailyBars extends StatelessWidget {
     final colors = context.viberColors;
     return Container(
       key: const Key('usage-daily-trend'),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border.all(color: colors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -489,7 +480,9 @@ final class _UsageDailyBars extends StatelessWidget {
             cost
                 ? copy(monthly ? 'usage.cost.monthly' : 'usage.cost.daily')
                 : copy(monthly ? 'usage.trend.monthly' : 'usage.trend'),
-            style: Theme.of(context).textTheme.titleSmall,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: 8),
           if (report.days.isEmpty ||
@@ -1166,9 +1159,11 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
+        const SizedBox(height: 4),
         Wrap(
           spacing: 8,
           runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             if (!widget.modelsOnly)
               for (final dimension in [
@@ -1181,60 +1176,65 @@ final class _UsageGroupTableState extends State<UsageGroupTable> {
               ])
                 ChoiceChip(
                   key: Key('usage-group-${_labels[dimension]}'),
+                  showCheckmark: false,
                   label: Text(copy('usage.group.${_labels[dimension]}')),
                   selected: dimension == _groupBy,
                   onSelected: (_) => _navigate(0, groupBy: dimension),
                 ),
+            if (_groupBy == 'project')
+              FilterChip(
+                label: Text(copy('usage.branch.launch')),
+                selected: _byBranch,
+                onSelected: (value) => _navigate(0, byBranch: value),
+              ),
           ],
         ),
-        const SizedBox(height: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 40),
-          child: Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              TextButton(
-                onPressed: _trail.isEmpty ? null : () => _navigate(0),
-                child: Text(copy('usage.group.${_labels[_groupBy]}')),
-              ),
-              for (var i = 0; i < _trail.length; i++) ...[
-                const Icon(Icons.chevron_right, size: 14),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 240),
-                  child: TextButton(
-                    onPressed: i == _trail.length - 1
-                        ? null
-                        : () => _navigate(i + 1),
-                    child: Text(
-                      _label(_trail[i]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+        if (_trail.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: () => _navigate(0),
+                  child: Text(copy('usage.group.${_labels[_groupBy]}')),
+                ),
+                for (var i = 0; i < _trail.length; i++) ...[
+                  const Icon(Icons.chevron_right, size: 14),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: TextButton(
+                      onPressed: i == _trail.length - 1
+                          ? null
+                          : () => _navigate(i + 1),
+                      child: Text(
+                        _label(_trail[i]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
-              if (_groupBy == 'project')
-                FilterChip(
-                  label: Text(copy('usage.branch.launch')),
-                  selected: _byBranch,
-                  onSelected: (value) => _navigate(0, byBranch: value),
-                ),
-            ],
+            ),
           ),
-        ),
-        Text(
-          copy('usage.path.${_labels[_groupBy]}'),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-        ),
         SizedBox(
           height: 36,
           child: Row(
             children: [
-              Expanded(
+              Flexible(
+                child: Text(
+                  '${copy('usage.path.${_labels[_groupBy]}')} · ',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+              ),
+              Flexible(
                 child: Text(
                   _snapshotExpired
                       ? copy('usage.page.changed')
@@ -1374,58 +1374,67 @@ String _tableCostLabel(RuntimeCostEstimate cost) {
   return '${cost.partial ? '≥ ' : ''}\$${usageIntegerLabel(cents ~/ 100)}.${(cents % 100).toString().padLeft(2, '0')}';
 }
 
-final class _ReportScope extends StatelessWidget {
-  const _ReportScope({
+/// One line under the range: what the window covers, how long usage is kept
+/// and when it was read, with Refresh at the end of the line.
+final class _UsageStatusLine extends StatelessWidget {
+  const _UsageStatusLine({
     required this.report,
     required this.copy,
+    required this.personal,
     required this.refreshing,
     required this.onRefresh,
   });
 
   final RuntimeUsageReport report;
   final AppCopy copy;
+  final bool personal;
   final bool refreshing;
   final VoidCallback onRefresh;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Icon(
-        Icons.inventory_2_outlined,
-        size: 16,
-        color: context.viberColors.route,
-      ),
-      const SizedBox(width: ViberSpacing.sm),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              copy('usage.scope.retained'),
-              style: Theme.of(context).textTheme.labelLarge,
+  Widget build(BuildContext context) {
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    final parts = [
+      _periodLabel(report.period),
+      report.collection.enabled
+          ? copy.format('usage.collection.since', {
+              'time': _timestamp(report.collection.collectingSince!),
+              'days': report.collection.retentionDays.toString(),
+            })
+          : copy(
+              personal
+                  ? 'usage.personal.collection_off'
+                  : 'usage.collection.disabled',
             ),
-            Text(
-              '${_periodLabel(report.period)} · '
-              '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt, seconds: true)})}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ],
+      copy.format('usage.generated', {
+        'time': _timestamp(report.generatedAt, seconds: true),
+      }),
+    ];
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: ViberSpacing.sm,
+      children: [
+        Text(parts.join(' · '), key: const Key('usage-status'), style: muted),
+        TextButton.icon(
+          key: const Key('usage-refresh'),
+          onPressed: refreshing ? null : onRefresh,
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+          ),
+          icon: refreshing
+              ? const CompactProgressIndicator()
+              : const Icon(Icons.refresh, size: 14),
+          label: Tooltip(
+            message: copy('usage.refresh.hint'),
+            child: Text(copy('usage.page.update')),
+          ),
         ),
-      ),
-      IconButton(
-        key: const Key('usage-refresh'),
-        onPressed: refreshing ? null : onRefresh,
-        tooltip: copy('usage.refresh.hint'),
-        icon: refreshing
-            ? const CompactProgressIndicator()
-            : const Icon(Icons.refresh, size: 16),
-      ),
-    ],
-  );
+      ],
+    );
+  }
 }
 
 final class _UsageOverview extends StatelessWidget {
@@ -1448,78 +1457,140 @@ final class _UsageOverview extends StatelessWidget {
     );
     final input = _sumDayTokens(report.days, (tokens) => tokens.inputUncached);
     final output = _sumDayTokens(report.days, (tokens) => tokens.output);
+    final cost = _reportCost(report);
+    final stats = [
+      UsageStat(
+        key: const Key('usage-total-api-calls'),
+        label: copy('usage.metric.api_calls'),
+        value: _integer(agentApiCalls),
+        detail: copy.format('usage.calls.outcomes', {
+          'succeeded': _integer(succeeded),
+          'failed': _integer(failed),
+          'canceled': _integer(canceled),
+        }),
+        help: copy('usage.metric.api_calls.detail'),
+      ),
+      UsageStat(
+        key: const Key('usage-input-tokens'),
+        label: copy('usage.metric.input'),
+        value: input.label,
+        detail: copy('usage.metric.protocol_declared'),
+      ),
+      UsageStat(
+        key: const Key('usage-output-tokens'),
+        label: copy('usage.metric.output'),
+        value: output.label,
+        detail: copy('usage.metric.protocol_declared'),
+      ),
+      UsageStat(
+        key: const Key('usage-estimated-cost'),
+        label: copy('usage.cost.title'),
+        value: usageCostLabel(cost),
+        detail: copy.format('usage.cost.coverage_short', {
+          'known': _integer(cost.completeCalls),
+          'total': _integer(agentApiCalls),
+        }),
+        help: _costCoverage(cost, copy),
+      ),
+    ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 1100
-            ? 6
-            : constraints.maxWidth >= 560
-            ? 3
-            : 2;
-        final spacing = ViberSpacing.md * (columns - 1);
-        final width = (constraints.maxWidth - spacing) / columns;
-        return Wrap(
-          spacing: ViberSpacing.md,
-          runSpacing: ViberSpacing.md,
-          children: [
-            UsageOverviewCard(
-              width: width,
-              key: const Key('usage-total-api-calls'),
-              icon: Icons.swap_horiz,
-              label: copy('usage.metric.api_calls'),
-              value: _integer(agentApiCalls),
-              detail: copy('usage.metric.api_calls.detail'),
-            ),
-            UsageOverviewCard(
-              width: width,
-              icon: Icons.check_circle_outline,
-              label: copy('usage.succeeded'),
-              value: _integer(succeeded),
-              detail: agentApiCalls == 0
-                  ? '—'
-                  : '${(100 * succeeded / agentApiCalls).toStringAsFixed(1)}%',
-              accent: context.viberColors.verified,
-            ),
-            UsageOverviewCard(
-              width: width,
-              icon: Icons.error_outline,
-              label: copy('usage.failed'),
-              value: _integer(failed),
-              detail: copy.format('usage.canceled', {'count': '$canceled'}),
-            ),
-            UsageOverviewCard(
-              key: const Key('usage-input-tokens'),
-              width: width,
-              icon: Icons.input,
-              label: copy('usage.metric.input'),
-              value: input.label,
-              detail: copy('usage.metric.protocol_declared'),
-            ),
-            UsageOverviewCard(
-              key: const Key('usage-output-tokens'),
-              width: width,
-              icon: Icons.output,
-              label: copy('usage.metric.output'),
-              value: output.label,
-              detail: copy('usage.metric.protocol_declared'),
-            ),
-            Tooltip(
-              message: _costCoverage(_reportCost(report), copy),
-              child: UsageOverviewCard(
-                key: const Key('usage-estimated-cost'),
-                width: width,
-                icon: Icons.payments_outlined,
-                label: copy('usage.cost.title'),
-                value: usageCostLabel(_reportCost(report)),
-                detail: copy.format('usage.cost.coverage', {
-                  'known': '${_reportCost(report).completeCalls}',
-                  'total': '$agentApiCalls',
-                }),
+        final columns = constraints.maxWidth >= 880
+            ? 4
+            : constraints.maxWidth >= 300
+            ? 2
+            : 1;
+        final rows = <Widget>[];
+        for (var start = 0; start < stats.length; start += columns) {
+          final row = stats.sublist(
+            start,
+            math.min(start + columns, stats.length),
+          );
+          rows.add(
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var index = 0; index < columns; index++) ...[
+                    if (index > 0)
+                      VerticalDivider(
+                        width: ViberSpacing.xl,
+                        thickness: 1,
+                        color: context.viberColors.dividerSoft,
+                      ),
+                    Expanded(
+                      child: index < row.length
+                          ? row[index]
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ],
               ),
             ),
-          ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: ViberSpacing.lg,
+          children: rows,
         );
       },
     );
+  }
+}
+
+/// A headline figure: a small label, the number, and one muted line that
+/// says what the number is made of.
+final class UsageStat extends StatelessWidget {
+  const UsageStat({
+    required this.label,
+    required this.value,
+    required this.detail,
+    this.help,
+    super.key,
+  });
+
+  final String label;
+  final String value;
+  final String detail;
+  final String? help;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    final colors = context.viberColors;
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.labelMedium?.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: ViberSpacing.xxs),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.headlineSmall?.copyWith(
+            color: colors.text,
+            fontSize: 26,
+            height: 34 / 26,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(height: ViberSpacing.xxs),
+        Text(
+          detail,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.bodySmall?.copyWith(color: colors.textMuted),
+        ),
+      ],
+    );
+    return help == null ? body : Tooltip(message: help!, child: body);
   }
 }
 
