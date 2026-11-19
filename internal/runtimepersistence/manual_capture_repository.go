@@ -333,7 +333,7 @@ func (repository *manualCaptureRepository) AuthorizeProxy(
 		digest[:], toUnixMillis(now),
 	), fence: &original})
 	if errors.Is(err, sql.ErrNoRows) {
-		// The credential is refused whether or not this write lands.
+		// Admission is refused either way; this write only records the expiry.
 		_, _ = repository.database.ExecContext(
 			operation,
 			`UPDATE manual_captures
