@@ -1403,7 +1403,7 @@ void main() {
     // Network exits are their own destination now, not a Settings tab.
     await tester.tap(find.byKey(const Key('workbench-tab-network-exits')));
     await tester.pumpAndSettle();
-    expect(find.text('网络出口方案'), findsOneWidget);
+    expect(find.text('网络出口'), findsWidgets);
     expect(
       find.byKey(const Key('egress-profile-row-profile.direct')),
       findsOneWidget,
@@ -1419,7 +1419,7 @@ void main() {
       const Key('settings-egress-profile-dialog'),
     );
     expect(profileDialog, findsOneWidget);
-    expect(find.text('新建网络出口方案'), findsNWidgets(2));
+    expect(find.text('新建网络出口'), findsNWidgets(2));
     expect(find.text('方案名称'), findsOneWidget);
     await tester.enterText(
       find.byKey(const Key('egress-profile-display-name')),
