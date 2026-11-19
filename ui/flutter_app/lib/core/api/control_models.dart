@@ -7159,6 +7159,7 @@ final class CaptureRecord {
     this.managedRun,
     this.manualCapture,
     this.transport,
+    this.environment,
   }) : _activityAt = activityAt;
 
   factory CaptureRecord.fromJson(Object? json, String path) {
@@ -7181,6 +7182,7 @@ final class CaptureRecord {
         'manualCapture',
         'transport',
         'activityAt',
+        'environment',
       },
     );
     final kind = requireString(value, 'kind', path);
@@ -7218,6 +7220,18 @@ final class CaptureRecord {
     final manualSummary = manual == null
         ? null
         : ManualCaptureSummary.fromJson(manual, '$path.manualCapture');
+    CaptureEnvironmentRef? environment;
+    if (value['environment'] != null) {
+      try {
+        environment = CaptureEnvironmentRef.fromJson(
+          value['environment'],
+          '$path.environment',
+        );
+      } on ControlContractException {
+        // The routing set is an annotation the Runtime adds on a best-effort
+        // basis; one this build cannot read never hides the Capture itself.
+      }
+    }
     final createdAt = requireTimestamp(value, 'createdAt', path);
     final updatedAt = requireTimestamp(value, 'updatedAt', path);
     final activityAt = optionalTimestamp(value, 'activityAt', path);
@@ -7245,6 +7259,7 @@ final class CaptureRecord {
       managedRun: managedSummary,
       manualCapture: manualSummary,
       transport: transport,
+      environment: environment,
     );
   }
 
@@ -7261,6 +7276,11 @@ final class CaptureRecord {
   final ManualCaptureSummary? manualCapture;
   final String? transport;
 
+  /// The routing set this Capture currently uses. Only the Capture list
+  /// carries it; null when there is no assignment or the Runtime could not
+  /// read it for this page.
+  final CaptureEnvironmentRef? environment;
+
   bool get running => kind == 'managed_run'
       ? state == 'created' || state == 'attached'
       : state == 'active';
@@ -7275,6 +7295,24 @@ final class CaptureRecord {
       manualCapture?.lastObservedAt ??
       managedRun?.firstObservedAt ??
       (running ? createdAt : updatedAt);
+}
+
+/// The Environment revision a Capture's current assignment points at, which
+/// can be newer than the one it launched with.
+final class CaptureEnvironmentRef {
+  const CaptureEnvironmentRef({required this.id, required this.revision});
+
+  factory CaptureEnvironmentRef.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'id', 'revision'});
+    return CaptureEnvironmentRef(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+    );
+  }
+
+  final String id;
+  final int revision;
 }
 
 final class CapturePage {

@@ -550,6 +550,95 @@ func TestActiveCapturesExcludesTerminalHistory(t *testing.T) {
 	}
 }
 
+func TestResolveManyReadsAPageInOneRepositoryCall(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	resolver := newRevisionResolver(t, environmentFixture(t, "work", "adapter.shared"))
+	manager := newTestManager(t, repository, resolver)
+	managed := testCapture()
+	manual, _ := captureidentity.New(captureidentity.KindManualCapture, "manual.two")
+	for _, command := range []CreateCommand{
+		{Capture: managed, EnvironmentID: "work", Source: SourceLaunch},
+		{Capture: manual, EnvironmentID: "work", Source: SourceManualCreate},
+	} {
+		if _, err := manager.Create(context.Background(), command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A write whose outcome is unknown poisons its Capture even if the row
+	// did land; Resolve refuses it, so the batch leaves it out too.
+	poisoned, _ := captureidentity.New(captureidentity.KindManagedRun, "run.poisoned")
+	repository.nextOutcome = CommitOutcomeIndeterminate
+	if _, err := manager.Create(context.Background(), CreateCommand{
+		Capture: poisoned, EnvironmentID: "work", Source: SourceLaunch,
+	}); !errors.Is(err, ErrCommitOutcomeUnknown) {
+		t.Fatalf("indeterminate create = %v", err)
+	}
+	landed := repository.assignments[managed]
+	landed.Capture = poisoned
+	repository.assignments[poisoned] = landed
+	unrequested, _ := captureidentity.New(captureidentity.KindManagedRun, "run.unrequested")
+	extra := repository.assignments[managed]
+	extra.Capture = unrequested
+	repository.loadManyExtra = []Assignment{extra}
+	missing, _ := captureidentity.New(captureidentity.KindManagedRun, "run.missing")
+	sameIDOtherKind, _ := captureidentity.New(captureidentity.KindManualCapture, managed.ID)
+
+	manager.statesMu.Lock()
+	statesBefore := len(manager.states)
+	manager.statesMu.Unlock()
+	resolved, err := manager.ResolveMany(context.Background(), []captureidentity.Reference{
+		managed, manual, missing, sameIDOtherKind, poisoned, managed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.loadManyCalls != 1 {
+		t.Fatalf("batch read used %d repository calls, want 1", repository.loadManyCalls)
+	}
+	if len(resolved) != 2 || resolved[managed] != repository.assignments[managed] ||
+		resolved[manual] != repository.assignments[manual] {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	manager.statesMu.Lock()
+	statesAfter := len(manager.states)
+	manager.statesMu.Unlock()
+	if statesAfter != statesBefore {
+		t.Fatalf("listing registered Capture state: %d -> %d", statesBefore, statesAfter)
+	}
+
+	empty, err := manager.ResolveMany(context.Background(), nil)
+	if err != nil || len(empty) != 0 || repository.loadManyCalls != 1 {
+		t.Fatalf("empty batch = %+v, %v, calls=%d", empty, err, repository.loadManyCalls)
+	}
+	if _, err := manager.ResolveMany(
+		context.Background(), []captureidentity.Reference{{Kind: "unknown", ID: "x"}},
+	); !errors.Is(err, ErrInvalidAssignment) {
+		t.Fatalf("invalid reference = %v", err)
+	}
+	oversized := make([]captureidentity.Reference, MaxListLimit+1)
+	for index := range oversized {
+		oversized[index] = managed
+	}
+	if _, err := manager.ResolveMany(context.Background(), oversized); !errors.Is(err, ErrInvalidAssignment) {
+		t.Fatalf("oversized batch = %v", err)
+	}
+	storage := errors.New("database is locked")
+	repository.loadManyErr = storage
+	if _, err := manager.ResolveMany(
+		context.Background(), []captureidentity.Reference{managed},
+	); !errors.Is(err, storage) {
+		t.Fatalf("storage failure = %v", err)
+	}
+	repository.loadManyErr = nil
+	manager.BeginShutdown()
+	if _, err := manager.ResolveMany(
+		context.Background(), []captureidentity.Reference{managed},
+	); !errors.Is(err, ErrRuntimeStopping) {
+		t.Fatalf("batch after shutdown = %v", err)
+	}
+}
+
 func assertRequestRoute(
 	t *testing.T,
 	manager *Manager,
@@ -868,6 +957,12 @@ type memoryRepository struct {
 	mu          sync.Mutex
 	assignments map[captureidentity.Reference]Assignment
 	nextOutcome CommitOutcome
+	// loadManyCalls and loadManyErr let tests see and fail the batch read.
+	loadManyCalls int
+	loadManyErr   error
+	// loadManyExtra is returned beside the stored rows to model a store that
+	// answers with rows nobody asked for.
+	loadManyExtra []Assignment
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -882,6 +977,25 @@ func (repository *memoryRepository) Load(
 	defer repository.mu.Unlock()
 	assignment, exists := repository.assignments[reference]
 	return assignment, exists, nil
+}
+
+func (repository *memoryRepository) LoadMany(
+	_ context.Context,
+	references []captureidentity.Reference,
+) ([]Assignment, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	repository.loadManyCalls++
+	if repository.loadManyErr != nil {
+		return nil, repository.loadManyErr
+	}
+	result := make([]Assignment, 0, len(references))
+	for _, reference := range references {
+		if assignment, exists := repository.assignments[reference]; exists {
+			result = append(result, assignment)
+		}
+	}
+	return append(result, repository.loadManyExtra...), nil
 }
 
 func (repository *memoryRepository) ListByEnvironment(

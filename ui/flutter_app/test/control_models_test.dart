@@ -1172,6 +1172,60 @@ void main() {
     },
   );
 
+  test('Capture list items carry the routing set they currently use', () {
+    Map<String, Object?> manual(String id, [Object? environment]) => {
+      'key': 'manual_capture:$id',
+      'id': id,
+      'kind': 'manual_capture',
+      'displayName': 'IDE proxy',
+      'state': 'active',
+      'observation': 'waiting_for_traffic',
+      'createdAt': '2026-08-10T09:00:00.000Z',
+      'updatedAt': '2026-08-10T09:01:00.000Z',
+      'manualCapture': {
+        'clientClass': 'desktop_app',
+        'lifetime': 'until_revoked',
+        'credentialRevision': 1,
+      },
+      'environment': ?environment,
+    };
+
+    final page = CapturePage.fromJson({
+      'items': [
+        manual('assigned', {'id': 'work', 'revision': 7}),
+        manual('unassigned'),
+      ],
+    }, 'capturePage');
+    expect(page.items[0].environment?.id, 'work');
+    expect(page.items[0].environment?.revision, 7);
+    expect(page.items[1].environment, isNull);
+
+    // An annotation this build cannot read drops only the annotation.
+    for (final unreadable in <Object?>[
+      {'id': 'work'},
+      {'id': 'work', 'revision': 0},
+      {'id': ' work', 'revision': 7},
+      {'id': 'work', 'revision': 7, 'digest': 'extra'},
+      'work',
+    ]) {
+      final record = CaptureRecord.fromJson(
+        manual('unreadable', unreadable),
+        'capture',
+      );
+      expect(record.key, 'manual_capture:unreadable');
+      expect(record.environment, isNull, reason: '$unreadable');
+    }
+
+    // The rest of the item stays strict.
+    expect(
+      () => CaptureRecord.fromJson({
+        ...manual('strict', {'id': 'work', 'revision': 7}),
+        'routingSet': 'work',
+      }, 'capture'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test('Provider Account response rejects any returned secret field', () {
     expect(
       () => ProviderAccount.fromJson({

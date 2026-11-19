@@ -2,6 +2,7 @@ package desktopcontrol
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -29,6 +30,9 @@ const (
 	captureListMaximumLimit = 199
 	captureCursorVersion    = 2
 	maximumCaptureCursor    = 512
+	// captureEnvironmentLookupTimeout bounds the routing-set annotation of one
+	// page. A slower assignment read drops the annotation, never the page.
+	captureEnvironmentLookupTimeout = 2 * time.Second
 )
 
 type captureCursorDocument struct {
@@ -52,6 +56,17 @@ type CaptureResponse struct {
 	Transport     string                 `json:"transport,omitempty"`
 	ManagedRun    *ManagedRunResponse    `json:"managedRun,omitempty"`
 	ManualCapture *ManualCaptureResponse `json:"manualCapture,omitempty"`
+	// Environment is the routing set the Capture currently uses. Only the list
+	// fills it, and it is omitted when there is no assignment or it could not
+	// be read.
+	Environment *CaptureEnvironmentResponse `json:"environment,omitempty"`
+}
+
+// CaptureEnvironmentResponse names the Environment revision a Capture's
+// current assignment points at, not the revision it launched with.
+type CaptureEnvironmentResponse struct {
+	ID       environment.EnvironmentID `json:"id"`
+	Revision environment.Revision      `json:"revision"`
 }
 
 type ManagedRunResponse struct {
@@ -223,7 +238,41 @@ func (handler *Handler) listCaptures(writer http.ResponseWriter, request *http.R
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)
 		return
 	}
+	handler.markCaptureEnvironments(request.Context(), response.Items)
 	writeJSON(writer, http.StatusOK, response)
+}
+
+// markCaptureEnvironments annotates one page with the Environment each Capture
+// currently uses, in a single batched read. It is best effort by design: the
+// session list must still render when the assignment store is slow or
+// failing, so any lookup error leaves every item without the annotation.
+func (handler *Handler) markCaptureEnvironments(parent context.Context, items []CaptureResponse) {
+	references := make([]captureidentity.Reference, 0, len(items))
+	for _, item := range items {
+		reference := captureidentity.Reference{Kind: item.Kind, ID: item.ID}
+		if reference.Validate() == nil {
+			references = append(references, reference)
+		}
+	}
+	if len(references) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, captureEnvironmentLookupTimeout)
+	defer cancel()
+	assignments, err := handler.assignments.ResolveMany(ctx, references)
+	if err != nil {
+		return
+	}
+	for index := range items {
+		reference := captureidentity.Reference{Kind: items[index].Kind, ID: items[index].ID}
+		assignment, exists := assignments[reference]
+		if !exists {
+			continue
+		}
+		items[index].Environment = &CaptureEnvironmentResponse{
+			ID: assignment.EnvironmentID, Revision: assignment.EnvironmentRevision,
+		}
+	}
 }
 
 func (handler *Handler) markACPCaptures(request *http.Request, items []CaptureResponse) error {
