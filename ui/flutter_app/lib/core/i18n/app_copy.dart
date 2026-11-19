@@ -2401,14 +2401,21 @@ final class AppCopy {
         'Preferences, team access, safety and network behavior for this Runtime',
     'settings.tab.general': 'General',
     'settings.tab.preferences': 'Preferences',
-    'settings.tab.access': 'Access & launch',
-    'settings.tab.safety': 'Safety & data',
-    'settings.tab.users': 'User management',
+    'settings.tab.access': 'Access and launch',
+    'settings.tab.safety': 'Safety and data',
+    'settings.tab.users': 'Users',
+    'settings.section_detail.general':
+        'Appearance, language, transparent capture and updates',
+    'settings.section_detail.access':
+        'Terminal command, editors, browser and other devices',
+    'settings.section_detail.users': 'Who can sign in to this Runtime',
+    'settings.section_detail.safety':
+        'Certificates, storage, backups and cleanup',
     'settings.tab.proxy': 'Network exits',
     'settings.preferences.title': 'Workbench preferences',
     'settings.preferences.detail':
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
-    'settings.access.title': 'Access & launch',
+    'settings.access.title': 'Access and launch',
     'settings.access.socks': 'SOCKS5 proxy',
     'settings.access.network.disabled': 'Not enabled',
     'settings.access.network.unknown': 'Availability unknown',
@@ -2427,7 +2434,7 @@ final class AppCopy {
         'Optional for local App use. Expand for the Web address and remote login steps.',
     'settings.access.team.detail':
         'Create accounts in User management, then share the workbench address and connection commands.',
-    'settings.safety.title': 'Safety & data',
+    'settings.safety.title': 'Safety and data',
     'settings.safety.detail':
         'Server connections, AI traffic inspection and stored data are separate controls.',
     'settings.server_connection.title': 'Server HTTPS',
@@ -5274,7 +5281,11 @@ final class AppCopy {
     'settings.tab.preferences': '偏好设置',
     'settings.tab.access': '接入与启动',
     'settings.tab.safety': '安全与数据',
-    'settings.tab.users': '用户管理',
+    'settings.tab.users': '用户',
+    'settings.section_detail.general': '外观、语言、透明捕获与更新',
+    'settings.section_detail.access': '终端命令、编辑器、浏览器与其他设备',
+    'settings.section_detail.users': '谁可以登录此 Runtime',
+    'settings.section_detail.safety': '证书、存储、备份与清理',
     'settings.tab.proxy': '网络出口',
     'settings.preferences.title': '工作台偏好',
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
