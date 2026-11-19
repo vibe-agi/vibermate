@@ -424,6 +424,14 @@ final class _EnvironmentDetail extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // Recording is set for the whole routing set, not per path.
+                  Text(
+                    key: const Key('environment-recording-mode'),
+                    '${copy('environment.recording.mode')}: ${copy('environment.recording.${value.contentRecording.mode}')}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
                 ],
               );
               final identity = Row(
@@ -719,35 +727,33 @@ final class _ProtocolPlanRows extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             if (constraints.maxWidth < 560) return const SizedBox.shrink();
+            final full = _fullPathTable(context, constraints.maxWidth);
+            Widget label(String key, int flex) => Expanded(
+              flex: flex,
+              child: Text(
+                copy(key),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            );
             return Container(
               width: double.infinity,
               color: context.viberColors.panelRaised.withValues(alpha: 0.45),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               child: Row(
                 children: [
-                  Expanded(
-                    flex: 3,
-                    child: Text(
-                      copy('environment.mapping.client'),
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ),
+                  label('environment.path.agent', full ? 2 : 3),
+                  if (full) ...[
+                    const SizedBox(width: 10),
+                    label('environment.path.scripts', 2),
+                  ],
                   const SizedBox(width: 24),
-                  Expanded(
-                    flex: 4,
-                    child: Text(
-                      copy('environment.mapping.upstream'),
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ),
+                  label('environment.path.send_to', 4),
                   const SizedBox(width: 10),
-                  Expanded(
-                    flex: 4,
-                    child: Text(
-                      copy('environment.mapping.accounts'),
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ),
+                  label('environment.path.account', full ? 5 : 4),
+                  if (full) ...[
+                    const SizedBox(width: 10),
+                    label('environment.path.exit', 2),
+                  ],
                 ],
               ),
             );
@@ -756,12 +762,14 @@ final class _ProtocolPlanRows extends StatelessWidget {
         if (upstream == null)
           _OriginalDestinationRow(
             clientProtocol: plan.clientProtocol,
+            plan: plan,
             copy: copy,
           )
         else
           for (final route in upstream.routes)
             _RouteAuthorityRow(
               clientOrigin: clientOrigin,
+              plan: plan,
               controller: controller,
               environment: environment,
               route: route,
@@ -782,49 +790,205 @@ final class _ProtocolPlanRows extends StatelessWidget {
 final class _OriginalDestinationRow extends StatelessWidget {
   const _OriginalDestinationRow({
     required this.clientProtocol,
+    required this.plan,
     required this.copy,
   });
 
   final String clientProtocol;
+  final EnvironmentProtocolPlan plan;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.all(10),
-    child: Row(
-      children: [
-        Expanded(
-          flex: 3,
-          child: Text(
-            _localizedCopy(copy, 'routes.protocol', clientProtocol),
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-        ),
-        const SizedBox(width: 24),
-        Expanded(
-          flex: 4,
-          child: Text(
-            copy('environment.destination.original'),
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 4,
-          child: Text(
-            copy('environment.destination.original.detail'),
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
-      ],
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final full = _fullPathTable(context, constraints.maxWidth);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: full ? 2 : 3,
+              child: Text(
+                _localizedCopy(copy, 'routes.protocol', clientProtocol),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            if (full) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: _PathScripts(plan: plan, copy: copy),
+              ),
+            ],
+            const SizedBox(width: 24),
+            Expanded(
+              flex: 4,
+              child: Text(
+                copy('environment.destination.original'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: full ? 5 : 4,
+              child: Text(
+                copy('environment.destination.original.detail'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            if (full) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: _PathExit(plan: plan, copy: copy),
+              ),
+            ],
+          ],
+        );
+      },
     ),
   );
+}
+
+/// Whether a path has room to read as five columns, left to right: agent,
+/// audit and scripts, where it is sent, the account, and the network exit.
+/// Larger text needs proportionally more room.
+bool _fullPathTable(BuildContext context, double width) =>
+    width >= MediaQuery.textScalerOf(context).scale(14) / 14 * 860;
+
+/// Scripts and exit side by side under a path when the window is too narrow
+/// for their own columns.
+final class _PathFooter extends StatelessWidget {
+  const _PathFooter({
+    required this.scripts,
+    required this.exit,
+    required this.copy,
+  });
+
+  final Widget scripts;
+  final Widget exit;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(color: context.viberColors.textMuted);
+    Widget part(String key, Widget child) => SizedBox(
+      width: 220,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(copy(key), style: label),
+          child,
+        ],
+      ),
+    );
+    return Wrap(
+      spacing: 24,
+      runSpacing: 6,
+      children: [
+        part('environment.path.scripts', scripts),
+        part('environment.path.exit', exit),
+      ],
+    );
+  }
+}
+
+/// The message scripts that run on a path, in the order they run.
+final class _PathScripts extends StatelessWidget {
+  const _PathScripts({required this.plan, required this.copy});
+
+  final EnvironmentProtocolPlan plan;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    if (plan.transforms.isEmpty) {
+      return Text(copy('environment.path.no_scripts'), style: muted);
+    }
+    return Column(
+      key: Key('environment-path-scripts-${plan.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final transform in plan.transforms)
+          Text(
+            transform.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+      ],
+    );
+  }
+}
+
+/// Where a path's traffic leaves: an account's own exit wins over the
+/// path's, which wins over the default exit.
+final class _PathExit extends StatelessWidget {
+  const _PathExit({required this.plan, required this.copy, this.account});
+
+  final EnvironmentProtocolPlan plan;
+  final AppCopy copy;
+  final ProviderAccount? account;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    final muted = theme.bodySmall?.copyWith(
+      color: context.viberColors.textMuted,
+    );
+    String name(EgressProfileRevision profile) =>
+        profile.id == EgressProfileRevision.direct.id
+        ? copy('environment.egress.proxy.direct')
+        : profile.displayName;
+    final (String title, String detail) = switch ((
+      account?.egressProfile,
+      plan.egressProfile,
+    )) {
+      (final EgressProfileRevision pinned, _) => (
+        name(pinned),
+        copy('environment.path.exit_account'),
+      ),
+      (_, final EgressProfileRevision profile) => (
+        name(profile),
+        copy.format('settings.egress.revision', {'revision': profile.revision}),
+      ),
+      _ => (
+        copy('environment.path.default_exit'),
+        copy('environment.path.exit_inherit'),
+      ),
+    };
+    return Column(
+      key: Key('environment-path-exit-${plan.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.bodyMedium,
+        ),
+        Text(
+          detail,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: muted,
+        ),
+      ],
+    );
+  }
 }
 
 final class _RouteAuthorityRow extends StatelessWidget {
   const _RouteAuthorityRow({
     this.controller,
     this.environment,
+    required this.plan,
     required this.route,
     required this.clientProtocol,
     required this.clientOrigin,
@@ -837,6 +1001,7 @@ final class _RouteAuthorityRow extends StatelessWidget {
 
   final WorkbenchController? controller;
   final EnvironmentRecord? environment;
+  final EnvironmentProtocolPlan plan;
   final EnvironmentRoute route;
   final String clientProtocol;
   final Uri clientOrigin;
@@ -865,11 +1030,13 @@ final class _RouteAuthorityRow extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 560;
+        final full = _fullPathTable(context, constraints.maxWidth);
         final client = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               _localizedCopy(copy, 'routes.protocol', clientProtocol),
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleSmall,
             ),
@@ -912,8 +1079,35 @@ final class _RouteAuthorityRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: monoStyle,
             ),
+            Text(
+              route.backendProtocol == clientProtocol
+                  ? copy('environment.path.same_protocol')
+                  : copy.format('environment.path.translated', {
+                      'protocol': _localizedCopy(
+                        copy,
+                        'routes.protocol',
+                        route.backendProtocol,
+                      ),
+                    }),
+              key: Key('environment-path-translation-${route.id}'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
           ],
         );
+        final fixedAccount = route.accountPolicy.mode == 'fixed'
+            ? accounts
+                  .where(
+                    (account) =>
+                        account.id == route.accountPolicy.fixedAccountId,
+                  )
+                  .firstOrNull
+            : null;
+        final exit = _PathExit(plan: plan, copy: copy, account: fixedAccount);
+        final scripts = _PathScripts(plan: plan, copy: copy);
         final accountList = _RouteAccountActivationGroup(
           key: ValueKey(route.id),
           controller: controller,
@@ -954,11 +1148,17 @@ final class _RouteAuthorityRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 accountList,
+                const SizedBox(height: 6),
+                _PathFooter(scripts: scripts, exit: exit, copy: copy),
               ] else
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(flex: 3, child: client),
+                    Expanded(flex: full ? 2 : 3, child: client),
+                    if (full) ...[
+                      const SizedBox(width: 10),
+                      Expanded(flex: 2, child: scripts),
+                    ],
                     Padding(
                       padding: const EdgeInsets.only(top: 3),
                       child: Icon(
@@ -970,8 +1170,17 @@ final class _RouteAuthorityRow extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(flex: 4, child: upstream),
                     const SizedBox(width: 10),
-                    Expanded(flex: 4, child: accountList),
+                    Expanded(flex: full ? 5 : 4, child: accountList),
+                    if (full) ...[
+                      const SizedBox(width: 10),
+                      Expanded(flex: 2, child: exit),
+                    ],
                   ],
+                ),
+              if (!compact && !full)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: _PathFooter(scripts: scripts, exit: exit, copy: copy),
                 ),
             ],
           ),
