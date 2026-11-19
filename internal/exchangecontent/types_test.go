@@ -2,6 +2,7 @@ package exchangecontent
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -579,5 +580,42 @@ func TestCanonicalDecoderRejectsUnknownFields(t *testing.T) {
 	tampered, _ := json.Marshal(object)
 	if _, err := DecodeCanonicalJSON(tampered); err == nil {
 		t.Fatal("unknown field was accepted")
+	}
+}
+
+func TestSanitizeTextRedactsTokenShapesAndProxyCredentials(t *testing.T) {
+	t.Parallel()
+	// Built the way capturecredential builds one: 32 bytes, unpadded base64url.
+	credential := "run_" + base64.RawURLEncoding.EncodeToString([]byte("fixture-entropy-0123456789abcdef"))
+	manual := "manual_" + base64.RawURLEncoding.EncodeToString([]byte("FIXTURE-entropy-9876543210ABCDEF"))
+	for _, secret := range []string{
+		"ey" + "JhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJmaXh0dXJlIn0." + strings.Repeat("Sg4kQ", 6),
+		"ghp_" + strings.Repeat("A1b2C3d4", 5),
+		"github_pat_" + strings.Repeat("Z9y8X7w6", 4),
+		"xo" + "xb-" + strings.Repeat("7", 10) + "-fixture",
+		"AIza" + strings.Repeat("Sy0_aB1-c", 4)[:35],
+		"AK" + "IA" + strings.Repeat("Q7", 8),
+		credential,
+		manual,
+	} {
+		text := "env says KEY=" + secret + " done"
+		got := sanitizeText(text)
+		if strings.Contains(got, secret) || !strings.Contains(got, "[redacted credential]") {
+			t.Fatalf("sanitizeText(%q) = %q", text, got)
+		}
+	}
+	proxy := "HTTPS_PROXY=http://capture:" + credential + "@127.0.0.1:9000"
+	if got := sanitizeText(proxy); strings.Contains(got, credential) {
+		t.Fatalf("proxy URL kept its credential: %q", got)
+	}
+	for _, ordinary := range []string{
+		"run_the_whole_integration_suite_for_this_workspace_tonight",
+		"manual_capture_settings_are_described_in_the_handbook_page",
+		"eyJ is how a base64 JSON object starts",
+		"AKIA alone is not a key",
+	} {
+		if got := sanitizeText(ordinary); got != ordinary {
+			t.Fatalf("sanitizeText changed ordinary text %q to %q", ordinary, got)
+		}
 	}
 }
