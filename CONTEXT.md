@@ -287,7 +287,7 @@ An ordered server-message channel owned by one authenticated native protocol ses
 _Avoid_: Capture, Conversation, HTTP connection, session-wide event cache
 
 **Agent API Call**:
-One terminal Exchange counted once by the Usage report, regardless of retries or conversation-body retention. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls. Opaque forwarded connections and ACP Prompts do not establish Agent API Calls.
+One terminal Exchange counted once by the Usage and cost screen, regardless of retries or conversation-body retention. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls. Opaque forwarded connections and ACP Prompts do not establish Agent API Calls.
 _Avoid_: Turn, billing event
 
 **Usage Observation**:
