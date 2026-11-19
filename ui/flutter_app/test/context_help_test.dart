@@ -101,7 +101,7 @@ void main() {
       ) async {
         await tester.binding.setSurfaceSize(const Size(390, 760));
         addTearDown(() => tester.binding.setSurfaceSize(null));
-        final title = chinese ? '上游账号' : 'Upstream accounts';
+        final title = chinese ? '账号' : 'Accounts';
         final dismiss = chinese ? '关闭' : 'Close';
         final message = List.filled(
           24,

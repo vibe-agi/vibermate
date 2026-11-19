@@ -46,6 +46,17 @@ var (
 	urlUserInfoPattern = regexp.MustCompile(
 		`(?i)\b(https?://)[^/@\s:]+:[^/@\s]+@`,
 	)
+	// Token shapes that carry their own prefix: a JSON Web Token, GitHub,
+	// Slack and Google keys.
+	prefixedTokenPattern = regexp.MustCompile(
+		`\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|` +
+			`(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}|` +
+			`xox[abeoprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35})`,
+	)
+	awsAccessKeyPattern = regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`)
+	// ViberMate's own proxy credentials: a kind prefix and 32 random bytes in
+	// unpadded base64url. An agent that prints its environment echoes one.
+	captureCredentialPattern = regexp.MustCompile(`\b(?:run|manual)_[A-Za-z0-9_-]{43}`)
 )
 
 type FrozenRef struct {
@@ -1069,7 +1080,7 @@ func sanitizeText(value string) string {
 		// Recheck the current value after earlier ordered replacements, keeping
 		// all regex matching/redaction semantics (including Unicode folding).
 		required string
-	}{{unixHomePattern, "${1}~", "/"}, {windowsHomePattern, "${1}~", "\\"}, {headerSecretPattern, "${1}: [redacted]", ":="}, {bearerPattern, "Bearer [redacted]", " \t"}, {providerSecretPattern, "[redacted credential]", "-"}, {urlUserInfoPattern, "${1}[redacted]@", "@"}} {
+	}{{unixHomePattern, "${1}~", "/"}, {windowsHomePattern, "${1}~", "\\"}, {headerSecretPattern, "${1}: [redacted]", ":="}, {bearerPattern, "Bearer [redacted]", " \t"}, {providerSecretPattern, "[redacted credential]", "-"}, {urlUserInfoPattern, "${1}[redacted]@", "@"}, {prefixedTokenPattern, "[redacted credential]", "._-I"}, {awsAccessKeyPattern, "[redacted credential]", "AS"}} {
 		if strings.IndexAny(value, replacement.required) < 0 {
 			continue
 		}
@@ -1077,7 +1088,33 @@ func sanitizeText(value string) string {
 			value = replacement.pattern.ReplaceAllString(value, replacement.value)
 		}
 	}
+	if strings.Contains(value, "_") && captureCredentialPattern.MatchString(value) {
+		value = captureCredentialPattern.ReplaceAllStringFunc(value, func(match string) string {
+			if randomLooking(match[strings.IndexByte(match, '_')+1:]) {
+				return "[redacted credential]"
+			}
+			return match
+		})
+	}
 	return value
+}
+
+// randomLooking tells random base64url from a long snake_case name such as
+// run_the_whole_integration_suite_for_this_workspace: random text of this
+// length all but always mixes upper case, lower case and digits.
+func randomLooking(value string) bool {
+	var upper, lower, digit bool
+	for _, r := range value {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= 'a' && r <= 'z':
+			lower = true
+		case r >= '0' && r <= '9':
+			digit = true
+		}
+	}
+	return upper && lower && digit
 }
 
 func sanitizeJSON(encoded []byte) json.RawMessage {

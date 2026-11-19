@@ -176,3 +176,62 @@ func (observer *rawObserver) snapshot() []rawevidence.Observation {
 	defer observer.mu.Unlock()
 	return slices.Clone(observer.observations)
 }
+
+// Account and login calls on a decrypted provider host are either refused
+// (no catalogued operation) or passed back to the original service as a
+// bodyless probe. Neither may leave anything in the recording, since such
+// calls carry keys and tokens in their bodies. A model request on the same
+// connection is recorded, so the fixture does record.
+func TestRefusedAndProbePathsLeaveNoRawEvidence(t *testing.T) {
+	t.Parallel()
+
+	observer := &rawObserver{}
+	fixture := newProxyFixtureWithRawEvidence(t, observer)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+		"api.anthropic.com",
+	)
+	defer secured.Close()
+
+	refused := postCountTokens(t, secured, "/api/oauth/claude_cli/create_api_key")
+	io.Copy(io.Discard, refused.Body)
+	refused.Body.Close()
+	if refused.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("create_api_key answered %d", refused.StatusCode)
+	}
+	probe := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodGet,
+		URL:    mustURL(t, "/api/claude_code/settings"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{"Authorization": []string{"Bearer client-owned"}},
+	})
+	io.Copy(io.Discard, probe.Body)
+	probe.Body.Close()
+	if probe.StatusCode != http.StatusAccepted {
+		t.Fatalf("settings probe answered %d", probe.StatusCode)
+	}
+	if observations := observer.snapshot(); len(observations) != 0 {
+		t.Fatalf("refused and probe calls were recorded: %+v", observations)
+	}
+
+	const requestBody = `{"model":"client"}`
+	model := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Authorization": []string{"Bearer fixture-client-auth"},
+			"Content-Type":  []string{"application/json"},
+		},
+		Body:          io.NopCloser(strings.NewReader(requestBody)),
+		ContentLength: int64(len(requestBody)),
+	})
+	io.Copy(io.Discard, model.Body)
+	model.Body.Close()
+	if model.StatusCode != http.StatusOK || len(observer.snapshot()) == 0 {
+		t.Fatalf("model request status=%d, %d observations: the fixture does not record", model.StatusCode, len(observer.snapshot()))
+	}
+}

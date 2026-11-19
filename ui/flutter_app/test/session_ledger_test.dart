@@ -288,6 +288,24 @@ void main() {
       expect(find.textContaining('Changed · Mask secrets'), findsWidgets);
       expect(find.textContaining('Blocked by script'), findsNothing);
 
+      // A request a script changed compares what the agent sent with what
+      // reached the provider.
+      await tester.tap(find.textContaining('Changed · Mask secrets').first);
+      await tester.pumpAndSettle();
+      final compare = find.byKey(const Key('ledger-inspector-compare'));
+      await tester.ensureVisible(compare);
+      await tester.pumpAndSettle();
+      await tester.tap(compare);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('raw-evidence-diff-dialog')), findsOneWidget);
+      expect(find.text('Compare request and response stages'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('raw-evidence-diff-dialog')), findsNothing);
+      await tester.tap(find.byKey(const Key('ledger-inspector-close')));
+      await tester.pumpAndSettle();
+
       // The ledger covers the whole session by default and can be narrowed
       // to the conversation selected above it.
       final scope = find.byKey(const Key('ledger-scope'));
