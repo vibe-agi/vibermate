@@ -60,6 +60,30 @@ function runCaptured(command, arguments_, timeoutMilliseconds) {
   });
 }
 
+const maximumReportedDiagnosticBytes = 4096;
+
+// A failed Apple command otherwise leaves nothing to act on: with JSON output
+// requested, notarytool writes its reason (an expired agreement, a revoked
+// key, a rejected issuer) to stderr. Report the exit and a bounded stderr with
+// the credential identifiers and key path replaced; Apple's messages carry no
+// secret, and the workflow masks its registered secrets as well.
+function reportFailedNotaryCommand(result, label, credentials) {
+  if (result.error === undefined && result.signal === null && result.status === 0) {
+    return;
+  }
+  let stderr = `${result.stderr ?? ""}`.slice(0, maximumReportedDiagnosticBytes);
+  for (const value of [credentials.keyPath, credentials.keyID, credentials.issuerID]) {
+    if (typeof value === "string" && value.length > 0) {
+      stderr = stderr.split(value).join("[redacted]");
+    }
+  }
+  console.error(
+    `${label} exited with status ${result.status ?? "none"}` +
+      `${result.signal ? ` and signal ${result.signal}` : ""}` +
+      `${result.error ? ` (${result.error.code ?? result.error.name})` : ""}:\n${stderr}`,
+  );
+}
+
 function requireSuccessfulCommand(result, label) {
   if (result.error !== undefined || result.signal !== null || result.status !== 0) {
     throw new Error(`${label} failed`);
@@ -118,6 +142,7 @@ async function fetchNotaryExchange(candidate, credentials) {
     ],
     notaryProcessTimeoutMilliseconds,
   );
+  reportFailedNotaryCommand(submitResult, "notarytool submit", credentials);
   const submitSource = submitResult.stdout ?? "";
   let submitValue;
   let submitDecodeError;
