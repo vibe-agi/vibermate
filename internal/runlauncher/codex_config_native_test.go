@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -69,9 +71,11 @@ func codexLauncherConfigRead(t *testing.T, fixture *codexProviderNativeFixture, 
 		cancel()
 		_ = output.Close()
 		_ = input.Close()
+		// The launcher gives a child 3 seconds to stop after SIGTERM before
+		// killing it, so a bound of exactly that raced it on every release.
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Error("native configuration reader did not terminate")
 		}
 	})
@@ -172,8 +176,39 @@ func codexStableRepairBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(version)) != "codex-cli 0.163.0" {
-		t.Skip("repair acceptance is pinned separately to 0.163.0")
+	release, supported, err := codexReleaseAtLeast(string(version), [3]int{0, 163, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !supported {
+		t.Skipf("Codex %s predates these configuration surfaces, accepted from 0.163.0", release)
 	}
 	return binary
+}
+
+// codexReleaseAtLeast reads `codex --version` output and reports whether the
+// release is at least floor. An acceptance contract holds from the release CI
+// first ran it on, and every later release has to keep it, so a newer binary
+// runs the test rather than skipping it.
+func codexReleaseAtLeast(output string, floor [3]int) (string, bool, error) {
+	fields := strings.Fields(output)
+	if len(fields) != 2 || fields[0] != "codex-cli" {
+		return "", false, fmt.Errorf("unexpected Codex version output %q", output)
+	}
+	release := fields[1]
+	core, _, _ := strings.Cut(release, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return release, false, fmt.Errorf("unexpected Codex release %q", release)
+	}
+	for index, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil {
+			return release, false, fmt.Errorf("unexpected Codex release %q", release)
+		}
+		if number != floor[index] {
+			return release, number > floor[index], nil
+		}
+	}
+	return release, true, nil
 }
