@@ -177,6 +177,12 @@ func (f *codexProviderNativeFixture) launcher(binary, home string, stdin io.Read
 	return launcher
 }
 
+func (f *codexProviderNativeFixture) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
+}
+
 func (f *codexProviderNativeFixture) assertRequest(bearer string, markers ...string) {
 	f.t.Helper()
 	f.mu.Lock()
