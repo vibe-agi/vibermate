@@ -213,6 +213,13 @@ func (f *codexProviderNativeFixture) assertRequest(bearer string, markers ...str
 
 func codexProviderNativeCertificates(t *testing.T) (string, tls.Certificate) {
 	t.Helper()
+	return nativeFixtureCertificates(t, "chatgpt.com", "api.openai.com")
+}
+
+// nativeFixtureCertificates makes a throwaway root and one leaf for names. The
+// root reaches a native client only through the launch it is testing.
+func nativeFixtureCertificates(t *testing.T, names ...string) (string, tls.Certificate) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +229,7 @@ func codexProviderNativeCertificates(t *testing.T) (string, tls.Certificate) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{"chatgpt.com", "api.openai.com"}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: names, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

@@ -1,12 +1,15 @@
 # Runs the installed-client acceptance tests against the newest published Codex
-# release once a day. Pull requests stay on the versions this repository has
-# accepted; the canary says early, without blocking anyone, when a new release
-# changes a surface ViberMate depends on, so a release is studied rather than
-# adopted blindly or discovered by users.
+# and Claude Code releases once a day. Pull requests stay on the versions this
+# repository has accepted; the canary says early, without blocking anyone, when
+# a new release changes a surface ViberMate depends on, so a release is studied
+# rather than adopted blindly or discovered by users.
 #
-# The release under test is unreviewed code, so its job holds a read-only
-# token that is not left in the checkout; only the reporting job, which runs
-# nothing from the release, may open an issue.
+# The Claude tests launch with the grant a recognised build receives, so they
+# say whether a release would work once recognised, not whether it is.
+#
+# A release under test is unreviewed code, so its job holds a read-only token
+# that is not left in the checkout; only the reporting job, which runs nothing
+# from a release, may open an issue.
 name: client canary
 
 on:
@@ -67,26 +70,78 @@ jobs:
             go test -count=1 -v -run '^TestInstalledCodex' "${packages[@]}"
           fi
 
+  claude-latest:
+    name: newest Claude Code release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Find the newest Claude Code release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(npm view @anthropic-ai/claude-code version)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Run the installed-Claude tests against it
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-claude-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" "@anthropic-ai/claude-code@${VERSION}"
+          claude_binary="$(find "${prefix}/node_modules/@anthropic-ai" -type f -name claude -path '*/claude-code-linux-*/claude')"
+          test -f "${claude_binary}"
+          test "$("${claude_binary}" --version)" = "${VERSION} (Claude Code)"
+          export VIBERMATE_CLAUDE_ACCEPTANCE="${claude_binary}"
+          if ! go test -count=1 -v -run '^TestInstalledClaude' ./internal/runlauncher; then
+            echo "::warning::installed-Claude tests failed once against ${VERSION}; retrying"
+            go test -count=1 -v -run '^TestInstalledClaude' ./internal/runlauncher
+          fi
+
   report:
     name: report a failing release
-    needs: codex-latest
+    needs: [codex-latest, claude-latest]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: Open an issue unless one is already open
+      - name: Open an issue per failing release unless one is already open
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.codex-latest.outputs.version }}
+          CODEX_RESULT: ${{ needs.codex-latest.result }}
+          CODEX_VERSION: ${{ needs.codex-latest.outputs.version }}
+          CLAUDE_RESULT: ${{ needs.claude-latest.result }}
+          CLAUDE_VERSION: ${{ needs.claude-latest.outputs.version }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          title="Client canary: Codex ${VERSION:-latest} fails the installed-client tests"
-          open="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq 'length')"
-          if [ "${open}" = "0" ]; then
-            gh issue create --title "${title}" --body "The daily client canary failed against the newest published Codex release (${VERSION:-unknown}). Pull requests are unaffected; they test the accepted versions. Run: ${RUN_URL}"
-          fi
+          report() {
+            local client="$1" result="$2" version="$3"
+            [ "${result}" = "failure" ] || return 0
+            local title="Client canary: ${client} ${version:-latest} fails the installed-client tests"
+            local open
+            open="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq 'length')"
+            if [ "${open}" = "0" ]; then
+              gh issue create --title "${title}" --body "The daily client canary failed against the newest published ${client} release (${version:-unknown}). Pull requests are unaffected; they test the accepted versions. Run: ${RUN_URL}"
+            fi
+          }
+          report "Codex" "${CODEX_RESULT}" "${CODEX_VERSION}"
+          report "Claude Code" "${CLAUDE_RESULT}" "${CLAUDE_VERSION}"

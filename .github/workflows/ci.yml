@@ -110,6 +110,16 @@ jobs:
           VIBERMATE_OFFICIAL_CODEX="${prefix}/node_modules/.bin/codex" \
             go test -count=1 -run '^TestOfficialInstalledClientPackagesMatchTheBuiltInCatalog$' \
               ./internal/clientadapter
+      - name: Complete a Claude Code turn through the launcher and production codec
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/vibermate-official-clients-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          claude_binary="$(find "${prefix}/node_modules/@anthropic-ai" -type f -name claude -path '*/claude-code-linux-*/claude')"
+          test -f "${claude_binary}"
+          test "$("${claude_binary}" --version)" = '2.1.220 (Claude Code)'
+          VIBERMATE_CLAUDE_ACCEPTANCE="${claude_binary}" \
+            go test -count=1 -run '^TestInstalledClaude' ./internal/runlauncher
   codex-current-compatibility:
     needs: generated-structural
     strategy:
