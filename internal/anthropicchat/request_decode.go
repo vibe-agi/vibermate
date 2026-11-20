@@ -215,19 +215,25 @@ func (codec *Codec) decodeClientRequest(
 		// Code 2.1.3xx sends with a mid-conversation system message. Like a
 		// tool definition, the message object is tolerant and declares each
 		// unknown field; its content blocks stay strict, because an unknown
-		// field inside a block changes what that block means.
+		// field inside a block changes what that block means. Nearly every
+		// message is exactly role and content, and the body's duplicate names
+		// were refused above, so those decode in one pass; only a message that
+		// carries something else pays for the tolerant one.
 		var message anthropicMessageWire
-		messagePath := fmt.Sprintf("$.messages[%d]", index)
-		unknownMessage, unknownErr := mode.fields(rawMessage, &message, messagePath, budget)
-		if unknownErr != nil {
-			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				messagePath,
-				unknownErr,
-			)
-		}
-		if err := protocolcore.AppendReportWithin(&report, unknownMessage, budget); err != nil {
-			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		if mode == requestDecodeNative || decodeKnownFields(rawMessage, &message) != nil {
+			message = anthropicMessageWire{}
+			messagePath := fmt.Sprintf("$.messages[%d]", index)
+			unknownMessage, unknownErr := mode.fields(rawMessage, &message, messagePath, budget)
+			if unknownErr != nil {
+				return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
+					protocolcore.ReasonInvalidClientRequest,
+					messagePath,
+					unknownErr,
+				)
+			}
+			if err := protocolcore.AppendReportWithin(&report, unknownMessage, budget); err != nil {
+				return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+			}
 		}
 		decoded, messageReport, decodeErr := codec.decodeMessage(
 			index,
