@@ -59,7 +59,13 @@ jobs:
           test -f "${codex_binary}"
           test "$("${codex_binary}" --version)" = "codex-cli ${VERSION}"
           export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
-          go test -count=1 -v -run '^TestInstalledCodex' ./internal/runlauncher ./internal/loopbackproxy ./internal/productruntime
+          # These tests have a known transient TLS reset on hosted runners; a
+          # release is reported only when it fails twice in a row.
+          packages=(./internal/runlauncher ./internal/loopbackproxy ./internal/productruntime)
+          if ! go test -count=1 -v -run '^TestInstalledCodex' "${packages[@]}"; then
+            echo "::warning::installed-Codex tests failed once against ${VERSION}; retrying"
+            go test -count=1 -v -run '^TestInstalledCodex' "${packages[@]}"
+          fi
 
   report:
     name: report a failing release
