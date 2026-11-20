@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,10 +48,41 @@ func TestInstalledCodexReadsEnterpriseWorkspaceRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(version)) != "codex-cli 0.163.0" {
-		t.Skip("Enterprise bundle acceptance is pinned separately to 0.163.0")
+	release, supported, err := codexReleaseAtLeast(string(version), [3]int{0, 163, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !supported {
+		t.Skipf("Codex %s predates the Enterprise bundle contract, accepted from 0.163.0", release)
 	}
 	testInstalledCodexReadsManagedAccount(t, "enterprise")
+}
+
+// codexReleaseAtLeast reads `codex --version` output and reports whether the
+// release is at least floor. An acceptance contract holds from the release CI
+// first ran it on, and every later release has to keep it, so a newer binary
+// runs the test rather than skipping it.
+func codexReleaseAtLeast(output string, floor [3]int) (string, bool, error) {
+	fields := strings.Fields(output)
+	if len(fields) != 2 || fields[0] != "codex-cli" {
+		return "", false, fmt.Errorf("unexpected Codex version output %q", output)
+	}
+	release := fields[1]
+	core, _, _ := strings.Cut(release, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return release, false, fmt.Errorf("unexpected Codex release %q", release)
+	}
+	for index, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil {
+			return release, false, fmt.Errorf("unexpected Codex release %q", release)
+		}
+		if number != floor[index] {
+			return release, number > floor[index], nil
+		}
+	}
+	return release, true, nil
 }
 
 func testInstalledCodexReadsManagedAccount(t *testing.T, plan string) {

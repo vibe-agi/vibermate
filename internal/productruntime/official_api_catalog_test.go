@@ -98,12 +98,12 @@ func TestOfficialAPICatalogExplicitRouteThroughCONNECT(t *testing.T) {
 	}
 }
 
-// Opt-in, separately pinned native contract. All auth is synthetic and every
-// network request terminates at the loopback capture fixture.
+// Opt-in native contract, accepted from Codex 0.163.0. All auth is synthetic
+// and every network request terminates at the loopback capture fixture.
 func TestInstalledCodexOfficialAPIModelCatalog(t *testing.T) {
 	binary := os.Getenv("VIBERMATE_CODEX_ACCEPTANCE")
 	if binary == "" {
-		t.Skip("requires explicitly selected Codex 0.163.0")
+		t.Skip("requires an explicitly selected native Codex")
 	}
 	if !filepath.IsAbs(binary) {
 		t.Fatal("native path must be absolute")
@@ -115,8 +115,12 @@ func TestInstalledCodexOfficialAPIModelCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(output)) != "codex-cli 0.163.0" {
-		t.Skip("official API catalog acceptance is pinned to 0.163.0")
+	release, supported, err := codexReleaseAtLeast(string(output), [3]int{0, 163, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !supported {
+		t.Skipf("Codex %s predates the official API catalog contract, accepted from 0.163.0", release)
 	}
 	f := officialAPICatalogFixture(t)
 	f.wire.catalogBody = `{"models":[{"slug":"task5-api-capability","display_name":"Task5 API capability","description":"Synthetic API catalog model","model_specialty":"cyber","available_access_programs":{"cyber":["standard","daybreak_blue","daybreak_red"]},"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"Low"}],"shell_type":"shell_command","visibility":"list","minimal_client_version":[0,1,0],"supported_in_api":true,"priority":0,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"prefer_websockets":false,"base_instructions":"Synthetic fixture instructions.","support_verbosity":false,"default_verbosity":null,"apply_patch_tool_type":null,"truncation_policy":{"mode":"bytes","limit":10000},"supports_image_detail_original":false,"multi_agent_version":"v2","context_window":272000,"max_context_window":272000,"experimental_supported_tools":[]}]}`
@@ -201,7 +205,7 @@ func TestInstalledCodexOfficialAPIModelCatalog(t *testing.T) {
 		t.Fatal("native model catalog did not reach explicit managed route")
 	}
 	for _, request := range f.wire.requests {
-		if request.URL.Host != "chatgpt.com" || request.URL.Path != "/backend-api/codex/models" || request.URL.Query().Get("client_version") != "0.163.0" || request.Header.Get("Authorization") != "Bearer "+f.token {
+		if request.URL.Host != "chatgpt.com" || request.URL.Path != "/backend-api/codex/models" || request.URL.Query().Get("client_version") != release || request.Header.Get("Authorization") != "Bearer "+f.token {
 			t.Fatalf("native API metadata lost fixed destination/account: %s", request.URL)
 		}
 	}

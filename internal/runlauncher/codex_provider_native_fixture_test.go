@@ -130,6 +130,14 @@ func (f *codexProviderNativeFixture) serveHTTP(w http.ResponseWriter, r *http.Re
 	}
 	request, err := http.ReadRequest(bufio.NewReader(secure))
 	if err != nil {
+		// Likewise a tunnel closed after the handshake without a request,
+		// typically one Codex opened for background work as it was stopped,
+		// delivered nothing. A partial request is still a failure, and the
+		// delivered requests are still asserted exactly.
+		if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
+			f.t.Logf("native fixture: client closed a tunnel without a request: %v", err)
+			return
+		}
 		f.t.Errorf("native fixture HTTP: %v", err)
 		return
 	}
