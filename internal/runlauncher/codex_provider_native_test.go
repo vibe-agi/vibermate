@@ -76,6 +76,18 @@ func TestInstalledCodexManagedAuthResumesOpenAIHistoryWithoutLogin(t *testing.T)
 		}
 		before = after
 	} else {
+		// Only Codex's own refusal to move the conversation is that behaviour;
+		// a resume that fails for any other reason is a regression. ViberMate's
+		// lines are left out, since its hint names the provider too.
+		var codexOutput []string
+		for _, line := range strings.Split(run.stderr, "\n") {
+			if !strings.HasPrefix(line, "vibermate") {
+				codexOutput = append(codexOutput, line)
+			}
+		}
+		if !strings.Contains(strings.Join(codexOutput, "\n"), "model provider") {
+			t.Fatalf("the resume failed for a reason other than the conversation's provider: code=%d err=%v stderr=%s", run.code, run.err, run.stderr)
+		}
 		t.Log("Codex refused to move the conversation to ViberMate's provider")
 		if !strings.Contains(run.stderr, "`fork`") {
 			t.Fatalf("a refused resume did not explain how to continue: %s", run.stderr)
