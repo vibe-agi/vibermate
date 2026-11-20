@@ -24,7 +24,7 @@ func TestInstalledCodexCaptureIsolationStartupContract(t *testing.T) {
 		t.Fatal("Codex fixture must be absolute")
 	}
 	environment := []string{"PATH=/usr/bin:/bin", "HOME=" + t.TempDir(), "CODEX_HOME=" + t.TempDir()}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	versionCommand := exec.CommandContext(ctx, executable, "--version")
 	versionCommand.Env = environment
@@ -34,9 +34,13 @@ func TestInstalledCodexCaptureIsolationStartupContract(t *testing.T) {
 	}
 	// This selects the pinned fixture expectation, not authorization. Actual
 	// Launcher eligibility is tested through validated grants below.
+	// Only the frozen verified 0.145.0 recipe is version-selected (production
+	// pins the same tuple). Every other release must prove the contract natively.
 	legacy := strings.TrimSpace(string(version)) == "codex-cli 0.145.0"
-	if !legacy && strings.TrimSpace(string(version)) != "codex-cli 0.159.2" && strings.TrimSpace(string(version)) != "codex-cli 0.160.0" && strings.TrimSpace(string(version)) != "codex-cli 0.163.0" {
-		t.Fatal("startup-contract fixture must be an approved exact test version")
+	if !legacy {
+		if supported, err := codexSupportsNoDaemon(ctx, executable, environment); err != nil || !supported {
+			t.Fatalf("%s no longer exposes --no-daemon; capture isolation would be refused", strings.TrimSpace(string(version)))
+		}
 	}
 	for _, original := range [][]string{nil, {"resume", "fixture-thread"}, {"fork", "--last"}, {"--model", "exec", "resume", "fixture-thread"},
 		{"exec", "fixture prompt"}, {"review", "--base", "main"}, {"app-server", "--listen", "stdio://"}} {

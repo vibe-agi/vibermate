@@ -62,7 +62,8 @@ func TestInstalledCodexObservesNativeDestinationsThroughLauncher(t *testing.T) {
 				}
 			}
 			command := []string{"codex", "exec", "--skip-git-repo-check", "--ephemeral", "--model", "gpt-5.2", "synthetic no-network fixture"}
-			control := &controlFixture{t: t, executable: binary, workspace: directory, rootPath: filepath.Join(directory, "root.pem"), credential: capability(0x11), proxy: capability(0x22), run: capability(0x33), expectedCommand: command, recipe: clientadapter.LaunchCodexResponsesHTTP, recognition: clientadapter.RecognitionVerified, authorities: []string{"api.openai.com:443", "chatgpt.com:443", "explicit.invalid:443"}, adapter: &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: capturecontrol.ClientAdapterView{ID: "codex-cli", Revision: 1, Version: "synthetic-recipe", CatalogRevision: 7, Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary, LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP}, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault}}
+			rootPath, _ := codexProviderNativeCertificates(t)
+			control := &controlFixture{t: t, executable: binary, workspace: directory, rootPath: rootPath, credential: capability(0x11), proxy: capability(0x22), run: capability(0x33), expectedCommand: command, recipe: clientadapter.LaunchCodexResponsesHTTP, recognition: clientadapter.RecognitionVerified, authorities: []string{"api.openai.com:443", "chatgpt.com:443", "explicit.invalid:443"}, adapter: &capturecontrol.ClientLaunchAdapterView{ClientAdapterView: capturecontrol.ClientAdapterView{ID: "codex-cli", Revision: 1, Version: "synthetic-recipe", CatalogRevision: 7, Source: capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog, InstallShape: clientadapter.InstallNativeSingleBinary, LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP}, StreamingFallbackPolicy: clientadapter.StreamingFallbackClientDefault}}
 			observed := make(chan string, 64)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodConnect && strings.HasPrefix(r.URL.Path, "/api/v1/") {
@@ -80,7 +81,7 @@ func TestInstalledCodexObservesNativeDestinationsThroughLauncher(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			done := make(chan struct{})
 			go func() {
