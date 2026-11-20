@@ -6,14 +6,15 @@
 
 - [隐藏本机身份](hide-local-identity/README.md)：用户名、主目录、工作区根路径的请求替换与响应还原。
 - [隐藏客户端元信息](hide-client-metadata/README.md)：独立的 version、install id、User-Agent 请求头替换。
+- [隐藏 Agent 标识](hide-agent-ids/README.md)：Claude Code、Codex 自己生成的提示、设备与安装标识的请求替换。
 
 各功能目录提供可直接粘贴的脚本；同一份已测试文件也会生成到 UI 的“脚本库”模板中。
 文件放入本目录不会自动影响已发布策略；使用时仍须从模板创建可编辑副本、测试、发布，
 再绑定到相应流量策略。
 “隐藏本机身份”必须将请求／响应脚本配置到同一个条目，不能只安装请求脚本；
-“隐藏客户端元信息”仅有请求脚本，响应脚本留空。
+“隐藏客户端元信息”与“隐藏 Agent 标识”仅有请求脚本，响应脚本留空。
 
-`build-ui-templates.mjs` 将这三个最终脚本逐字生成到 Flutter catalog；`go generate ./...`
+`build-ui-templates.mjs` 将这些最终脚本逐字生成到 Flutter catalog；`go generate ./...`
 会执行生成，`node javascript/build-ui-templates.mjs --check` 可单独检查一致性。UI 不在另一处
 维护简化副本。更新模板只会显示来源版本和差异，不会迁移或改写数据库中的已发布策略。
 

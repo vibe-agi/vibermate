@@ -1933,6 +1933,7 @@ final class AppCopy {
     'code_library.starter.blank': 'Blank',
     'code_library.starter.local_identity': 'Hide local identity',
     'code_library.starter.client_metadata': 'Replace client metadata',
+    'code_library.starter.agent_ids': 'Hide agent IDs',
     'code_library.starter.block_secrets': 'Block secret leakage',
     'code_library.starter.private_contacts': 'Hide email and private IP',
     'code_library.starter.turn_time': 'Show Turn time',
@@ -1951,6 +1952,8 @@ final class AppCopy {
         'Tested request + response pair. Replaces supported local identity fields and restores editable response fields while preserving schema, IDs, signatures and encrypted continuation data.',
     'code_library.starter.client_metadata.detail':
         'Tested request-only template. Replaces allowlisted version, install-ID and User-Agent headers; it never changes credentials, bodies or session IDs. Edit the synthetic defaults before publishing.',
+    'code_library.starter.agent_ids.detail':
+        'Tested request-only template. Replaces the prompt, device and installation IDs Claude Code and Codex create for themselves with stable stand-ins derived from your key; session IDs stay. Set your own key before publishing.',
     'code_library.starter.block_secrets.detail':
         'Stop a request locally when it contains a private-key marker or a recognizable access-token prefix.',
     'code_library.starter.private_contacts.detail':
@@ -4910,6 +4913,7 @@ final class AppCopy {
     'code_library.starter.blank': '空白',
     'code_library.starter.local_identity': '隐藏本机身份',
     'code_library.starter.client_metadata': '替换客户端元信息',
+    'code_library.starter.agent_ids': '隐藏 Agent 标识',
     'code_library.starter.block_secrets': '阻止密钥泄露',
     'code_library.starter.private_contacts': '隐藏邮箱与内网 IP',
     'code_library.starter.turn_time': '显示轮次时间',
@@ -4928,6 +4932,8 @@ final class AppCopy {
         '经过测试的请求＋响应成对模板：替换支持的本机身份字段，并只在可编辑响应字段中还原；保留 schema、ID、签名与加密续接数据。',
     'code_library.starter.client_metadata.detail':
         '经过测试的仅请求模板：只替换白名单内的版本、安装 ID 和 User-Agent 头，不改凭据、正文或会话 ID；发布前需修改合成默认值。',
+    'code_library.starter.agent_ids.detail':
+        '经过测试的仅请求模板：把 Claude Code 与 Codex 自己生成的提示、设备和安装 ID 换成由你的密钥派生的固定替代值，会话 ID 保持不变；发布前请设置自己的密钥。',
     'code_library.starter.block_secrets.detail': '请求含私钥标记或可识别的访问令牌前缀时，在本地直接停止。',
     'code_library.starter.private_contacts.detail':
         '发送前替换邮箱和内网 IPv4 地址，再在响应中还原。',

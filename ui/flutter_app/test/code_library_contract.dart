@@ -37,6 +37,8 @@ const clientMetadataContract = (
   response: '',
 );
 
+const agentIdsContract = (request: builtInHideAgentIdsRequest, response: '');
+
 const blockSecretsContract = (
   request: r'''const privateKey = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/;
 const commonKey = /\b(?:sk-ant-[A-Za-z0-9_-]{16,}|sk-proj-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[A-Z0-9]{16})\b/;
@@ -92,6 +94,11 @@ const _unguardedTransformSourceContracts =
         'anthropic_messages': clientMetadataContract,
         'openai_responses': clientMetadataContract,
         'openai_chat': clientMetadataContract,
+      },
+      'agentIds': {
+        'anthropic_messages': agentIdsContract,
+        'openai_responses': agentIdsContract,
+        'openai_chat': agentIdsContract,
       },
       'blockSecrets': {
         'anthropic_messages': blockSecretsContract,

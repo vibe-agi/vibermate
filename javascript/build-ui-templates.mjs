@@ -12,6 +12,7 @@ const inputs = {
   localRequest: await readFile(resolve(root, 'hide-local-identity/request.js'), 'utf8'),
   localResponse: await readFile(resolve(root, 'hide-local-identity/response.js'), 'utf8'),
   metadataRequest: await readFile(resolve(root, 'hide-client-metadata/request.js'), 'utf8'),
+  agentIdsRequest: await readFile(resolve(root, 'hide-agent-ids/request.js'), 'utf8'),
 };
 
 for (const [name, source] of Object.entries(inputs)) {
@@ -22,7 +23,8 @@ for (const [name, source] of Object.entries(inputs)) {
 
 const localVersion = /ViberMate local identity (v\d+)/.exec(inputs.localRequest)?.[1];
 const metadataVersion = /客户端元信息替换 (v\d+)/.exec(inputs.metadataRequest)?.[1];
-if (localVersion == null || metadataVersion == null ||
+const agentIdsVersion = /ViberMate agent IDs (v\d+)/.exec(inputs.agentIdsRequest)?.[1];
+if (localVersion == null || metadataVersion == null || agentIdsVersion == null ||
     !inputs.localResponse.includes('ViberMate local identity ' + localVersion)) {
   throw new Error('template version markers are missing or inconsistent');
 }
@@ -45,6 +47,12 @@ const builtInHideClientMetadataDigest =
     '${digest(inputs.metadataRequest)}';
 const builtInHideClientMetadataRequest =
     ${raw(inputs.metadataRequest)};
+
+const builtInHideAgentIdsVersion = '${agentIdsVersion}';
+const builtInHideAgentIdsDigest =
+    '${digest(inputs.agentIdsRequest)}';
+const builtInHideAgentIdsRequest =
+    ${raw(inputs.agentIdsRequest)};
 `;
 
 let current = '';

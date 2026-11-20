@@ -25,6 +25,7 @@ const _protocolLabels = <String, String>{
 const _transformLabels = <String, String>{
   'localIdentity': 'Hide local identity',
   'clientMetadata': 'Replace client metadata',
+  'agentIds': 'Hide agent IDs',
   'blockSecrets': 'Block secret leakage',
   'privateContacts': 'Hide email and private IP',
   'turnTime': 'Show Turn time',
@@ -283,7 +284,7 @@ void main() {
         expect(find.text(languageCase.title), findsOneWidget);
         expect(find.text(languageCase.transforms), findsOneWidget);
         expect(find.text(languageCase.selectors), findsOneWidget);
-        expect(find.text(languageCase.viewCode), findsNWidgets(8));
+        expect(find.text(languageCase.viewCode), findsNWidgets(9));
         await tester.tap(
           find.byKey(const Key('code-library-starter-localIdentity')),
         );
@@ -372,6 +373,7 @@ void main() {
       final actions = [
         find.byKey(const Key('code-library-starter-localIdentity')),
         find.byKey(const Key('code-library-starter-clientMetadata')),
+        find.byKey(const Key('code-library-starter-agentIds')),
         find.byKey(const Key('code-library-starter-blockSecrets')),
         find.byKey(const Key('code-library-starter-privateContacts')),
         find.byKey(const Key('code-library-starter-turnTime')),
