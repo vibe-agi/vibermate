@@ -15,7 +15,7 @@ import (
 type anthropicRequestWire struct {
 	Model         string                   `json:"model"`
 	MaxTokens     int                      `json:"max_tokens"`
-	Messages      []anthropicMessageWire   `json:"messages"`
+	Messages      []json.RawMessage        `json:"messages"`
 	System        json.RawMessage          `json:"system,omitempty"`
 	Metadata      json.RawMessage          `json:"metadata,omitempty"`
 	StopSequences []string                 `json:"stop_sequences,omitempty"`
@@ -209,7 +209,26 @@ func (codec *Codec) decodeClientRequest(
 	}
 
 	messages := make([]protocolcore.Message, len(wire.Messages))
-	for index, message := range wire.Messages {
+	for index, rawMessage := range wire.Messages {
+		// A message carries options beside its role and content that this
+		// dialect does not model, such as the per-message output_config Claude
+		// Code 2.1.3xx sends with a mid-conversation system message. Like a
+		// tool definition, the message object is tolerant and declares each
+		// unknown field; its content blocks stay strict, because an unknown
+		// field inside a block changes what that block means.
+		var message anthropicMessageWire
+		messagePath := fmt.Sprintf("$.messages[%d]", index)
+		unknownMessage, unknownErr := mode.fields(rawMessage, &message, messagePath, budget)
+		if unknownErr != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				messagePath,
+				unknownErr,
+			)
+		}
+		if err := protocolcore.AppendReportWithin(&report, unknownMessage, budget); err != nil {
+			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
 		decoded, messageReport, decodeErr := codec.decodeMessage(
 			index,
 			message,
