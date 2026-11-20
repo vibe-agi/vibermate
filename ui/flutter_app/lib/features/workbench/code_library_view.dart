@@ -993,6 +993,7 @@ final class _StarterGallery extends StatelessWidget {
                 for (final starter in const [
                   _TransformStarter.localIdentity,
                   _TransformStarter.clientMetadata,
+                  _TransformStarter.agentIds,
                   _TransformStarter.blockSecrets,
                   _TransformStarter.privateContacts,
                   _TransformStarter.turnTime,
@@ -1050,6 +1051,7 @@ final class _StarterCard extends StatelessWidget {
       icon: switch (starter) {
         _TransformStarter.localIdentity => Icons.visibility_off_outlined,
         _TransformStarter.clientMetadata => Icons.fingerprint_outlined,
+        _TransformStarter.agentIds => Icons.badge_outlined,
         _TransformStarter.blockSecrets => Icons.key_off_outlined,
         _TransformStarter.privateContacts => Icons.contact_page_outlined,
         _TransformStarter.turnTime => Icons.schedule_outlined,
@@ -2115,6 +2117,7 @@ enum _TransformStarter {
   blank,
   localIdentity,
   clientMetadata,
+  agentIds,
   blockSecrets,
   privateContacts,
   turnTime,
@@ -2168,6 +2171,15 @@ const _scriptTemplates = [
     request: builtInHideClientMetadataRequest,
     response: '',
     marker: '客户端元信息替换 v',
+  ),
+  _ScriptTemplate(
+    id: 'hide-agent-ids',
+    version: builtInHideAgentIdsVersion,
+    digest: builtInHideAgentIdsDigest,
+    labelKey: 'code_library.starter.agent_ids',
+    request: builtInHideAgentIdsRequest,
+    response: '',
+    marker: 'ViberMate agent IDs v',
   ),
 ];
 
@@ -2360,6 +2372,7 @@ String _starterLabel(AppCopy copy, _TransformStarter starter) =>
       _TransformStarter.clientMetadata => copy(
         'code_library.starter.client_metadata',
       ),
+      _TransformStarter.agentIds => copy('code_library.starter.agent_ids'),
       _TransformStarter.blockSecrets => copy(
         'code_library.starter.block_secrets',
       ),
@@ -2384,6 +2397,7 @@ String _starterDetailKey(_TransformStarter starter) => switch (starter) {
     'code_library.starter.local_identity.detail',
   _TransformStarter.clientMetadata =>
     'code_library.starter.client_metadata.detail',
+  _TransformStarter.agentIds => 'code_library.starter.agent_ids.detail',
   _TransformStarter.blockSecrets => 'code_library.starter.block_secrets.detail',
   _TransformStarter.privateContacts =>
     'code_library.starter.private_contacts.detail',
@@ -2432,6 +2446,10 @@ TrafficTransformPolicy _starterPolicy(
   ),
   _TransformStarter.clientMetadata => const TrafficTransformPolicy(
     requestJavaScript: builtInHideClientMetadataRequest,
+    responseJavaScript: '',
+  ),
+  _TransformStarter.agentIds => const TrafficTransformPolicy(
+    requestJavaScript: builtInHideAgentIdsRequest,
     responseJavaScript: '',
   ),
   _TransformStarter.blockSecrets => const TrafficTransformPolicy(
