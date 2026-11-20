@@ -18,6 +18,12 @@ func decodeStrict(value []byte, destination any) error {
 	if err := rejectDuplicateJSONNames(value); err != nil {
 		return err
 	}
+	return decodeKnownFields(value, destination)
+}
+
+// decodeKnownFields is decodeStrict for a value inside a body whose duplicate
+// names were already refused.
+func decodeKnownFields(value []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {

@@ -87,3 +87,38 @@ func (launcher *Launcher) announceManagedAuth() {
 		_, _ = fmt.Fprintln(launcher.config.Stderr, message)
 	}
 }
+
+// codexInvocationResumes reports whether a Codex command line resumes an
+// existing conversation (`codex resume …` or `codex exec resume …`). Codex
+// reads a bare "resume" before `--` as the subcommand even after a prompt; an
+// option value spelled "resume" would also match, which at most adds the hint
+// below to a run that failed anyway.
+func codexInvocationResumes(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "resume" {
+			return true
+		}
+	}
+	return false
+}
+
+// explainCodexResume follows a managed-auth Codex resume that exited with an
+// error. Codex releases from 0.166 keep a conversation on the model provider
+// it was started with, and managed authentication runs Codex on ViberMate's
+// own provider, so a conversation started outside ViberMate is refused rather
+// than moved; forking it works on every release. The hint is conditional
+// because ViberMate does not read Codex's private session files to tell this
+// refusal apart from other failures, and does not depend on Codex's version.
+func (launcher *Launcher) explainCodexResume() {
+	catalogs, err := locales.New()
+	if err != nil {
+		return
+	}
+	message, err := catalogs.Render(locales.Detect(launcher.config.BaseEnvironment), "cli.managedAuth.codexResume", nil)
+	if err == nil {
+		_, _ = fmt.Fprintln(launcher.config.Stderr, message)
+	}
+}

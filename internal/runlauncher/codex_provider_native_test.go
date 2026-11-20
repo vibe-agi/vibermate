@@ -58,14 +58,63 @@ func TestInstalledCodexManagedAuthResumesOpenAIHistoryWithoutLogin(t *testing.T)
 		t.Fatal(err)
 	}
 
+	// Releases before Codex bound a conversation to the provider it was saved
+	// with resume it in place under ViberMate's provider; later ones refuse.
+	// Both are Codex's call. What ViberMate owes either way: a refusal sends
+	// nothing, changes nothing, and says how to continue.
 	resume := newCodexProviderNativeFixture(t, binary, home, "work", "chatgpt.com:443", codexProviderNativeExec(id, nextMarker), 0xa1, true)
-	if got := codexProviderNativeRun(t, resume, binary, home, true); got != id {
-		t.Fatalf("cross-provider resume changed thread ID: got %s want %s", got, id)
+	run := codexProviderNativeTryRun(t, resume, binary, home, true)
+	if run.ok {
+		t.Log("Codex resumed the conversation in place under ViberMate's provider")
+		if run.id != id {
+			t.Fatalf("cross-provider resume changed thread ID: got %s want %s", run.id, id)
+		}
+		resume.assertRequest("vibermate-local-proxy", seedMarker, "synthetic reply for system_transparent", nextMarker)
+		resumedPath, after := codexProviderNativeHistory(t, home, id, "openai")
+		if resumedPath != path || !bytes.HasPrefix(after, before) || !bytes.Contains(after, []byte(nextMarker)) {
+			t.Fatal("cross-provider resume replaced or migrated original history")
+		}
+		before = after
+	} else {
+		// Only Codex's own refusal to move the conversation is that behaviour;
+		// a resume that fails for any other reason is a regression. ViberMate's
+		// lines are left out, since its hint names the provider too.
+		var codexOutput []string
+		for _, line := range strings.Split(run.stderr, "\n") {
+			if !strings.HasPrefix(line, "vibermate") {
+				codexOutput = append(codexOutput, line)
+			}
+		}
+		if !strings.Contains(strings.Join(codexOutput, "\n"), "model provider") {
+			t.Fatalf("the resume failed for a reason other than the conversation's provider: code=%d err=%v stderr=%s", run.code, run.err, run.stderr)
+		}
+		t.Log("Codex refused to move the conversation to ViberMate's provider")
+		if !strings.Contains(run.stderr, "`fork`") {
+			t.Fatalf("a refused resume did not explain how to continue: %s", run.stderr)
+		}
+		if requests := resume.requestCount(); requests != 0 {
+			t.Fatalf("a refused resume reached inference %d times", requests)
+		}
+		if _, after := codexProviderNativeHistory(t, home, id, "openai"); !bytes.Equal(before, after) {
+			t.Fatal("a refused resume changed the original history")
+		}
 	}
-	resume.assertRequest("vibermate-local-proxy", seedMarker, "synthetic reply for system_transparent", nextMarker)
-	resumedPath, after := codexProviderNativeHistory(t, home, id, "openai")
-	if resumedPath != path || !bytes.HasPrefix(after, before) || !bytes.Contains(after, []byte(nextMarker)) {
-		t.Fatal("cross-provider resume replaced or migrated original history")
+
+	// Forking continues the conversation under managed auth on every release:
+	// a new thread on ViberMate's provider, the original left as it was.
+	forkMarker := "cross-provider fork marker"
+	forkCommand := []string{"codex", "--no-daemon", "exec", "fork", id, "--skip-git-repo-check", "--json", "--model", "fixture", forkMarker}
+	fork := newCodexProviderNativeFixture(t, binary, home, "work", "chatgpt.com:443", forkCommand, 0xe1, true)
+	forked := codexProviderNativeRun(t, fork, binary, home, true)
+	if forked == id {
+		t.Fatalf("fork reused the thread ID %s", id)
+	}
+	fork.assertRequest("vibermate-local-proxy", seedMarker, forkMarker)
+	if _, history := codexProviderNativeHistory(t, home, forked, "vibermate"); !bytes.Contains(history, []byte(forkMarker)) {
+		t.Fatal("forked history lacks its continuation")
+	}
+	if _, after := codexProviderNativeHistory(t, home, id, "openai"); !bytes.Equal(before, after) {
+		t.Fatal("forking changed the original history")
 	}
 	codexProviderNativeUnchanged(t, home, config, nil)
 }
@@ -174,24 +223,44 @@ func codexProviderNativeExec(id, prompt string) []string {
 	return append(args, "--json", "--model", "fixture", prompt)
 }
 
-func codexProviderNativeRun(t *testing.T, f *codexProviderNativeFixture, binary, home string, managed bool) string {
+// codexProviderNativeTurn is one launched turn's outcome. ok means it
+// completed with the fixture's reply and exposed its thread ID.
+type codexProviderNativeTurn struct {
+	ok             bool
+	id             string
+	code           int
+	err            error
+	stdout, stderr string
+}
+
+func codexProviderNativeTryRun(t *testing.T, f *codexProviderNativeFixture, binary, home string, managed bool) codexProviderNativeTurn {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code, err := f.launcher(binary, home, strings.NewReader(""), &stdout, &stderr).Run(codexProviderNativeContext(t), runlauncher.LaunchRequest{EnvironmentID: environment.EnvironmentID(f.control.expectedEnvironment), ManagedAuth: managed, Command: f.control.expectedCommand})
-	if err != nil || code != 0 || !strings.Contains(stdout.String(), `"type":"turn.completed"`) || !strings.Contains(stdout.String(), "synthetic reply for "+f.control.expectedEnvironment) {
-		t.Fatalf("native turn failed: code=%d err=%v stdout=%s stderr=%s", code, err, &stdout, &stderr)
+	turn := codexProviderNativeTurn{code: code, err: err, stdout: stdout.String(), stderr: stderr.String()}
+	if err != nil || code != 0 || !strings.Contains(turn.stdout, `"type":"turn.completed"`) || !strings.Contains(turn.stdout, "synthetic reply for "+f.control.expectedEnvironment) {
+		return turn
 	}
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	for _, line := range strings.Split(turn.stdout, "\n") {
 		var event struct {
 			Type string `json:"type"`
 			ID   string `json:"thread_id"`
 		}
 		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "thread.started" && event.ID != "" {
-			return event.ID
+			turn.ok, turn.id = true, event.ID
+			return turn
 		}
 	}
-	t.Fatalf("native turn did not expose a thread ID: %s", &stdout)
-	return ""
+	return turn
+}
+
+func codexProviderNativeRun(t *testing.T, f *codexProviderNativeFixture, binary, home string, managed bool) string {
+	t.Helper()
+	turn := codexProviderNativeTryRun(t, f, binary, home, managed)
+	if !turn.ok {
+		t.Fatalf("native turn failed: code=%d err=%v stdout=%s stderr=%s", turn.code, turn.err, turn.stdout, turn.stderr)
+	}
+	return turn.id
 }
 
 func codexProviderNativeHistory(t *testing.T, home, id, provider string) (string, []byte) {

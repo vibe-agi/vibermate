@@ -306,12 +306,15 @@ func (launcher *Launcher) Run(
 		return 1, err
 	}
 	var providerArguments []string
+	explainResume := false
 	if request.ManagedAuth {
 		providerArguments, environment, err = prepareManagedAuth(grant, request.EnvironmentID, command[1:], launcher.config.BaseEnvironment, environment)
 		if err != nil {
 			launcher.finishBestEffort(control, grant)
 			return 1, err
 		}
+		explainResume = grant.LaunchRecipe == clientadapter.LaunchCodexResponsesHTTP &&
+			codexInvocationResumes(command[1:])
 	}
 	childArguments, err := buildChildArguments(
 		command,
@@ -524,6 +527,9 @@ func (launcher *Launcher) Run(
 		},
 	)
 	exitCode, childErr := childExit(waitErr)
+	if explainResume && exitCode != 0 {
+		launcher.explainCodexResume()
+	}
 	if finishErr != nil {
 		return exitCode, errors.Join(ErrCaptureFinalizationFailed, fmt.Errorf("finish CaptureRun: %w", finishErr))
 	}

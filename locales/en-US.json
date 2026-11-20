@@ -104,6 +104,7 @@
   "cli.usage.terminalCommand": "Usage: vibermate terminal-command status|install|refresh|repair|remove --json",
   "cli.usage.run": "Usage: vibermate run [--server <host:port|http(s)://host:port>] [--env <environment-id>] [--managed-auth] [--transparent] -- <command> [args...]",
   "cli.managedAuth.active": "vibermate: managed model-service authentication active for this launch.",
+  "cli.managedAuth.codexResume": "vibermate: if Codex refused because this conversation belongs to another model provider, run the same command with `fork` in place of `resume` to continue it as a new conversation under managed authentication, or resume it without --managed-auth.",
   "cli.error.managedAuth.environmentRequired": "Managed authentication requires an explicit Environment: vibermate run --env <environment-id> --managed-auth -- <command>.",
   "cli.error.managedAuth.clientRequired": "--managed-auth requires a recognized Codex or Claude client with its supported launch recipe.",
   "cli.error.managedAuth.managedDestinationRequired": "The selected Environment must manage the client destination. Choose an Environment with a managed Client Flow; original-only capture cannot supply authentication.",

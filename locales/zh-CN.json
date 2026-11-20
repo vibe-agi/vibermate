@@ -104,6 +104,7 @@
   "cli.usage.terminalCommand": "用法：vibermate terminal-command status|install|refresh|repair|remove --json",
   "cli.usage.run": "用法：vibermate run [--server <主机:端口|http(s)://主机:端口>] [--env <环境 ID>] [--managed-auth] [--transparent] -- <命令> [参数...]",
   "cli.managedAuth.active": "vibermate：本次启动已启用托管模型服务认证。",
+  "cli.managedAuth.codexResume": "vibermate：若 Codex 因该对话属于其他模型服务提供方而拒绝继续，可把命令中的 `resume` 换成 `fork`，在托管认证下以新对话继续；或不带 --managed-auth 继续原对话。",
   "cli.error.managedAuth.environmentRequired": "托管认证需要显式指定 Environment：vibermate run --env <环境 ID> --managed-auth -- <命令>。",
   "cli.error.managedAuth.clientRequired": "--managed-auth 需要已识别且具有匹配启动方案的 Codex 或 Claude 客户端。",
   "cli.error.managedAuth.managedDestinationRequired": "所选 Environment 必须托管客户端目标。请选择具有托管 Client Flow 的 Environment；仅捕获原始流量无法提供认证。",
