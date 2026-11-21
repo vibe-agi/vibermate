@@ -93,7 +93,9 @@ func claudeBody(t *testing.T) string {
 
 func TestClaudeIdentifiersBecomeStableStandIns(t *testing.T) {
 	body := claudeBody(t)
-	headers := http.Header{"X-Claude-Code-Session-Id": {claudeSession}, "User-Agent": {"claude-cli/2.1.329 (external, cli)"}}
+	// Claude Code 2.1.329 also sends the prompt ID in its own header.
+	headers := http.Header{"X-Claude-Code-Session-Id": {claudeSession}, "X-Claude-Code-Prompt-Id": {claudePrompt},
+		"User-Agent": {"claude-cli/2.1.329 (external, cli)"}}
 	input := messagetransform.RequestMessage{Method: "POST", Path: "/v1/messages", Headers: headers, Body: []byte(body)}
 	first := apply(t, requestSource, input)
 	second := apply(t, requestSource, input)
@@ -114,6 +116,21 @@ func TestClaudeIdentifiersBecomeStableStandIns(t *testing.T) {
 	}
 	if first.Headers.Get("X-Claude-Code-Session-Id") != claudeSession {
 		t.Error("the session header was changed")
+	}
+	// The header copy gets the same stand-in as the billing line; otherwise it
+	// would pair the stand-in with the original for the provider.
+	if got := first.Headers.Get("X-Claude-Code-Prompt-Id"); got != prompt {
+		t.Errorf("prompt ID header = %q, want the billing line's stand-in %q", got, prompt)
+	}
+}
+
+// With the prompt ID switched off, neither copy changes.
+func TestPromptIdHeaderFollowsItsSetting(t *testing.T) {
+	headers := http.Header{"X-Claude-Code-Prompt-Id": {claudePrompt}}
+	source := strings.Replace(requestSource, "claudePromptId: true", "claudePromptId: false", 1)
+	output := apply(t, source, messagetransform.RequestMessage{Method: "POST", Path: "/v1/messages", Headers: headers, Body: []byte(claudeBody(t))})
+	if output.Headers.Get("X-Claude-Code-Prompt-Id") != claudePrompt || !strings.Contains(string(output.Body), claudePrompt) {
+		t.Fatal("claudePromptId: false still changed a prompt ID copy")
 	}
 }
 

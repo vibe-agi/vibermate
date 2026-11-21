@@ -1,4 +1,4 @@
-# 隐藏 Agent 标识（请求，v1）
+# 隐藏 Agent 标识（请求，v2）
 
 替换 Claude Code 与 Codex 为自己生成、随请求发送的标识。本目录的 [request.js](request.js) 是 UI
 “隐藏 Agent 标识”模板的唯一代码来源，也可直接粘贴；**响应 JavaScript 留空**。
@@ -8,11 +8,14 @@
 
 | 客户端 | 标识 | 位置 |
 | --- | --- | --- |
-| Claude Code | `cc_prompt_id`，每个提示一个 UUID | 系统提示词开头的计费行 `x-anthropic-billing-header: …` |
+| Claude Code | `cc_prompt_id`，每个提示一个 UUID | 系统提示词开头的计费行 `x-anthropic-billing-header: …`，以及请求头 `X-Claude-Code-Prompt-Id` 中的同一个值 |
 | Claude Code | `device_id`，同一设备固定不变 | `metadata.user_id` 中的 JSON；也识别旧版 `user_<device>_account_…` 格式 |
 | Codex | `installation_id`，同一次安装固定不变 | 正文 `client_metadata` 的 `x-codex-installation-id` 与 `x-codex-turn-metadata`；请求头 `X-Codex-Turn-Metadata`、`X-Codex-Installation-Id` |
 
 只替换上述字段里的值。同一个值若出现在别处（例如用户粘贴进消息），保持原样。
+
+v2 起同时替换 `X-Claude-Code-Prompt-Id` 请求头：Claude Code 2.1.329 在这个请求头里发送与计费行相同的提示 ID，
+v1 只替换计费行，服务方仍能把替换值与原值对应起来。已发布 v1 的用户应从更新后的模板发布新修订。
 
 ## 替换方式
 

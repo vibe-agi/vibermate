@@ -1,4 +1,4 @@
-// ViberMate agent IDs v1: request only, leave the response script empty.
+// ViberMate agent IDs v2: request only, leave the response script empty.
 // Replaces identifiers Claude Code and Codex generate for themselves and send
 // as request metadata with stable stand-ins derived from the key below. No
 // imports, I/O, randomness or shared globals.
@@ -12,7 +12,8 @@
 
   // Set an item to false to leave that identifier as the agent sent it.
   const hide = {
-    // cc_prompt_id in Claude Code's billing line at the start of the system prompt
+    // cc_prompt_id in Claude Code's billing line at the start of the system
+    // prompt, and the same ID in its X-Claude-Code-Prompt-Id header
     claudePromptId: true,
     // device_id in Claude Code's metadata.user_id, the same for every session
     claudeDeviceId: true,
@@ -233,6 +234,22 @@
     });
     pieces.push(body.slice(from));
     request.body = pieces.join("");
+  }
+
+  // Claude Code repeats the prompt ID in its own header; the same stand-in
+  // replaces it there, or the header would pair the stand-in with the original.
+  if (hide.claudePromptId && request.headers) {
+    const value = request.headers["x-claude-code-prompt-id"];
+    const values = typeof value === "string" ? [value] : Array.isArray(value) ? value : null;
+    if (values !== null) {
+      let changed = false;
+      const next = values.map(function (item) {
+        if (typeof item !== "string" || !uuid.test(item)) return item;
+        changed = true;
+        return standIn("claude.prompt", item);
+      });
+      if (changed) request.headers["x-claude-code-prompt-id"] = next;
+    }
   }
 
   // Codex repeats its installation ID in two headers.
