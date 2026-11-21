@@ -94,7 +94,7 @@ func TestAgentIDsScriptReachesProviderWire(t *testing.T) {
 				providerOrigin: "https://api.anthropic.com", backend: protocolspec.DialectAnthropicMessages,
 				modelMode: environment.ModelModePassthrough, transform: transform}
 			body := claudeBody
-			headers := http.Header{"User-Agent": {"claude-cli/2.1.329 (external, cli)"}, "X-Claude-Code-Session-Id": {session},
+			headers := http.Header{"User-Agent": {"claude-cli/2.1.329 (external, cli)"}, "X-Claude-Code-Session-Id": {session}, "X-Claude-Code-Prompt-Id": {prompt},
 				"Authorization": {"Bearer client-fixture"}, "Anthropic-Version": {"2023-06-01"}}
 			responseBody := []byte(`{"id":"msg_fixture","type":"message","role":"assistant","model":"claude-client-alias","content":[{"type":"text","text":"fixture"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}}`)
 			if test.codex {
