@@ -583,6 +583,41 @@ func TestSignerIdentityBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 	}
 }
 
+// The packages that decide what a client is may never run it. Tests, other
+// packages and the signature adapter may.
+func TestClientExecutionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-client-execution-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-client-execution-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	for _, location := range []string{
+		"internal/capturegrant/issuer.go:3: client-execution-boundary",
+		"internal/clientadapter/verifier.go:6: client-execution-boundary",
+		"internal/toolpolicy/gate.go:5: client-execution-boundary",
+		"internal/toolpolicy/gate.go:8: client-execution-boundary",
+		"internal/capturerun/manager.go:3: client-execution-boundary",
+	} {
+		if !strings.Contains(err.Error(), location) {
+			t.Fatalf("public Check did not report %s: %v", location, err)
+		}
+	}
+	// The alias is resolved, so the ProcAttr selector on the same package is
+	// not a call, and the import of a process package alone is not a finding.
+	if strings.Contains(err.Error(), "internal/clientadapter/verifier.go:3:") {
+		t.Fatalf("importing os was reported: %v", err)
+	}
+}
+
 // Each fragment of the requirement language has to be doing work.
 //
 // Asserting only that the rule fired leaves every fragment but one removable:
