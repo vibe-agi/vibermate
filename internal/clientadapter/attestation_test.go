@@ -115,6 +115,78 @@ func TestCatalogAcceptsGenericCompanionEvidenceWithoutUpgradingIt(t *testing.T) 
 	}
 }
 
+// A recognized companion claim names its client only through the label it was
+// evaluated for, so the Server must refuse a claim whose signer belongs to a
+// different label, or to another catalog revision.
+func TestCompanionRecognizedClaimIsAcceptedOnlyForItsLabel(t *testing.T) {
+	t.Parallel()
+
+	catalog := BuiltInCatalog()
+	revision := catalog.Revision()
+	claude := SignerEvidence{
+		ID:              "claude-code",
+		Revision:        1,
+		CatalogRevision: revision,
+		InstallShape:    InstallNativeSingleBinary,
+		LaunchRecipe:    LaunchNodeEnvProxy,
+		SignedPath:      filepath.Join(string(filepath.Separator), "opt", "claude"),
+	}
+	codexWrapper := SignerEvidence{
+		ID:              "codex-cli",
+		Revision:        1,
+		CatalogRevision: revision,
+		InstallShape:    InstallNPMWrapperNativeChild,
+		LaunchRecipe:    LaunchCodexResponsesHTTP,
+		SignedPath:      filepath.Join(string(filepath.Separator), "opt", "codex-native"),
+	}
+	codexNative := codexWrapper
+	codexNative.InstallShape = InstallNativeSingleBinary
+	recognized := func(label string, revision CatalogRevision, signer SignerEvidence) Detection {
+		return Detection{
+			Status:          StatusGeneric,
+			Recognition:     RecognitionRecognized,
+			CatalogRevision: revision,
+			CanonicalPath:   filepath.Join(string(filepath.Separator), "opt", label),
+			ExecutableLabel: label,
+			Signer:          &signer,
+		}
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		detection Detection
+	}{
+		{"claude with claude-code evidence", recognized("claude", revision, claude)},
+		{"codex with wrapper evidence", recognized("codex", revision, codexWrapper)},
+		{"codex with native evidence", recognized("codex", revision, codexNative)},
+	} {
+		accepted, err := catalog.ValidateCompanionAttestation(testCase.detection)
+		if err != nil || accepted.Signer == nil ||
+			*accepted.Signer != *testCase.detection.Signer ||
+			accepted.ExecutableLabel != testCase.detection.ExecutableLabel {
+			t.Fatalf("%s: ValidateCompanionAttestation() = %+v, %v", testCase.name, accepted, err)
+		}
+	}
+
+	staleSigner := claude
+	staleSigner.CatalogRevision = revision - 1
+	for _, testCase := range []struct {
+		name      string
+		detection Detection
+	}{
+		{"claude with codex-cli evidence", recognized("claude", revision, codexNative)},
+		{"codex with claude-code evidence", recognized("codex", revision, claude)},
+		{"claude-code as the label", recognized("claude-code", revision, claude)},
+		{"a stale signer revision", recognized("claude", revision, staleSigner)},
+		{"a stale detection revision", recognized("claude", revision-1, staleSigner)},
+		{"a detection revision the signer does not share", recognized("claude", revision-1, claude)},
+	} {
+		if accepted, err := catalog.ValidateCompanionAttestation(testCase.detection); err == nil {
+			t.Fatalf("%s was accepted: %+v", testCase.name, accepted)
+		}
+	}
+}
+
 func fixedAttestationRelease() Release {
 	return Release{
 		ID:                      "codex-cli",

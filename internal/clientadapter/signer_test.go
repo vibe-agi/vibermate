@@ -171,6 +171,50 @@ func TestACatalogRefusesAnUnusableSignerIdentity(t *testing.T) {
 	}
 }
 
+// A stored executable label is what names a recognized run's client, so a
+// label may name only one client. One client under two install shapes is the
+// ordinary case and stays accepted.
+func TestCatalogRefusesTwoClientsUnderOneLabel(t *testing.T) {
+	t.Parallel()
+
+	releases := []clientadapter.Release{clientadapter.ClaudeCode221220DarwinARM64()}
+	impostor := clientadapter.ClaudeCodeSignerDarwin()
+	impostor.ID = "another-client"
+	impostor.SigningIdentifier = "com.example.another-client"
+	_, err := clientadapter.NewCatalogWithSigners(
+		1,
+		releases,
+		[]clientadapter.Signer{clientadapter.ClaudeCodeSignerDarwin(), impostor},
+	)
+	if err == nil ||
+		err.Error() != "client signer catalog names two clients under one invocation label" {
+		t.Fatalf("two clients under one label: %v", err)
+	}
+
+	elsewhere := impostor
+	elsewhere.InvocationLabel = "another"
+	if _, err := clientadapter.NewCatalogWithSigners(
+		1,
+		releases,
+		[]clientadapter.Signer{clientadapter.ClaudeCodeSignerDarwin(), elsewhere},
+	); err != nil {
+		t.Fatalf("two clients under two labels were refused: %v", err)
+	}
+	if _, err := clientadapter.NewCatalogWithSigners(
+		1,
+		releases,
+		[]clientadapter.Signer{
+			clientadapter.CodexCLISignerDarwin(),
+			clientadapter.CodexCLINativeSignerDarwin(),
+		},
+	); err != nil {
+		t.Fatalf("one client under two shapes was refused: %v", err)
+	}
+	if _, err := clientadapter.NewReleaseVerifier(clientadapter.BuiltInCatalog()); err != nil {
+		t.Fatalf("the built-in catalog was refused: %v", err)
+	}
+}
+
 // The property the whole tier rests on, asserted against a real Developer ID
 // signature: accepting a publisher must not accept a modified copy of their
 // file. This lives here rather than in `codesignature` because Apple's own

@@ -231,6 +231,19 @@ func NewCatalogWithSigners(
 			)
 		}
 	}
+	// Recognition evaluates only the signers catalogued for the invoked label,
+	// so a label must name one client for a stored label to say which client a
+	// recognized run is (ADR 0026).
+	clientByLabel := make(map[string]string, len(clonedSigners))
+	for _, signer := range clonedSigners {
+		if client, seen := clientByLabel[signer.InvocationLabel]; seen &&
+			client != signer.ID {
+			return Catalog{}, errors.New(
+				"client signer catalog names two clients under one invocation label",
+			)
+		}
+		clientByLabel[signer.InvocationLabel] = signer.ID
+	}
 	return Catalog{
 		revision: revision,
 		releases: cloned,
