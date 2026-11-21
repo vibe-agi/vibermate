@@ -13,6 +13,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/lifecyclegate"
 )
@@ -48,6 +49,10 @@ type Options struct {
 	NativeRevocation interface {
 		Revoke(context.Context, captureidentity.Reference, string) error
 	}
+	// RecognizedClients is the host catalog's index of publisher-recognized
+	// clients (ADR 0026). The zero value names no client, so a Manager built
+	// without it gives every recognized run nothing beyond its recipe.
+	RecognizedClients clientadapter.RecognizedClients
 }
 
 // TerminalEvidence owns the prepared CaptureRun evidence boundary. Commit is
@@ -86,8 +91,9 @@ type Manager struct {
 	nativeRevocation interface {
 		Revoke(context.Context, captureidentity.Reference, string) error
 	}
-	lifecycle *lifecyclegate.Gate
-	recovery  Recovery
+	lifecycle         *lifecyclegate.Gate
+	recovery          Recovery
+	recognizedClients clientadapter.RecognizedClients
 
 	shutdownMu      sync.Mutex
 	activeRevoked   bool
@@ -113,16 +119,17 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		return nil, fmt.Errorf("recover CaptureRuns: %w", err)
 	}
 	return &Manager{
-		repository:       options.Repository,
-		clock:            options.Clock,
-		random:           options.Random,
-		defaultLifetime:  options.DefaultLifetime,
-		maxLifetime:      options.MaxLifetime,
-		evidenceBarrier:  options.EvidenceBarrier,
-		nativeRevocation: options.NativeRevocation,
-		archiveBarrier:   options.ArchiveBarrier,
-		lifecycle:        lifecyclegate.New("CaptureRun", ErrInvalidRequest, ErrRuntimeStopping),
-		recovery:         recovery,
+		repository:        options.Repository,
+		clock:             options.Clock,
+		random:            options.Random,
+		defaultLifetime:   options.DefaultLifetime,
+		maxLifetime:       options.MaxLifetime,
+		evidenceBarrier:   options.EvidenceBarrier,
+		nativeRevocation:  options.NativeRevocation,
+		archiveBarrier:    options.ArchiveBarrier,
+		lifecycle:         lifecyclegate.New("CaptureRun", ErrInvalidRequest, ErrRuntimeStopping),
+		recovery:          recovery,
+		recognizedClients: options.RecognizedClients,
 	}, nil
 }
 
@@ -251,7 +258,7 @@ func (manager *Manager) AuthorizeProxy(
 	if err := record.Validate(); err != nil || !record.State.active() {
 		return Evidence{}, errors.Join(ErrCapabilityRejected, err)
 	}
-	return evidenceOf(record), nil
+	return evidenceOf(record, manager.recognizedClients), nil
 }
 
 func (manager *Manager) Attach(
@@ -490,7 +497,14 @@ func (manager *Manager) ListRuns(
 	if _, err := manager.repository.Recover(ctx, manager.clock.Now().UTC()); err != nil {
 		return Page{}, fmt.Errorf("recover expired CaptureRuns before list: %w", err)
 	}
-	return manager.repository.List(ctx, request)
+	page, err := manager.repository.List(ctx, request)
+	if err != nil {
+		return Page{}, err
+	}
+	for index := range page.Items {
+		page.Items[index] = manager.withRecognizedClient(page.Items[index])
+	}
+	return page, nil
 }
 
 // GetRun returns one redacted run without accepting or returning a capability.
@@ -498,5 +512,22 @@ func (manager *Manager) GetRun(ctx context.Context, runID string) (View, error) 
 	if manager == nil || validateID(runID) != nil {
 		return View{}, ErrInvalidRequest
 	}
-	return manager.repository.Get(ctx, runID)
+	view, err := manager.repository.Get(ctx, runID)
+	if err != nil {
+		return View{}, err
+	}
+	return manager.withRecognizedClient(view), nil
+}
+
+// withRecognizedClient names a listed run's client from the same index proxy
+// authorization reads, so a reader shows what a connection would receive.
+func (manager *Manager) withRecognizedClient(view View) View {
+	view.RecognizedClient = recognizedClientOf(
+		manager.recognizedClients,
+		view.Recognition,
+		view.Adapter,
+		view.CatalogRevision,
+		view.ExecutableLabel,
+	)
+	return view
 }

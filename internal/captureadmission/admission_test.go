@@ -344,3 +344,246 @@ func TestManagedAdmissionPreservesTrustedRuntimeUser(t *testing.T) {
 		t.Fatalf("trusted owner dropped: %q %v", id, ok)
 	}
 }
+
+var everyFeature = []clientadapter.Feature{
+	clientadapter.FeatureResponsesWebSocketHTTPFallback,
+	clientadapter.FeatureCoreOwnedStreamingFallback,
+	clientadapter.FeatureStructuredWorkspaceTools,
+	clientadapter.FeatureResponsesDataKeepalive,
+}
+
+// The recognized basis answers only for bits the recognized-client policy
+// grants and the operator switch leaves on. It never changes Supports, the
+// confidence or the exact path, and a verified run never falls through to it.
+func TestRecognizedAdmissionMatrix(t *testing.T) {
+	t.Parallel()
+
+	tools := clientadapter.FeatureStructuredWorkspaceTools
+	fallback := clientadapter.FeatureCoreOwnedStreamingFallback
+	keepalive := clientadapter.FeatureResponsesDataKeepalive
+	claudePolicy := tools | fallback
+	for _, testCase := range []struct {
+		name       string
+		label      string
+		client     clientadapter.RecognizedClient
+		recognized clientadapter.Feature
+	}{
+		{"claude granted", "claude",
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: claudePolicy, Protections: claudePolicy}, claudePolicy},
+		{"claude switched off", "claude",
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: claudePolicy}, 0},
+		{"claude under the empty policy", "claude",
+			clientadapter.RecognizedClient{ID: "claude-code"}, 0},
+		{"codex granted", "codex",
+			clientadapter.RecognizedClient{ID: "codex-cli", Policy: keepalive, Protections: keepalive}, keepalive},
+		{"codex switched off", "codex",
+			clientadapter.RecognizedClient{ID: "codex-cli", Policy: keepalive}, 0},
+		{"no client named", "claude", clientadapter.RecognizedClient{}, 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			admission, err := NewManagedRun(ManagedRunEvidence{
+				CaptureRunID:     "run-recognized",
+				SourceLabel:      testCase.label,
+				Workspace:        testWorkspace(t),
+				WorkspaceRoot:    "/workspace/project",
+				RecognizedClient: testCase.client,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if admission.AttributionConfidence() != AttributionConfigured {
+				t.Fatalf("confidence = %q", admission.AttributionConfidence())
+			}
+			for _, feature := range everyFeature {
+				if admission.Supports(feature) {
+					t.Fatalf("Supports(%s) is true on a recognized run", feature.Name())
+				}
+				want := clientadapter.ProtectionNone
+				if testCase.recognized&feature != 0 {
+					want = clientadapter.ProtectionRecognizedClient
+				}
+				if got := admission.ProtectionBasis(feature); got != want {
+					t.Fatalf("ProtectionBasis(%s) = %s, want %s", feature.Name(), got, want)
+				}
+			}
+			for _, query := range []clientadapter.Feature{0, tools | fallback, 1 << 40} {
+				if got := admission.ProtectionBasis(query); got != clientadapter.ProtectionNone {
+					t.Fatalf("ProtectionBasis(%b) = %s", query, got)
+				}
+			}
+		})
+	}
+
+	catalog := clientadapter.BuiltInCatalog()
+	for _, release := range []struct {
+		id, version, goos, arch string
+	}{
+		{"codex-cli", "0.145.0", "linux", "amd64"},
+		{"codex-cli", "0.159.2", "darwin", "arm64"},
+		{"claude-code", "2.1.220", "darwin", "arm64"},
+	} {
+		adapter, ok := catalog.ExpectedEvidenceForPlatform(release.id, release.version, release.goos, release.arch)
+		if !ok {
+			t.Fatalf("%s %s evidence is unavailable", release.id, release.version)
+		}
+		admission, err := NewManagedRun(ManagedRunEvidence{
+			CaptureRunID: "run-verified",
+			SourceLabel:  "client",
+			Adapter:      &adapter,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, feature := range everyFeature {
+			want := clientadapter.ProtectionNone
+			if adapter.Supports(feature) {
+				want = clientadapter.ProtectionExactRelease
+			}
+			if got := admission.ProtectionBasis(feature); got != want {
+				t.Fatalf("%s %s: ProtectionBasis(%s) = %s, want %s",
+					release.id, release.version, feature.Name(), got, want)
+			}
+			if admission.Supports(feature) != adapter.Supports(feature) {
+				t.Fatalf("%s %s: Supports(%s) changed", release.id, release.version, feature.Name())
+			}
+		}
+	}
+	// 0.145.0 carries only the WebSocket bit, so it gains no tools.
+	adapter, _ := catalog.ExpectedEvidenceForPlatform("codex-cli", "0.145.0", "linux", "amd64")
+	admission, err := NewManagedRun(ManagedRunEvidence{
+		CaptureRunID: "run-verified", SourceLabel: "codex", Adapter: &adapter,
+		Workspace: testWorkspace(t), WorkspaceRoot: "/workspace/project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.ProtectionBasis(tools) != clientadapter.ProtectionNone {
+		t.Fatal("an exact release without the tools bit gained tools")
+	}
+
+	manual, err := NewManual("manual-recognized", 1, "Claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range everyFeature {
+		if got := manual.ProtectionBasis(feature); got != clientadapter.ProtectionNone {
+			t.Fatalf("manual ProtectionBasis(%s) = %s", feature.Name(), got)
+		}
+	}
+}
+
+func TestAdmissionRefusesInconsistentRecognizedClients(t *testing.T) {
+	t.Parallel()
+
+	catalog := clientadapter.BuiltInCatalog()
+	adapter, ok := catalog.ExpectedEvidenceForPlatform("claude-code", "2.1.220", "darwin", "arm64")
+	if !ok {
+		t.Fatal("built-in Claude Code evidence is unavailable")
+	}
+	tools := clientadapter.FeatureStructuredWorkspaceTools
+	for _, testCase := range []struct {
+		name     string
+		adapter  *clientadapter.Evidence
+		client   clientadapter.RecognizedClient
+		accepted bool
+	}{
+		{"with release evidence", &adapter,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools, Protections: tools}, false},
+		{"with release evidence and no grant", &adapter,
+			clientadapter.RecognizedClient{ID: "claude-code"}, false},
+		{"an unknown policy bit", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools | 1<<40}, false},
+		{"an unknown protection bit", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools, Protections: 1 << 40}, false},
+		{"protections beyond the policy", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools,
+				Protections: tools | clientadapter.FeatureCoreOwnedStreamingFallback}, false},
+		{"protections without a client", nil,
+			clientadapter.RecognizedClient{Policy: tools, Protections: tools}, false},
+		{"a consistent client", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools, Protections: tools}, true},
+		{"a switched-off client", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools}, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := NewManagedRun(ManagedRunEvidence{
+				CaptureRunID:     "run-inconsistent",
+				SourceLabel:      "claude",
+				Adapter:          testCase.adapter,
+				RecognizedClient: testCase.client,
+			})
+			if testCase.accepted != (err == nil) {
+				t.Fatalf("NewManagedRun() error = %v, want accepted %v", err, testCase.accepted)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidAdmission) {
+				t.Fatalf("error = %v, want ErrInvalidAdmission", err)
+			}
+		})
+	}
+
+	manual, err := NewManual("manual-recognized", 1, "Claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual.recognizedClient = clientadapter.RecognizedClient{ID: "claude-code"}
+	if err := manual.Validate(); !errors.Is(err, ErrInvalidAdmission) {
+		t.Fatalf("a manual admission naming a client validated: %v", err)
+	}
+}
+
+// The authorizer carries the run's recognized client into the admission, and
+// a run that names none still authorizes exactly as before.
+func TestManagedRunAuthorizationCarriesTheRecognizedClient(t *testing.T) {
+	t.Parallel()
+
+	catalog := clientadapter.BuiltInCatalog()
+	adapter, ok := catalog.ExpectedEvidenceForPlatform("claude-code", "2.1.220", "darwin", "arm64")
+	if !ok {
+		t.Fatal("built-in Claude Code evidence is unavailable")
+	}
+	tools := clientadapter.FeatureStructuredWorkspaceTools
+	for _, testCase := range []struct {
+		name    string
+		adapter *clientadapter.Evidence
+		client  clientadapter.RecognizedClient
+		want    clientadapter.ProtectionBasis
+	}{
+		{"recognized", nil,
+			clientadapter.RecognizedClient{ID: "claude-code", Policy: tools, Protections: tools},
+			clientadapter.ProtectionRecognizedClient},
+		{"recognized under the empty policy", nil,
+			clientadapter.RecognizedClient{ID: "claude-code"}, clientadapter.ProtectionNone},
+		{"verified", &adapter, clientadapter.RecognizedClient{}, clientadapter.ProtectionExactRelease},
+		{"unverified, unknown or stale", nil, clientadapter.RecognizedClient{}, clientadapter.ProtectionNone},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			value := testCredentialValue(t, capturecredential.KindManagedRun)
+			runs := &frozenRunAuthorizer{
+				want: value,
+				evidence: capturerun.Evidence{
+					RunID:            "run-carrier",
+					ExecutableLabel:  "claude",
+					CWD:              "/workspace/project",
+					Workspace:        testWorkspace(t),
+					Adapter:          testCase.adapter,
+					RecognizedClient: testCase.client,
+				},
+			}
+			authorizer, err := NewAuthorizer(runs, &frozenManualAuthorizer{err: manualcapture.ErrCredentialRejected})
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential, err := NewProxyCredential(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission, err := authorizer.Authorize(context.Background(), credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := admission.ProtectionBasis(tools); got != testCase.want {
+				t.Fatalf("ProtectionBasis(tools) = %s, want %s", got, testCase.want)
+			}
+		})
+	}
+}

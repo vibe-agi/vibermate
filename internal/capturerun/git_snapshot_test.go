@@ -3,6 +3,8 @@ package capturerun
 import (
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 func TestLaunchGitSnapshotIsExplicitAndFrozen(t *testing.T) {
@@ -25,7 +27,7 @@ func TestLaunchGitSnapshotIsExplicitAndFrozen(t *testing.T) {
 		}
 	}
 	record := DurableRecord{Runtime: RuntimeMetadata{GitAtLaunch: &git}}
-	cloned, view, evidence := record.Runtime.Clone(), ViewOf(record), evidenceOf(record)
+	cloned, view, evidence := record.Runtime.Clone(), ViewOf(record), evidenceOf(record, clientadapter.RecognizedClients{})
 	git.Branch = "later"
 	view.Runtime.GitAtLaunch.RepositoryName = "changed"
 	if cloned.GitAtLaunch.Branch != "main" || view.Runtime.GitAtLaunch.Branch != "main" || evidence.Runtime.GitAtLaunch.Branch != "main" || cloned.GitAtLaunch.RepositoryName != "github.com/team/project" || evidence.Runtime.GitAtLaunch.RepositoryName != "github.com/team/project" {
