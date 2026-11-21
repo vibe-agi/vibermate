@@ -181,9 +181,11 @@ List<EnvironmentClientEndpoint> appendEnvironmentUpstreamEndpoint({
   final desiredClientOrigin =
       clientOrigin ??
       clientOriginForUpstreamEndpoint(upstreamEndpoint, protocol);
+  // The Route speaks the upstream's protocol, which differs from the client's
+  // when ViberMate translates, as in the existing-plan branch above.
   final route = _upstreamRoute(
     upstreamEndpoint,
-    protocol,
+    preferredBackendProtocolForClient(protocol, upstreamEndpoint),
     initialAccountPolicy,
     identityNonce,
   );

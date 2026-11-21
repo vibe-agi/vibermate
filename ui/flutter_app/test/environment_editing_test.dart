@@ -941,6 +941,41 @@ void main() {
   );
 
   test(
+    'a new Claude flow to an OpenAI-compatible upstream gets a translated Route',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final dashboard = await api.loadDashboard();
+      final openAI = dashboard.endpoints.firstWhere(
+        (value) => value.id == 'target.openai.official',
+      );
+      final account = dashboard.accounts.firstWhere(
+        (value) => value.id == 'openai-work',
+      );
+
+      final endpoints = appendEnvironmentUpstreamEndpoint(
+        endpoints: const [],
+        upstreamEndpoint: openAI,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
+        clientProtocol: 'anthropic_messages',
+        identityNonce: 'fresh-claude-flow',
+      );
+
+      final clientEndpoint = endpoints.single;
+      expect(
+        clientEndpoint.clientOrigin,
+        Uri.parse('https://api.anthropic.com'),
+      );
+      final plan = clientEndpoint.protocolPlans.single;
+      expect(plan.clientProtocol, 'anthropic_messages');
+      // The Route must name the upstream's protocol, not the client's: an
+      // OpenAI service cannot be asked to speak Anthropic Messages.
+      expect(plan.routes.single.backendProtocol, 'openai_chat');
+    },
+  );
+
+  test(
     'Account Selector freezes only Accounts owned by the Route Endpoint',
     () async {
       final api = PreviewControlApi();
