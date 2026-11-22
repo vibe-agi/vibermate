@@ -3341,13 +3341,20 @@ void main() {
 
       await tester.tap(find.byKey(const Key('manual-capture-create')));
       await tester.pumpAndSettle();
-      expect(find.text('Create a dedicated proxy login'), findsOneWidget);
+      expect(find.text('Connect another app'), findsOneWidget);
       expect(
         find.text(
-          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
+          "For apps you don't start with vibermate run. ViberMate gives the app its own proxy login.",
         ),
         findsOneWidget,
       );
+      expect(
+        find.text(
+          'Forward as-is: requests go unchanged to the service the app chose, with its own login, and ViberMate records them.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('system_transparent'), findsNothing);
 
       await tester.tap(find.byKey(const Key('manual-capture-environment')));
       await tester.pumpAndSettle();
@@ -3355,14 +3362,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
+          'Work decides which AI service and account answer these requests, and ViberMate records them.',
         ),
         findsOneWidget,
       );
       expect(
-        find.text('api.anthropic.com:443  ·  api.openai.com:443'),
+        find.text('Decrypted and recorded: api.anthropic.com, api.openai.com'),
         findsOneWidget,
       );
+
+      // A name is required, and the example is only a placeholder.
+      await tester.tap(find.byKey(const Key('manual-capture-create-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.text('Name this connection'), findsOneWidget);
 
       await tester.enterText(
         find.byKey(const Key('manual-capture-name')),
@@ -3373,6 +3385,17 @@ void main() {
 
       expect(find.text('Proxy login created'), findsOneWidget);
       expect(find.text('preview-password-1'), findsOneWidget);
+      expect(find.text('Root certificate file'), findsOneWidget);
+      expect(
+        find.byKey(const Key('manual-capture-open-guide')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          "In the app's network settings, set its HTTP/HTTPS proxy to the address below.",
+        ),
+        findsOneWidget,
+      );
       expect(
         find.text('/Users/mira/Library/Application Support/ViberMate/root.pem'),
         findsOneWidget,
@@ -3452,9 +3475,9 @@ void main() {
 
     await tester.tap(find.byKey(const Key('manual-capture-create')));
     await tester.pumpAndSettle();
-    expect(find.text('创建专属代理登录'), findsOneWidget);
+    expect(find.text('接入其他应用'), findsOneWidget);
     expect(
-      find.text('ViberMate 会解密并记录下列 Agent API 入口；“原始目的地”保持客户端 URL、鉴权和模型不变。'),
+      find.text('原样转发：请求原样发往应用自己选择的服务，并使用它自己的登录；ViberMate 会记录这些请求。'),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -3467,7 +3490,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('代理登录已创建'), findsOneWidget);
     expect(find.text('preview-password-1'), findsOneWidget);
-    expect(find.text('Root 路径'), findsOneWidget);
+    expect(find.text('根证书文件'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('manual-capture-delivery-done')));

@@ -920,10 +920,13 @@ final class AppCopy {
         'ViberMate can\'t verify this copy of {agent}, so it can\'t give it ViberMate\'s certificate, and its requests will fail. Start a supported version, or update ViberMate.',
     'capture.cannot_connect.versions':
         'Versions ViberMate can connect on this Mac: {versions}.',
-    'capture.manual.create': 'Create manual session',
-    'capture.manual.create.title': 'Create a dedicated proxy login',
-    'capture.manual.name': 'Session name',
-    'capture.manual.name.placeholder': 'Figma Desktop',
+    'capture.manual.create': 'Connect another app',
+    'capture.manual.create.title': 'Connect another app',
+    'capture.manual.create.intro':
+        'For apps you don\'t start with vibermate run. ViberMate gives the app its own proxy login.',
+    'capture.manual.name': 'App name',
+    'capture.manual.name.placeholder': 'e.g. Figma Desktop',
+    'capture.manual.name.required': 'Name this connection',
     'capture.manual.client_class': 'Client type',
     'capture.manual.client_class.desktop_app': 'Desktop app',
     'capture.manual.client_class.cli': 'Command line client',
@@ -934,11 +937,14 @@ final class AppCopy {
     'capture.manual.duration': 'Temporary lifetime',
     'capture.manual.duration.hours': '{count} hours',
     'capture.manual.duration.minutes': '{count} minutes',
-    'capture.manual.review.title': 'Review proxy authority',
+    'capture.manual.review.title': 'What ViberMate will see',
+    'capture.manual.review.builtin':
+        '{set}: requests go unchanged to the service the app chose, with its own login, and ViberMate records them.',
     'capture.manual.review.semantic':
-        'ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client\'s URL, authentication, and model unchanged.',
+        '{set} decides which AI service and account answer these requests, and ViberMate records them.',
     'capture.manual.review.connection_only':
-        'Connection-only capture: encrypted traffic keeps its original destination. ViberMate records connection metadata and does not deliver a Root.',
+        '{set}: encrypted traffic keeps its original destination. ViberMate records connection details only and gives the app no certificate.',
+    'capture.manual.review.hosts': 'Decrypted and recorded: {hosts}',
     'capture.manual.create.action': 'Create proxy login',
     'capture.manual.rotate': 'Rotate proxy credential',
     'capture.manual.rotate.title': 'Rotate this proxy credential?',
@@ -965,7 +971,14 @@ final class AppCopy {
         'UDP does not need the Root certificate. Install the Proxy CA only for eligible HTTPS interception.',
     'capture.manual.delivery.username': 'Username',
     'capture.manual.delivery.password': 'Password',
-    'capture.manual.delivery.root': 'Root path',
+    'capture.manual.delivery.root': 'Root certificate file',
+    'capture.manual.delivery.steps.proxy':
+        'In the app\'s network settings, set its HTTP/HTTPS proxy to the address below.',
+    'capture.manual.delivery.steps.login':
+        'When the app asks for proxy credentials, use this username and password.',
+    'capture.manual.delivery.steps.root':
+        'Trust the root certificate file on this device, so the app accepts ViberMate\'s certificate.',
+    'capture.manual.delivery.open_guide': 'Open guide',
     'capture.manual.delivery.root_server':
         'Trust this Proxy CA on the client device for intercepted AI hosts. Verify its SHA-256 fingerprint before installing.',
     'capture.manual.delivery.download_root': 'Download Proxy CA',
@@ -4144,10 +4157,13 @@ final class AppCopy {
     'capture.cannot_connect.detail':
         'ViberMate 无法验证这份 {agent}，因此不能为它提供 ViberMate 证书，它的请求会失败。请改用受支持的版本，或更新 ViberMate。',
     'capture.cannot_connect.versions': '这台 Mac 上 ViberMate 可以连接的版本：{versions}。',
-    'capture.manual.create': '创建专属代理登录',
-    'capture.manual.create.title': '创建专属代理登录',
-    'capture.manual.name': '记录名称',
-    'capture.manual.name.placeholder': 'Figma Desktop',
+    'capture.manual.create': '接入其他应用',
+    'capture.manual.create.title': '接入其他应用',
+    'capture.manual.create.intro':
+        '用于不通过 vibermate run 启动的应用。ViberMate 会为该应用创建专属代理登录。',
+    'capture.manual.name': '应用名称',
+    'capture.manual.name.placeholder': '例如 Figma Desktop',
+    'capture.manual.name.required': '请为此连接命名',
     'capture.manual.client_class': '客户端类型',
     'capture.manual.client_class.desktop_app': '桌面 App',
     'capture.manual.client_class.cli': '命令行客户端',
@@ -4158,11 +4174,14 @@ final class AppCopy {
     'capture.manual.duration': '临时有效期',
     'capture.manual.duration.hours': '{count} 小时',
     'capture.manual.duration.minutes': '{count} 分钟',
-    'capture.manual.review.title': '检查代理 authority',
+    'capture.manual.review.title': 'ViberMate 可以看到的内容',
+    'capture.manual.review.builtin':
+        '{set}：请求原样发往应用自己选择的服务，并使用它自己的登录；ViberMate 会记录这些请求。',
     'capture.manual.review.semantic':
-        'ViberMate 会解密并记录下列 Agent API 入口；“原始目的地”保持客户端 URL、鉴权和模型不变。',
+        '由 {set} 决定这些请求发往哪个 AI 服务、使用哪个账号；ViberMate 会记录这些请求。',
     'capture.manual.review.connection_only':
-        '仅记录连接：加密流量保持客户端原始目的地；ViberMate 记录连接元数据，不会交付 Root。',
+        '{set}：加密流量保持原始目的地；ViberMate 只记录连接信息，不会向应用提供证书。',
+    'capture.manual.review.hosts': '将解密并记录：{hosts}',
     'capture.manual.create.action': '创建代理登录',
     'capture.manual.rotate': '轮换代理凭据',
     'capture.manual.rotate.title': '轮换这个代理凭据？',
@@ -4185,7 +4204,11 @@ final class AppCopy {
         'UDP 不需要 Root 证书。仅在符合条件的 HTTPS 解密时安装代理 CA。',
     'capture.manual.delivery.username': '用户名',
     'capture.manual.delivery.password': '密码',
-    'capture.manual.delivery.root': 'Root 路径',
+    'capture.manual.delivery.root': '根证书文件',
+    'capture.manual.delivery.steps.proxy': '在应用的网络设置中，把 HTTP/HTTPS 代理设为下面的地址。',
+    'capture.manual.delivery.steps.login': '应用要求代理凭据时，填写下面的用户名和密码。',
+    'capture.manual.delivery.steps.root': '在这台设备上信任根证书文件，让应用接受 ViberMate 的证书。',
+    'capture.manual.delivery.open_guide': '打开指南',
     'capture.manual.delivery.root_server':
         '在客户端设备上信任此 Proxy CA，才能验证被检查的 AI 域名。安装前请核对 SHA-256 指纹。',
     'capture.manual.delivery.download_root': '下载 Proxy CA',

@@ -370,4 +370,90 @@ void main() {
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });
+
+  testWidgets('the guide and the toolbar both connect another app', (
+    tester,
+  ) async {
+    final controller = await open(tester);
+    expect(find.byTooltip('Connect another app'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('setup-connect-other-app')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Connect another app'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('manual-capture-intro')), findsOneWidget);
+    expect(find.text('App name'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(
+            find.descendant(
+              of: find.byKey(const Key('manual-capture-name')),
+              matching: find.byType(TextField),
+            ),
+          )
+          .controller!
+          .text,
+      isEmpty,
+      reason: 'the example is a placeholder, nothing is prefilled',
+    );
+    expect(find.text('e.g. Figma Desktop'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await close(tester, controller);
+  });
+
+  testWidgets('a Web owner\'s empty list leads with the access guide', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi.freshInstall();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewFixture.freshInstall().terminalCommands,
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      closeRuntime: api.close,
+      runtimeTarget: '192.168.1.44:9666',
+      webPrincipal: const RuntimeWebPrincipal(
+        id: 'user.preview.owner',
+        username: 'owner',
+        role: RuntimeWebRole.owner,
+      ),
+    );
+    await controller.initialize();
+    controller.hideSetupGuide();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      tester.widget(
+        find.byKey(const Key('capture-empty-open-terminal-settings')),
+      ),
+      isA<FilledButton>(),
+    );
+    expect(
+      tester.widget(find.byKey(const Key('capture-empty-create-manual'))),
+      isA<OutlinedButton>(),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('capture-empty-create-manual')),
+        matching: find.text('Connect another app'),
+      ),
+      findsOneWidget,
+    );
+    await close(tester, controller);
+  });
 }

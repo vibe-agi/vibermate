@@ -275,18 +275,28 @@ final class _CaptureMaster extends StatelessWidget {
         controller.data?.environments ?? const <EnvironmentRecord>[];
     final noMatch = query.isNotEmpty && running.isEmpty && history.isEmpty;
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
-    final accessGuide = TextButton.icon(
-      key: const Key('capture-empty-open-terminal-settings'),
-      onPressed: controller.openAccessSettings,
-      icon: const Icon(Icons.terminal, size: 15),
-      label: Text(
-        copy(
-          controller.terminalManagement
-              ? 'capture.empty.action'
-              : 'capture.empty.web.action',
-        ),
+    final accessLabel = Text(
+      copy(
+        controller.terminalManagement
+            ? 'capture.empty.action'
+            : 'capture.empty.web.action',
       ),
     );
+    // A Web owner's main path is signing in and running an agent from a
+    // computer, so the access guide is the filled button there.
+    final accessGuide = webOwner
+        ? FilledButton.icon(
+            key: const Key('capture-empty-open-terminal-settings'),
+            onPressed: controller.openAccessSettings,
+            icon: const Icon(Icons.terminal, size: 15),
+            label: accessLabel,
+          )
+        : TextButton.icon(
+            key: const Key('capture-empty-open-terminal-settings'),
+            onPressed: controller.openAccessSettings,
+            icon: const Icon(Icons.terminal, size: 15),
+            label: accessLabel,
+          );
     final showGuide = TextButton(
       key: const Key('capture-empty-show-guide'),
       onPressed: controller.showSetupGuide,
@@ -376,15 +386,14 @@ final class _CaptureMaster extends StatelessWidget {
                         ? Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              FilledButton.icon(
+                              accessGuide,
+                              const SizedBox(height: ViberSpacing.sm),
+                              OutlinedButton.icon(
                                 key: const Key('capture-empty-create-manual'),
                                 onPressed: onCreateManual,
                                 icon: const Icon(Icons.add_link, size: 16),
-                                label: Text(
-                                  copy('capture.manual.create.action'),
-                                ),
+                                label: Text(copy('capture.manual.create')),
                               ),
-                              accessGuide,
                               showGuide,
                             ],
                           )
@@ -2890,6 +2899,12 @@ final class _ManualCaptureCreateDialogState
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  copy('capture.manual.create.intro'),
+                  key: const Key('manual-capture-intro'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 11),
                 CompactLabeledControl(
                   label: copy('capture.manual.name'),
                   child: TextFormField(
@@ -2902,7 +2917,7 @@ final class _ManualCaptureCreateDialogState
                       counterText: '',
                     ),
                     validator: (value) => value == null || value.trim().isEmpty
-                        ? copy('routes.validation.required')
+                        ? copy('capture.manual.name.required')
                         : null,
                   ),
                 ),
@@ -3012,7 +3027,15 @@ final class _ManualCaptureCreateDialogState
                     ),
                   )
                 else if (_context case final captureContext?)
-                  _ManualContextReview(context: captureContext, copy: copy)
+                  _ManualContextReview(
+                    context: captureContext,
+                    environment: environments
+                        .where(
+                          (value) => value.id == captureContext.environmentId,
+                        )
+                        .firstOrNull,
+                    copy: copy,
+                  )
                 else
                   InlineNotice(
                     message:
@@ -3195,31 +3218,42 @@ final class _ManualCaptureRotateDialogState
   }
 }
 
+/// What the proxy login lets ViberMate see, as a neutral panel: the routing
+/// set by name and what it does with the app's requests, then the services
+/// it decrypts and records.
 final class _ManualContextReview extends StatelessWidget {
-  const _ManualContextReview({required this.context, required this.copy});
+  const _ManualContextReview({
+    required this.context,
+    required this.environment,
+    required this.copy,
+  });
 
   final ManualCaptureContext context;
+  final EnvironmentRecord? environment;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext buildContext) {
     final semantic = context.root != null;
+    final colors = buildContext.viberColors;
+    final set = environment == null
+        ? routingSetDisplayName(context.environmentId, null, copy)
+        : environmentDisplayName(environment!, copy);
+    final summary = copy.format(
+      !semantic
+          ? 'capture.manual.review.connection_only'
+          : context.environmentId == builtInRoutingSetId
+          ? 'capture.manual.review.builtin'
+          : 'capture.manual.review.semantic',
+      {'set': set},
+    );
     return Container(
+      key: const Key('manual-capture-review'),
       width: double.infinity,
-      padding: const EdgeInsets.all(9),
+      padding: const EdgeInsets.all(ViberSpacing.lg),
       decoration: BoxDecoration(
-        color:
-            (semantic
-                    ? buildContext.viberColors.warning
-                    : buildContext.viberColors.route)
-                .withValues(alpha: 0.07),
-        border: Border.all(
-          color:
-              (semantic
-                      ? buildContext.viberColors.warning
-                      : buildContext.viberColors.route)
-                  .withValues(alpha: 0.28),
-        ),
+        color: colors.rail,
+        border: Border.all(color: colors.dividerSoft),
         borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
@@ -3230,12 +3264,29 @@ final class _ManualContextReview extends StatelessWidget {
             style: Theme.of(buildContext).textTheme.titleSmall,
           ),
           const SizedBox(height: 4),
-          Text(
-            semantic
-                ? copy('capture.manual.review.semantic')
-                : copy('capture.manual.review.connection_only'),
-            style: Theme.of(buildContext).textTheme.bodySmall,
+          Tooltip(
+            // The exact version stays one hover away for whoever needs it.
+            message:
+                '${context.environmentId} · ${copy.format('common.revision', {'revision': context.environmentRevision})}',
+            child: Text(
+              summary,
+              style: Theme.of(buildContext).textTheme.bodySmall,
+            ),
           ),
+          if (semantic && context.protectedAuthorities.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              copy.format('capture.manual.review.hosts', {
+                'hosts': context.protectedAuthorities
+                    .map(_withoutDefaultPort)
+                    .join(', '),
+              }),
+              key: const Key('manual-capture-review-hosts'),
+              style: Theme.of(
+                buildContext,
+              ).textTheme.bodySmall?.copyWith(color: colors.text),
+            ),
+          ],
           const SizedBox(height: 6),
           Text(context.proxyAddress, style: monoStyle),
           if (context.socksAddress case final address?)
@@ -3243,21 +3294,15 @@ final class _ManualContextReview extends StatelessWidget {
               '${copy('settings.access.socks')}: $address',
               style: monoStyle,
             ),
-          Text(
-            '${context.environmentId}  ·  r${context.environmentRevision}',
-            style: monoStyle,
-          ),
-          if (context.protectedAuthorities.isNotEmpty)
-            Text(
-              context.protectedAuthorities.join('  ·  '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: monoStyle,
-            ),
         ],
       ),
     );
   }
+
+  static String _withoutDefaultPort(String authority) =>
+      authority.endsWith(':443')
+      ? authority.substring(0, authority.length - 4)
+      : authority;
 }
 
 final class _ManualGrantDelivery extends StatefulWidget {
@@ -3298,6 +3343,53 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
           children: [
             InlineNotice(message: copy('capture.manual.delivery.once')),
             const SizedBox(height: 10),
+            // Where each value goes, before the values themselves.
+            for (final (index, step) in [
+              copy('capture.manual.delivery.steps.proxy'),
+              copy('capture.manual.delivery.steps.login'),
+              if (grant.root != null)
+                copy('capture.manual.delivery.steps.root'),
+            ].indexed)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      child: Text(
+                        '${index + 1}.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.text,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        step,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (widget.controller.accessSettingsAvailable)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const Key('manual-capture-open-guide'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    widget.controller.openAccessSettings();
+                  },
+                  icon: const Icon(Icons.menu_book_outlined, size: 14),
+                  label: Text(copy('capture.manual.delivery.open_guide')),
+                ),
+              ),
+            const SizedBox(height: 6),
             _ManualValueRow(
               label: copy('capture.manual.delivery.proxy'),
               value: grant.proxyAddress,
