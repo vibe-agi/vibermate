@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/bootstrap/root_trust_installer_contract.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/egress_profile_editor.dart';
@@ -20,6 +23,7 @@ void main() {
     AppLanguage language = AppLanguage.english,
     bool server = true,
     String runtimeTarget = 'This Mac',
+    RootTrustInstaller Function(PreviewControlApi api)? installer,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -31,7 +35,9 @@ void main() {
       serverManagement: server,
       runtimeTarget: runtimeTarget,
       rootTrustManagement: true,
-      rootTrustInstaller: PreviewRootTrustInstaller(fixture.api),
+      rootTrustInstaller:
+          installer?.call(fixture.api) ??
+          PreviewRootTrustInstaller(fixture.api),
       closeRuntime: fixture.api.close,
       initialPreferences: WorkbenchPreferences(language: language),
     );
@@ -88,9 +94,24 @@ void main() {
     }
     expect(find.text('vibermate run -- claude'), findsOneWidget);
     expect(find.text('vibermate run -- codex'), findsOneWidget);
+    // Said once: the section line says where the agent's requests appear,
+    // and the step's title where to run the commands.
     expect(
       find.text('In Terminal, go to your project folder and run one of these:'),
-      findsOneWidget,
+      findsNothing,
+    );
+    expect(
+      find.text('2. Copy a command and run it in your project folder'),
+      findsNothing,
+    );
+    expect(
+      find.text('3. Copy a command and run it in your project folder'),
+      findsOne,
+    );
+    expect(find.byKey(const Key('access-launch-detail')), findsNothing);
+    expect(
+      find.text('Using ViberMate on this Mac needs no sign-in or domain.'),
+      findsOne,
     );
     // A shell alias is not enough: the agent must start by its name.
     expect(
@@ -117,6 +138,151 @@ void main() {
     expect(find.text('Availability unknown'), findsNothing);
     expect(find.text('VLESS engine availability unknown'), findsNothing);
     expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('before the command is set up, the page says so once', (
+    tester,
+  ) async {
+    final controller = await open(tester, stage: PreviewFreshStage.start);
+    await tester.tap(find.byKey(const Key('setup-hide')));
+    await settle(tester);
+    controller.openAccessSettings();
+    await settle(tester);
+    expect(find.text('1. Set up the vibermate command'), findsOne);
+    expect(
+      find.text('Set it up once, then copy an Agent launch command below.'),
+      findsOne,
+    );
+    expect(
+      find.text(
+        'Set up the vibermate command first, then copy a command below.',
+      ),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('managed-run-copy-claude')))
+          .onPressed,
+      isNull,
+    );
+    await close(tester, controller);
+  });
+
+  testWidgets('trusting the certificate here is confirmed in place', (
+    tester,
+  ) async {
+    final controller = await open(tester);
+    controller.openAccessSettings();
+    await settle(tester);
+    final button = find.byKey(const Key('access-install-trust'));
+    await tester.ensureVisible(button);
+    await settle(tester);
+    await tester.tap(button);
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+    await settle(tester);
+    // Step 2 stays, ticked, and the steps keep their numbers.
+    final step = find.byKey(const Key('access-step-trust'));
+    expect(step, findsOne);
+    expect(
+      find.descendant(
+        of: step,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is StatusPill && widget.label == 'Installed and trusted',
+        ),
+      ),
+      findsOne,
+    );
+    expect(
+      find.descendant(
+        of: step,
+        matching: find.text("Codex: this Mac trusts ViberMate's certificate."),
+      ),
+      findsOne,
+    );
+    expect(find.byKey(const Key('access-install-trust')), findsNothing);
+    expect(
+      find.text('3. Copy a command and run it in your project folder'),
+      findsOne,
+    );
+    await close(tester, controller);
+  });
+
+  testWidgets('a cancelled macOS prompt says so on the page', (tester) async {
+    final controller = await open(
+      tester,
+      installer: (_) => const _RefusingInstaller(),
+    );
+    controller.openAccessSettings();
+    await settle(tester);
+    final button = find.byKey(const Key('access-install-trust'));
+    await tester.ensureVisible(button);
+    await settle(tester);
+    await tester.tap(button);
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+    await settle(tester);
+    final error = find.byKey(const Key('access-root-ca-error'));
+    expect(error, findsOne);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('access-step-trust')),
+        matching: error,
+      ),
+      findsOne,
+    );
+    expect(find.byKey(const Key('access-install-trust')), findsOne);
+    await close(tester, controller);
+  });
+
+  testWidgets('a link to the remote guide brings it into view', (tester) async {
+    final controller = await open(tester, size: const Size(1440, 600));
+    controller.openAccessSettings(focus: AccessFocus.remote);
+    await settle(tester);
+    final guide = tester.getRect(
+      find.byKey(const ValueKey('settings-remote-guide-true')),
+    );
+    expect(guide.top, greaterThanOrEqualTo(0));
+    expect(guide.top, lessThan(600));
+    // The page scrolled to it: it starts far below the first screen.
+    final scroll = tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(const Key('settings-access-scroll')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+    expect(scroll.pixels, greaterThan(0));
+    await close(tester, controller);
+  });
+
+  testWidgets('Technical details says what the SOCKS5 listener is for', (
+    tester,
+  ) async {
+    final controller = await open(tester);
+    controller.openAccessSettings();
+    await settle(tester);
+    final toggle = find.byKey(const Key('access-technical-details-toggle'));
+    await tester.ensureVisible(toggle);
+    await settle(tester);
+    await tester.tap(toggle);
+    await settle(tester);
+    expect(
+      find.text(
+        'For apps you point at ViberMate by hand with a proxy login. Claude '
+        "Code and Codex don't need it.",
+      ),
+      findsOne,
+    );
+    expect(
+      tester.getRect(find.byKey(const Key('access-socks-purpose'))).top,
+      lessThan(tester.getRect(find.text('SOCKS5 proxy')).top),
+    );
     await close(tester, controller);
   });
 
@@ -269,4 +435,14 @@ void main() {
       '外观、语言与更新',
     );
   });
+}
+
+final class _RefusingInstaller implements RootTrustInstaller {
+  const _RefusingInstaller();
+
+  @override
+  Future<void> install(RootCAMaterial material) async =>
+      throw const RootTrustInstallerException(
+        RootTrustInstallerFailure.userCancelled,
+      );
 }

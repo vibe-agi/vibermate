@@ -214,6 +214,9 @@ final class CodexCertificateRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = controller.rootCAStatus;
     final busy = controller.rootCAMutating || controller.rootCALoading;
+    // Trusted while the row is still shown (Access and launch keeps it once
+    // trusted there): the green pill and what it means, without a button.
+    final trusted = status != null && status.rootValid && status.installed;
     final label = Wrap(
       spacing: ViberSpacing.md,
       runSpacing: ViberSpacing.xs,
@@ -249,7 +252,15 @@ final class CodexCertificateRow extends StatelessWidget {
             key: Key('$keyPrefix-codex-requirement'),
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (stacked) ...[
+              if (trusted) ...[
+                label,
+                const SizedBox(height: ViberSpacing.xs),
+                Text(
+                  copy('setup.start.codex_ready'),
+                  key: Key('$keyPrefix-codex-ready'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ] else if (stacked) ...[
                 label,
                 const SizedBox(height: ViberSpacing.sm),
                 // The guide's phone layout gives every button the full
@@ -266,7 +277,7 @@ final class CodexCertificateRow extends StatelessWidget {
                     button,
                   ],
                 ),
-              if (explain) ...[
+              if (explain && !trusted) ...[
                 const SizedBox(height: ViberSpacing.xs),
                 Text(
                   copy('setup.start.codex_requirement'),

@@ -1545,7 +1545,13 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
     final access = controller.runtimeStatus?.networkAccess;
     final remote =
         controller.serverManagement || controller.webPrincipal != null;
-    final codexNeedsRoot = setupRootTrusted(controller) == false;
+    final rootTrusted = setupRootTrusted(controller);
+    // Shown while this Mac does not trust the certificate, and kept, ticked,
+    // once it came to trust it in this app session, so trusting it here is
+    // confirmed in place instead of the step vanishing.
+    final trustStep =
+        rootTrusted == false ||
+        (rootTrusted == true && controller.rootTrustedHere);
     // This Mac's Server listens on this Mac only: a browser here can open
     // it, another computer cannot.
     final browserOnly =
@@ -1575,25 +1581,39 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
             child: _TerminalCommandPanel(controller: controller, copy: copy),
           ),
         ),
-        // Shown only while this Mac does not trust the certificate.
-        if (codexNeedsRoot)
+        if (trustStep)
           _AccessStep(
             key: const Key('access-step-trust'),
             title: copy.format('terminal.run.step', {
               'number': 2,
               'title': copy('terminal.run.step.trust'),
             }),
-            child: CodexCertificateRow(
-              controller: controller,
-              copy: copy,
-              keyPrefix: 'access',
-              explain: false,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                CodexCertificateRow(
+                  controller: controller,
+                  copy: copy,
+                  keyPrefix: 'access',
+                  explain: false,
+                ),
+                // A cancelled macOS prompt or an unconfirmed trust says so
+                // here, where the button was pressed.
+                if (controller.rootCAError case final error?) ...[
+                  const SizedBox(height: 8),
+                  InlineNotice(
+                    key: const Key('access-root-ca-error'),
+                    message: rootCAErrorMessage(copy, error),
+                    error: true,
+                  ),
+                ],
+              ],
             ),
           ),
         _AccessStep(
           key: const Key('access-step-copy'),
           title: copy.format('terminal.run.step', {
-            'number': codexNeedsRoot ? 3 : 2,
+            'number': trustStep ? 3 : 2,
             'title': copy('terminal.run.step.copy'),
           }),
           child: Container(
@@ -1636,8 +1656,10 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
                     'settings-remote-guide-${controller.remoteConnectionGuideRequested}',
                   ),
                   initiallyExpanded: controller.remoteConnectionGuideRequested,
-                  tilePadding: EdgeInsets.zero,
-                  childrenPadding: EdgeInsets.zero,
+                  // A part of 'Other ways to connect', indented under it in
+                  // a quieter style than the section's own title.
+                  tilePadding: const EdgeInsets.only(left: 12),
+                  childrenPadding: const EdgeInsets.only(left: 12),
                   shape: const Border(),
                   collapsedShape: const Border(),
                   title: Text(
@@ -1646,12 +1668,16 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
                           ? 'settings.access.browser.title'
                           : 'settings.access.team.title',
                     ),
+                    style: Theme.of(context).textTheme.labelLarge,
                   ),
                   subtitle: Text(
                     copy(
                       browserOnly
                           ? 'settings.access.browser.detail'
                           : 'settings.access.team.optional',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
                     ),
                   ),
                   children: [
@@ -1672,10 +1698,21 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
             label: copy('common.technical_details'),
             child: Padding(
               padding: const EdgeInsets.only(left: 18, top: 2),
-              child: _NetworkAccessFacts(
-                access: access,
-                copy: copy,
-                vless: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // What the listener is for, so 'Not enabled' doesn't read
+                  // as something to fix.
+                  Text(
+                    copy('settings.access.socks.purpose'),
+                    key: const Key('access-socks-purpose'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _NetworkAccessFacts(access: access, copy: copy, vless: false),
+                ],
               ),
             ),
           ),
@@ -1817,22 +1854,29 @@ final class _LaunchRoutingChoice extends StatelessWidget {
           controller: controller,
           copy: copy,
           routingSetId: chosen?.id,
+          // The step's title already says where to run them, and the
+          // Terminal card above says to set the command up first.
+          lead: false,
+          installHint: false,
           // Without another routing set to choose, the way to one is Routing.
           onUseRoutingSet: sets.isEmpty
               ? () => controller.selectSection(WorkbenchSection.environments)
               : null,
         ),
-        const SizedBox(height: 8),
-        Text(
-          sets.isEmpty
-              ? copy('terminal.run.after')
-              : copy.sentences([
-                  copy('terminal.run.after'),
-                  copy('terminal.run.choose_set'),
-                ]),
-          key: const Key('access-launch-detail'),
-          style: muted,
-        ),
+        // What the choice does: the section line already says what happens
+        // without a routing set.
+        if (chosen != null || sets.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            chosen != null
+                ? copy.format('terminal.run.after_set', {
+                    'name': environmentDisplayName(chosen, copy),
+                  })
+                : copy('terminal.run.choose_set'),
+            key: const Key('access-launch-detail'),
+            style: muted,
+          ),
+        ],
       ],
     );
   }
@@ -1853,11 +1897,12 @@ final class _AccessSectionTitle extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
+      // The page's main path: above its numbered steps and the cards in them.
       Text(
         title,
         style: Theme.of(
           context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
       ),
       const SizedBox(height: 2),
       Text(

@@ -2564,6 +2564,8 @@ final class AppCopy {
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
     'settings.access.title': 'Access and launch',
     'settings.access.socks': 'SOCKS5 proxy',
+    'settings.access.socks.purpose':
+        'For apps you point at ViberMate by hand with a proxy login. Claude Code and Codex don\'t need it.',
     'settings.access.network.disabled': 'Not enabled',
     'settings.access.network.unknown': 'Availability unknown',
     'settings.access.vless.installed': 'VLESS engine installed',
@@ -2575,7 +2577,7 @@ final class AppCopy {
         'Start Claude Code or Codex from Terminal or an editor, and connect other devices.',
     'settings.access.local.title': 'On this Mac',
     'settings.access.local.no_account':
-        'Using ViberMate on this Mac needs no sign-in or domain. For Codex, also trust the certificate under Safety and data.',
+        'Using ViberMate on this Mac needs no sign-in or domain.',
     'settings.access.editor.title': 'Use from an editor (optional)',
     'settings.access.editor.detail':
         'Zed, JetBrains or VS Code start Claude Code or Codex through ViberMate (ACP).',
@@ -3397,10 +3399,10 @@ final class AppCopy {
         'Workspace preferences could not be saved. Runtime evidence is unaffected; another navigation change will retry.',
     'terminal.title': 'Terminal command',
     'terminal.description':
-        'Use vibermate from Terminal to start managed Agent runs.',
+        'The vibermate command starts Claude Code or Codex through ViberMate from Terminal.',
     'terminal.run.title': 'Start Claude Code or Codex',
     'terminal.run.detail':
-        'Open Terminal, go to your project folder and paste a command. Your agent starts as usual with its own sign-in, and its requests appear in Sessions.',
+        'Your agent starts as usual with its own sign-in, and its requests appear in Sessions.',
     'terminal.run.install_first':
         'Set up the vibermate command first, then copy a command below.',
     'terminal.run.lead':
@@ -3409,15 +3411,15 @@ final class AppCopy {
         'Claude Code or Codex must already be installed and start when you type claude or codex in Terminal.',
     'terminal.run.use_routing_set': 'Use a routing set instead',
     'terminal.run.step': '{number}. {title}',
-    'terminal.run.step.install': 'Install the vibermate command',
+    'terminal.run.step.install': 'Set up the vibermate command',
     'terminal.run.step.trust': 'Codex only: trust ViberMate\'s certificate',
     'terminal.run.step.copy':
         'Copy a command and run it in your project folder',
     'terminal.run.send_through': 'Send requests through',
     'terminal.run.builtin_choice':
         'Forward as-is · record only, original destination',
-    'terminal.run.after':
-        'The agent starts as usual with its own login, and its requests to the AI service appear in Sessions.',
+    'terminal.run.after_set':
+        'Requests follow the {name} routing set: its accounts, scripts and network exits apply.',
     'terminal.run.choose_set':
         'To use your accounts and scripts, choose a routing set above.',
     'terminal.run.copy': 'Copy {client} launch command',
@@ -5629,6 +5631,8 @@ final class AppCopy {
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
     'settings.access.title': '接入与启动',
     'settings.access.socks': 'SOCKS5 代理',
+    'settings.access.socks.purpose':
+        '用于通过代理登录、手动指向 ViberMate 的应用。Claude Code 和 Codex 不需要它。',
     'settings.access.network.disabled': '未启用',
     'settings.access.network.unknown': '可用性未知',
     'settings.access.vless.installed': 'VLESS 内核已安装',
@@ -5637,8 +5641,7 @@ final class AppCopy {
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '从终端或编辑器启动 Claude Code 或 Codex，并接入其他设备。',
     'settings.access.local.title': '这台电脑',
-    'settings.access.local.no_account':
-        '在这台 Mac 上使用 ViberMate 无需登录或域名。使用 Codex 时，还需在「安全与数据」中信任证书。',
+    'settings.access.local.no_account': '在这台 Mac 上使用 ViberMate 无需登录或域名。',
     'settings.access.editor.title': '从编辑器使用（可选）',
     'settings.access.editor.detail':
         '让 Zed、JetBrains 或 VS Code 通过 ViberMate（ACP）启动 Claude Code 或 Codex。',
@@ -6339,22 +6342,22 @@ final class AppCopy {
     'preferences.warning.unavailable': '无法读取工作台偏好。本次会话仍可继续；后续变更会重试保存。',
     'preferences.warning.save_failed': '无法保存工作台偏好。运行时证据不受影响；下次导航变更会重试。',
     'terminal.title': '终端命令',
-    'terminal.description': '在终端中使用 vibermate 启动托管的 Agent 运行。',
+    'terminal.description':
+        'vibermate 命令可在终端中通过 ViberMate 启动 Claude Code 或 Codex。',
     'terminal.run.title': '启动 Claude Code 或 Codex',
-    'terminal.run.detail':
-        '打开终端，进入项目目录并粘贴命令。Agent 会照常启动并使用自己的登录，它的请求会显示在「运行记录」中。',
+    'terminal.run.detail': 'Agent 会照常启动并使用自己的登录，它的请求会显示在「运行记录」中。',
     'terminal.run.install_first': '请先设置 vibermate 命令，再复制下方命令。',
-    'terminal.run.lead': '在终端中进入项目文件夹，运行以下任一命令：',
+    'terminal.run.lead': '在终端中进入项目目录，运行以下任一命令：',
     'terminal.run.requirement':
         '需先安装 Claude Code 或 Codex，并确认在终端输入 claude 或 codex 能直接启动。',
     'terminal.run.use_routing_set': '改用流量策略',
     'terminal.run.step': '{number}. {title}',
-    'terminal.run.step.install': '安装 vibermate 命令',
+    'terminal.run.step.install': '设置 vibermate 命令',
     'terminal.run.step.trust': '仅 Codex：信任 ViberMate 证书',
-    'terminal.run.step.copy': '复制命令并在项目文件夹中运行',
+    'terminal.run.step.copy': '复制命令并在项目目录中运行',
     'terminal.run.send_through': '请求发送方式',
     'terminal.run.builtin_choice': '原样转发 · 仅记录，按原目标发送',
-    'terminal.run.after': 'Agent 会照常启动并使用自己的登录，它发往 AI 服务的请求会显示在运行记录中。',
+    'terminal.run.after_set': '请求会按「{name}」流量策略处理，其中的账号、脚本和网络出口都会生效。',
     'terminal.run.choose_set': '要使用你的账号和脚本，请在上方选择流量策略。',
     'terminal.run.copy': '复制 {client} 启动命令',
     'terminal.run.copied': '已复制 {client} 命令',

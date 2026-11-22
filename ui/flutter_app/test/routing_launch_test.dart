@@ -229,7 +229,7 @@ void main() {
     final (controller, copied) = await open(tester);
     controller.openAccessSettings();
     await settle(tester);
-    expect(find.text('1. Install the vibermate command'), findsOneWidget);
+    expect(find.text('1. Set up the vibermate command'), findsOneWidget);
     expect(
       find.text("2. Codex only: trust ViberMate's certificate"),
       findsOneWidget,
@@ -240,6 +240,12 @@ void main() {
     );
     expect(find.text('Send requests through'), findsOneWidget);
     expect(find.text('vibermate run -- claude'), findsOneWidget);
+    Text detail() =>
+        tester.widget<Text>(find.byKey(const Key('access-launch-detail')));
+    expect(
+      detail().data,
+      'To use your accounts and scripts, choose a routing set above.',
+    );
     expect(
       find.byKey(const Key('managed-run-use-routing-set')),
       findsNothing,
@@ -255,6 +261,12 @@ void main() {
     await settle(tester);
     expect(find.text('vibermate run --env work -- claude'), findsOneWidget);
     expect(find.text('vibermate run --env work -- codex'), findsOneWidget);
+    // The line says what the chosen set does, not to choose one.
+    expect(
+      detail().data,
+      'Requests follow the Work routing set: its accounts, scripts and '
+      'network exits apply.',
+    );
     await tester.tap(find.byKey(const Key('managed-run-copy-claude')));
     await tester.pump();
     expect(copied.last, 'vibermate run --env work -- claude');
