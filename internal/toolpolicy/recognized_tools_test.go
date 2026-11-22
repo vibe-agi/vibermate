@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -476,5 +477,53 @@ func TestRecognizedBasisKeepsTheContainmentRules(t *testing.T) {
 	escape := toolCall{"Read", argumentsJSON(t, map[string]any{"file_path": filepath.Join(link, "secret.txt")})}
 	if approvedWithoutQuestion(t, root, clientadapter.ProtectionRecognizedClient, captured, escape) {
 		t.Fatal("the recognized basis followed a symlink out of the workspace")
+	}
+}
+
+// A group decodes each called tool's definition once, not once per call: the
+// definition is the same for every call in the request that carried it. This
+// test is not parallel, because AllocsPerRun counts every allocation in the
+// process.
+func TestRecognizedDefinitionIsDecodedOncePerCalledTool(t *testing.T) {
+	root := workspaceRoot(t)
+	notes := writeWorkspaceFile(t, root, "notes.txt", "hello\n")
+	captured := capturedDefinitions(t)
+	// Ignored property keywords make Read's definition costly to decode
+	// without changing what it declares or what the path check reads.
+	heavy := withSchema(captured, "Read", mutateSchema(t, captured["Read"], func(schema map[string]any) {
+		for _, property := range schemaProperties(schema) {
+			for index := 0; index < 200; index++ {
+				property.(map[string]any)["x-note-"+strconv.Itoa(index)] = index
+			}
+		}
+	}))
+	read := toolCall{"Read", argumentsJSON(t, map[string]any{"file_path": notes})}
+	const calls = 9
+	group := make([]toolCall, calls)
+	for index := range group {
+		group[index] = read
+	}
+	request := basisRequest(t, environment.ToolPolicyReview, root, clientadapter.ProtectionRecognizedClient, heavy, group)
+	decision, intents := request.Context(), request.ToolIntents()
+	if !safeWorkspaceGroup(decision, intents[:1]) || !safeWorkspaceGroup(decision, intents) {
+		t.Fatal("the recognized basis asked about calls to the captured Read")
+	}
+	var definition protocolcore.ToolDefinition
+	for _, candidate := range decision.Tools() {
+		if candidate.Name == "Read" {
+			definition = candidate
+		}
+	}
+	decode := testing.AllocsPerRun(20, func() {
+		if _, ok := recognizedDefinition(recognizedToolShapes["Read"], definition); !ok {
+			t.Fatal("the heavy Read definition lost its closed shape")
+		}
+	})
+	single := testing.AllocsPerRun(20, func() { safeWorkspaceGroup(decision, intents[:1]) })
+	whole := testing.AllocsPerRun(20, func() { safeWorkspaceGroup(decision, intents) })
+	perCall := (whole - single) / (calls - 1)
+	if perCall >= decode/2 {
+		t.Fatalf("each further call allocates %.0f times; decoding the definition alone allocates %.0f",
+			perCall, decode)
 	}
 }

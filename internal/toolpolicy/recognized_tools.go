@@ -52,12 +52,20 @@ var recognizedSchemaKeys = map[string]struct{}{
 	"title":                {},
 }
 
+// recognizedDefinitions holds, for one group, the property names each called
+// tool's definition declares. A definition is decoded once per called tool,
+// and only for the group of the request that carried it: a definition never
+// vouches for another request's calls.
+type recognizedDefinitions map[string]map[string]struct{}
+
 // recognizedBuiltInCall proves one call of a recognized client's group: the
 // tool has a recognized shape, the request's own definition is closed to that
 // shape, and every argument the call uses is one the shape lists and the
 // definition declares. The classifier reads only the path and patterns, so an
-// argument it never examined must not ride along.
+// argument it never examined must not ride along. A definition without the
+// closed shape ends the group, so only a proven definition is kept.
 func recognizedBuiltInCall(
+	decoded recognizedDefinitions,
 	definition protocolcore.ToolDefinition,
 	intent protocolcore.ToolIntent,
 ) bool {
@@ -65,9 +73,14 @@ func recognizedBuiltInCall(
 	if !known {
 		return false
 	}
-	declared, ok := recognizedDefinition(shape, definition)
-	if !ok {
-		return false
+	declared, found := decoded[intent.Call.Name]
+	if !found {
+		var ok bool
+		declared, ok = recognizedDefinition(shape, definition)
+		if !ok {
+			return false
+		}
+		decoded[intent.Call.Name] = declared
 	}
 	var arguments map[string]json.RawMessage
 	if json.Unmarshal(intent.Call.Arguments.Bytes(), &arguments) != nil ||

@@ -136,6 +136,10 @@ func safeWorkspaceGroup(
 			}
 		}
 	}
+	var decoded recognizedDefinitions
+	if recognized {
+		decoded = make(recognizedDefinitions)
+	}
 	for _, intent := range intents {
 		if intent.Call.Namespace != "" ||
 			intent.Call.EffectiveKind() != protocolcore.ToolKindFunction {
@@ -145,7 +149,7 @@ func safeWorkspaceGroup(
 		if !exists || definition.EffectiveKind() != protocolcore.ToolKindFunction {
 			return false
 		}
-		if recognized && !recognizedBuiltInCall(definition, intent) {
+		if recognized && !recognizedBuiltInCall(decoded, definition, intent) {
 			return false
 		}
 		if !safeWorkspaceIntent(realRoot, definition, intent, recognized) {
