@@ -22,6 +22,7 @@ import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
 import 'provider_account_facts.dart';
 import 'route_account_scope_editor.dart';
+import 'launch_command.dart';
 import 'routing_set_name.dart';
 import 'workbench_controller.dart';
 
@@ -271,6 +272,16 @@ final class _EnvironmentDirectory extends StatelessWidget {
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                           ),
+                          if (environment.state != 'active') ...[
+                            const SizedBox(width: 6),
+                            InlineStatus(
+                              key: Key(
+                                'environment-disabled-${environment.id}',
+                              ),
+                              label: copy('environment.disabled_marker'),
+                              color: context.viberColors.textMuted,
+                            ),
+                          ],
                           if (environment.systemOwned)
                             Tooltip(
                               message: copy('environment.system_managed'),
@@ -399,12 +410,14 @@ final class _EnvironmentDetail extends StatelessWidget {
                           label: copy('common.system'),
                           color: context.viberColors.textMuted,
                         ),
-                      StatusPill(
-                        label: copy('environment.state.${value.state}'),
-                        color: value.state == 'active'
-                            ? context.viberColors.verified
-                            : context.viberColors.textFaint,
-                      ),
+                      // An enabled set is the normal case and needs no
+                      // pill; only a disabled one is marked.
+                      if (value.state != 'active')
+                        InlineStatus(
+                          key: const Key('environment-disabled'),
+                          label: copy('environment.disabled_marker'),
+                          color: context.viberColors.textMuted,
+                        ),
                     ],
                   ),
                   // On a narrow pane the line moves into the scrolling body,
@@ -566,61 +579,74 @@ final class _EnvironmentDetail extends StatelessWidget {
           ),
         const Divider(height: 1),
         Expanded(
-          child: value.clientEndpoints.isEmpty
-              ? CenteredMessage(
-                  icon: Icons.compare_arrows,
-                  title: environmentDisplayName(value, copy),
-                  detail: copy(
-                    value.systemOwned
-                        ? 'environment.connection_only'
-                        : 'environment.no_client_flows',
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final description =
+                  isBuiltInRoutingSet(value) &&
+                  constraints.maxWidth < _builtInDescriptionInHeader;
+              // Above the paths: how to start an agent on this set, and the
+              // sessions already running on it.
+              final lead = <Widget>[
+                if (description)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _BuiltInDescription(copy: copy),
                   ),
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final description =
-                        isBuiltInRoutingSet(value) &&
-                        constraints.maxWidth < _builtInDescriptionInHeader;
-                    final lead = description ? 1 : 0;
-                    return ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
-                      itemCount:
-                          lead +
-                          value.clientEndpoints.length +
-                          (historical ? 0 : 1),
-                      itemBuilder: (context, position) {
-                        if (description && position == 0) {
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _BuiltInDescription(copy: copy),
-                          );
-                        }
-                        final index = position - lead;
-                        return !historical && index == 0
-                            ? _LiveSessions(
-                                controller: controller,
-                                environment: value,
-                                copy: copy,
-                              )
-                            : _ClientEndpointPlan(
-                                controller: controller,
-                                environment: value,
-                                clientEndpoint:
-                                    value.clientEndpoints[historical
-                                        ? index
-                                        : index - 1],
-                                endpoints: endpoints,
-                                accounts: accounts,
-                                copy: copy,
-                                activationEnabled:
-                                    !historical &&
-                                    !value.systemOwned &&
-                                    !controller.environmentMutating,
-                              );
-                      },
-                    );
-                  },
-                ),
+                if (!historical && value.state == 'active')
+                  _StartWithRoutingSet(
+                    controller: controller,
+                    environment: value,
+                    copy: copy,
+                  ),
+                if (!historical)
+                  _LiveSessions(
+                    controller: controller,
+                    environment: value,
+                    copy: copy,
+                  ),
+              ];
+              if (value.clientEndpoints.isEmpty) {
+                return ListView(
+                  key: const Key('environment-detail-scroll'),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+                  children: [
+                    ...lead,
+                    Text(
+                      copy(
+                        value.systemOwned
+                            ? 'environment.connection_only'
+                            : 'environment.no_client_flows',
+                      ),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return ListView.builder(
+                key: const Key('environment-detail-scroll'),
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+                itemCount: lead.length + value.clientEndpoints.length,
+                itemBuilder: (context, position) {
+                  if (position < lead.length) return lead[position];
+                  return _ClientEndpointPlan(
+                    controller: controller,
+                    environment: value,
+                    clientEndpoint:
+                        value.clientEndpoints[position - lead.length],
+                    endpoints: endpoints,
+                    accounts: accounts,
+                    copy: copy,
+                    activationEnabled:
+                        !historical &&
+                        !value.systemOwned &&
+                        !controller.environmentMutating,
+                  );
+                },
+              );
+            },
+          ),
         ),
       ],
     );
@@ -644,6 +670,48 @@ final class _BuiltInDescription extends StatelessWidget {
     style: Theme.of(
       context,
     ).textTheme.bodySmall?.copyWith(color: context.viberColors.text),
+  );
+}
+
+/// Under an enabled set's header: the commands that start Claude Code or
+/// Codex on it. The set's id is inside the command, so there is nothing to
+/// look up; the built-in set's commands carry no --env.
+final class _StartWithRoutingSet extends StatelessWidget {
+  const _StartWithRoutingSet({
+    required this.controller,
+    required this.environment,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final EnvironmentRecord environment;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('environment-launch'),
+    margin: const EdgeInsets.only(bottom: 14),
+    padding: const EdgeInsets.fromLTRB(11, 9, 10, 10),
+    decoration: BoxDecoration(
+      border: Border.all(color: context.viberColors.dividerSoft),
+      borderRadius: ViberMetrics.surfaceRadius,
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          copy('environment.launch.title'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 6),
+        LaunchCommandCard(
+          controller: controller,
+          copy: copy,
+          routingSetId: environment.id,
+          keyPrefix: 'environment-launch',
+        ),
+      ],
+    ),
   );
 }
 
@@ -683,7 +751,14 @@ final class _LiveSessions extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           if (sessions.isEmpty)
-            Text(copy('environment.live.none'), style: muted)
+            Text(
+              copy(
+                environment.state == 'active'
+                    ? 'environment.live.none'
+                    : 'environment.live.disabled',
+              ),
+              style: muted,
+            )
           else
             Wrap(
               spacing: 8,

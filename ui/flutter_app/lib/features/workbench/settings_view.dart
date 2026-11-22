@@ -1486,10 +1486,19 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
       };
       final context = target.currentContext;
       if (!mounted || context == null) return;
+      // Scroll only as far as needed: a card already on screen stays put.
       unawaited(
         Scrollable.ensureVisible(
           context,
-          duration: const Duration(milliseconds: 200),
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        ).then(
+          (_) => context.mounted
+              ? Scrollable.ensureVisible(
+                  context,
+                  alignmentPolicy:
+                      ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+                )
+              : null,
         ),
       );
     });
@@ -1550,30 +1559,46 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
           detail: copy('terminal.run.detail'),
         ),
         const SizedBox(height: 10),
-        KeyedSubtree(
-          key: _terminalKey,
-          child: _TerminalCommandPanel(controller: controller, copy: copy),
-        ),
-        const SizedBox(height: 9),
-        Container(
-          key: const Key('managed-run-guide'),
-          padding: const EdgeInsets.fromLTRB(11, 10, 10, 10),
-          decoration: BoxDecoration(
-            border: Border.all(color: context.viberColors.dividerSoft),
-            borderRadius: ViberMetrics.surfaceRadius,
+        _AccessStep(
+          key: const Key('access-step-install'),
+          title: copy.format('terminal.run.step', {
+            'number': 1,
+            'title': copy('terminal.run.step.install'),
+          }),
+          child: KeyedSubtree(
+            key: _terminalKey,
+            child: _TerminalCommandPanel(controller: controller, copy: copy),
           ),
-          child: LaunchCommandCard(
-            controller: controller,
-            copy: copy,
-            codexFooter: codexNeedsRoot
-                ? CodexCertificateRow(
-                    controller: controller,
-                    copy: copy,
-                    keyPrefix: 'access',
-                  )
-                : null,
-            onUseRoutingSet: () =>
-                controller.selectSection(WorkbenchSection.environments),
+        ),
+        // Shown only while this Mac does not trust the certificate.
+        if (codexNeedsRoot)
+          _AccessStep(
+            key: const Key('access-step-trust'),
+            title: copy.format('terminal.run.step', {
+              'number': 2,
+              'title': copy('terminal.run.step.trust'),
+            }),
+            child: CodexCertificateRow(
+              controller: controller,
+              copy: copy,
+              keyPrefix: 'access',
+              explain: false,
+            ),
+          ),
+        _AccessStep(
+          key: const Key('access-step-copy'),
+          title: copy.format('terminal.run.step', {
+            'number': codexNeedsRoot ? 3 : 2,
+            'title': copy('terminal.run.step.copy'),
+          }),
+          child: Container(
+            key: const Key('managed-run-guide'),
+            padding: const EdgeInsets.fromLTRB(11, 10, 10, 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: context.viberColors.dividerSoft),
+              borderRadius: ViberMetrics.surfaceRadius,
+            ),
+            child: _LaunchRoutingChoice(controller: controller, copy: copy),
           ),
         ),
         const SizedBox(height: 8),
@@ -1683,6 +1708,112 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
         detail: copy('settings.access.transparent.detail'),
         children: [_TransparentCapturePanel(controller: capture, copy: copy)],
       );
+}
+
+/// One numbered step of starting an agent on this Mac.
+final class _AccessStep extends StatelessWidget {
+  const _AccessStep({required this.title, required this.child, super.key});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        child,
+      ],
+    ),
+  );
+}
+
+/// Step 3 on Access and launch: which routing set requests go through, and
+/// the commands that start an agent on it. The built-in set comes first and
+/// stays the default, so a beginner's command is unchanged; the choice
+/// appears only once another routing set is enabled.
+final class _LaunchRoutingChoice extends StatelessWidget {
+  const _LaunchRoutingChoice({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final sets = [
+      for (final environment
+          in controller.data?.environments ?? const <EnvironmentRecord>[])
+        if (environment.state == 'active' && !isBuiltInRoutingSet(environment))
+          environment,
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final chosen = sets
+        .where((environment) => environment.id == controller.launchRoutingSetId)
+        .firstOrNull;
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (sets.isNotEmpty) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: CompactLabeledControl(
+                label: copy('terminal.run.send_through'),
+                child: CompactSelectField<String>(
+                  key: const Key('access-routing-set'),
+                  initialValue: chosen?.id ?? builtInRoutingSetId,
+                  isExpanded: true,
+                  items: [
+                    DropdownMenuItem(
+                      key: const Key('access-routing-set-built-in'),
+                      value: builtInRoutingSetId,
+                      child: Text(copy('terminal.run.builtin_choice')),
+                    ),
+                    for (final environment in sets)
+                      DropdownMenuItem(
+                        key: Key('access-routing-set-${environment.id}'),
+                        value: environment.id,
+                        child: Text(environmentDisplayName(environment, copy)),
+                      ),
+                  ],
+                  onChanged: (value) => controller.setLaunchRoutingSet(
+                    value == builtInRoutingSetId ? null : value,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        LaunchCommandCard(
+          controller: controller,
+          copy: copy,
+          routingSetId: chosen?.id,
+          // Without another routing set to choose, the way to one is Routing.
+          onUseRoutingSet: sets.isEmpty
+              ? () => controller.selectSection(WorkbenchSection.environments)
+              : null,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          sets.isEmpty
+              ? copy('terminal.run.after')
+              : copy.sentences([
+                  copy('terminal.run.after'),
+                  copy('terminal.run.choose_set'),
+                ]),
+          key: const Key('access-launch-detail'),
+          style: muted,
+        ),
+      ],
+    );
+  }
 }
 
 /// The title of a section of Access and launch, with one line under it.

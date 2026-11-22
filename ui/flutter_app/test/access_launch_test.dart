@@ -90,12 +90,13 @@ void main() {
       find.text('In Terminal, go to your project folder and run one of these:'),
       findsOneWidget,
     );
-    // The Codex certificate row sits under the Codex command.
+    // Codex's certificate is its own step, between the command and the
+    // launch commands.
     expect(find.byKey(const Key('access-codex-requirement')), findsOneWidget);
     expect(
       tester.getRect(find.byKey(const Key('access-codex-requirement'))).top,
-      greaterThan(
-        tester.getRect(find.byKey(const Key('managed-run-command-codex'))).top,
+      lessThan(
+        tester.getRect(find.byKey(const Key('managed-run-command-claude'))).top,
       ),
     );
     // Server, browser and proxy details are folded under the other ways.

@@ -4300,11 +4300,28 @@ void main() {
         ),
         findsOneWidget,
       );
+      // The paths follow the set's launch commands and running sessions.
+      final detail = find
+          .descendant(
+            of: find.byKey(const Key('environment-detail-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.text('Anthropic · Lab'),
+        200,
+        scrollable: detail,
+      );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
 
       await tester.binding.setSurfaceSize(const Size(390, 844));
       await tester.pumpAndSettle();
       expect(find.textContaining('Client protocol & origin  →'), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Anthropic · Lab'),
+        200,
+        scrollable: detail,
+      );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -4409,9 +4426,12 @@ void main() {
         find.descendant(of: group, matching: find.text('Anthropic · Lab')),
         findsOneWidget,
       );
-      await tester.tap(
-        find.byKey(const Key('environment-account-activate-anthropic-lab')),
+      final activate = find.byKey(
+        const Key('environment-account-activate-anthropic-lab'),
       );
+      await tester.ensureVisible(activate);
+      await tester.pumpAndSettle();
+      await tester.tap(activate);
       await tester.pumpAndSettle();
 
       final selected = controller.selectedEnvironment!.routes
@@ -4425,9 +4445,12 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(
-        find.byKey(const Key('environment-account-manage-anthropic-direct')),
+      final manage = find.byKey(
+        const Key('environment-account-manage-anthropic-direct'),
       );
+      await tester.ensureVisible(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(manage);
       await tester.pumpAndSettle();
       expect(controller.section, WorkbenchSection.routes);
       expect(controller.selectedEndpointId, 'target.anthropic.official');

@@ -424,6 +424,16 @@ final class WorkbenchController extends ChangeNotifier
   /// Where Access and launch scrolls when it next shows; read once.
   AccessFocus? _pendingAccessFocus;
 
+  /// The routing set chosen under 'Send requests through' on Access and
+  /// launch, kept for this app session; null is the built-in set.
+  String? launchRoutingSetId;
+
+  void setLaunchRoutingSet(String? id) {
+    if (launchRoutingSetId == id) return;
+    launchRoutingSetId = id;
+    notifyListeners();
+  }
+
   /// Where Access and launch should scroll, once.
   AccessFocus? takeAccessFocus() {
     final focus = _pendingAccessFocus;

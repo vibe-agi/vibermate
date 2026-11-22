@@ -157,12 +157,17 @@ final class CodexCertificateRow extends StatelessWidget {
     required this.copy,
     this.narrow = false,
     this.keyPrefix = 'setup',
+    this.explain = true,
     super.key,
   });
 
   final WorkbenchController controller;
   final AppCopy copy;
   final bool narrow;
+
+  /// The line saying only Codex needs it; left out under a heading that
+  /// already says so.
+  final bool explain;
 
   /// Keys the row and its button: '[keyPrefix]-codex-requirement' and
   /// '[keyPrefix]-install-trust'.
@@ -215,13 +220,15 @@ final class CodexCertificateRow extends StatelessWidget {
                 button,
               ],
             ),
-          const SizedBox(height: ViberSpacing.xs),
-          Text(
-            copy('setup.start.codex_requirement'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
+          if (explain) ...[
+            const SizedBox(height: ViberSpacing.xs),
+            Text(
+              copy('setup.start.codex_requirement'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
