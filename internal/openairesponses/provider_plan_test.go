@@ -259,6 +259,25 @@ func TestReasoningReplayKeepsThinkingTurns(t *testing.T) {
 			notices: []string{"reasoning_not_replayed $.messages[1].blocks[0]"},
 		},
 		{name: "keep more turns than exist", edits: []protocolcore.ContextEdit{{Kind: protocolcore.ContextEditClearThinking, KeepThinkingTurns: 5}}, want: []string{"rs_a", "rs_b"}},
+		// With several edits the fewest kept turns apply, in either order.
+		{
+			name: "several edits, fewest last",
+			edits: []protocolcore.ContextEdit{
+				{Kind: protocolcore.ContextEditClearThinking, KeepThinkingTurns: 3},
+				{Kind: protocolcore.ContextEditClearThinking, KeepThinkingTurns: 1},
+			},
+			want:    []string{"rs_b"},
+			notices: []string{"reasoning_not_replayed $.messages[1].blocks[0]"},
+		},
+		{
+			name: "several edits, fewest first",
+			edits: []protocolcore.ContextEdit{
+				{Kind: protocolcore.ContextEditClearThinking, KeepThinkingTurns: 1},
+				{Kind: protocolcore.ContextEditClearThinking, KeepThinkingTurns: 3},
+			},
+			want:    []string{"rs_b"},
+			notices: []string{"reasoning_not_replayed $.messages[1].blocks[0]"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

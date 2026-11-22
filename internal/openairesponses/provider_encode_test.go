@@ -365,6 +365,14 @@ func encodeRows() []encodeRow {
 			notices: []string{"tool_error_flag_encoded $.messages[2].blocks[0].is_error"},
 		},
 		{
+			name: "an error list output that starts with text marks that text",
+			request: toolRow(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,` +
+				`"content":[{"type":"text","text":"boom"},` + pngPart + `]}]}`),
+			want: toolWant(`{"type":"function_call_output","call_id":"toolu_1","output":[{"type":"input_text","text":"Tool error: boom"},` +
+				pngWire + `]}`),
+			notices: []string{"tool_error_flag_encoded $.messages[2].blocks[0].is_error"},
+		},
+		{
 			name: "a mid-conversation system message becomes a developer message in place",
 			request: rowRequest(`"messages":[{"role":"user","content":"hi"},` +
 				`{"role":"system","content":[{"type":"text","text":"# Environment"}],"output_config":{"effort":"medium"}},` +
