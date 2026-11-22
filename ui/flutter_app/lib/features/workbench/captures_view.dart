@@ -42,11 +42,29 @@ final class _CapturesViewState extends State<CapturesView> {
   bool _masterVisible = true;
   double _masterWidth = ViberMetrics.masterPaneWidth;
 
+  /// The session last marked as completing the setup guide. Seeded from the
+  /// controller so returning to Sessions does not open it again.
+  String? _connectedKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _connectedKey = widget.controller.setupConnectedCaptureKey;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 760;
+        final connected = widget.controller.setupConnectedCaptureKey;
+        if (connected != _connectedKey) {
+          _connectedKey = connected;
+          // The guide's first request just arrived. The wide layout opens
+          // its session in place of the guide; at phone width, open it too,
+          // so the Connected notice shows instead of a bare list row.
+          if (connected != null && narrow) _narrowDetail = true;
+        }
         // The setup guide is decided from every loaded session; a filter
         // that matches nothing is a search result, never a fresh install.
         final guideActive =
@@ -800,7 +818,11 @@ final class _CaptureDetail extends StatelessWidget {
       color: context.viberColors.canvas,
       child: Column(
         children: [
-          if (guideActive)
+          // The way back stays while the session opened from the guide
+          // shows its Connected notice, so its header does not jump up the
+          // moment the first request arrives.
+          if (guideActive ||
+              (!showBack && controller.keepsSetupBack(capture.key)))
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),

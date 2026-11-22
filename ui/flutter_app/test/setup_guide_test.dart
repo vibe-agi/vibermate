@@ -326,6 +326,76 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets('at phone width the first request opens its session too', (
+    tester,
+  ) async {
+    final controller = await open(
+      tester,
+      stage: PreviewFreshStage.observed,
+      size: const Size(390, 844),
+    );
+    expect(find.byKey(const Key('setup-guide')), findsOneWidget);
+
+    await controller.refresh();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    final capture = controller.data!.captures.single;
+    expect(controller.selectedCaptureKey, capture.key);
+    // The guide gives way to the session and its notice, not to a bare row.
+    expect(find.byKey(const Key('setup-guide')), findsNothing);
+    expect(find.byKey(const Key('setup-connected-notice')), findsOneWidget);
+    expect(find.textContaining('30 days'), findsOneWidget);
+    expect(find.byTooltip('Back'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(Key('capture-row-${capture.key}')),
+      findsOneWidget,
+      reason: 'the back arrow still returns to the list',
+    );
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('a session opened from the guide keeps its place as it connects', (
+    tester,
+  ) async {
+    final controller = await open(tester, stage: PreviewFreshStage.observed);
+    final capture = controller.data!.captures.single;
+    await tester.tap(find.byKey(Key('capture-row-${capture.key}')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    final back = find.byKey(const Key('setup-back'));
+    expect(back, findsOneWidget);
+    final header = find.byKey(const Key('capture-directory-toggle'));
+    final before = tester.getTopLeft(header);
+
+    await controller.refresh();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.data!.captures.single.observation, 'observed');
+    expect(find.byKey(const Key('setup-connected-notice')), findsOneWidget);
+    expect(back, findsOneWidget);
+    expect(tester.getTopLeft(header), before, reason: 'the header stays put');
+
+    // Going back asks for the guide again, now with every step done.
+    await tester.tap(back);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const Key('setup-guide-pane')), findsOneWidget);
+    expect(inStep('prompt', find.text('Done')), findsOneWidget);
+
+    // Once the notice is dismissed, the session no longer offers the way back.
+    await tester.tap(find.byKey(Key('capture-row-${capture.key}')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const Key('setup-connected-dismiss')));
+    controller.hideSetupGuide();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(back, findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
   testWidgets('Hide guide lasts for the session; Settings shows it again', (
     tester,
   ) async {

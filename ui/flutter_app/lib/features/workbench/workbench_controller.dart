@@ -2605,6 +2605,16 @@ final class WorkbenchController extends ChangeNotifier
   /// the 'Connected' notice until that is dismissed.
   String? setupConnectedCaptureKey;
 
+  /// The connected session, when it was already open from the guide as its
+  /// first request arrived.
+  String? _setupBackCaptureKey;
+
+  /// Whether [captureKey], opened from the guide, keeps its way back to the
+  /// guide while it shows the 'Connected' notice.
+  bool keepsSetupBack(String captureKey) =>
+      _setupBackCaptureKey == captureKey &&
+      setupConnectedCaptureKey == captureKey;
+
   bool? _setupGuideWasEligible;
   bool _selectionChangedForSetup = false;
 
@@ -2650,8 +2660,13 @@ final class WorkbenchController extends ChangeNotifier
     unawaited(refreshSetupFacts());
   }
 
-  /// Leaves the session opened from the guide and shows the guide again.
+  /// Leaves the session opened from the guide and shows the guide again,
+  /// asking for it when its last step has completed meanwhile.
   void backToSetupGuide() {
+    if (!setupGuideEligible) {
+      showSetupGuide();
+      return;
+    }
     if (selectedCaptureKey == null) return;
     selectedCaptureKey = null;
     _resetCaptureDetail();
@@ -4259,6 +4274,9 @@ final class WorkbenchController extends ChangeNotifier
       // The guide's last step just completed: open the session that did it.
       selectedCaptureKey = connected.key;
       setupConnectedCaptureKey = connected.key;
+      _setupBackCaptureKey = connected.key == previousCaptureKey
+          ? connected.key
+          : null;
       _selectionChangedForSetup = connected.key != previousCaptureKey;
     } else if (successor != null) {
       selectedCaptureKey = successor.key;
