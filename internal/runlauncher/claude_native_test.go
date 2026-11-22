@@ -260,29 +260,58 @@ func claudeNativeEnvironment(home string) []string {
 
 func TestInstalledClaudeCompletesATurnThroughLauncher(t *testing.T) {
 	binary := claudeNativeBinary(t)
-	for index, managed := range []bool{false, true} {
-		name := "own_credential"
-		if managed {
-			name = "managed_auth"
-		}
-		t.Run(name, func(t *testing.T) {
+	// stream-json is how Claude Code talks to an editor or SDK, and it asks
+	// for the same thinking display ("updates") as an interactive session,
+	// which the json output mode does not.
+	for index, test := range []struct {
+		name       string
+		managed    bool
+		streamJSON bool
+	}{
+		{name: "own_credential"},
+		{name: "managed_auth", managed: true},
+		{name: "stream_json", streamJSON: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
 			command := []string{"claude", "-p", "Reply with the fixture text", "--output-format", "json"}
-			f := newClaudeNativeFixture(t, binary, home, command, byte(0x41+index*4), managed)
+			if test.streamJSON {
+				command = []string{"claude", "-p", "Reply with the fixture text", "--output-format", "stream-json", "--verbose"}
+			}
+			f := newClaudeNativeFixture(t, binary, home, command, byte(0x41+index*4), test.managed)
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			var stdout, stderr strings.Builder
-			code, err := f.launcher(binary, home, &stdout, &stderr).Run(ctx, runlauncher.LaunchRequest{EnvironmentID: "work", ManagedAuth: managed, Command: command})
-			var result struct {
-				IsError bool   `json:"is_error"`
-				Result  string `json:"result"`
-			}
-			if err != nil || code != 0 || json.Unmarshal([]byte(stdout.String()), &result) != nil || result.IsError || !strings.Contains(result.Result, f.reply) {
+			code, err := f.launcher(binary, home, &stdout, &stderr).Run(ctx, runlauncher.LaunchRequest{EnvironmentID: "work", ManagedAuth: test.managed, Command: command})
+			result, parsed := claudeNativeResult(stdout.String(), test.streamJSON)
+			if err != nil || code != 0 || !parsed || result.IsError || !strings.Contains(result.Result, f.reply) {
 				t.Fatalf("Claude Code turn failed: code=%d err=%v stdout=%s stderr=%s", code, err, stdout.String(), stderr.String())
 			}
 			f.assertWire(t)
 		})
 	}
+}
+
+type claudeNativeTurnResult struct {
+	Type    string `json:"type"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+}
+
+// claudeNativeResult reads the turn's result: the single JSON object of the
+// json output mode, or the "result" event among stream-json's lines.
+func claudeNativeResult(stdout string, streamJSON bool) (claudeNativeTurnResult, bool) {
+	var result claudeNativeTurnResult
+	if !streamJSON {
+		return result, json.Unmarshal([]byte(stdout), &result) == nil
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		var event claudeNativeTurnResult
+		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "result" {
+			return event, true
+		}
+	}
+	return result, false
 }
 
 func (f *claudeNativeFixture) assertWire(t *testing.T) {

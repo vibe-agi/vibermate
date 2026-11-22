@@ -284,13 +284,16 @@ func (codec *Codec) decodeClientRequest(
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
 	}
-	reasoning, output, err := decodeOutputConfiguration(
+	reasoning, output, displayReport, err := decodeOutputConfiguration(
 		wire.Thinking,
 		wire.OutputConfig,
 		mode,
 	)
 	if err != nil {
 		return protocolcore.Request{}, report.Build(), err
+	}
+	if err := protocolcore.AppendReportWithin(&report, displayReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 	contextIntent, err := decodeContextManagement(wire.Context, mode)
 	if err != nil {
@@ -493,6 +496,7 @@ func decodeOutputConfiguration(
 ) (
 	protocolcore.ReasoningIntent,
 	protocolcore.StructuredOutputIntent,
+	protocolcore.TranslationReport,
 	error,
 ) {
 	var intent protocolcore.ReasoningIntent
@@ -502,6 +506,7 @@ func decodeOutputConfiguration(
 		if err := mode.decode(outputConfigRaw, &output); err != nil {
 			return protocolcore.ReasoningIntent{},
 				protocolcore.StructuredOutputIntent{},
+				protocolcore.TranslationReport{},
 				protocolcore.NewFailure(
 					protocolcore.ReasonInvalidClientRequest,
 					"$.output_config",
@@ -513,6 +518,7 @@ func decodeOutputConfiguration(
 			if err := mode.decode(output.Format, &format); err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonInvalidClientRequest,
 						"$.output_config.format",
@@ -522,6 +528,7 @@ func decodeOutputConfiguration(
 			if format.Type != "json_schema" {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonUnsupportedClientInput,
 						"$.output_config.format.type",
@@ -532,6 +539,7 @@ func decodeOutputConfiguration(
 			if err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonInvalidClientRequest,
 						"$.output_config.format.schema",
@@ -555,6 +563,7 @@ func decodeOutputConfiguration(
 		default:
 			return protocolcore.ReasoningIntent{},
 				protocolcore.StructuredOutputIntent{},
+				protocolcore.TranslationReport{},
 				protocolcore.NewFailure(
 					protocolcore.ReasonInvalidClientRequest,
 					"$.output_config.effort",
@@ -566,6 +575,7 @@ func decodeOutputConfiguration(
 			if err := mode.decode(output.TaskBudget, &budget); err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonInvalidClientRequest,
 						"$.output_config.task_budget",
@@ -575,6 +585,7 @@ func decodeOutputConfiguration(
 			if budget.Type != "tokens" || budget.Total <= 0 {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonInvalidClientRequest,
 						"$.output_config.task_budget",
@@ -592,6 +603,7 @@ func decodeOutputConfiguration(
 			if err := intent.TaskBudget.Validate(); err != nil {
 				return protocolcore.ReasoningIntent{},
 					protocolcore.StructuredOutputIntent{},
+					protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
 						protocolcore.ReasonInvalidClientRequest,
 						"$.output_config.task_budget",
@@ -601,12 +613,13 @@ func decodeOutputConfiguration(
 		}
 	}
 	if !rawPresent(thinkingRaw) {
-		return intent, structuredOutput, nil
+		return intent, structuredOutput, protocolcore.TranslationReport{}, nil
 	}
 	var thinking anthropicThinkingWire
 	if err := mode.decode(thinkingRaw, &thinking); err != nil {
 		return protocolcore.ReasoningIntent{},
 			protocolcore.StructuredOutputIntent{},
+			protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
 				"$.thinking",
@@ -623,6 +636,7 @@ func decodeOutputConfiguration(
 	default:
 		return protocolcore.ReasoningIntent{},
 			protocolcore.StructuredOutputIntent{},
+			protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
 				"$.thinking.type",
@@ -632,22 +646,26 @@ func decodeOutputConfiguration(
 	if thinking.BudgetTokens != nil {
 		intent.BudgetTokens = *thinking.BudgetTokens
 	}
+	// Display only chooses how thinking is shown to the client; it never
+	// changes what the model does. An unknown value is therefore declared
+	// and left out rather than refused: a native route forwards the
+	// original bytes anyway, and no other dialect has the setting.
+	var report protocolcore.TranslationReport
 	switch thinking.Display {
 	case "":
 	case "summarized":
 		intent.Display = protocolcore.ThinkingDisplaySummarized
 	case "omitted":
 		intent.Display = protocolcore.ThinkingDisplayOmitted
+	case "updates":
+		intent.Display = protocolcore.ThinkingDisplayUpdates
 	default:
-		return protocolcore.ReasoningIntent{},
-			protocolcore.StructuredOutputIntent{},
-			protocolcore.NewFailure(
-				protocolcore.ReasonInvalidClientRequest,
-				"$.thinking.display",
-				errors.New("thinking display is unsupported"),
-			)
+		report = protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+			Code: protocolcore.NoticeThinkingDisplayNotForwarded,
+			Path: "$.thinking.display",
+		})
 	}
-	return intent, structuredOutput, nil
+	return intent, structuredOutput, report, nil
 }
 
 func (codec *Codec) decodeSystem(

@@ -705,6 +705,9 @@ type ThinkingDisplay string
 const (
 	ThinkingDisplaySummarized ThinkingDisplay = "summarized"
 	ThinkingDisplayOmitted    ThinkingDisplay = "omitted"
+	// ThinkingDisplayUpdates is what Claude Code 2.1.3xx asks for in its
+	// interactive and stream-json modes.
+	ThinkingDisplayUpdates ThinkingDisplay = "updates"
 )
 
 type ReasoningEffort string
@@ -823,7 +826,7 @@ func (intent ReasoningIntent) Validate(maxOutputTokens int) error {
 		return errors.New("reasoning execution mode is unsupported")
 	}
 	switch intent.Display {
-	case "", ThinkingDisplaySummarized, ThinkingDisplayOmitted:
+	case "", ThinkingDisplaySummarized, ThinkingDisplayOmitted, ThinkingDisplayUpdates:
 	default:
 		return errors.New("thinking display is unsupported")
 	}

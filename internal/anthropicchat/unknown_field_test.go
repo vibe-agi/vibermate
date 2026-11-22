@@ -198,3 +198,78 @@ func TestARefusalInsideAFieldNamesTheField(t *testing.T) {
 		t.Fatalf("the refusal does not name the field: %v", err)
 	}
 }
+
+// Claude Code 2.1.3xx asks for thinking display "updates" in its interactive
+// and stream-json modes. Refusing it failed every such request on the native
+// Anthropic route and on the translated route alike.
+func TestThinkingDisplayUpdatesIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	codec, err := anthropicchat.New(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"model":"claude-opus-5-5","max_tokens":64,"thinking":{"type":"adaptive","display":"updates"},"messages":[{"role":"user","content":"hi"}]}`)
+	for name, decode := range map[string]func([]byte) (protocolcore.Request, protocolcore.TranslationReport, error){
+		"translated": codec.DecodeClientRequest,
+		"native":     codec.DecodeCompatibleClientRequest,
+	} {
+		decoded, _, err := decode(body)
+		if err != nil {
+			t.Fatalf("%s route refused display updates: %v", name, err)
+		}
+		if decoded.Reasoning.Display != protocolcore.ThinkingDisplayUpdates {
+			t.Fatalf("%s route display = %q", name, decoded.Reasoning.Display)
+		}
+	}
+	decoded, _, err := codec.DecodeClientRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, report, err := codec.EncodeProviderRequest(decoded); err != nil {
+		t.Fatalf("a translated request with display updates did not encode: %v", err)
+	} else if !hasNotice(report, protocolcore.NoticeThinkingDisplayNotForwarded, "$.thinking.display") {
+		t.Fatalf("the translated route did not declare the dropped display: %+v", report.Notices())
+	}
+}
+
+// Display only chooses how thinking is shown to the client, so a value a
+// newer client invents is declared and left out instead of refusing the turn.
+func TestAnUnknownThinkingDisplayIsDeclaredNotRefused(t *testing.T) {
+	t.Parallel()
+
+	codec, err := anthropicchat.New(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"model":"claude-opus-5-5","max_tokens":64,"thinking":{"type":"adaptive","display":"a-future-mode"},"messages":[{"role":"user","content":"hi"}]}`)
+	for name, decode := range map[string]func([]byte) (protocolcore.Request, protocolcore.TranslationReport, error){
+		"translated": codec.DecodeClientRequest,
+		"native":     codec.DecodeCompatibleClientRequest,
+	} {
+		decoded, report, err := decode(body)
+		if err != nil {
+			t.Fatalf("%s route refused an unknown display: %v", name, err)
+		}
+		if decoded.Reasoning.Display != "" || decoded.Reasoning.Thinking != protocolcore.ThinkingModeAdaptive {
+			t.Fatalf("%s route reasoning = %+v", name, decoded.Reasoning)
+		}
+		if !hasNotice(report, protocolcore.NoticeThinkingDisplayNotForwarded, "$.thinking.display") {
+			t.Fatalf("%s route did not declare the unknown display: %+v", name, report.Notices())
+		}
+	}
+	// An unknown thinking type still changes what the model does, so it is
+	// still refused.
+	if _, _, err := codec.DecodeClientRequest([]byte(`{"model":"m","max_tokens":8,"thinking":{"type":"a-future-mode"},"messages":[{"role":"user","content":"hi"}]}`)); err == nil {
+		t.Fatal("an unknown thinking type was accepted")
+	}
+}
+
+func hasNotice(report protocolcore.TranslationReport, code protocolcore.NoticeCode, path string) bool {
+	for _, notice := range report.Notices() {
+		if notice.Code == code && notice.Path == path {
+			return true
+		}
+	}
+	return false
+}
