@@ -18,6 +18,11 @@ final class AppCopy {
     return value ?? '';
   }
 
+  /// Sentences from separate keys as one text: Chinese runs them together
+  /// after its full stops, other languages put a space between them.
+  String sentences(Iterable<String> values) =>
+      values.join(identical(_values, _zh) ? '' : ' ');
+
   String format(String key, Map<String, Object> values) {
     var result = call(key);
     for (final entry in values.entries) {
@@ -839,7 +844,7 @@ final class AppCopy {
     'setup.status.failed': 'Didn\'t start',
     'setup.command.title': 'Set up the vibermate command',
     'setup.command.detail':
-        'Adds the vibermate command for Terminal (in ~/.local/bin). Nothing else on your Mac changes.',
+        'Adds the vibermate command for Terminal (in ~/\u2060.local/\u2060bin). Nothing else on your Mac changes.',
     'setup.command.open_settings': 'Open Terminal settings',
     'setup.start.title': 'Start Claude Code or Codex',
     'setup.start.detail':
@@ -912,7 +917,6 @@ final class AppCopy {
     'capture.state.revoked': 'Revoked',
     'capture.state.expired': 'Expired',
     'capture.client.version_unknown': 'Version unknown',
-    'capture.client.version_unreported': 'Client version not reported',
     'capture.client.version_reported': 'client-reported',
     'capture.client.version': 'Version {version}',
     'capture.client.version_title': 'Agent version',
@@ -3421,7 +3425,7 @@ final class AppCopy {
     'notice.manual_capture.revoked':
         'Proxy login revoked. Conversation and Activity evidence were retained.',
     'notice.manual_capture.created':
-        'App connected with its own proxy login. Its requests appear here once it uses the proxy.',
+        'Proxy login created. The app\'s requests appear here once it uses the proxy.',
     'notice.manual_capture.rotated':
         'Proxy credential rotated. Conversation and Activity evidence were retained.',
     'notice.network.approval_allowed':
@@ -4099,7 +4103,7 @@ final class AppCopy {
     'setup.status.failed': '未启动',
     'setup.command.title': '设置 vibermate 命令',
     'setup.command.detail':
-        '为终端添加 vibermate 命令（位于 ~/.local/bin），不会改动这台 Mac 上的其他内容。',
+        '为终端添加 vibermate 命令（位于 ~/\u2060.local/\u2060bin），不会改动这台 Mac 上的其他内容。',
     'setup.command.open_settings': '打开终端设置',
     'setup.start.title': '启动 Claude Code 或 Codex',
     'setup.start.detail': '在终端中进入项目目录，运行下面任一命令。使用 Agent 期间请保持 ViberMate 打开。',
@@ -4157,7 +4161,6 @@ final class AppCopy {
     'capture.state.revoked': '已撤销',
     'capture.state.expired': '已过期',
     'capture.client.version_unknown': '版本未知',
-    'capture.client.version_unreported': '客户端未报告版本',
     'capture.client.version_reported': '客户端自报',
     'capture.client.version': '版本 {version}',
     'capture.client.version_title': 'Agent 版本',

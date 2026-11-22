@@ -3411,7 +3411,7 @@ void main() {
       expect(find.text('Browser Lab'), findsWidgets);
       expect(
         find.text(
-          'App connected with its own proxy login. Its requests appear here once it uses the proxy.',
+          "Proxy login created. The app's requests appear here once it uses the proxy.",
         ),
         findsOneWidget,
       );

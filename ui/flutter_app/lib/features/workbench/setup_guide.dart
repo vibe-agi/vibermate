@@ -251,7 +251,7 @@ String cannotConnectDetail(
   final versions = client == null
       ? null
       : controller.supportedClientVersions(client);
-  return [
+  return copy.sentences([
     copy.format('capture.cannot_connect.detail', {
       'agent': capture.displayName,
     }),
@@ -259,7 +259,7 @@ String cannotConnectDetail(
       copy.format('capture.cannot_connect.versions', {
         'versions': versions.join(', '),
       }),
-  ].join(' ');
+  ]);
 }
 
 /// The first-run guide on the empty Sessions screen: the steps to connect

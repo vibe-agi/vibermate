@@ -484,11 +484,11 @@ final class _CaptureMaster extends StatelessWidget {
                           title: copy.format('capture.search.no_match', {
                             'filter': filter.trim(),
                           }),
-                          detail: [
+                          detail: copy.sentences([
                             copy('capture.search.hint'),
                             if (controller.data?.captureNextCursor != null)
                               copy('capture.search.load_hint'),
-                          ].join(' '),
+                          ]),
                           action: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -2928,14 +2928,6 @@ final class _ManualCaptureCreateDialogState
                           },
                   ),
                 ),
-                if (_environmentId == builtInRoutingSetId) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    copy('environment.builtin.description'),
-                    key: const Key('manual-capture-environment-description'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
                 const SizedBox(height: 9),
                 CompactLabeledControl(
                   label: copy('capture.manual.client_class'),

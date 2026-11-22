@@ -162,10 +162,13 @@ void main() {
       ),
       findsOneWidget,
     );
+    // The set's --env description is about agents; the review panel below
+    // already says what it does for an app.
     expect(
       find.byKey(const Key('manual-capture-environment-description')),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.textContaining('原样转发：请求原样发往应用自己选择的服务'), findsOneWidget);
     expect(find.text('System Transparent'), findsNothing);
     expect(tester.takeException(), isNull);
     await close(tester, controller);
