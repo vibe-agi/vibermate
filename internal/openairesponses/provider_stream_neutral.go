@@ -169,10 +169,13 @@ type translatedStream struct {
 	// when its own output is empty.
 	output       map[int]json.RawMessage
 	notification *protocolcore.Failure
-	terminal     bool
-	progress     uint64
-	failed       bool
-	finished     bool
+	// cutOff is the path of the first function call the stream completed
+	// unfinished, which only an incomplete terminal may hold.
+	cutOff   string
+	terminal bool
+	progress uint64
+	failed   bool
+	finished bool
 }
 
 func (stream *translatedStream) Feed(_ context.Context, fragment []byte) ([]byte, error) {
@@ -716,6 +719,14 @@ func (stream *translatedStream) completeItem(index int, raw json.RawMessage, liv
 			return err
 		}
 	case streamItemFunctionCall:
+		if normalized.cutOff {
+			// Nothing of it reaches the client; the terminal must say the
+			// response ended incomplete (finishResponse checks).
+			if stream.cutOff == "" {
+				stream.cutOff = path
+			}
+			break
+		}
 		if err := live.add(stream.assembler.ToolCall(key, normalized.blocks[0].ToolCall)); err != nil {
 			return err
 		}
@@ -745,7 +756,8 @@ func (stream *translatedStream) completeItem(index int, raw json.RawMessage, liv
 // Assembler, which checks it against every streamed block in both
 // directions. An item the terminal holds but the stream never completed,
 // such as a message cut off by an incomplete terminal, is completed from the
-// snapshot first, so its open block closes with its final text.
+// snapshot first, so its open block closes with its final text; a function
+// call cut off the same way is dropped and declared.
 func (stream *translatedStream) finishResponse(event streamEvent, live *clientBytes) error {
 	if !rawPresent(event.Response) {
 		return malformedEvent("$.response", "Responses terminal event is invalid")
@@ -771,6 +783,11 @@ func (stream *translatedStream) finishResponse(event streamEvent, live *clientBy
 		if err := stream.completeItem(index, raw, live); err != nil {
 			return err
 		}
+	}
+	// A call the stream completed unfinished may be missing from a terminal
+	// output that the normaliser checked, so it is checked here too.
+	if stream.cutOff != "" && !endedIncomplete(response.StopReason) {
+		return cutOffCallError(stream.cutOff)
 	}
 	for _, notice := range notices {
 		stream.assembler.Notice(notice)

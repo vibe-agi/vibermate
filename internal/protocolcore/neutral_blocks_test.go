@@ -382,7 +382,7 @@ func TestNewNoticeCodesAreDistinct(t *testing.T) {
 		NoticeDeferredToolNotForwarded, NoticeReasoningNotReplayed, NoticeMediaNotForwarded,
 		NoticeDocumentConverted, NoticeStructuredOutputNameSynthesized, NoticeMessagePhaseInferred,
 		NoticePromptCacheKeyDerived, NoticeSystemRoleNormalized, NoticeHostedOutputNotForwarded,
-		NoticeRefusalRenderedAsText, NoticeStopReasonApproximated,
+		NoticeIncompleteToolCallNotForwarded, NoticeRefusalRenderedAsText, NoticeStopReasonApproximated,
 		// Existing codes the new sides reuse.
 		NoticeCacheControlNotForwarded, NoticeReasoningContentNotForwarded, NoticeCitationsNotForwarded,
 		NoticeToolItemIdentityNotForwarded, NoticeUnknownRequestFieldNotForwarded,

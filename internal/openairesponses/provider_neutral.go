@@ -49,9 +49,12 @@ func (side *ProviderSide) newOutputNormalizer(providerContext protocolpath.Provi
 }
 
 // normalizedItem is one output item as neutral blocks, with what it lost.
+// cutOff marks a function call that never completed: it has no block, and
+// only an incomplete terminal may hold one.
 type normalizedItem struct {
 	blocks  []protocolcore.ContentBlock
 	notices []protocolcore.TranslationNotice
+	cutOff  bool
 }
 
 type translatedReasoningWire struct {
@@ -102,9 +105,18 @@ func (normalizer outputNormalizer) item(raw json.RawMessage, path string) (norma
 	case "message":
 		return normalizer.message(raw, path)
 	case "function_call":
-		call, err := normalizer.functionCall(raw, path)
+		call, cutOff, err := normalizer.functionCall(raw, path)
 		if err != nil {
 			return normalizedItem{}, err
+		}
+		if cutOff {
+			// Its arguments stopped mid-way, so it cannot run. Dropping it
+			// lets the turn end with the terminal's stop reason (max_tokens
+			// for the output limit), whose recovery the client knows.
+			return normalizedItem{cutOff: true, notices: []protocolcore.TranslationNotice{{
+				Code: protocolcore.NoticeIncompleteToolCallNotForwarded,
+				Path: path,
+			}}}, nil
 		}
 		block, err := protocolcore.NewToolCallBlock(call)
 		if err != nil {
@@ -250,28 +262,52 @@ func annotated(raw json.RawMessage) bool {
 // functionCall normalises a completed function call. Its arguments must be
 // one JSON object within the tool JSON bound, and its name must be one the
 // body declared: it is mapped back to the client's name, and anything else
-// fails closed, since the client could not have offered that tool.
-func (normalizer outputNormalizer) functionCall(raw json.RawMessage, path string) (protocolcore.ToolCall, error) {
+// fails closed, since the client could not have offered that tool. A call
+// still in progress or incomplete is reported as cut off, with nothing else
+// checked: the terminal decides whether that is allowed.
+func (normalizer outputNormalizer) functionCall(raw json.RawMessage, path string) (call protocolcore.ToolCall, cutOff bool, err error) {
 	var wire providerFunctionCallWire
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return protocolcore.ToolCall{}, invalidProvider(path, err)
+		return protocolcore.ToolCall{}, false, invalidProvider(path, err)
 	}
-	if wire.Status != "" && wire.Status != "completed" {
-		return protocolcore.ToolCall{}, invalidProvider(path+".status", errors.New("function call is incomplete"))
+	switch wire.Status {
+	case "", "completed":
+	case "in_progress", "incomplete":
+		return protocolcore.ToolCall{}, true, nil
+	default:
+		return protocolcore.ToolCall{}, false, invalidProvider(path+".status", errors.New("function call status is invalid"))
 	}
 	name, declared := normalizer.toolNames[wire.Name]
 	if wire.Namespace != "" || !declared {
-		return protocolcore.ToolCall{}, invalidProvider(path+".name", errors.New("function call names a tool the request did not declare"))
+		return protocolcore.ToolCall{}, false, invalidProvider(path+".name", errors.New("function call names a tool the request did not declare"))
 	}
 	arguments, err := protocolcore.NewJSONObject([]byte(wire.Arguments), protocolcore.MaxToolJSONBytes)
 	if err != nil {
-		return protocolcore.ToolCall{}, invalidProvider(path+".arguments", err)
+		return protocolcore.ToolCall{}, false, invalidProvider(path+".arguments", err)
 	}
-	call, err := newToolCall(protocolcore.ToolKindFunction, wire.ID, wire.CallID, "", name, arguments, "")
+	call, err = newToolCall(protocolcore.ToolKindFunction, wire.ID, wire.CallID, "", name, arguments, "")
 	if err != nil {
-		return protocolcore.ToolCall{}, invalidProvider(path, err)
+		return protocolcore.ToolCall{}, false, invalidProvider(path, err)
 	}
-	return call, nil
+	return call, false, nil
+}
+
+// cutOffCallError refuses a function call that never completed in a
+// response that did not end incomplete: such a call was not cut off by a
+// limit, so the response is inconsistent.
+func cutOffCallError(path string) error {
+	return invalidProvider(path+".status", errors.New("function call is incomplete"))
+}
+
+// endedIncomplete reports a stop reason only an incomplete terminal gives,
+// the only kind that may leave a function call unfinished.
+func endedIncomplete(reason protocolcore.StopReason) bool {
+	switch reason {
+	case protocolcore.StopReasonMaxTokens, protocolcore.StopReasonRefusal, protocolcore.StopReasonIncomplete:
+		return true
+	default:
+		return false
+	}
 }
 
 // terminal normalises a Responses terminal response object. When its output
@@ -310,10 +346,15 @@ func (normalizer outputNormalizer) terminal(
 		)
 	}
 	blocks := make([]protocolcore.ContentBlock, 0, len(wire.Output))
+	cutOff := ""
 	for index, raw := range wire.Output {
-		item, err := normalizer.item(raw, fmt.Sprintf("$.output[%d]", index))
+		path := fmt.Sprintf("$.output[%d]", index)
+		item, err := normalizer.item(raw, path)
 		if err != nil {
 			return protocolcore.Response{}, nil, nil, err
+		}
+		if item.cutOff && cutOff == "" {
+			cutOff = path
 		}
 		blocks = append(blocks, item.blocks...)
 		notices = append(notices, item.notices...)
@@ -321,6 +362,9 @@ func (normalizer outputNormalizer) terminal(
 	stopReason, err := translatedStopReason(wire, blocks)
 	if err != nil {
 		return protocolcore.Response{}, nil, nil, err
+	}
+	if cutOff != "" && !endedIncomplete(stopReason) {
+		return protocolcore.Response{}, nil, nil, cutOffCallError(cutOff)
 	}
 	usage, usageNotices, err := translatedUsage(wire.Usage)
 	if err != nil {
