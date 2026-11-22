@@ -24,3 +24,22 @@ type ClientStreamEncoder interface {
 	Terminal(protocolcore.Response) ([]byte, error)
 	TranslationReport() protocolcore.TranslationReport
 }
+
+// ReasoningStreamEncoder is an optional client-encoder capability, found by
+// type assertion like SourceRequestEncoder. Without it, reasoning stays only
+// in the terminal response.
+type ReasoningStreamEncoder interface {
+	StartReasoning(index int) ([]byte, error)
+	AppendReasoning(index int, text string) ([]byte, error)
+	// StopReasoning writes the reasoning's replay state (for Anthropic, the
+	// signature) and then closes the block.
+	StopReasoning(index int, value protocolcore.Reasoning) ([]byte, error)
+}
+
+// RefusalStreamEncoder is an optional client-encoder capability. Without it,
+// a refusal is rendered as a text block.
+type RefusalStreamEncoder interface {
+	StartRefusal(index int) ([]byte, error)
+	AppendRefusal(index int, text string) ([]byte, error)
+	StopRefusal(index int) ([]byte, error)
+}
