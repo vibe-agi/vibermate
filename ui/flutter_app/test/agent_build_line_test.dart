@@ -81,10 +81,13 @@ void main() {
       tester,
       client: PreviewFreshClient.recognized,
     );
+    // The Runtime records a version only for a verified release, and its
+    // only client-reported version attribute is Codex's.
+    expect(controller.data!.captures.single.managedRun!.clientAdapter, isNull);
     await openRun(tester, controller);
     expect(
       line(tester).data,
-      'Version 2.1.329 · Official build, not yet listed',
+      'Version unknown · Official build, not yet listed',
     );
     final context = tester.element(
       find.byKey(const Key('capture-client-line')),
@@ -181,7 +184,7 @@ void main() {
       language: AppLanguage.simplifiedChinese,
     );
     await openRun(tester, controller);
-    expect(line(tester).data, '版本 2.1.329 · 官方构建，尚未收录');
+    expect(line(tester).data, '版本未知 · 官方构建，尚未收录');
     await close(tester, controller);
   });
 

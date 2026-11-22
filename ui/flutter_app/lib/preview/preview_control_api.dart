@@ -546,7 +546,6 @@ final class PreviewControlApi
           recognition = 'verified';
         case PreviewFreshClient.recognized:
           recognition = 'recognized';
-          version ??= codex ? '0.171.0' : '2.1.329';
         case PreviewFreshClient.unverified:
           recognition = 'unverified';
       }
@@ -577,16 +576,16 @@ final class PreviewControlApi
             ? '/opt/homebrew/bin/codex'
             : '/Users/mira/.local/bin/claude',
         recognition: recognition,
-        clientAdapter: recognition == 'unverified' && version == null
+        // Like the Runtime, only a verified release has an adapter, and
+        // with it a version; a signed or unchecked build has neither.
+        clientAdapter: recognition != 'verified'
             ? null
             : CaptureClientAdapter(
                 id: codex ? 'codex-cli' : 'claude-code',
                 revision: 1,
                 version: version ?? (codex ? '0.145.0' : '2.1.220'),
                 catalogRevision: 1,
-                source: recognition == 'recognized'
-                    ? 'publisher_signature'
-                    : 'prelaunch_digest_catalog',
+                source: 'prelaunch_digest_catalog',
                 installShape: codex
                     ? 'npm_wrapper_native_child'
                     : 'native_single_binary',
