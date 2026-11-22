@@ -65,13 +65,32 @@ type reasoningFacts struct {
 	sealed     bool
 }
 
+// writeString hashes a string through a small buffer: SHA-256 has no
+// WriteString, and converting a long final text to bytes would copy it.
+func writeString(digest hash.Hash, value string) {
+	var chunk [4096]byte
+	for value != "" {
+		count := copy(chunk[:], value)
+		_, _ = digest.Write(chunk[:count])
+		value = value[count:]
+	}
+}
+
+func sumString(value string) [32]byte {
+	digest := sha256.New()
+	writeString(digest, value)
+	var sum [32]byte
+	copy(sum[:], digest.Sum(nil))
+	return sum
+}
+
 func factsOf(reasoning protocolcore.Reasoning) reasoningFacts {
 	source := reasoning.TextSource
 	if source == protocolcore.ReasoningTextSummary {
 		source = ""
 	}
 	facts := reasoningFacts{
-		text: sha256.Sum256([]byte(reasoning.Text)), textBytes: len(reasoning.Text),
+		text: sumString(reasoning.Text), textBytes: len(reasoning.Text),
 		textSource: source, redacted: reasoning.Redacted, sealed: !reasoning.Seal.IsZero(),
 	}
 	if facts.sealed {
@@ -492,7 +511,7 @@ func (assembler *Assembler) appendText(block *assembledBlock, text string, live 
 
 // stream records visible text in the block's running digest and sends it.
 func (assembler *Assembler) stream(block *assembledBlock, text string, live *bytes.Buffer) error {
-	_, _ = block.streamed.Write([]byte(text))
+	writeString(block.streamed, text)
 	block.streamedBytes += len(text)
 	return assembler.appendText(block, text, live)
 }
@@ -503,7 +522,7 @@ func (assembler *Assembler) repair(block *assembledBlock, final string, live *by
 	if block.streamedBytes > len(final) {
 		return assemblerViolation("streamed text is longer than its final value")
 	}
-	prefix := sha256.Sum256([]byte(final[:block.streamedBytes]))
+	prefix := sumString(final[:block.streamedBytes])
 	if !bytes.Equal(prefix[:], block.streamed.Sum(nil)) {
 		return assemblerViolation("streamed text is not a prefix of its final value")
 	}
@@ -665,7 +684,7 @@ func (assembler *Assembler) matchTerminal(response protocolcore.Response) error 
 
 func (block *assembledBlock) matches(terminal protocolcore.ContentBlock) bool {
 	text := func(value string) bool {
-		return len(value) == block.length && sha256.Sum256([]byte(value)) == block.digest
+		return len(value) == block.length && sumString(value) == block.digest
 	}
 	switch block.kind {
 	case assembledText:
