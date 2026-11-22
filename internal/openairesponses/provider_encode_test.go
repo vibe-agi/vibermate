@@ -575,10 +575,17 @@ func rowBody(t testing.TB, request string) []byte {
 	return []byte(request)
 }
 
-func encodeRowBody(t testing.TB, row encodeRow) ([]byte, protocolcore.TranslationReport) {
+// rowNeutralRequest is the neutral request a row's Claude body decodes to.
+func rowNeutralRequest(t testing.TB, row encodeRow) protocolcore.Request {
 	t.Helper()
 	request := decodeClaude(t, rowBody(t, row.request))
 	request.ProtocolEvidence = row.evidence
+	return request
+}
+
+func encodeRowBody(t testing.TB, row encodeRow) ([]byte, protocolcore.TranslationReport) {
+	t.Helper()
+	request := rowNeutralRequest(t, row)
 	context := protocolpath.ProviderContext{}
 	if row.context != nil {
 		context = *row.context
