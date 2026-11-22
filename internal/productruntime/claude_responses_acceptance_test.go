@@ -308,26 +308,36 @@ func (run *claudeAcceptanceRun) claude(t *testing.T, ctx context.Context, binary
 
 // A0 proves the harness on the existing Anthropic to Chat pair before any new
 // code: the proxy, Root delivery without recognition, the placeholder token,
-// the managed account and the private transport.
+// the managed account and the private transport. It runs both output modes:
+// --output-format json sends thinking display "omitted", stream-json sends
+// "updates".
 func testInstalledClaudeBaselineOnChat(t *testing.T, binary string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	upstream := &claudeAcceptanceUpstream{t: t}
 	run := newClaudeAcceptanceRun(t, ctx, binary, environment.ClientProtocolOpenAIChat, upstream.serveChat, upstream)
-	// --output-format json sends display "omitted", which every release of
-	// the Anthropic decoder accepts; stream-json waits for the display fix.
-	stdout, stderr, err := run.claude(t, ctx, binary, []string{"-p", "Reply with the fixture text", "--output-format", "json"})
-	var result struct {
-		IsError    bool                       `json:"is_error"`
-		Result     string                     `json:"result"`
-		ModelUsage map[string]json.RawMessage `json:"modelUsage"`
-	}
-	if err != nil || json.Unmarshal([]byte(stdout), &result) != nil || result.IsError || !strings.Contains(result.Result, claudeAcceptanceReply) {
-		t.Fatalf("Claude Code turn failed: err=%v stdout=%s stderr=%s", err, stdout, stderr)
-	}
-	for model := range result.ModelUsage {
-		if !strings.HasPrefix(model, "claude-") {
-			t.Errorf("Claude Code reported upstream model %q instead of the Claude model it asked for", model)
+	for _, mode := range [][]string{{"--output-format", "json"}, {"--output-format", "stream-json", "--verbose"}} {
+		upstream.mu.Lock()
+		before := len(upstream.requests)
+		upstream.mu.Unlock()
+		stdout, stderr, err := run.claude(t, ctx, binary, append([]string{"-p", "Reply with the fixture text"}, mode...))
+		result, parsed := claudeAcceptanceResult(stdout)
+		if err != nil || !parsed || result.IsError || !strings.Contains(result.Result, claudeAcceptanceReply) {
+			t.Fatalf("Claude Code turn %v failed: err=%v stdout=%s stderr=%s", mode, err, stdout, stderr)
+		}
+		if len(result.ModelUsage) == 0 {
+			t.Errorf("Claude Code %v reported no model usage", mode)
+		}
+		for model := range result.ModelUsage {
+			if !strings.HasPrefix(model, "claude-") {
+				t.Errorf("Claude Code reported upstream model %q instead of the Claude model it asked for", model)
+			}
+		}
+		upstream.mu.Lock()
+		after := len(upstream.requests)
+		upstream.mu.Unlock()
+		if after == before {
+			t.Errorf("Claude Code %v sent no Chat request", mode)
 		}
 	}
 	task7Must(t, run.fixture.pipeline.Drain(ctx))
@@ -340,6 +350,9 @@ func testInstalledClaudeBaselineOnChat(t *testing.T, binary string) {
 	t.Logf("upstream requests=%v other=%v", paths, upstream.other)
 	if len(upstream.requests) == 0 {
 		t.Fatal("no Chat request reached the fake upstream")
+	}
+	if len(upstream.other) != 0 {
+		t.Errorf("Claude Code reached the provider outside chat completions: %v", upstream.other)
 	}
 	mapped := map[string]bool{}
 	for _, mapping := range claudeAcceptanceModels {
@@ -362,4 +375,29 @@ func testInstalledClaudeBaselineOnChat(t *testing.T, binary string) {
 			t.Errorf("request %d asked for model %q, not a mapped one (%v)", index, body.Model, err)
 		}
 	}
+}
+
+// claudeAcceptanceTurn is the result Claude Code prints at the end of a -p
+// turn: the whole output with --output-format json, the last "result" line
+// with stream-json.
+type claudeAcceptanceTurn struct {
+	Type       string                     `json:"type"`
+	IsError    bool                       `json:"is_error"`
+	Result     string                     `json:"result"`
+	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
+}
+
+func claudeAcceptanceResult(stdout string) (claudeAcceptanceTurn, bool) {
+	var result claudeAcceptanceTurn
+	if json.Unmarshal([]byte(stdout), &result) == nil {
+		return result, result.Type == "result"
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		result = claudeAcceptanceTurn{}
+		if json.Unmarshal([]byte(lines[index]), &result) == nil && result.Type == "result" {
+			return result, true
+		}
+	}
+	return claudeAcceptanceTurn{}, false
 }
