@@ -2685,6 +2685,9 @@ final class WorkbenchController extends ChangeNotifier
     setupGuideHidden = false;
     _setupGuideRequested = true;
     _setupGuideWasEligible = true;
+    // Leaving Settings forgets where a link into Access and launch pointed.
+    remoteConnectionGuideRequested = false;
+    _pendingAccessFocus = null;
     section = WorkbenchSection.captures;
     operationNotice = null;
     if (selectedCaptureKey != null) {
@@ -3163,11 +3166,6 @@ final class WorkbenchController extends ChangeNotifier
     terminalCommand = _withShellCheck(current);
     notifyListeners();
   }
-
-  /// A `vibermate run` launch reached this Runtime, which proves Terminal
-  /// found the command, however it was typed.
-  bool get launchedFromTerminal =>
-      data?.captures.any((capture) => capture.kind == 'managed_run') ?? false;
 
   // Once per App startup, maintain only an existing receipt-owned link.
   // Never install a new command or replace a package-manager/user-owned file.

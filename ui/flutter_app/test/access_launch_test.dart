@@ -187,6 +187,10 @@ void main() {
     controller.openAccessSettings();
     await settle(tester);
     expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+    // So does going back to the setup guide from Settings.
+    controller.openAccessSettings(focus: AccessFocus.remote);
+    controller.showSetupGuide();
+    expect(controller.remoteConnectionGuideRequested, isFalse);
     await close(tester, controller);
   });
 

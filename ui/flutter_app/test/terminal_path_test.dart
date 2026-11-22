@@ -92,14 +92,31 @@ void main() {
       expect(check.lookup, ShellCommandLookup.found);
     });
 
-    test('a slow profile times out as unknown', () async {
+    test('a slow profile times out as unknown, on time', () async {
       final shell = fakeShell('zsh', 'sleep 5; echo "$target"');
+      final clock = Stopwatch()..start();
       final check = await LoginShellProbe(
         environment: {'SHELL': shell},
         timeout: const Duration(milliseconds: 200),
       ).check(target);
       expect(check.lookup, ShellCommandLookup.unknown);
+      // The orphaned sleep still holds the pipe; the check does not wait.
+      expect(clock.elapsed, lessThan(const Duration(seconds: 3)));
     });
+
+    test(
+      'a process the profile leaves running does not hold the check',
+      () async {
+        final shell = fakeShell('zsh', 'sleep 30 & echo "$target"');
+        final clock = Stopwatch()..start();
+        final check = await LoginShellProbe(
+          environment: {'SHELL': shell},
+          timeout: const Duration(seconds: 1),
+        ).check(target);
+        expect(check.lookup, ShellCommandLookup.found);
+        expect(clock.elapsed, lessThan(const Duration(seconds: 5)));
+      },
+    );
 
     test('no SHELL means the check cannot run', () async {
       final check = await const LoginShellProbe(environment: {}).check(target);
@@ -358,6 +375,12 @@ void main() {
       );
       await controller.refreshTerminalCommand(checkShell: true);
       expect(service.checks, checks + 1);
+      // Coming back to the window asks again: the person may have fixed
+      // their PATH in Terminal meanwhile.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(service.checks, checks + 2);
       await close(tester, controller);
     });
   });

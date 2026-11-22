@@ -172,6 +172,8 @@ final class LoginShellProbe {
   /// The App's environment; [Platform.environment] when null.
   final Map<String, String>? environment;
 
+  static const _maximumOutputBytes = 16 * 1024;
+
   Future<ShellCommandCheck> check(String targetPath) async {
     final shell = (environment ?? Platform.environment)['SHELL'];
     if (shell == null || !shell.startsWith('/')) {
@@ -195,27 +197,55 @@ final class LoginShellProbe {
     } on Object {
       // A shell that already exited has nothing to read from stdin anyway.
     }
-    final output = PackagedTerminalCommandService._collectBounded(
-      process.stdout,
-      allowEmpty: true,
+    // The whole check, reading included, fits in [timeout]: a process the
+    // profile left running may hold the pipes open long after the shell
+    // exits, so only what arrived in time is read.
+    final clock = Stopwatch()..start();
+    Duration remaining() {
+      final left = timeout - clock.elapsed;
+      return left.isNegative ? Duration.zero : left;
+    }
+
+    final bytes = BytesBuilder(copy: false);
+    var length = 0;
+    final closed = Completer<void>();
+    void finish([Object? _]) {
+      if (!closed.isCompleted) closed.complete();
+    }
+
+    final stdout = process.stdout.listen(
+      (chunk) {
+        length += chunk.length;
+        if (length <= _maximumOutputBytes) bytes.add(chunk);
+      },
+      onDone: finish,
+      onError: finish,
+      cancelOnError: true,
     );
-    final ignored = process.stderr.drain<void>();
-    int exitCode;
+    final stderr = process.stderr.listen((_) {}, onError: (_) {});
+    int? exitCode;
     try {
-      exitCode = await process.exitCode.timeout(timeout);
+      exitCode = await process.exitCode.timeout(remaining());
     } on TimeoutException {
       process.kill(ProcessSignal.sigkill);
-      await PackagedTerminalCommandService._ignoreFailure(output);
-      await PackagedTerminalCommandService._ignoreFailure(ignored);
+    }
+    try {
+      // Output written before the shell exited is already on its way.
+      await closed.future.timeout(
+        remaining() + const Duration(milliseconds: 100),
+      );
+    } on TimeoutException {
+      // A lingering child holds the pipe; what arrived is enough.
+    }
+    await stdout.cancel();
+    await stderr.cancel();
+    if (exitCode == null || length > _maximumOutputBytes) {
       return ShellCommandCheck(ShellCommandLookup.unknown, shell: name);
     }
     String last;
     try {
-      final text = const Utf8Decoder(
-        allowMalformed: true,
-      ).convert(await output);
-      await PackagedTerminalCommandService._ignoreFailure(ignored);
-      last = text
+      last = const Utf8Decoder(allowMalformed: true)
+          .convert(bytes.takeBytes())
           .split('\n')
           .map((line) => line.trim())
           .lastWhere((line) => line.isNotEmpty, orElse: () => '');
