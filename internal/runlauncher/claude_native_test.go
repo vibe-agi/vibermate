@@ -42,8 +42,10 @@ type claudeNativeRequest struct {
 	path, authorization, apiKey, proxyAuthorization, encoding, codecErr string
 	body                                                                []byte
 	// decoded is the production same-dialect decode of the body; it is the
-	// zero value when the codec refused the request (codecErr says why).
-	decoded protocolcore.Request
+	// zero value when the codec refused the request (codecErr says why, and
+	// sameDialectErr holds that refusal alone).
+	decoded        protocolcore.Request
+	sameDialectErr string
 	// stream, tools and messagesDigest are read from the body as sent:
 	// whether it asked for a stream, how many tools it defined, and a digest
 	// of its messages, which a non-streaming resend of the same turn repeats.
@@ -97,10 +99,13 @@ type claudeNativeFixture struct {
 	mu          sync.Mutex
 	failure     claudeStreamFailure
 	failureTail []byte
-	messages    []claudeNativeRequest
-	other       []string
-	refused     []string
-	tunnels     int
+	// script, when set, may answer a streaming request that defines tools
+	// with its own event stream instead of the fixture text.
+	script   claudeNativeScript
+	messages []claudeNativeRequest
+	other    []string
+	refused  []string
+	tunnels  int
 }
 
 func claudeNativeBinary(t *testing.T) string {
@@ -180,6 +185,17 @@ func (f *claudeNativeFixture) failStream(failure claudeStreamFailure) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failure, f.failureTail = failure, tail
+}
+
+// claudeNativeScript answers one streaming request that defines tools. index
+// is the request's position among the recorded /v1/messages requests. It
+// returns the whole event stream, or false to leave the fixture text.
+type claudeNativeScript func(index int, request claudeNativeRequest, model string) (string, bool)
+
+func (f *claudeNativeFixture) setScript(script claudeNativeScript) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.script = script
 }
 
 func (f *claudeNativeFixture) serveProxy(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +293,7 @@ func (f *claudeNativeFixture) serveAnthropic(w http.ResponseWriter, r *http.Requ
 		var problems []string
 		if decoded, _, err := codec.DecodeCompatibleClientRequest(body); err != nil {
 			problems = append(problems, "Anthropic route: "+err.Error())
+			request.sameDialectErr = err.Error()
 		} else {
 			request.decoded = decoded
 		}
@@ -309,8 +326,16 @@ func (f *claudeNativeFixture) serveAnthropic(w http.ResponseWriter, r *http.Requ
 		f.failure = streamCompletes // only the first such request fails
 	}
 	f.messages = append(f.messages, request)
+	index, script := len(f.messages)-1, f.script
 	f.mu.Unlock()
 	w.Header().Set("Request-Id", "req_fixture")
+	if script != nil && shape.Stream && request.tools > 0 && !request.failed {
+		if events, scripted := script(index, request, shape.Model); scripted {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, events)
+			return
+		}
+	}
 	if !shape.Stream {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"id":"msg_fixture","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":%q}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":2}}`, shape.Model, f.reply)
@@ -432,6 +457,14 @@ func claudeNativeResult(stdout string, streamJSON bool) (claudeNativeTurnResult,
 
 func (f *claudeNativeFixture) assertWire(t *testing.T) {
 	t.Helper()
+	f.checkWire(t, true)
+}
+
+// checkWire checks the credential boundary, the Capture lifecycle and the
+// codec. translated also requires every request to decode for a translated
+// route, not only for the same-dialect Anthropic route.
+func (f *claudeNativeFixture) checkWire(t *testing.T, translated bool) {
+	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t.Logf("tunnels=%d messages=%d other=%v refused=%v", f.tunnels, len(f.messages), f.other, f.refused)
@@ -442,8 +475,11 @@ func (f *claudeNativeFixture) assertWire(t *testing.T) {
 		if request.encoding != "" {
 			t.Errorf("request %d is %s-encoded; decode it here before checking it against the codec", index, request.encoding)
 		}
-		if request.codecErr != "" {
+		if translated && request.codecErr != "" {
 			t.Errorf("ViberMate's Anthropic codec refused request %d: %s", index, request.codecErr)
+		}
+		if !translated && request.sameDialectErr != "" {
+			t.Errorf("ViberMate's Anthropic codec refused request %d for the Anthropic route: %s", index, request.sameDialectErr)
 		}
 		if request.proxyAuthorization != "" {
 			t.Errorf("request %d carried the proxy credential to the provider", index)
