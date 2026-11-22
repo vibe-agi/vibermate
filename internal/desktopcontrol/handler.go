@@ -43,6 +43,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productbuild"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
@@ -80,6 +81,8 @@ const (
 	ReasonEnvironmentSystemOwned             ReasonCode = "environment_system_owned"
 	ReasonEnvironmentPreviewStale            ReasonCode = "environment_preview_stale"
 	ReasonEnvironmentUpstreamStale           ReasonCode = "environment_upstream_stale"
+	ReasonEnvironmentChatGPTPlanNativeOnly   ReasonCode = "environment_chatgpt_plan_native_only"
+	ReasonEnvironmentTranslationUnavailable  ReasonCode = "environment_translation_unavailable"
 	ReasonDryRunFlowNotMatched               ReasonCode = "dry_run_flow_not_matched"
 	ReasonDryRunInputInvalid                 ReasonCode = "dry_run_input_invalid"
 	ReasonDryRunSelectorFailed               ReasonCode = "dry_run_selector_failed"
@@ -1417,6 +1420,19 @@ func classifyEnvironmentError(err error) problemSpec {
 		return problemSpec{
 			status: http.StatusNotFound,
 			reason: ReasonEnvironmentDraftNotFound,
+		}
+	case errors.Is(err, environment.ErrTranslatedChatGPTRoute):
+		// Also an ErrInvalidEnvironment, so it is checked first.
+		return problemSpec{
+			status: http.StatusUnprocessableEntity,
+			reason: ReasonEnvironmentChatGPTPlanNativeOnly,
+		}
+	case errors.Is(err, protocolspec.ErrUnsupportedCodecPair):
+		// A route asks for a translation this build does not have: the
+		// configuration is at fault, not the runtime.
+		return problemSpec{
+			status: http.StatusUnprocessableEntity,
+			reason: ReasonEnvironmentTranslationUnavailable,
 		}
 	case errors.Is(err, environment.ErrInvalidEnvironment),
 		errors.Is(err, environment.ErrInvalidTransition):

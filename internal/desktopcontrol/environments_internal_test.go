@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
@@ -50,6 +51,34 @@ func TestStaleEnvironmentUpstreamHasSpecificSafeControlProblem(t *testing.T) {
 	spec := classifyEnvironmentError(fmt.Errorf("private diagnostic context: %w", environment.ErrUpstreamEndpointStale))
 	if spec.status != http.StatusUnprocessableEntity || spec.reason != ReasonEnvironmentUpstreamStale || spec.detail != "" {
 		t.Fatalf("upstream revision problem = %+v", spec)
+	}
+}
+
+func TestRefusedTranslationsHaveSpecificSafeControlProblems(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		reason ReasonCode
+	}{
+		{
+			"translated ChatGPT route",
+			fmt.Errorf("%w: route %q: %w", environment.ErrInvalidEnvironment, "route.private", environment.ErrTranslatedChatGPTRoute),
+			ReasonEnvironmentChatGPTPlanNativeOnly,
+		},
+		{
+			"unregistered codec pair",
+			fmt.Errorf("compile route %q codec: %w", "route.private",
+				fmt.Errorf("%w: client=%q provider=%q", protocolspec.ErrUnsupportedCodecPair, "a", "b")),
+			ReasonEnvironmentTranslationUnavailable,
+		},
+		{"other invalid Environment", fmt.Errorf("private: %w", environment.ErrInvalidEnvironment), ReasonInvalidRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := classifyEnvironmentError(fmt.Errorf("private diagnostic context: %w", test.err))
+			if spec.status != http.StatusUnprocessableEntity || spec.reason != test.reason || spec.detail != "" {
+				t.Fatalf("problem = %+v", spec)
+			}
+		})
 	}
 }
 

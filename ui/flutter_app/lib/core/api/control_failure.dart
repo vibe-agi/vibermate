@@ -15,6 +15,10 @@ final class ControlFailure implements Exception {
     if (error is ControlProblem) {
       final key = switch (error.reasonCode) {
         'environment_upstream_stale' => 'error.environment_upstream_stale',
+        'environment_chatgpt_plan_native_only' =>
+          'error.chatgpt_plan_native_only',
+        'environment_translation_unavailable' =>
+          'error.translation_unavailable',
         'inspection_changed' => 'error.inspection_changed',
         'inspection_unavailable' => 'error.inspection_unavailable',
         'provider_account_scope_mismatch' => 'error.account_scope_mismatch',
