@@ -2715,7 +2715,7 @@ final class AppCopy {
     'settings.server_connection.tls.error': 'Last certificate error',
     'settings.runtime_ca.title': 'ViberMate certificate',
     'settings.runtime_ca.detail':
-        'ViberMate uses this certificate to read your agents\' encrypted requests on this Server. Agents you start with vibermate run --server trust it automatically, so Claude Code and Codex need no installation, and neither does using the browser. In Keychain Access and other tools it is the Proxy CA.',
+        'Agents you start with vibermate run --server trust it automatically, so Claude Code, Codex and the browser need no installation. Also called the Proxy CA; in Keychain Access it is named “ViberMate Local Root”.',
     'settings.runtime_ca.fingerprint': 'SHA-256 fingerprint',
     'settings.runtime_ca.expires': 'Expires (UTC)',
     'settings.runtime_ca.guide':
@@ -2801,7 +2801,7 @@ final class AppCopy {
     'settings.storage.backup_target': 'New backup directory',
     'settings.storage.backup_confirm': 'Create backup',
     'settings.storage.backup_confirmation':
-        'This backup includes the private key of ViberMate\'s certificate. Anyone who has it could read HTTPS traffic on a Mac that trusts this certificate. Keep the backup private.\n\nViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
+        'This backup includes the private key of ViberMate\'s certificate. Anyone who has it could read HTTPS traffic on a Mac that trusts this certificate. Keep the backup private.\n\nViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup also contains unencrypted evidence; keep it private.',
     'settings.storage.backup_created':
         'Verified backup created. Provider credentials and external TLS files were not included.',
     'settings.storage.restore_title': 'Restore this backup?',
@@ -3035,7 +3035,7 @@ final class AppCopy {
     'server.access.manage_users': 'Manage who can sign in',
     'server.install.title': 'Install ViberMate on the other computer',
     'server.install.detail':
-        'Install the app, then set up the vibermate command in its Settings → Access and launch. On Linux, install the .deb or .rpm package.',
+        'Install the app, then set up the vibermate command in its Settings → Access and launch. On Linux, download the archive for your machine from the latest release and extract it.',
     'server.install.guide': 'Install guide',
     'server.install.url': 'https://github.com/vibe-agi/vibermate#get-started',
     'server.access.loading': 'Reading Server access…',
@@ -5761,7 +5761,7 @@ final class AppCopy {
     'settings.server_connection.tls.error': '最近一次证书错误',
     'settings.runtime_ca.title': 'ViberMate 证书',
     'settings.runtime_ca.detail':
-        'ViberMate 用这张证书读取经过此 Server 的 Agent 加密请求。通过 vibermate run --server 启动的 Agent 会自动信任它，因此 Claude Code 和 Codex 无需安装，只用网页也无需安装。在钥匙串访问等工具中，它显示为代理 CA。',
+        '通过 vibermate run --server 启动的 Agent 会自动信任它，因此 Claude Code、Codex 和网页都无需安装。它也称为代理 CA，在“钥匙串访问”中名为“ViberMate Local Root”。',
     'settings.runtime_ca.fingerprint': 'SHA-256 指纹',
     'settings.runtime_ca.expires': '有效期至（UTC）',
     'settings.runtime_ca.guide':
@@ -5836,7 +5836,7 @@ final class AppCopy {
     'settings.storage.backup_target': '新备份目录',
     'settings.storage.backup_confirm': '创建备份',
     'settings.storage.backup_confirmation':
-        '此备份包含 ViberMate 证书的私钥。拿到它的人可以读取信任该证书的 Mac 上的 HTTPS 流量，请妥善保管备份。\n\nViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
+        '此备份包含 ViberMate 证书的私钥。拿到它的人可以读取信任该证书的 Mac 上的 HTTPS 流量，请妥善保管备份。\n\nViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份还包含未加密的证据，请妥善保管。',
     'settings.storage.backup_created': '可验证备份已创建；未包含服务商凭据和外部 TLS 文件。',
     'settings.storage.restore_title': '恢复这个备份？',
     'settings.storage.restore_source': '已验证备份',
@@ -6032,7 +6032,7 @@ final class AppCopy {
     'server.access.manage_users': '管理可登录的用户',
     'server.install.title': '在另一台电脑上安装 ViberMate',
     'server.install.detail':
-        '安装 App 后，在其「设置 → 接入与启动」中设置 vibermate 命令。Linux 请安装 .deb 或 .rpm 包。',
+        '安装 App 后，在其「设置 → 接入与启动」中设置 vibermate 命令。Linux 请从最新发布下载对应架构的压缩包并解压。',
     'server.install.guide': '安装指南',
     'server.install.url':
         'https://github.com/vibe-agi/vibermate/blob/main/README.zh-CN.md#开始使用',

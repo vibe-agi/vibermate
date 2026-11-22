@@ -140,5 +140,45 @@ void main() {
         isNot(anyOf(contains('never exported'), contains('永不导出'))),
       );
     }
+    // The risk is said once, under one name.
+    final english = AppCopy.forLanguage(AppLanguage.english)(
+      'settings.storage.backup_confirmation',
+    );
+    expect('private key'.allMatches(english), hasLength(1));
+    expect(english, isNot(contains('Proxy CA private key')));
+    final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese)(
+      'settings.storage.backup_confirmation',
+    );
+    expect('私钥'.allMatches(chinese), hasLength(1));
+  });
+
+  test('the Server panel names the certificate as the Mac panel does', () {
+    for (final language in AppLanguage.values) {
+      final copy = AppCopy.forLanguage(language);
+      final help = copy('settings.runtime_ca.detail');
+      // The Keychain name, as on the Mac panel; its first sentence is not
+      // the line already shown under the title.
+      expect(help, contains('“ViberMate Local Root”'));
+      expect(
+        help,
+        isNot(
+          startsWith(
+            copy('settings.root_ca.scope').split(RegExp('[.。]')).first,
+          ),
+        ),
+      );
+    }
+  });
+
+  test('another computer is told to install what is released', () {
+    for (final language in AppLanguage.values) {
+      final detail = AppCopy.forLanguage(language)('server.install.detail');
+      // Linux ships as an archive; there is no .deb or .rpm.
+      expect(detail, isNot(anyOf(contains('.deb'), contains('.rpm'))));
+    }
+    expect(
+      AppCopy.forLanguage(AppLanguage.english)('server.install.detail'),
+      contains('download the archive for your machine'),
+    );
   });
 }
