@@ -948,6 +948,9 @@ func encodeMessage(
 				text.WriteString(block.Text)
 				hasText = true
 			case protocolcore.BlockToolResult:
+				if block.ToolResult.HasNonTextParts() {
+					return nil, false, errors.New("Chat tool results carry text only")
+				}
 				flushText()
 				content := block.ToolResult.Content
 				encoded = append(encoded, openAIRequestMessageWire{
@@ -1019,6 +1022,9 @@ func encodeMessage(
 				return nil, false, errors.New(
 					"tool message contains an unsupported block",
 				)
+			}
+			if block.ToolResult.HasNonTextParts() {
+				return nil, false, errors.New("Chat tool results carry text only")
 			}
 			content := block.ToolResult.Content
 			encoded[index] = openAIRequestMessageWire{

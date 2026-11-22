@@ -525,6 +525,19 @@ func reasoningContentNotice(path string) protocolcore.TranslationReport {
 	})
 }
 
+// clientUsageNotices declares what an Anthropic usage object cannot carry:
+// a known reasoning token count (design 7.6), which Anthropic folds into
+// output_tokens without a field of its own.
+func clientUsageNotices(usage protocolcore.Usage) []protocolcore.TranslationNotice {
+	if !usage.Reasoning.Known {
+		return nil
+	}
+	return []protocolcore.TranslationNotice{{
+		Code: protocolcore.NoticeReasoningUsageNotForwarded,
+		Path: "$.usage",
+	}}
+}
+
 func reasoningUsageNotice(path string) protocolcore.TranslationReport {
 	return protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 		Code: protocolcore.NoticeReasoningUsageNotForwarded,
@@ -533,24 +546,97 @@ func reasoningUsageNotice(path string) protocolcore.TranslationReport {
 }
 
 type anthropicResponseWire struct {
-	ID           string                         `json:"id"`
-	Type         string                         `json:"type"`
-	Role         string                         `json:"role"`
-	Model        string                         `json:"model"`
-	Content      []anthropicResponseContentWire `json:"content"`
-	StopReason   string                         `json:"stop_reason"`
-	StopSequence *string                        `json:"stop_sequence"`
-	Usage        anthropicUsageWire             `json:"usage"`
-	Container    any                            `json:"container"`
-	StopDetails  any                            `json:"stop_details"`
+	ID           string             `json:"id"`
+	Type         string             `json:"type"`
+	Role         string             `json:"role"`
+	Model        string             `json:"model"`
+	Content      []any              `json:"content"`
+	StopReason   string             `json:"stop_reason"`
+	StopSequence *string            `json:"stop_sequence"`
+	Usage        anthropicUsageWire `json:"usage"`
+	Container    any                `json:"container"`
+	StopDetails  any                `json:"stop_details"`
+	// SafeguardResults reports each safeguard the request asked for and the
+	// route does not run; absent for every other request.
+	SafeguardResults []anthropicSafeguardResultWire `json:"safeguard_results,omitempty"`
 }
 
-type anthropicResponseContentWire struct {
+type anthropicThinkingContentWire struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+type anthropicRedactedThinkingContentWire struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
+}
+
+type anthropicSafeguardStatusWire struct {
+	Type string `json:"type"`
+}
+
+type anthropicSafeguardResultWire struct {
+	Type   string                       `json:"type"`
+	Status anthropicSafeguardStatusWire `json:"status"`
+}
+
+// safeguardResults states, for each safeguard the request asked for, that
+// this route does not run it. ViberMate made no judgement, so it never
+// reports a verdict (design 7.7).
+func safeguardResults(kinds []protocolcore.SafeguardKind) []anthropicSafeguardResultWire {
+	if len(kinds) == 0 {
+		return nil
+	}
+	results := make([]anthropicSafeguardResultWire, len(kinds))
+	for index, kind := range kinds {
+		results[index] = anthropicSafeguardResultWire{
+			Type:   string(kind),
+			Status: anthropicSafeguardStatusWire{Type: "unsupported"},
+		}
+	}
+	return results
+}
+
+// anthropicSignature is the thinking signature a reasoning block's seal
+// becomes: a Responses seal in its vmr1. form, which Claude Code echoes back
+// verbatim, an Anthropic signature as it came, and nothing for no seal.
+func anthropicSignature(reasoning protocolcore.Reasoning) (string, error) {
+	switch reasoning.Seal.Format {
+	case "":
+		return "", nil
+	case protocolcore.SealResponsesEncrypted:
+		return protocolcore.FormatReasoningSeal(reasoning.Seal, reasoning.TextSource)
+	case protocolcore.SealAnthropicSignature:
+		return reasoning.Seal.Opaque, nil
+	default:
+		return "", errors.New("reasoning seal cannot be an Anthropic thinking signature")
+	}
+}
+
+// anthropicTextContentWire always writes text: Anthropic requires the
+// member, and an empty answer is still a text block with empty text.
+type anthropicTextContentWire struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type anthropicToolUseContentWire struct {
 	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// anthropicStopReason is the stop_reason both Anthropic client encoders
+// write. Anthropic has no incomplete terminal, so a provider's incomplete
+// response reads as end_turn; approximated reports that the caller must
+// declare it.
+func anthropicStopReason(reason protocolcore.StopReason) (value string, approximated bool) {
+	if reason == protocolcore.StopReasonIncomplete {
+		return string(protocolcore.StopReasonEndTurn), true
+	}
+	return string(reason), false
 }
 
 type anthropicUsageWire struct {
@@ -561,44 +647,101 @@ type anthropicUsageWire struct {
 }
 
 func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte, error) {
+	encoded, _, err := codec.encodeClientResponse(protocolcore.Request{}, response)
+	return encoded, err
+}
+
+// encodeClientResponse writes one unary Anthropic message. The request
+// decides what the client sees: thinking text is left out when it asked for
+// display omitted, and every safeguard it asked for is reported unserved.
+// Text, refusals rendered as text and tool calls are written in block order;
+// thinking blocks carry their seal as the signature.
+func (codec *Codec) encodeClientResponse(
+	request protocolcore.Request,
+	response protocolcore.Response,
+) ([]byte, protocolcore.TranslationReport, error) {
 	if err := codec.ValidateResponse(response); err != nil {
-		return nil, protocolcore.NewFailure(
+		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
 			"$",
 			err,
 		)
 	}
-	content := make([]anthropicResponseContentWire, len(response.Blocks))
+	var notices []protocolcore.TranslationNotice
+	content := make([]any, len(response.Blocks))
 	for index, block := range response.Blocks {
 		switch block.Kind {
 		case protocolcore.BlockText:
-			content[index] = anthropicResponseContentWire{
+			content[index] = anthropicTextContentWire{
 				Type: "text",
 				Text: block.Text,
 			}
+		case protocolcore.BlockRefusal:
+			// Anthropic's refusal stop reason starts Claude Code's fallback
+			// flow, so a refusal part reads as an ordinary answer (design 7.4).
+			content[index] = anthropicTextContentWire{
+				Type: "text",
+				Text: block.Refusal,
+			}
+			notices = append(notices, protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeRefusalRenderedAsText,
+				Path: fmt.Sprintf("$.content[%d]", index),
+			})
+		case protocolcore.BlockReasoning:
+			if block.Reasoning.Redacted {
+				content[index] = anthropicRedactedThinkingContentWire{
+					Type: "redacted_thinking",
+					Data: block.Reasoning.Seal.Opaque,
+				}
+				continue
+			}
+			signature, err := anthropicSignature(*block.Reasoning)
+			if err != nil {
+				return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
+					protocolcore.ReasonUnsupportedProviderData,
+					fmt.Sprintf("$.content[%d]", index),
+					err,
+				)
+			}
+			thinking := block.Reasoning.Text
+			if request.Reasoning.Display == protocolcore.ThinkingDisplayOmitted {
+				thinking = ""
+			}
+			content[index] = anthropicThinkingContentWire{
+				Type:      "thinking",
+				Thinking:  thinking,
+				Signature: signature,
+			}
 		case protocolcore.BlockToolCall:
 			if block.ToolCall.EffectiveKind() != protocolcore.ToolKindFunction {
-				return nil, protocolcore.NewFailure(
+				return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 					protocolcore.ReasonUnsupportedProviderData,
 					fmt.Sprintf("$.content[%d]", index),
 					errors.New("only function tool calls can be encoded for Anthropic Messages"),
 				)
 			}
-			content[index] = anthropicResponseContentWire{
+			content[index] = anthropicToolUseContentWire{
 				Type:  "tool_use",
 				ID:    block.ToolCall.Key.WireID(),
 				Name:  block.ToolCall.Name,
 				Input: block.ToolCall.Arguments.Bytes(),
 			}
 		default:
-			return nil, protocolcore.NewFailure(
+			return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedProviderData,
 				fmt.Sprintf("$.content[%d]", index),
 				errors.New("response block cannot be encoded for Anthropic Messages"),
 			)
 		}
 	}
-	stopReason := string(response.StopReason)
+	stopReason, approximated := anthropicStopReason(response.StopReason)
+	if approximated {
+		notices = append(notices, protocolcore.TranslationNotice{
+			Code: protocolcore.NoticeStopReasonApproximated,
+			Path: "$.stop_reason",
+		})
+	}
+	notices = append(notices, clientUsageNotices(response.Usage)...)
 	var stopSequence *string
 	if response.StopReason == protocolcore.StopReasonStopSequence {
 		value := response.StopSequence
@@ -620,25 +763,26 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 		usage.CacheReadInputTokens = &value
 	}
 	encoded, err := json.Marshal(anthropicResponseWire{
-		ID:           response.ID,
-		Type:         "message",
-		Role:         "assistant",
-		Model:        response.RequestedModel,
-		Content:      content,
-		StopReason:   stopReason,
-		StopSequence: stopSequence,
-		Usage:        usage,
-		Container:    nil,
-		StopDetails:  nil,
+		ID:               response.ID,
+		Type:             "message",
+		Role:             "assistant",
+		Model:            response.RequestedModel,
+		Content:          content,
+		StopReason:       stopReason,
+		StopSequence:     stopSequence,
+		Usage:            usage,
+		Container:        nil,
+		StopDetails:      nil,
+		SafeguardResults: safeguardResults(request.UnservedSafeguards),
 	})
 	if err != nil {
-		return nil, protocolcore.NewFailure(
+		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
 			"$",
 			err,
 		)
 	}
-	return encoded, nil
+	return encoded, protocolcore.NewTranslationReport(notices...), nil
 }
 
 func cachedUsageValue(

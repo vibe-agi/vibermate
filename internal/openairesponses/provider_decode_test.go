@@ -415,6 +415,65 @@ func TestProviderStreamBoundsNormalizedWire(t *testing.T) {
 	}
 }
 
+// The relay's framing checks, which the translating driver shares (design
+// 7.1). Each payload would decode to a valid event if the check were gone.
+func TestProviderStreamFramingFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	event := func(name, data string) []byte {
+		encoded, err := ssewire.Encode(ssewire.Event{Name: name, Data: []byte(data)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	for _, test := range []struct {
+		name string
+		wire []byte
+	}{
+		{"a duplicated root member", event("response.in_progress",
+			`{"type":"response.in_progress","response":{"id":"resp_other"},"response":{"id":"resp_1"}}`)},
+		{"a duplicated nested member", event("response.output_item.added",
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_0","id":"msg_1","role":"assistant","content":[]}}`)},
+		{"an event name that differs from its payload type", event("response.queued",
+			`{"type":"response.in_progress","response":{"id":"resp_1"}}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stream, err := newTestCodec(t).NewProviderStream(streamingRequestFixture(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			released, err := stream.Feed(context.Background(), test.wire)
+			if protocolcore.ReasonOf(err) != protocolcore.ReasonMalformedEventStream || len(released) != 0 {
+				t.Fatalf("Feed() = %q, %v; want malformed_event_stream", released, err)
+			}
+		})
+	}
+
+	// The bound is on the stream, not on a fragment: comments spend no JSON
+	// budget and reach no client, so only the wire count stops them.
+	options := DefaultOptions()
+	options.MaxResponseBytes = 1024
+	codec, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := codec.NewProviderStream(streamingRequestFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comment := []byte(": " + strings.Repeat("x", 300) + "\n")
+	for range 3 {
+		if _, err := stream.Feed(context.Background(), comment); err != nil {
+			t.Fatalf("a fragment within the bound failed: %v", err)
+		}
+	}
+	if _, err := stream.Feed(context.Background(), comment); protocolcore.ReasonOf(err) != protocolcore.ReasonStreamLimitExceeded {
+		t.Fatalf("Feed() past the bound = %v, want stream_limit_exceeded", err)
+	}
+}
+
 func TestProviderStreamRejectsContradictoryTerminalTool(t *testing.T) {
 	stream, err := newTestCodec(t).NewProviderStream(streamingRequestFixture(t))
 	if err != nil {

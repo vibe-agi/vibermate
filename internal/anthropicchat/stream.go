@@ -1069,35 +1069,43 @@ func (terminal *PendingTerminal) Reject() error {
 	return nil
 }
 
+// appendTerminalEvents writes message_delta and message_stop. safeguards
+// lists the unserved safeguards to report in the delta; nil omits the
+// member, so the Chat path's bytes are unchanged.
 func appendTerminalEvents(
 	destination *bytes.Buffer,
 	reason protocolcore.StopReason,
 	usage protocolcore.Usage,
+	safeguards []protocolcore.SafeguardKind,
 ) error {
 	outputTokens := int64(0)
 	if usage.Output.Known {
 		outputTokens = usage.Output.Tokens
 	}
+	stopReason, _ := anthropicStopReason(reason)
 	if err := appendEvent(destination, "message_delta", struct {
 		Type  string `json:"type"`
 		Delta struct {
-			StopReason   string  `json:"stop_reason"`
-			StopSequence *string `json:"stop_sequence"`
-			Container    any     `json:"container"`
-			StopDetails  any     `json:"stop_details"`
+			StopReason       string                         `json:"stop_reason"`
+			StopSequence     *string                        `json:"stop_sequence"`
+			Container        any                            `json:"container"`
+			StopDetails      any                            `json:"stop_details"`
+			SafeguardResults []anthropicSafeguardResultWire `json:"safeguard_results,omitempty"`
 		} `json:"delta"`
 		Usage anthropicUsageWire `json:"usage"`
 	}{
 		Type: "message_delta",
 		Delta: struct {
-			StopReason   string  `json:"stop_reason"`
-			StopSequence *string `json:"stop_sequence"`
-			Container    any     `json:"container"`
-			StopDetails  any     `json:"stop_details"`
+			StopReason       string                         `json:"stop_reason"`
+			StopSequence     *string                        `json:"stop_sequence"`
+			Container        any                            `json:"container"`
+			StopDetails      any                            `json:"stop_details"`
+			SafeguardResults []anthropicSafeguardResultWire `json:"safeguard_results,omitempty"`
 		}{
-			StopReason:  string(reason),
-			Container:   nil,
-			StopDetails: nil,
+			StopReason:       stopReason,
+			Container:        nil,
+			StopDetails:      nil,
+			SafeguardResults: safeguardResults(safeguards),
 		},
 		Usage: anthropicUsageWire{
 			InputTokens:              knownTokens(usage.InputUncached),

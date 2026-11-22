@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
@@ -25,7 +26,16 @@ var (
 	ErrRouteOutsideRouteSet     = errors.New("route is outside the frozen RouteSet")
 	ErrUnsupportedPluginBinding = errors.New("plugin bindings are not executable in this runtime slice")
 	ErrAccountReadAmbiguous     = errors.New("account read requires one fixed account on one frozen route")
+	// ErrTranslatedChatGPTRoute refuses a route that would send another
+	// dialect's requests to a ChatGPT plan. Compile errors wrap it together
+	// with ErrInvalidEnvironment; Restore never returns it.
+	ErrTranslatedChatGPTRoute = errors.New("a ChatGPT plan serves only clients of its own protocol")
 )
+
+// chatGPTRealmID is the realm of the built-in ChatGPT service. Custom
+// services get their own ID as realm, so only the host check below can catch
+// a custom service pointed at chatgpt.com.
+const chatGPTRealmID = "openai.chatgpt"
 
 type ProtocolCatalog interface {
 	Resolve(protocolspec.Dialect, protocolspec.Dialect) (protocolspec.CodecPlan, error)
@@ -425,6 +435,7 @@ func (plan RequestPlan) UsesOriginalAccount() bool {
 func compileExecution(
 	compiler Compiler,
 	aggregate Environment,
+	kind compilationKind,
 ) ([]CompiledEndpointPlan, map[string]int, error) {
 	if compiler.protocols == nil || compiler.wireProfiles == nil {
 		return nil, nil, ErrCompilerUnavailable
@@ -520,6 +531,7 @@ func compileExecution(
 						compiler,
 						route,
 						clientDialect,
+						kind,
 					)
 					if err != nil {
 						return nil, nil, err
@@ -600,6 +612,7 @@ func compileRoute(
 	compiler Compiler,
 	route UpstreamRoute,
 	client protocolspec.Dialect,
+	kind compilationKind,
 ) (CompiledRoutePlan, error) {
 	if len(route.PluginBindings) != 0 {
 		return CompiledRoutePlan{}, ErrUnsupportedPluginBinding
@@ -607,6 +620,17 @@ func compileRoute(
 	backend, err := backendDialect(route.BackendProtocol)
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q: %w", route.ID, err)
+	}
+	// Checked before the codec pair resolves, so the refusal does not depend
+	// on which translating pairs a build registers. Only a candidate (a draft
+	// or a publish) is refused: a revision already published keeps restoring,
+	// as frozen evidence does, so it cannot stop the runtime from starting.
+	// No cross-dialect Responses pair was registered before this check, so no
+	// stored revision holds the route it exists to stop.
+	if kind == compileCandidate && client != backend && targetsChatGPTPlan(route.ProviderTarget) {
+		return CompiledRoutePlan{}, fmt.Errorf(
+			"%w: route %q: %w", ErrInvalidEnvironment, route.ID, ErrTranslatedChatGPTRoute,
+		)
 	}
 	codec, err := compiler.protocols.Resolve(client, backend)
 	if err != nil {
@@ -636,6 +660,18 @@ func compileRoute(
 		allowAccountHistory: route.AllowAccountHistory,
 		wireProfile:         compiledWire,
 	}, nil
+}
+
+// targetsChatGPTPlan reports whether a provider target is a ChatGPT plan: the
+// built-in ChatGPT realm, any origin on chatgpt.com or one of its subdomains
+// (whatever its scheme, port or base path), or an origin the Codex backend
+// paths apply to.
+func targetsChatGPTPlan(target ProviderTarget) bool {
+	if target.RealmID == chatGPTRealmID || upstreamendpoint.IsChatGPTCodexOrigin(target.Origin) {
+		return true
+	}
+	host := target.Origin.Host()
+	return host == "chatgpt.com" || strings.HasSuffix(host, ".chatgpt.com")
 }
 
 func compileAccountPolicy(route UpstreamRoute) (CompiledAccountPolicy, error) {

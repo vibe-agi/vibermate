@@ -141,7 +141,10 @@ func failingField(
 	return cause
 }
 
-// modelledFieldNames is the set of wire names the destination declares.
+// modelledFieldNames is the set of wire names the destination declares. As
+// in encoding/json, an embedded struct without a tag contributes its own
+// fields, so a profile can model a few more members on top of a shared wire
+// type without the shared type declaring them for every profile.
 func modelledFieldNames(destination any) map[string]struct{} {
 	names := map[string]struct{}{}
 	value := reflect.ValueOf(destination)
@@ -151,9 +154,18 @@ func modelledFieldNames(destination any) map[string]struct{} {
 	if value.Kind() != reflect.Struct {
 		return names
 	}
-	structType := value.Type()
+	addModelledFieldNames(value.Type(), names)
+	return names
+}
+
+func addModelledFieldNames(structType reflect.Type, names map[string]struct{}) {
 	for index := range structType.NumField() {
-		tag := structType.Field(index).Tag.Get("json")
+		field := structType.Field(index)
+		tag := field.Tag.Get("json")
+		if tag == "" && field.Anonymous && field.Type.Kind() == reflect.Struct {
+			addModelledFieldNames(field.Type, names)
+			continue
+		}
 		if tag == "" || tag == "-" {
 			continue
 		}
@@ -162,5 +174,4 @@ func modelledFieldNames(destination any) map[string]struct{} {
 			names[name] = struct{}{}
 		}
 	}
-	return names
 }

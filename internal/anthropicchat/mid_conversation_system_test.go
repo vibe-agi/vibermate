@@ -2,6 +2,7 @@ package anthropicchat_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
@@ -92,5 +93,54 @@ func TestAMidConversationSystemMessageReachesTheBackendInPlace(t *testing.T) {
 	if wire.Messages[1].Role != "system" ||
 		wire.Messages[1].Content != "an instruction" {
 		t.Fatalf("backend instruction = %+v", wire.Messages[1])
+	}
+}
+
+// Claude Code's mid-conversation system message carries a cache breakpoint on
+// its text block. The joined instruction text has no place for it or for
+// citations, so each is declared at its block, as for any other message,
+// instead of being dropped silently. The instruction itself is unchanged.
+func TestAMidConversationSystemMessageDeclaresWhatItsBlocksLose(t *testing.T) {
+	t.Parallel()
+
+	codec, err := anthropicchat.New(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"model":"claude-3-5-sonnet",
+		"max_tokens":64,
+		"messages":[
+			{"role":"user","content":"first"},
+			{"role":"system","content":[
+				{"type":"text","text":"an ","cache_control":{"type":"ephemeral"}},
+				{"type":"text","text":"instruction","citations":[{"type":"char_location"}]},
+				{"type":"text","text":"","cache_control":null}
+			]},
+			{"role":"user","content":"second"}
+		]
+	}`)
+	want := []string{
+		"cache_control_not_forwarded $.messages[1].content[0].cache_control",
+		"citations_not_forwarded $.messages[1].content[1].citations",
+	}
+	for name, decode := range map[string]func([]byte) (protocolcore.Request, protocolcore.TranslationReport, error){
+		"strict": codec.DecodeClientRequest,
+		"native": codec.DecodeCompatibleClientRequest,
+	} {
+		decoded, report, err := decode(body)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := decoded.Messages[1].Blocks[0].Text; got != "an instruction" {
+			t.Fatalf("%s: instruction = %q", name, got)
+		}
+		var got []string
+		for _, notice := range report.Notices() {
+			got = append(got, string(notice.Code)+" "+notice.Path)
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%s: notices = %q, want %q", name, got, want)
+		}
 	}
 }

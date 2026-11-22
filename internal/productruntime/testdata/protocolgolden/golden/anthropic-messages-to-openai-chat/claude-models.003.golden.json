@@ -6,6 +6,7 @@
       "cache_control_not_forwarded $.system[2].cache_control",
       "cache_control_not_forwarded $.system[3].cache_control",
       "unknown_request_field_not_forwarded $.messages[1].output_config",
+      "cache_control_not_forwarded $.messages[1].content[0].cache_control",
       "unknown_request_field_not_forwarded $.tools[10].defer_loading",
       "metadata_not_forwarded $.metadata"
     ]
@@ -169,7 +170,7 @@
         ]
       },
       "encodeNotices": [],
-      "clientResponse": "{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":0},\"container\":null,\"stop_details\":null}"
+      "clientResponse": "{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":0},\"container\":null,\"stop_details\":null}"
     },
     "unary-text": {
       "decodeNotices": [],

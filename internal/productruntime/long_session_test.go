@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -151,7 +152,14 @@ func testRuntimeLongSessionFixture(t *testing.T, original bool, scenario string,
 	route := &protocol.Destination.Upstream.Routes[0]
 	crossChat := strings.HasPrefix(scenario, "cross_chat")
 	if crossChat {
-		endpoint, err := f.runtime.endpoints.Create(ctx, upstreamendpoint.CreateCommand{ID: "long-chat", DisplayName: "Long Chat", Origin: route.ProviderTarget.Origin, RealmID: "long-chat", BackendProtocols: []string{string(protocolspec.DialectOpenAIChat)}, Capabilities: route.ProviderTarget.Capabilities, Drivers: []providerauth.DriverRef{providerauth.StaticHeaderDriverRef()}})
+		// A translated route must not target a ChatGPT origin, so the Chat
+		// service has its own host; the private transport below sends every
+		// host to the test server.
+		chatOrigin, err := originidentity.ParseProviderOrigin("https://long-chat.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint, err := f.runtime.endpoints.Create(ctx, upstreamendpoint.CreateCommand{ID: "long-chat", DisplayName: "Long Chat", Origin: chatOrigin, RealmID: "long-chat", BackendProtocols: []string{string(protocolspec.DialectOpenAIChat)}, Capabilities: route.ProviderTarget.Capabilities, Drivers: []providerauth.DriverRef{providerauth.StaticHeaderDriverRef()}})
 		if err != nil {
 			t.Fatal(err)
 		}

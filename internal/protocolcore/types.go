@@ -2135,6 +2135,11 @@ const (
 	NoticePromptCacheKeyDerived           NoticeCode = "prompt_cache_key_derived"
 	NoticeSystemRoleNormalized            NoticeCode = "system_role_normalized"
 	NoticeHostedOutputNotForwarded        NoticeCode = "hosted_output_not_forwarded"
+	// NoticeIncompleteToolCallNotForwarded marks a function call an
+	// incomplete terminal cut off before its arguments were complete. It is
+	// dropped, so the turn ends with the terminal's stop reason instead of a
+	// call that cannot run.
+	NoticeIncompleteToolCallNotForwarded NoticeCode = "incomplete_tool_call_not_forwarded"
 	// Codes of the stream Assembler and the Anthropic client encoders.
 	NoticeRefusalRenderedAsText  NoticeCode = "refusal_rendered_as_text"
 	NoticeStopReasonApproximated NoticeCode = "stop_reason_approximated"

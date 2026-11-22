@@ -314,6 +314,10 @@ final class AppCopy {
         'The upstream service was updated. Refresh the page, then review and publish the policy again.',
     'error.environment_upstream_changed':
         'An upstream service has changed or is unavailable. Refresh the page and reselect the service before publishing.',
+    'error.chatgpt_plan_native_only':
+        'ViberMate doesn\'t route other apps to a ChatGPT plan. To use OpenAI models with Claude Code, add an OpenAI API key.',
+    'error.translation_unavailable':
+        'ViberMate can\'t translate this client protocol to the selected upstream protocol yet. Choose another protocol or service for this route.',
     'app.name': 'ViberMate',
     'app.subtitle': 'Agent traffic runtime',
     'status.ready': 'Ready',
@@ -3645,6 +3649,10 @@ final class AppCopy {
     'error.control_contract': '配置或运行时返回的数据不符合预期。请检查输入，确认 App 与运行时版本一致后刷新重试。',
     'error.environment_upstream_stale': '上游服务已更新。请刷新页面后，重新检查并发布策略。',
     'error.environment_upstream_changed': '上游服务已变更或不可用。请刷新页面，重新选择该服务后再发布。',
+    'error.chatgpt_plan_native_only':
+        'ViberMate 不会把其他应用转发到 ChatGPT 套餐。要让 Claude Code 使用 OpenAI 模型，请添加 OpenAI API Key。',
+    'error.translation_unavailable':
+        'ViberMate 目前还不能把此客户端协议转换为所选的上游协议。请为这条路由选择其他协议或服务。',
     'app.name': 'ViberMate',
     'app.subtitle': 'Agent 流量运行时',
     'status.ready': '就绪',

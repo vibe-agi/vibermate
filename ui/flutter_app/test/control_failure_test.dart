@@ -15,6 +15,8 @@ import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 void main() {
   const reasons = {
     'environment_upstream_stale': 'error.environment_upstream_stale',
+    'environment_chatgpt_plan_native_only': 'error.chatgpt_plan_native_only',
+    'environment_translation_unavailable': 'error.translation_unavailable',
     'provider_account_scope_mismatch': 'error.account_scope_mismatch',
     'provider_account_conflict': 'error.account_conflict',
     'provider_account_in_use': 'error.account_in_use',
@@ -51,6 +53,8 @@ void main() {
         ]) {
           final text = AppCopy.forLanguage(language)(failure.messageKey);
           expect(text, isNotEmpty);
+          // A failure notice shows its copy unformatted.
+          expect(text, isNot(contains('{')));
           expect(text, isNot(contains(entry.key)));
           expect(text, isNot(contains('untrusted-private-secret')));
         }
