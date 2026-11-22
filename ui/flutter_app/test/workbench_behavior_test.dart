@@ -554,14 +554,19 @@ void main() {
     await tester.enterText(search, 'not-loaded-yet');
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'filtered Capture layout');
-    expect(find.text('No loaded sessions match this filter.'), findsOneWidget);
+    expect(find.text('No sessions match “not-loaded-yet”.'), findsOneWidget);
+    expect(
+      find.textContaining('Load older sessions to continue searching'),
+      findsOneWidget,
+      reason: 'older pages may still match',
+    );
     expect(find.byKey(const Key('captures-load-more')), findsOneWidget);
 
     await tester.tap(find.byTooltip('Clear session filter'));
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'cleared Capture layout');
     expect(tester.widget<TextField>(search).controller!.text, isEmpty);
-    expect(find.text('No loaded sessions match this filter.'), findsNothing);
+    expect(find.byKey(const Key('capture-filter-no-match')), findsNothing);
 
     await tester.tap(find.byKey(const Key('captures-load-more')));
     await tester.pumpAndSettle();
@@ -575,7 +580,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('empty Captures shows Agent and Web proxy launch paths', (
+  testWidgets('with the guide hidden, empty Sessions keeps the launch paths', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -583,7 +588,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No sessions yet.',
+        empty: 'No sessions yet',
         detail: 'Start Codex or Claude through ViberMate from Terminal.',
         settings: 'Terminal command',
         web: false,
@@ -591,7 +596,7 @@ void main() {
       (
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
-        empty: '还没有运行记录。',
+        empty: '还没有运行记录',
         detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
         settings: '终端命令',
         web: false,
@@ -599,7 +604,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No sessions yet.',
+        empty: 'No sessions yet',
         detail:
             'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
@@ -608,7 +613,7 @@ void main() {
       (
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
-        empty: '还没有运行记录。',
+        empty: '还没有运行记录',
         detail: '从终端启动 Agent，或为其他客户端创建专属代理登录。',
         settings: '网页与客户端接入',
         web: true,
@@ -633,6 +638,9 @@ void main() {
             : null,
       );
       await controller.initialize();
+      // A fresh install opens on the setup guide; hiding it leaves today's
+      // empty state with its two ways in.
+      controller.hideSetupGuide();
       await tester.pumpWidget(
         MaterialApp(
           theme: ViberTheme.light(),
@@ -642,6 +650,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text(scenario.empty), findsOneWidget);
+      expect(find.byKey(const Key('capture-empty-show-guide')), findsOneWidget);
       expect(find.text(scenario.detail), findsOneWidget);
       expect(
         find.byKey(const Key('capture-empty-create-manual')),
@@ -1789,13 +1798,9 @@ void main() {
       );
       expect(evidence, findsOneWidget);
       expect(
-        find.descendant(of: evidence, matching: find.text('2.1.220')),
-        findsOneWidget,
-      );
-      expect(
         find.descendant(
           of: evidence,
-          matching: find.text('Exact release verified'),
+          matching: find.text('Version 2.1.220 · Known release'),
         ),
         findsOneWidget,
       );
@@ -3336,13 +3341,20 @@ void main() {
 
       await tester.tap(find.byKey(const Key('manual-capture-create')));
       await tester.pumpAndSettle();
-      expect(find.text('Create a dedicated proxy login'), findsOneWidget);
+      expect(find.text('Connect another app'), findsOneWidget);
       expect(
         find.text(
-          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
+          "For apps you don't start with vibermate run. ViberMate gives the app its own proxy login.",
         ),
         findsOneWidget,
       );
+      expect(
+        find.text(
+          'Forward as-is: requests go unchanged to the service the app chose, with its own login, and ViberMate records them.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('system_transparent'), findsNothing);
 
       await tester.tap(find.byKey(const Key('manual-capture-environment')));
       await tester.pumpAndSettle();
@@ -3350,14 +3362,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
+          'Work decides which AI service and account answer these requests, and ViberMate records them.',
         ),
         findsOneWidget,
       );
       expect(
-        find.text('api.anthropic.com:443  ·  api.openai.com:443'),
+        find.text('Decrypted and recorded: api.anthropic.com, api.openai.com'),
         findsOneWidget,
       );
+
+      // A name is required, and the example is only a placeholder.
+      await tester.tap(find.byKey(const Key('manual-capture-create-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.text('Name this connection'), findsOneWidget);
 
       await tester.enterText(
         find.byKey(const Key('manual-capture-name')),
@@ -3368,6 +3385,16 @@ void main() {
 
       expect(find.text('Proxy login created'), findsOneWidget);
       expect(find.text('preview-password-1'), findsOneWidget);
+      expect(find.text('Root certificate file'), findsOneWidget);
+      // The guide is offered only with the values saved, never above them.
+      expect(find.text('I saved these values, open guide'), findsOneWidget);
+      expect(find.text('Open guide'), findsNothing);
+      expect(
+        find.text(
+          "In the app's network settings, set its HTTP/HTTPS proxy to the address below.",
+        ),
+        findsOneWidget,
+      );
       expect(
         find.text('/Users/mira/Library/Application Support/ViberMate/root.pem'),
         findsOneWidget,
@@ -3383,7 +3410,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Browser Lab'), findsWidgets);
       expect(
-        find.text('Manual session created with a dedicated proxy login.'),
+        find.text(
+          "Proxy login created. The app's requests appear here once it uses the proxy.",
+        ),
         findsOneWidget,
       );
       expect(find.text('preview-password-1'), findsNothing);
@@ -3393,6 +3422,48 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('the proxy login password stays until its values are saved', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('manual-capture-create')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('manual-capture-name')),
+      'Figma',
+    );
+    await tester.tap(find.byKey(const Key('manual-capture-create-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+
+    // Neither a click beside the dialog nor Escape drops the password.
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+
+    // Saying the values are saved closes it and opens the guide.
+    await tester.tap(
+      find.byKey(const Key('manual-capture-delivery-done-guide')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Access and launch'), findsWidgets);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets(
     'manual capture credential rotation requires confirmation and retains evidence',
@@ -3447,9 +3518,9 @@ void main() {
 
     await tester.tap(find.byKey(const Key('manual-capture-create')));
     await tester.pumpAndSettle();
-    expect(find.text('创建专属代理登录'), findsOneWidget);
+    expect(find.text('接入其他应用'), findsOneWidget);
     expect(
-      find.text('ViberMate 会解密并记录下列 Agent API 入口；“原始目的地”保持客户端 URL、鉴权和模型不变。'),
+      find.text('原样转发：请求原样发往应用自己选择的服务，并使用它自己的登录；ViberMate 会记录这些请求。'),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -3462,7 +3533,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('代理登录已创建'), findsOneWidget);
     expect(find.text('preview-password-1'), findsOneWidget);
-    expect(find.text('Root 路径'), findsOneWidget);
+    expect(find.text('根证书文件'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('manual-capture-delivery-done')));

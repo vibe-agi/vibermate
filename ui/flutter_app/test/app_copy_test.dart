@@ -17,6 +17,30 @@ void main() {
       '数据升级未完成，原数据保留',
     );
   });
+  test('sentences from separate keys join without a space in Chinese', () {
+    expect(
+      AppCopy.forLanguage(
+        AppLanguage.simplifiedChinese,
+      ).sentences(['或更新 ViberMate。', '这台 Mac 上可以连接的版本：2.1.220。']),
+      '或更新 ViberMate。这台 Mac 上可以连接的版本：2.1.220。',
+    );
+    expect(
+      AppCopy.forLanguage(
+        AppLanguage.english,
+      ).sentences(['Update ViberMate.', 'Versions: 2.1.220.']),
+      'Update ViberMate. Versions: 2.1.220.',
+    );
+  });
+
+  test('a path in the guide never breaks at its slashes', () {
+    for (final language in AppLanguage.values) {
+      final detail = AppCopy.forLanguage(language)('setup.command.detail');
+      // A word joiner after each slash keeps ~/.local/bin on one line.
+      expect(detail, contains('~/\u2060.local/\u2060bin'));
+      expect(detail.replaceAll('\u2060', ''), contains('~/.local/bin'));
+    }
+  });
+
   test('English and Chinese copy catalogs reject missing public keys', () {
     final english = AppCopy.forLanguage(AppLanguage.english);
     final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese);
@@ -31,7 +55,7 @@ void main() {
     final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese);
 
     expect(chinese('nav.captures'), '运行记录');
-    expect(chinese('capture.empty'), '还没有运行记录。');
+    expect(chinese('capture.empty'), '还没有运行记录');
     expect(chinese('capture.session'), '查看客户端会话');
     expect(chinese('conversation.exchange'), 'Agent 调用');
     expect(chinese('exchange.attempt.one'), '1 次上游尝试');

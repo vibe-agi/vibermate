@@ -1042,6 +1042,19 @@ final class WorkbenchController extends ChangeNotifier
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
+
+  /// Set once 'Install and trust' succeeds in this app session: the launches
+  /// that had already stopped before their agent started by then.
+  Set<String>? _launchesStoppedBeforeRootTrust;
+
+  /// This Mac came to trust ViberMate's certificate from this app session.
+  bool get rootTrustedHere => _launchesStoppedBeforeRootTrust != null;
+
+  /// [capture] stopped before this Mac came to trust ViberMate's certificate
+  /// here, so the missing trust may be what stopped it.
+  bool stoppedBeforeRootTrust(CaptureRecord capture) =>
+      _launchesStoppedBeforeRootTrust?.contains(capture.key) ?? false;
+
   ProductUpdateResult? productUpdate;
   bool productUpdateLoading = false;
   RuntimeStorageLocation? storageLocation;
@@ -1883,6 +1896,11 @@ final class WorkbenchController extends ChangeNotifier
       }
       rootCAGuideIntent = null;
       operationNotice = 'root_ca_updated';
+      _launchesStoppedBeforeRootTrust = {
+        ...?_launchesStoppedBeforeRootTrust,
+        for (final capture in data?.captures ?? const <CaptureRecord>[])
+          if (capture.stoppedBeforeStart) capture.key,
+      };
       notifyListeners();
       return true;
     } catch (error) {
@@ -1971,6 +1989,8 @@ final class WorkbenchController extends ChangeNotifier
       _inventoryFailureStatus = null;
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
+      // The detail of the selected session loads below either way.
+      _selectionChangedForSetup = false;
       loading = false;
       _startProviderAccountQuotaPolling();
       notifyListeners();
@@ -2055,8 +2075,15 @@ final class WorkbenchController extends ChangeNotifier
       data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
       _startProviderAccountQuotaPolling();
-      if (hadInventoryFailure || !_sameDashboard(previous, data!)) {
+      final setupSelection = _selectionChangedForSetup;
+      _selectionChangedForSetup = false;
+      if (hadInventoryFailure ||
+          setupSelection ||
+          !_sameDashboard(previous, data!)) {
         notifyListeners();
+      }
+      if (setupSelection && selectedCapture != null) {
+        unawaited(_loadCaptureDetail(selectedCapture!));
       }
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
@@ -2567,6 +2594,123 @@ final class WorkbenchController extends ChangeNotifier
     if (serverManagement && (runtimeUsers == null || serverAccess == null)) {
       unawaited(refreshServerManagement());
     }
+  }
+
+  /// Hidden with 'Hide guide' for the rest of this app session.
+  bool setupGuideHidden = false;
+
+  /// Shown again from Access and launch, even after the first request.
+  bool _setupGuideRequested = false;
+
+  /// The session whose first request completed the setup guide. It carries
+  /// the 'Connected' notice until that is dismissed.
+  String? setupConnectedCaptureKey;
+
+  /// The connected session, when it was already open from the guide as its
+  /// first request arrived.
+  String? _setupBackCaptureKey;
+
+  /// Whether [captureKey], opened from the guide, keeps its way back to the
+  /// guide while it shows the 'Connected' notice.
+  bool keepsSetupBack(String captureKey) =>
+      _setupBackCaptureKey == captureKey &&
+      setupConnectedCaptureKey == captureKey;
+
+  bool? _setupGuideWasEligible;
+  bool _selectionChangedForSetup = false;
+
+  /// Whether Sessions shows the setup guide when its filter is empty: until
+  /// the first request of any session arrives, unless it was hidden. Decided
+  /// from every loaded session, never from a filtered list.
+  bool get setupGuideEligible => _setupGuideEligibleFor(data);
+
+  bool _setupGuideEligibleFor(DashboardData? value) {
+    if (value == null || setupGuideHidden || !accessSettingsAvailable) {
+      return false;
+    }
+    if (_setupGuideRequested) return true;
+    return value.captureNextCursor == null &&
+        !value.captures.any((capture) => capture.observation == 'observed');
+  }
+
+  void hideSetupGuide() {
+    if (setupGuideHidden) return;
+    setupGuideHidden = true;
+    _setupGuideRequested = false;
+    final current = data;
+    if (current != null) _repairDashboardSelections(current);
+    final capture = selectedCapture;
+    if (capture != null && selectedAssignment == null && !detailLoading) {
+      unawaited(_loadCaptureDetail(capture));
+    }
+    notifyListeners();
+  }
+
+  /// Opens Sessions on the setup guide, from Access and launch.
+  void showSetupGuide() {
+    setupGuideHidden = false;
+    _setupGuideRequested = true;
+    _setupGuideWasEligible = true;
+    section = WorkbenchSection.captures;
+    operationNotice = null;
+    if (selectedCaptureKey != null) {
+      selectedCaptureKey = null;
+      _resetCaptureDetail();
+    }
+    notifyListeners();
+    unawaited(refreshSetupFacts());
+  }
+
+  /// Leaves the session opened from the guide and shows the guide again,
+  /// asking for it when its last step has completed meanwhile.
+  void backToSetupGuide() {
+    if (!setupGuideEligible) {
+      showSetupGuide();
+      return;
+    }
+    if (selectedCaptureKey == null) return;
+    selectedCaptureKey = null;
+    _resetCaptureDetail();
+    operationNotice = null;
+    notifyListeners();
+  }
+
+  void dismissSetupConnected() {
+    if (setupConnectedCaptureKey == null) return;
+    setupConnectedCaptureKey = null;
+    notifyListeners();
+  }
+
+  /// Rereads what the guide's steps depend on. The guide calls this when it
+  /// first shows and the window regains focus; never on the five-second poll,
+  /// because the Terminal command check starts the packaged binary.
+  Future<void> refreshSetupFacts() async {
+    if (_disposed) return;
+    await Future.wait([
+      if (terminalManagement)
+        refreshTerminalCommand(quiet: terminalCommand != null),
+      if (rootTrustManagement) refreshRootCA(quiet: rootCAStatus != null),
+      // A Server's guide shows its own address in the commands.
+      if (!terminalManagement && serverManagement && serverAccess == null)
+        refreshServerManagement(quiet: true),
+    ]);
+  }
+
+  /// The releases of an agent this build can connect through ViberMate on
+  /// this machine; null when the Runtime does not say.
+  List<String>? supportedClientVersions(String clientAdapterId) {
+    final api = _api;
+    return api is SupportedClientVersionsSource
+        ? (api as SupportedClientVersionsSource).supportedClientVersions(
+            clientAdapterId,
+          )
+        : null;
+  }
+
+  /// Settings > Safety and data, where saved requests are kept and deleted.
+  void openSafetySettings() {
+    selectSection(WorkbenchSection.settings);
+    selectSettingsTab(settingsDestinations.indexOf(SettingsDestination.safety));
   }
 
   void openUpdateSettings() {
@@ -4097,7 +4241,58 @@ final class WorkbenchController extends ChangeNotifier
     final captureExists =
         previousCaptureKey != null &&
         updated.captures.any((capture) => capture.key == previousCaptureKey);
-    if (forceCaptureDefault || !captureExists) {
+    final guide = _setupGuideEligibleFor(updated);
+    final connected =
+        _setupGuideWasEligible == true && !guide && !setupGuideHidden
+        ? _newestObservedCapture(updated)
+        : null;
+    _setupGuideWasEligible = guide;
+    final selected = captureExists
+        ? updated.captures.firstWhere(
+            (capture) => capture.key == previousCaptureKey,
+          )
+        : null;
+    // A launch that stopped before its agent started gives way to the next
+    // run, so the moment it connects shows the session that did. Only a run
+    // that appeared since the last read counts: a stopped launch opened
+    // beside a run that was already listed stays open.
+    final listedBefore = _listedCaptureKeys;
+    _listedCaptureKeys = {for (final capture in updated.captures) capture.key};
+    final successor =
+        selected != null && selected.stoppedBeforeStart && listedBefore != null
+        ? updated.captures
+              .where(
+                (capture) =>
+                    capture.kind == 'managed_run' &&
+                    capture.running &&
+                    !listedBefore.contains(capture.key) &&
+                    capture.createdAt.isAfter(selected.createdAt),
+              )
+              .fold<CaptureRecord?>(
+                null,
+                (newest, capture) =>
+                    newest == null ||
+                        capture.createdAt.isAfter(newest.createdAt)
+                    ? capture
+                    : newest,
+              )
+        : null;
+    if (connected != null) {
+      // The guide's last step just completed: open the session that did it.
+      selectedCaptureKey = connected.key;
+      setupConnectedCaptureKey = connected.key;
+      _setupBackCaptureKey = connected.key == previousCaptureKey
+          ? connected.key
+          : null;
+      _selectionChangedForSetup = connected.key != previousCaptureKey;
+    } else if (successor != null) {
+      selectedCaptureKey = successor.key;
+      _selectionChangedForSetup = true;
+    } else if (guide) {
+      // The guide owns the wide pane: nothing is opened for the person, and
+      // a session they opened themselves stays open.
+      if (!captureExists) selectedCaptureKey = null;
+    } else if (forceCaptureDefault || !captureExists) {
       final running =
           updated.captures
               .where((capture) => capture.running)
@@ -4136,6 +4331,21 @@ final class WorkbenchController extends ChangeNotifier
     if (!endpointExists) {
       selectedEndpointId = updated.endpoints.firstOrNull?.id;
     }
+  }
+
+  /// The sessions listed when selections were last repaired; null before
+  /// the first read.
+  Set<String>? _listedCaptureKeys;
+
+  static CaptureRecord? _newestObservedCapture(DashboardData value) {
+    CaptureRecord? newest;
+    for (final capture in value.captures) {
+      if (capture.observation != 'observed') continue;
+      if (newest == null || capture.activityAt.isAfter(newest.activityAt)) {
+        newest = capture;
+      }
+    }
+    return newest;
   }
 
   void _resetCaptureDetail() {
@@ -4330,6 +4540,13 @@ final class WorkbenchController extends ChangeNotifier
       return;
     }
     selectedCaptureKey = captureKey;
+    // Sessions listed when the person chose this one, including older pages
+    // loaded since the last read, never replace it.
+    _listedCaptureKeys = {
+      ...?_listedCaptureKeys,
+      for (final capture in data?.captures ?? const <CaptureRecord>[])
+        capture.key,
+    };
     _resetCaptureDetail();
     operationNotice = null;
     notifyListeners();
@@ -4759,7 +4976,8 @@ final class WorkbenchController extends ChangeNotifier
               // must not turn a confirmed assignment into an unassigned run.
               if (ownsAssignmentRequest()) {
                 selectedAssignment = assignment;
-                selectedCaptureLaunchIncomplete = assignment == null;
+                selectedCaptureLaunchIncomplete =
+                    assignment == null || capture.stoppedBeforeStart;
                 if (errorMessage == _captureAssignmentError) {
                   errorMessage = null;
                 }
@@ -4803,7 +5021,15 @@ final class WorkbenchController extends ChangeNotifier
       final acp = values[2] as ACPRecord?;
       selectedAssignment = assignment;
       selectedACP = acp;
-      selectedCaptureLaunchIncomplete = selectedAssignment == null;
+      selectedCaptureLaunchIncomplete =
+          selectedAssignment == null || capture.stoppedBeforeStart;
+      // The stopped launch offers "Install and trust" only when this Mac is
+      // known not to trust the certificate.
+      if (capture.stoppedBeforeStart &&
+          rootTrustManagement &&
+          rootCAStatus == null) {
+        unawaited(refreshRootCA(quiet: true));
+      }
       if (summary.contentBodiesAvailable == false) {
         _summaryBodiesAbsent = true;
         selectedCaptureConversations = const ConversationPage(
@@ -4869,6 +5095,15 @@ final class WorkbenchController extends ChangeNotifier
       final allKnownAbsent =
           directoryBodies.isNotEmpty &&
           directoryBodies.every((value) => value == false);
+      if (!_captureViewChosen &&
+          available.isEmpty &&
+          capture.kind == 'managed_run' &&
+          capture.running &&
+          capture.observation == 'waiting_for_traffic') {
+        // Nothing to summarise yet: the request list says what it waits for,
+        // and the first request decides the view as usual.
+        showCaptureRequestRecords = true;
+      }
       if (!_captureViewChosen && (anyRetainedBody || allKnownAbsent)) {
         showCaptureRequestRecords = anyRetainedBody;
         _captureViewChosen = true;
@@ -5195,7 +5430,13 @@ final class WorkbenchController extends ChangeNotifier
       final updated = await _api.loadDashboard();
       if (_disposed) return null;
       data = updated;
-      selectedCaptureKey = 'manual_capture:${created.grant.capture.id}';
+      final key = 'manual_capture:${created.grant.capture.id}';
+      if (selectedCaptureKey != key) {
+        selectedCaptureKey = key;
+        // What was read for the session open before belongs to it, not to
+        // the new login: its requests would show under the new name.
+        _resetCaptureDetail();
+      }
       operationNotice = 'manual_capture.created';
       mutating = false;
       notifyListeners();
@@ -5595,6 +5836,10 @@ final class WorkbenchController extends ChangeNotifier
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_disposed) return;
+    if (state == AppLifecycleState.resumed && setupGuideEligible) {
+      // Back from Terminal, where the person may have just set something up.
+      unawaited(refreshSetupFacts());
+    }
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {

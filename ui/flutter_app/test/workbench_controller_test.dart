@@ -1181,8 +1181,19 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text('Launch did not complete'), findsOneWidget);
+        expect(
+          find.text('This launch stopped before codex started'),
+          findsOneWidget,
+        );
         expect(find.text('No routing set attached'), findsOneWidget);
+        expect(
+          find.textContaining('No routing set was attached. Terminal shows'),
+          findsOneWidget,
+        );
+        // Its routing set is unknown, so the command cannot be promised as
+        // the same one again.
+        expect(find.text('Copy launch command'), findsOneWidget);
+        expect(find.text('Copy command again'), findsNothing);
         expect(
           find.textContaining('capture_assignment_not_found'),
           findsNothing,

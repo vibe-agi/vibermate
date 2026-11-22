@@ -30,6 +30,25 @@ func TestAnUnverifiedClientIsToldWhyItWillFail(t *testing.T) {
 	}
 }
 
+// The warning speaks the language of the terminal it is written to.
+func TestTheUnverifiedClientWarningIsLocalized(t *testing.T) {
+	t.Parallel()
+
+	var stderr strings.Builder
+	launcher := &Launcher{config: Config{
+		Stderr:          &stderr,
+		BaseEnvironment: []string{"LANG=zh_CN.UTF-8"},
+	}}
+	launcher.warnUnverified(capturecontrol.LaunchGrant{
+		Run:         capturecontrol.CaptureRunView{ExecutableLabel: "claude"},
+		Recognition: clientadapter.RecognitionUnverified,
+	})
+	warning := stderr.String()
+	if !strings.Contains(warning, "claude") || !strings.Contains(warning, "\u4fe1\u4efb\u6839") {
+		t.Fatalf("the warning is not the Chinese one: %q", warning)
+	}
+}
+
 // A recognized client and an uncatalogued program are both launched without
 // surprise, and neither is warned about: one is fine, and the other never had
 // a reason to expect a trust root.

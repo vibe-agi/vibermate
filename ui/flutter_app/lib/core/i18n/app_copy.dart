@@ -18,6 +18,11 @@ final class AppCopy {
     return value ?? '';
   }
 
+  /// Sentences from separate keys as one text: Chinese runs them together
+  /// after its full stops, other languages put a space between them.
+  String sentences(Iterable<String> values) =>
+      values.join(identical(_values, _zh) ? '' : ' ');
+
   String format(String key, Map<String, Object> values) {
     var result = call(key);
     for (final entry in values.entries) {
@@ -393,6 +398,9 @@ final class AppCopy {
     'ledger.result.canceled': 'Canceled',
     'ledger.result.scripts': '{count} scripts',
     'ledger.empty': 'No requests yet',
+    'ledger.waiting': 'Waiting for the first request',
+    'ledger.waiting.detail':
+        'Type a prompt in {agent}; it appears here within a few seconds.',
     'ledger.empty_filter': 'No loaded request matches this filter',
     'ledger.partial': 'Counts cover loaded requests',
     'ledger.load_earlier': 'Load earlier requests',
@@ -610,7 +618,11 @@ final class AppCopy {
         'Could not save the note. Your draft is kept; try again.',
     'provider_accounts.note.conflict':
         'This account changed elsewhere. Nothing was overwritten. Copy your draft before closing and reopening the editor.',
-    'provider_accounts.empty': 'Add your first upstream account',
+    'provider_accounts.empty': 'No accounts yet',
+    'provider_accounts.empty.detail':
+        'You don\'t need one to start: Claude Code and Codex keep using their own sign-in.',
+    'provider_accounts.empty.when':
+        'Accounts are used through a routing set, to send requests to another service or account, or to run an agent that isn\'t signed in.',
     'provider_accounts.no_results': 'No accounts match your search',
     'provider_accounts.service': 'Credential service',
     'provider_accounts.clear_search': 'Clear search',
@@ -761,9 +773,13 @@ final class AppCopy {
     'approval.attention.pending': '{count} pending',
     'approval.attention.none': 'No approvals',
     'approval.attention.unavailable': 'Approval inbox unavailable',
-    'capture.search': 'Filter sessions',
+    'capture.search': 'Filter by agent or project',
     'capture.search.clear': 'Clear session filter',
-    'capture.search.no_match': 'No loaded sessions match this filter.',
+    'capture.search.no_match': 'No sessions match “{filter}”.',
+    'capture.search.hint':
+        'The filter looks at agent names, project folders and devices.',
+    'capture.search.clear_action': 'Clear filter',
+    'capture.search.requests': 'Search requests for “{filter}”',
     'capture.search.load_hint':
         'Load older sessions to continue searching retained history.',
     'evidence_search.open': 'Search all records',
@@ -809,7 +825,7 @@ final class AppCopy {
     'evidence_search.match.time': 'time',
     'capture.running': 'Running now',
     'capture.history': 'History',
-    'capture.empty': 'No sessions yet.',
+    'capture.empty': 'No sessions yet',
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
     'capture.empty.web.detail':
@@ -818,14 +834,78 @@ final class AppCopy {
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older sessions',
     'capture.select': 'Select a session to see its requests.',
+    'setup.title': 'Connect Claude Code or Codex',
+    'setup.intro':
+        'ViberMate shows every request your agent sends. Your agent keeps its own sign-in, so you don\'t need to add Accounts or set up Routing to start.',
+    'setup.step': 'Step {number}',
+    'setup.status.done': 'Done',
+    'setup.status.todo': 'To do',
+    'setup.status.waiting': 'Waiting',
+    'setup.status.failed': 'Didn\'t start',
+    'setup.command.title': 'Set up the vibermate command',
+    'setup.command.detail':
+        'Adds the vibermate command for Terminal (in ~/\u2060.local/\u2060bin). Nothing else on your Mac changes.',
+    'setup.command.open_settings': 'Open Terminal settings',
+    'setup.start.title': 'Start Claude Code or Codex',
+    'setup.start.detail':
+        'In Terminal, go to your project folder and run one of these. Keep ViberMate open while you work.',
+    'setup.start.copy': 'Copy',
+    'setup.start.copied': 'Copied',
+    'setup.start.codex_requirement':
+        'Codex only: needs ViberMate\'s certificate trusted on this Mac. macOS asks for your password once.',
+    'setup.start.install_trust': 'Install and trust',
+    'setup.start.codex_ready':
+        'Codex: this Mac trusts ViberMate\'s certificate.',
+    'setup.start.root_trusted_retry':
+        'This Mac now trusts ViberMate\'s certificate. Run the Codex command again.',
+    'setup.start.waiting':
+        'Waiting for your agent… This page updates by itself.',
+    'setup.start.done': '{agent} started.',
+    'setup.start.copy_again': 'Copy command again',
+    'setup.start.copy_launch': 'Copy launch command',
+    'setup.prompt.title': 'Send your first prompt',
+    'setup.prompt.detail':
+        'Type anything in your agent. Its requests appear here within a few seconds.',
+    'setup.prompt.done': 'Your agent\'s requests are arriving.',
+    'setup.prompt.waiting':
+        'Waiting for your first request… This page updates by itself.',
+    'setup.server.install.title': 'Install vibermate and sign in',
+    'setup.server.install.detail':
+        'On the computer where your agent runs, install ViberMate, then sign in to this Server in Terminal:',
+    'setup.server.start.detail':
+        'In Terminal, go to your project folder and run one of these.',
+    'setup.footer.other_app':
+        'Using another app? Connect it with a proxy login',
+    'setup.footer.doctor':
+        'Something not working? Run vibermate doctor in Terminal',
+    'setup.footer.doctor.copy': 'Copy vibermate doctor',
+    'setup.hide': 'Hide guide',
+    'setup.show': 'Show setup guide',
+    'setup.back': 'Back to setup guide',
+    'setup.connected':
+        'Connected. Every request from {agent} appears below as it happens.',
+    'setup.connected.saved':
+        'ViberMate keeps the full text of your agent\'s requests and replies on this Mac for {days} days. It isn\'t encrypted; only your Mac account protects it.',
+    'setup.connected.saved.server':
+        'ViberMate keeps the full text of your agent\'s requests and replies on the Server for {days} days.',
+    'setup.connected.saved.metadata':
+        'ViberMate keeps the details of each request, without its text, for {days} days.',
+    'setup.connected.manage': 'Manage saved data',
+    'setup.connected.next':
+        'Next, if you like: send requests with another account, or choose which sites your agent may reach.',
     'capture.assignment.missing': 'No routing set attached',
     'capture.assignment.unavailable': 'Routing set information unavailable',
     'capture.detail.unavailable': 'Run details are temporarily unavailable',
     'capture.detail.unavailable.detail':
         'The runtime could not load these details. Retry to read them again; this does not mean the run has no requests.',
-    'capture.launch_incomplete': 'Launch did not complete',
+    'capture.launch_incomplete': 'This launch stopped before {agent} started',
+    'capture.launch_incomplete.badge': 'Didn\'t start',
     'capture.launch_incomplete.detail':
-        'No routing set was attached and no traffic was recorded. Check the launch error in Terminal, correct the routing set if needed, then run the command again. You can delete this empty record.',
+        'Terminal shows why. Fix it, then run the command again. You can delete this record.',
+    'capture.launch_incomplete.detail.no_routing_set':
+        'No routing set was attached. Terminal shows why; correct the routing set if needed, then run the command again. You can delete this record.',
+    'capture.launch_incomplete.detail.codex_root':
+        'Codex needs ViberMate\'s certificate trusted on this Mac. Install and trust it, then run the command again.',
     'capture.managed': 'Managed run',
     'capture.manual': 'Manual session',
     'capture.source.managed.short': 'vibermate run',
@@ -837,20 +917,30 @@ final class AppCopy {
     'capture.state.revoked': 'Revoked',
     'capture.state.expired': 'Expired',
     'capture.client.version_unknown': 'Version unknown',
-    'capture.client.version_unreported': 'Client version not reported',
     'capture.client.version_reported': 'client-reported',
+    'capture.client.version': 'Version {version}',
+    'capture.client.version_title': 'Agent version',
     'capture.client.version_help':
-        'This is the Agent client version, not the ViberMate Terminal command. A reported version does not verify a release.',
-    'capture.client.compatibility.verified': 'Exact release verified',
-    'capture.client.compatibility.recognized':
-        'Publisher verified · release not cataloged',
-    'capture.client.compatibility.unverified':
-        'Known client · release not verified',
+        'This is the {agent} version. ViberMate compares it with the releases it knows; after an update, a release that is not listed yet is common.',
+    'capture.client.recognized_help':
+        'ViberMate checked that {publisher} signed this program. This exact version hasn\'t been tested with ViberMate yet.',
+    'capture.client.compatibility.verified': 'Known release',
+    'capture.client.compatibility.recognized': 'Official build, not yet listed',
+    'capture.client.compatibility.unverified': 'Build not checked',
     'capture.client.compatibility.unknown': 'Client release unknown',
-    'capture.manual.create': 'Create manual session',
-    'capture.manual.create.title': 'Create a dedicated proxy login',
-    'capture.manual.name': 'Session name',
-    'capture.manual.name.placeholder': 'Figma Desktop',
+    'capture.client.compatibility.blocked': 'Can\'t connect through ViberMate',
+    'capture.cannot_connect.badge': 'Can\'t connect',
+    'capture.cannot_connect.detail':
+        'ViberMate can\'t verify this copy of {agent}, so it can\'t give it ViberMate\'s certificate, and its requests will fail. Start a supported version, or update ViberMate.',
+    'capture.cannot_connect.versions':
+        'Versions ViberMate can connect on this Mac: {versions}.',
+    'capture.manual.create': 'Connect another app',
+    'capture.manual.create.title': 'Connect another app',
+    'capture.manual.create.intro':
+        'For apps you don\'t start with vibermate run. ViberMate gives the app its own proxy login.',
+    'capture.manual.name': 'App name',
+    'capture.manual.name.placeholder': 'e.g. Figma Desktop',
+    'capture.manual.name.required': 'Name this connection',
     'capture.manual.client_class': 'Client type',
     'capture.manual.client_class.desktop_app': 'Desktop app',
     'capture.manual.client_class.cli': 'Command line client',
@@ -861,11 +951,14 @@ final class AppCopy {
     'capture.manual.duration': 'Temporary lifetime',
     'capture.manual.duration.hours': '{count} hours',
     'capture.manual.duration.minutes': '{count} minutes',
-    'capture.manual.review.title': 'Review proxy authority',
+    'capture.manual.review.title': 'What ViberMate will see',
+    'capture.manual.review.builtin':
+        '{set}: requests go unchanged to the service the app chose, with its own login, and ViberMate records them.',
     'capture.manual.review.semantic':
-        'ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client\'s URL, authentication, and model unchanged.',
+        '{set} decides which AI service and account answer these requests, and ViberMate records them.',
     'capture.manual.review.connection_only':
-        'Connection-only capture: encrypted traffic keeps its original destination. ViberMate records connection metadata and does not deliver a Root.',
+        '{set}: encrypted traffic keeps its original destination. ViberMate records connection details only and gives the app no certificate.',
+    'capture.manual.review.hosts': 'Decrypted and recorded: {hosts}',
     'capture.manual.create.action': 'Create proxy login',
     'capture.manual.rotate': 'Rotate proxy credential',
     'capture.manual.rotate.title': 'Rotate this proxy credential?',
@@ -892,7 +985,13 @@ final class AppCopy {
         'UDP does not need the Root certificate. Install the Proxy CA only for eligible HTTPS interception.',
     'capture.manual.delivery.username': 'Username',
     'capture.manual.delivery.password': 'Password',
-    'capture.manual.delivery.root': 'Root path',
+    'capture.manual.delivery.root': 'Root certificate file',
+    'capture.manual.delivery.steps.proxy':
+        'In the app\'s network settings, set its HTTP/HTTPS proxy to the address below.',
+    'capture.manual.delivery.steps.login':
+        'When the app asks for proxy credentials, use this username and password.',
+    'capture.manual.delivery.steps.root':
+        'Trust the root certificate file on this device, so the app accepts ViberMate\'s certificate.',
     'capture.manual.delivery.root_server':
         'Trust this Proxy CA on the client device for intercepted AI hosts. Verify its SHA-256 fingerprint before installing.',
     'capture.manual.delivery.download_root': 'Download Proxy CA',
@@ -911,6 +1010,8 @@ final class AppCopy {
         'Revoking or rotating this login never deletes captured Conversation or Activity evidence.',
     'capture.manual.delivery.copied': '{field} copied',
     'capture.manual.delivery.done': 'I saved these values',
+    'capture.manual.delivery.done_open_guide':
+        'I saved these values, open guide',
     'capture.source.managed':
         'Started by vibermate run; its conversation stays with this run.',
     'capture.source.manual':
@@ -1511,6 +1612,9 @@ final class AppCopy {
     'environment.history.semantics':
         'Read-only frozen routing set revision {revision}',
     'environment.system_managed': 'Built-in · read-only',
+    'environment.builtin.name': 'Forward as-is',
+    'environment.builtin.description':
+        'Used when you start an agent without --env. Each agent keeps its own service and login, and its requests are recorded.',
     'environment.route.default': 'Default',
     'environment.route.fallback': 'Candidate',
     'environment.account.invalid':
@@ -3321,7 +3425,7 @@ final class AppCopy {
     'notice.manual_capture.revoked':
         'Proxy login revoked. Conversation and Activity evidence were retained.',
     'notice.manual_capture.created':
-        'Manual session created with a dedicated proxy login.',
+        'Proxy login created. The app\'s requests appear here once it uses the proxy.',
     'notice.manual_capture.rotated':
         'Proxy credential rotated. Conversation and Activity evidence were retained.',
     'notice.network.approval_allowed':
@@ -3329,6 +3433,8 @@ final class AppCopy {
     'notice.network.approval_denied':
         'Decision applied. Waiting work was refused.',
     'notice.network.rules_saved': 'Connection rule set saved atomically.',
+    'notice.root_ca_updated':
+        'This Mac now trusts ViberMate\'s certificate. Run the command again.',
     'notice.inventory.endpoint_created':
         'Upstream service created. Link existing accounts to use them here.',
     'notice.inventory.account_created':
@@ -3621,6 +3727,8 @@ final class AppCopy {
     'ledger.result.canceled': '已取消',
     'ledger.result.scripts': '{count} 个脚本',
     'ledger.empty': '暂无请求',
+    'ledger.waiting': '正在等待第一个请求',
+    'ledger.waiting.detail': '在 {agent} 中输入一条消息，几秒内就会显示在这里。',
     'ledger.empty_filter': '已加载的请求中没有符合此筛选的记录',
     'ledger.partial': '计数仅含已加载的请求',
     'ledger.load_earlier': '加载更早的请求',
@@ -3801,7 +3909,11 @@ final class AppCopy {
     'provider_accounts.note.invalid': '请填写不超过 256 字的单行备注。',
     'provider_accounts.note.failed': '备注未能保存，草稿已保留，请重试。',
     'provider_accounts.note.conflict': '账号已在别处更新，未覆盖。请先保留当前输入，再关闭并重新编辑。',
-    'provider_accounts.empty': '添加第一个上游账号',
+    'provider_accounts.empty': '还没有账号',
+    'provider_accounts.empty.detail':
+        '开始使用不需要账号：Claude Code 和 Codex 会继续使用自己的登录。',
+    'provider_accounts.empty.when':
+        '账号要通过流量策略使用，用于把请求发往其他服务或账号，或让未登录的 Agent 运行。',
     'provider_accounts.no_results': '没有匹配的账号，请调整搜索内容',
     'provider_accounts.service': '凭据适用服务',
     'provider_accounts.clear_search': '清空搜索',
@@ -3927,9 +4039,12 @@ final class AppCopy {
     'approval.attention.pending': '{count} 个待审批',
     'approval.attention.none': '没有待审批',
     'approval.attention.unavailable': '无法读取审批收件箱',
-    'capture.search': '筛选运行记录',
+    'capture.search': '按 Agent 或项目筛选',
     'capture.search.clear': '清除运行记录筛选条件',
-    'capture.search.no_match': '已加载的运行记录中没有符合条件的内容。',
+    'capture.search.no_match': '没有符合“{filter}”的运行记录。',
+    'capture.search.hint': '筛选只查找 Agent 名称、项目文件夹和设备。',
+    'capture.search.clear_action': '清除筛选',
+    'capture.search.requests': '在请求记录中搜索“{filter}”',
     'capture.search.load_hint': '继续加载更早的运行记录，以搜索保留的历史证据。',
     'evidence_search.open': '搜索全部记录',
     'evidence_search.title': '搜索已保留的历史',
@@ -3971,20 +4086,70 @@ final class AppCopy {
     'evidence_search.match.time': '时间',
     'capture.running': '正在运行',
     'capture.history': '历史记录',
-    'capture.empty': '还没有运行记录。',
+    'capture.empty': '还没有运行记录',
     'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
     'capture.empty.web.detail': '从终端启动 Agent，或为其他客户端创建专属代理登录。',
     'capture.empty.action': '打开终端设置',
     'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
     'capture.select': '请选择一条运行记录以检查其证据。',
+    'setup.title': '接入 Claude Code 或 Codex',
+    'setup.intro':
+        'ViberMate 会显示 Agent 发出的每个请求。Agent 继续使用自己的登录，开始使用前无需添加账号或设置流量策略。',
+    'setup.step': '第 {number} 步',
+    'setup.status.done': '已完成',
+    'setup.status.todo': '待完成',
+    'setup.status.waiting': '等待中',
+    'setup.status.failed': '未启动',
+    'setup.command.title': '设置 vibermate 命令',
+    'setup.command.detail':
+        '为终端添加 vibermate 命令（位于 ~/\u2060.local/\u2060bin），不会改动这台 Mac 上的其他内容。',
+    'setup.command.open_settings': '打开终端设置',
+    'setup.start.title': '启动 Claude Code 或 Codex',
+    'setup.start.detail': '在终端中进入项目目录，运行下面任一命令。使用 Agent 期间请保持 ViberMate 打开。',
+    'setup.start.copy': '复制',
+    'setup.start.copied': '已复制',
+    'setup.start.codex_requirement':
+        '仅 Codex：需要这台 Mac 信任 ViberMate 证书。macOS 会要求输入一次密码。',
+    'setup.start.install_trust': '安装并信任',
+    'setup.start.codex_ready': 'Codex：这台 Mac 已信任 ViberMate 证书。',
+    'setup.start.root_trusted_retry': '这台 Mac 已信任 ViberMate 证书。请重新运行 Codex 命令。',
+    'setup.start.waiting': '正在等待 Agent……此页面会自动更新。',
+    'setup.start.done': '{agent} 已启动。',
+    'setup.start.copy_again': '再次复制命令',
+    'setup.start.copy_launch': '复制启动命令',
+    'setup.prompt.title': '发送第一条消息',
+    'setup.prompt.detail': '在 Agent 中随便输入一句话，几秒内它的请求就会显示在这里。',
+    'setup.prompt.done': 'Agent 的请求已开始显示。',
+    'setup.prompt.waiting': '正在等待第一个请求……此页面会自动更新。',
+    'setup.server.install.title': '安装 vibermate 并登录',
+    'setup.server.install.detail': '在运行 Agent 的电脑上安装 ViberMate，然后在终端中登录此服务器：',
+    'setup.server.start.detail': '在终端中进入项目目录，运行下面任一命令。',
+    'setup.footer.other_app': '使用其他应用？用代理登录接入',
+    'setup.footer.doctor': '遇到问题？在终端运行 vibermate doctor',
+    'setup.footer.doctor.copy': '复制 vibermate doctor',
+    'setup.hide': '隐藏指南',
+    'setup.show': '显示设置指南',
+    'setup.back': '返回设置指南',
+    'setup.connected': '已接入。{agent} 的每个请求都会实时显示在下方。',
+    'setup.connected.saved':
+        'ViberMate 会在这台 Mac 上保存 Agent 请求与回复的完整内容 {days} 天。数据未加密，仅由你的 Mac 账户权限保护。',
+    'setup.connected.saved.server':
+        'ViberMate 会在服务器上保存 Agent 请求与回复的完整内容 {days} 天。',
+    'setup.connected.saved.metadata': 'ViberMate 会保存每个请求的详情（不含内容）{days} 天。',
+    'setup.connected.manage': '管理已保存的数据',
+    'setup.connected.next': '可选的下一步：使用其他账号发送请求，或选择 Agent 可以访问哪些网站。',
     'capture.assignment.missing': '未绑定流量策略',
     'capture.assignment.unavailable': '策略信息暂不可用',
     'capture.detail.unavailable': '运行记录详情暂时无法读取',
     'capture.detail.unavailable.detail': 'Runtime 未能读取详情。请重试；这不代表该运行记录没有请求。',
-    'capture.launch_incomplete': '启动未完成',
-    'capture.launch_incomplete.detail':
-        '本次启动未绑定流量策略，也没有记录到流量。请查看终端中的启动错误，按需修正策略后重新运行命令。此空记录可以删除。',
+    'capture.launch_incomplete': '本次启动在 {agent} 运行前已停止',
+    'capture.launch_incomplete.badge': '未启动',
+    'capture.launch_incomplete.detail': '终端中显示了原因。处理后请重新运行命令。此记录可以删除。',
+    'capture.launch_incomplete.detail.no_routing_set':
+        '未绑定流量策略。原因显示在终端中；按需修正流量策略后重新运行命令。此记录可以删除。',
+    'capture.launch_incomplete.detail.codex_root':
+        'Codex 需要这台 Mac 信任 ViberMate 的证书。请安装并信任后重新运行命令。',
     'capture.managed': '托管运行',
     'capture.manual': '手动捕获',
     'capture.source.managed.short': 'vibermate run',
@@ -3996,18 +4161,29 @@ final class AppCopy {
     'capture.state.revoked': '已撤销',
     'capture.state.expired': '已过期',
     'capture.client.version_unknown': '版本未知',
-    'capture.client.version_unreported': '客户端未报告版本',
     'capture.client.version_reported': '客户端自报',
+    'capture.client.version': '版本 {version}',
+    'capture.client.version_title': 'Agent 版本',
     'capture.client.version_help':
-        '这是 Agent 客户端版本，不是 ViberMate 终端命令版本。客户端自报版本不代表发行版本已验证。',
-    'capture.client.compatibility.verified': '精确版本已验证',
-    'capture.client.compatibility.recognized': '发布者已验证 · 版本未收录',
-    'capture.client.compatibility.unverified': '已知客户端 · 版本未验证',
+        '这是 {agent} 的版本。ViberMate 会将其与已知版本比对；更新后出现尚未收录的版本很常见。',
+    'capture.client.recognized_help':
+        'ViberMate 已确认此程序由 {publisher} 签名，但这个具体版本尚未与 ViberMate 一起测试。',
+    'capture.client.compatibility.verified': '已知版本',
+    'capture.client.compatibility.recognized': '官方构建，尚未收录',
+    'capture.client.compatibility.unverified': '未核验的构建',
     'capture.client.compatibility.unknown': '客户端版本未知',
-    'capture.manual.create': '创建专属代理登录',
-    'capture.manual.create.title': '创建专属代理登录',
-    'capture.manual.name': '记录名称',
-    'capture.manual.name.placeholder': 'Figma Desktop',
+    'capture.client.compatibility.blocked': '无法通过 ViberMate 连接',
+    'capture.cannot_connect.badge': '无法连接',
+    'capture.cannot_connect.detail':
+        'ViberMate 无法验证这份 {agent}，因此不能为它提供 ViberMate 证书，它的请求会失败。请改用受支持的版本，或更新 ViberMate。',
+    'capture.cannot_connect.versions': '这台 Mac 上 ViberMate 可以连接的版本：{versions}。',
+    'capture.manual.create': '接入其他应用',
+    'capture.manual.create.title': '接入其他应用',
+    'capture.manual.create.intro':
+        '用于不通过 vibermate run 启动的应用。ViberMate 会为该应用创建专属代理登录。',
+    'capture.manual.name': '应用名称',
+    'capture.manual.name.placeholder': '例如 Figma Desktop',
+    'capture.manual.name.required': '请为此连接命名',
     'capture.manual.client_class': '客户端类型',
     'capture.manual.client_class.desktop_app': '桌面 App',
     'capture.manual.client_class.cli': '命令行客户端',
@@ -4018,11 +4194,14 @@ final class AppCopy {
     'capture.manual.duration': '临时有效期',
     'capture.manual.duration.hours': '{count} 小时',
     'capture.manual.duration.minutes': '{count} 分钟',
-    'capture.manual.review.title': '检查代理 authority',
+    'capture.manual.review.title': 'ViberMate 可以看到的内容',
+    'capture.manual.review.builtin':
+        '{set}：请求原样发往应用自己选择的服务，并使用它自己的登录；ViberMate 会记录这些请求。',
     'capture.manual.review.semantic':
-        'ViberMate 会解密并记录下列 Agent API 入口；“原始目的地”保持客户端 URL、鉴权和模型不变。',
+        '由 {set} 决定这些请求发往哪个 AI 服务、使用哪个账号；ViberMate 会记录这些请求。',
     'capture.manual.review.connection_only':
-        '仅记录连接：加密流量保持客户端原始目的地；ViberMate 记录连接元数据，不会交付 Root。',
+        '{set}：加密流量保持原始目的地；ViberMate 只记录连接信息，不会向应用提供证书。',
+    'capture.manual.review.hosts': '将解密并记录：{hosts}',
     'capture.manual.create.action': '创建代理登录',
     'capture.manual.rotate': '轮换代理凭据',
     'capture.manual.rotate.title': '轮换这个代理凭据？',
@@ -4045,7 +4224,10 @@ final class AppCopy {
         'UDP 不需要 Root 证书。仅在符合条件的 HTTPS 解密时安装代理 CA。',
     'capture.manual.delivery.username': '用户名',
     'capture.manual.delivery.password': '密码',
-    'capture.manual.delivery.root': 'Root 路径',
+    'capture.manual.delivery.root': '根证书文件',
+    'capture.manual.delivery.steps.proxy': '在应用的网络设置中，把 HTTP/HTTPS 代理设为下面的地址。',
+    'capture.manual.delivery.steps.login': '应用要求代理凭据时，填写下面的用户名和密码。',
+    'capture.manual.delivery.steps.root': '在这台设备上信任根证书文件，让应用接受 ViberMate 的证书。',
     'capture.manual.delivery.root_server':
         '在客户端设备上信任此 Proxy CA，才能验证被检查的 AI 域名。安装前请核对 SHA-256 指纹。',
     'capture.manual.delivery.download_root': '下载 Proxy CA',
@@ -4060,6 +4242,7 @@ final class AppCopy {
     'capture.manual.delivery.evidence': '撤销或轮换登录都不会删除已有的对话与请求记录。',
     'capture.manual.delivery.copied': '已复制{field}',
     'capture.manual.delivery.done': '我已保存这些内容',
+    'capture.manual.delivery.done_open_guide': '我已保存这些内容，打开指南',
     'capture.source.managed': '由 vibermate run 启动；对话归入本次运行。',
     'capture.source.manual': '专属代理登录；没有客户端会话标识时，每次 Agent 调用单独记录。',
     'capture.environment': '流量策略',
@@ -4569,6 +4752,9 @@ final class AppCopy {
     'environment.history.detail': '只读流量策略版本 {revision}；当前配置未发生改变。',
     'environment.history.semantics': '只读的冻结流量策略版本 {revision}',
     'environment.system_managed': '内置 · 只读',
+    'environment.builtin.name': '原样转发',
+    'environment.builtin.description':
+        '不带 --env 启动 Agent 时使用：Agent 保持原服务和登录，请求会被记录。',
     'environment.route.default': '默认',
     'environment.route.fallback': '候选',
     'environment.account.invalid': '该账号尚未关联到所选上游服务，或地址与认证类型不兼容。',
@@ -6084,11 +6270,12 @@ final class AppCopy {
     'terminal.error.failed': '终端命令状态已变化或操作被拒绝，请检查当前状态。',
     'terminal.error.contract': 'App 内命令返回了无效状态，ViberMate 未采信。',
     'notice.manual_capture.revoked': '代理登录已撤销；已有对话与请求记录已保留。',
-    'notice.manual_capture.created': '专属代理登录已创建。',
+    'notice.manual_capture.created': '已为该应用创建专属代理登录；应用开始使用代理后，它的请求会显示在这里。',
     'notice.manual_capture.rotated': '代理凭据已轮换；已有对话与请求记录已保留。',
     'notice.network.approval_allowed': '决定已生效；等待中的工作获准继续。',
     'notice.network.approval_denied': '决定已生效；等待中的工作已被拒绝。',
     'notice.network.rules_saved': '连接规则集已原子保存。',
+    'notice.root_ca_updated': '这台 Mac 已信任 ViberMate 证书。请重新运行命令。',
     'notice.inventory.endpoint_created': '上游服务已创建；现在可以关联已有账号。',
     'notice.inventory.account_created': '上游账号已保存。先关联到适用的上游服务，再在流量策略中选择使用。',
     'notice.inventory.account_created.action': '关联到上游服务',

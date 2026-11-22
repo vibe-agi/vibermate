@@ -22,6 +22,7 @@ import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
 import 'provider_account_facts.dart';
 import 'route_account_scope_editor.dart';
+import 'routing_set_name.dart';
 import 'workbench_controller.dart';
 
 final class EnvironmentsView extends StatefulWidget {
@@ -208,11 +209,12 @@ final class _EnvironmentDirectory extends StatelessWidget {
           final environment = environments[index];
           final selected = environment.id == selectedId;
           final routes = environment.routes.length;
+          final name = environmentDisplayName(environment, copy);
           return Semantics(
             selected: selected,
             button: true,
             label:
-                '${environment.name}, ${environment.state}, '
+                '$name, ${environment.state}, '
                 '${copy.format('environment.routes', {'count': '$routes'})}',
             child: Material(
               color: selected
@@ -263,7 +265,7 @@ final class _EnvironmentDirectory extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              environment.name,
+                              name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall,
@@ -383,7 +385,8 @@ final class _EnvironmentDetail extends StatelessWidget {
                         padding: EdgeInsets.zero,
                       ),
                       Text(
-                        value.name,
+                        environmentDisplayName(value, copy),
+                        key: const Key('environment-title'),
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       if (historical)
@@ -404,6 +407,13 @@ final class _EnvironmentDetail extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // On a narrow pane the line moves into the scrolling body,
+                  // so the header never outgrows the screen.
+                  if (isBuiltInRoutingSet(value) &&
+                      constraints.maxWidth >= _builtInDescriptionInHeader) ...[
+                    const SizedBox(height: 3),
+                    _BuiltInDescription(copy: copy),
+                  ],
                   const SizedBox(height: 3),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -559,41 +569,82 @@ final class _EnvironmentDetail extends StatelessWidget {
           child: value.clientEndpoints.isEmpty
               ? CenteredMessage(
                   icon: Icons.compare_arrows,
-                  title: value.name,
+                  title: environmentDisplayName(value, copy),
                   detail: copy(
                     value.systemOwned
                         ? 'environment.connection_only'
                         : 'environment.no_client_flows',
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
-                  itemCount:
-                      value.clientEndpoints.length + (historical ? 0 : 1),
-                  itemBuilder: (context, index) => !historical && index == 0
-                      ? _LiveSessions(
-                          controller: controller,
-                          environment: value,
-                          copy: copy,
-                        )
-                      : _ClientEndpointPlan(
-                          controller: controller,
-                          environment: value,
-                          clientEndpoint: value
-                              .clientEndpoints[historical ? index : index - 1],
-                          endpoints: endpoints,
-                          accounts: accounts,
-                          copy: copy,
-                          activationEnabled:
-                              !historical &&
-                              !value.systemOwned &&
-                              !controller.environmentMutating,
-                        ),
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final description =
+                        isBuiltInRoutingSet(value) &&
+                        constraints.maxWidth < _builtInDescriptionInHeader;
+                    final lead = description ? 1 : 0;
+                    return ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+                      itemCount:
+                          lead +
+                          value.clientEndpoints.length +
+                          (historical ? 0 : 1),
+                      itemBuilder: (context, position) {
+                        if (description && position == 0) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _BuiltInDescription(copy: copy),
+                          );
+                        }
+                        final index = position - lead;
+                        return !historical && index == 0
+                            ? _LiveSessions(
+                                controller: controller,
+                                environment: value,
+                                copy: copy,
+                              )
+                            : _ClientEndpointPlan(
+                                controller: controller,
+                                environment: value,
+                                clientEndpoint:
+                                    value.clientEndpoints[historical
+                                        ? index
+                                        : index - 1],
+                                endpoints: endpoints,
+                                accounts: accounts,
+                                copy: copy,
+                                activationEnabled:
+                                    !historical &&
+                                    !value.systemOwned &&
+                                    !controller.environmentMutating,
+                              );
+                      },
+                    );
+                  },
                 ),
         ),
       ],
     );
   }
+}
+
+/// Below this width the header leaves the built-in set's description to the
+/// scrolling body.
+const _builtInDescriptionInHeader = 580.0;
+
+/// When the built-in routing set is used, under its name.
+final class _BuiltInDescription extends StatelessWidget {
+  const _BuiltInDescription({required this.copy});
+
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    copy('environment.builtin.description'),
+    key: const Key('environment-builtin-description'),
+    style: Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.text),
+  );
 }
 
 /// The sessions running on this routing set right now, so an edit's reach is
@@ -683,7 +734,7 @@ void _confirmDeleteEnvironment(
       builder: (_) => DeletionConfirmation(
         copy: copy,
         title: copy('deletion.environment.title'),
-        subject: environment.name,
+        subject: environmentDisplayName(environment, copy),
         consequence: copy('deletion.environment.consequence'),
         onConfirm: () async {
           final result = await controller.deleteEnvironment(environment.id);
@@ -5396,7 +5447,10 @@ final class _EnvironmentImpactReview extends StatelessWidget {
           const SizedBox(height: 13),
           _EditorSectionLabel(label: copy('environment.impact.summary')),
           const SizedBox(height: 5),
-          Text(candidate.name, style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            environmentDisplayName(candidate, copy),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
           SelectableText(
             '${candidate.id} · r${candidate.revision} · ${copy('environment.state.${candidate.state}')}',
             style: monoStyle.copyWith(color: context.viberColors.textMuted),

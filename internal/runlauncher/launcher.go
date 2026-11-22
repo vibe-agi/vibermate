@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/netnscapture"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
+	"github.com/vibe-agi/vibermate/locales"
 )
 
 const (
@@ -892,13 +893,18 @@ func (launcher *Launcher) warnUnverified(grant capturecontrol.LaunchGrant) {
 		launcher.config.Stderr == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(
-		launcher.config.Stderr,
-		"vibermate: %s is a client this build knows, at a version it has no "+
-			"release evidence for. It was started without a trust root, so "+
-			"requests it makes through vibermate will fail to connect.\n",
-		grant.Run.ExecutableLabel,
+	catalogs, err := locales.New()
+	if err != nil {
+		return
+	}
+	message, err := catalogs.Render(
+		locales.Detect(launcher.config.BaseEnvironment),
+		"cli.run.unverifiedClient",
+		map[string]string{"program": grant.Run.ExecutableLabel},
 	)
+	if err == nil {
+		_, _ = fmt.Fprintln(launcher.config.Stderr, message)
+	}
 }
 
 func (launcher *Launcher) finishBestEffort(

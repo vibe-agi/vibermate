@@ -6,6 +6,7 @@ import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/features/workbench/code_library_view.dart';
+import 'package:vibermate_app/features/workbench/routing_set_name.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
 CodeLibraryTransformRevision _script(String id, int revision) =>
@@ -141,7 +142,17 @@ void main() {
         .textSpan!
         .toPlainText();
     expect(text, contains('Used by'));
-    expect(text, contains(running.name));
+    // Routing sets appear by their display name; the built-in one is
+    // localized, the others keep their stored name.
+    expect(
+      text,
+      contains(
+        environmentDisplayName(
+          running,
+          AppCopy.forLanguage(AppLanguage.english),
+        ),
+      ),
+    );
     expect(text, contains('client flows'));
 
     // What it did to recent requests, counted per request.

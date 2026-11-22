@@ -21,6 +21,7 @@ import 'runtime_connection_guide.dart';
 import 'server_deployment_guide.dart';
 import 'network_exit_usage.dart';
 import 'workbench_controller.dart';
+import 'routing_set_name.dart';
 
 final class SettingsView extends StatelessWidget {
   const SettingsView({required this.controller, required this.copy, super.key});
@@ -1457,7 +1458,17 @@ final class _AccessSettingsPane extends StatelessWidget {
         ),
         dismissHelpLabel: copy('common.dismiss'),
       ),
-      const SizedBox(height: 14),
+      const SizedBox(height: 6),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          key: const Key('settings-show-setup-guide'),
+          onPressed: controller.showSetupGuide,
+          icon: const Icon(Icons.checklist, size: 15),
+          label: Text(copy('setup.show')),
+        ),
+      ),
+      const SizedBox(height: 8),
       _NetworkAccessFacts(
         access: controller.runtimeStatus?.networkAccess,
         copy: copy,
@@ -2504,7 +2515,7 @@ final class _RootCAStatusBody extends StatelessWidget {
         ],
         if (error != null) ...[
           const SizedBox(height: 8),
-          InlineNotice(message: _rootCAErrorMessage(copy, error!), error: true),
+          InlineNotice(message: rootCAErrorMessage(copy, error!), error: true),
         ],
       ],
     );
@@ -2518,7 +2529,8 @@ final class _RootCAStatusBody extends StatelessWidget {
   }
 }
 
-String _rootCAErrorMessage(AppCopy copy, String error) {
+/// The message for a root certificate failure the controller reports.
+String rootCAErrorMessage(AppCopy copy, String error) {
   if (error.contains('root_trust_install_not_confirmed')) {
     return copy('settings.root_ca.install.not_confirmed');
   }
@@ -3103,7 +3115,10 @@ final class _RuntimeUserPolicyDialogState
   Widget build(BuildContext context) {
     final records =
         widget.controller.data?.environments ?? const <EnvironmentRecord>[];
-    final labels = {for (final value in records) value.id: value.name};
+    final labels = {
+      for (final value in records)
+        value.id: environmentDisplayName(value, widget.copy),
+    };
     final ids = {...labels.keys, ..._selected}.toList()..sort();
     final calls = int.tryParse(_calls.text.trim()) ?? 0;
     final tokens = int.tryParse(_tokens.text.trim()) ?? 0;
@@ -4995,7 +5010,7 @@ final class _TerminalCommandActions extends StatelessWidget {
             key: const Key('terminal-command-install'),
             onPressed: busy
                 ? null
-                : () => _confirm(
+                : () => confirmTerminalCommandChange(
                     context,
                     controller,
                     copy,
@@ -5010,7 +5025,7 @@ final class _TerminalCommandActions extends StatelessWidget {
             key: const Key('terminal-command-refresh-installation'),
             onPressed: busy
                 ? null
-                : () => _confirm(
+                : () => confirmTerminalCommandChange(
                     context,
                     controller,
                     copy,
@@ -5025,7 +5040,7 @@ final class _TerminalCommandActions extends StatelessWidget {
             key: const Key('terminal-command-repair'),
             onPressed: busy
                 ? null
-                : () => _confirm(
+                : () => confirmTerminalCommandChange(
                     context,
                     controller,
                     copy,
@@ -5041,7 +5056,7 @@ final class _TerminalCommandActions extends StatelessWidget {
             key: const Key('terminal-command-remove'),
             onPressed: busy
                 ? null
-                : () => _confirm(
+                : () => confirmTerminalCommandChange(
                     context,
                     controller,
                     copy,
@@ -5056,7 +5071,9 @@ final class _TerminalCommandActions extends StatelessWidget {
   }
 }
 
-Future<void> _confirm(
+/// Asks before setting up, updating, repairing or removing the Terminal
+/// command, then runs the operation. Settings and the setup guide share it.
+Future<void> confirmTerminalCommandChange(
   BuildContext context,
   WorkbenchController controller,
   AppCopy copy,

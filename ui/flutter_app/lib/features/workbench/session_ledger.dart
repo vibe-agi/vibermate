@@ -203,6 +203,16 @@ final class _SessionLedgerState extends State<SessionLedger> {
         : widget.onLoadEarlier;
     final ordered = [...activities]
       ..sort((left, right) => right.occurredAt.compareTo(left.occurredAt));
+    // A running session that has not sent anything yet is waiting, not
+    // empty: say what makes its first request appear.
+    final selectedCapture = controller.selectedCapture;
+    final waiting =
+        selectedCapture != null &&
+            selectedCapture.kind == 'managed_run' &&
+            selectedCapture.running &&
+            selectedCapture.observation == 'waiting_for_traffic'
+        ? selectedCapture
+        : null;
     final counts = {
       for (final filter in SessionLedgerFilter.values)
         filter: ordered
@@ -268,11 +278,18 @@ final class _SessionLedgerState extends State<SessionLedger> {
               child: visible.isEmpty
                   ? CenteredMessage(
                       icon: Icons.receipt_long_outlined,
-                      title: copy(
-                        ordered.isEmpty
-                            ? 'ledger.empty'
-                            : 'ledger.empty_filter',
-                      ),
+                      title: ordered.isEmpty && waiting != null
+                          ? copy('ledger.waiting')
+                          : copy(
+                              ordered.isEmpty
+                                  ? 'ledger.empty'
+                                  : 'ledger.empty_filter',
+                            ),
+                      detail: ordered.isEmpty && waiting != null
+                          ? copy.format('ledger.waiting.detail', {
+                              'agent': waiting.displayName,
+                            })
+                          : null,
                     )
                   : ListView.builder(
                       key: const Key('session-ledger-list'),

@@ -13,12 +13,16 @@ import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
 import 'capture_overview.dart';
 import 'acp_view.dart';
+import 'agent_connection.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
 import 'session_ledger.dart';
+import 'settings_view.dart' show rootCAErrorMessage;
+import 'setup_guide.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
+import 'routing_set_name.dart';
 
 final class CapturesView extends StatefulWidget {
   const CapturesView({required this.controller, required this.copy, super.key});
@@ -38,14 +42,42 @@ final class _CapturesViewState extends State<CapturesView> {
   bool _masterVisible = true;
   double _masterWidth = ViberMetrics.masterPaneWidth;
 
+  /// The session last marked as completing the setup guide. Seeded from the
+  /// controller so returning to Sessions does not open it again.
+  String? _connectedKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _connectedKey = widget.controller.setupConnectedCaptureKey;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 760;
+        final connected = widget.controller.setupConnectedCaptureKey;
+        if (connected != _connectedKey) {
+          _connectedKey = connected;
+          // The guide's first request just arrived. The wide layout opens
+          // its session in place of the guide; at phone width, open it too,
+          // so the Connected notice shows instead of a bare list row.
+          if (connected != null && narrow) _narrowDetail = true;
+        }
+        // The setup guide is decided from every loaded session; a filter
+        // that matches nothing is a search result, never a fresh install.
+        final guideActive =
+            widget.controller.setupGuideEligible && _filter.trim().isEmpty;
+        final connectOtherApp = _canCreateManual(widget.controller)
+            ? () => _openCreateManualCapture(context)
+            : null;
         final master = _CaptureMaster(
           controller: widget.controller,
           copy: widget.copy,
+          guide: guideActive && narrow,
+          guideActive: guideActive,
+          onConnectOtherApp: connectOtherApp,
           filter: _filter,
           filterController: _filterController,
           onFilter: (value) => setState(() => _filter = value),
@@ -54,6 +86,7 @@ final class _CapturesViewState extends State<CapturesView> {
             _filter = '';
           }),
           onSearch: () => _openEvidenceSearch(context),
+          onSearchFor: (text) => _openEvidenceSearch(context, query: text),
           onCreateManual: () => _openCreateManualCapture(context),
           onSelect: (key) {
             unawaited(widget.controller.selectCapture(key));
@@ -63,6 +96,8 @@ final class _CapturesViewState extends State<CapturesView> {
         final detail = _CaptureDetail(
           controller: widget.controller,
           copy: widget.copy,
+          guideActive: guideActive && !narrow,
+          onConnectOtherApp: connectOtherApp,
           showBack: narrow,
           confirmRevoke: _confirmRevoke,
           onBack: () => setState(() {
@@ -141,12 +176,13 @@ final class _CapturesViewState extends State<CapturesView> {
     );
   }
 
-  void _openEvidenceSearch(BuildContext context) {
+  void _openEvidenceSearch(BuildContext context, {String query = ''}) {
     unawaited(
       showEvidenceSearchDialog(
         context,
         controller: widget.controller,
         copy: widget.copy,
+        initialQuery: query,
       ),
     );
   }
@@ -187,26 +223,47 @@ final class _CapturesViewState extends State<CapturesView> {
   }
 }
 
+bool _canCreateManual(WorkbenchController controller) =>
+    (controller.webPrincipal == null || controller.webPrincipal!.owner) &&
+    (controller.data?.environments.any(
+          (environment) => environment.state == 'active',
+        ) ??
+        false);
+
 final class _CaptureMaster extends StatelessWidget {
   const _CaptureMaster({
     required this.controller,
     required this.copy,
+    required this.guide,
+    required this.guideActive,
+    required this.onConnectOtherApp,
     required this.filter,
     required this.filterController,
     required this.onFilter,
     required this.onClearFilter,
     required this.onSearch,
+    required this.onSearchFor,
     required this.onCreateManual,
     required this.onSelect,
   });
 
   final WorkbenchController controller;
   final AppCopy copy;
+
+  /// Narrow layout: the setup guide sits at the top of the list body.
+  final bool guide;
+
+  /// The setup guide is on screen here or in the wide pane.
+  final bool guideActive;
+  final VoidCallback? onConnectOtherApp;
   final String filter;
   final TextEditingController filterController;
   final ValueChanged<String> onFilter;
   final VoidCallback onClearFilter;
   final VoidCallback onSearch;
+
+  /// Opens Search with this text filled in and searched.
+  final ValueChanged<String> onSearchFor;
   final VoidCallback onCreateManual;
   final ValueChanged<String> onSelect;
 
@@ -231,24 +288,37 @@ final class _CaptureMaster extends StatelessWidget {
     final history = controller.historicalCaptures
         .where(matches)
         .toList(growable: false);
-    final canCreateManual =
-        (controller.webPrincipal == null || controller.webPrincipal!.owner) &&
-        (controller.data?.environments.any(
-              (environment) => environment.state == 'active',
-            ) ??
-            false);
+    final canCreateManual = _canCreateManual(controller);
+    final environments =
+        controller.data?.environments ?? const <EnvironmentRecord>[];
+    final noMatch = query.isNotEmpty && running.isEmpty && history.isEmpty;
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
-    final accessGuide = TextButton.icon(
-      key: const Key('capture-empty-open-terminal-settings'),
-      onPressed: controller.openAccessSettings,
-      icon: const Icon(Icons.terminal, size: 15),
-      label: Text(
-        copy(
-          controller.terminalManagement
-              ? 'capture.empty.action'
-              : 'capture.empty.web.action',
-        ),
+    final accessLabel = Text(
+      copy(
+        controller.terminalManagement
+            ? 'capture.empty.action'
+            : 'capture.empty.web.action',
       ),
+    );
+    // A Web owner's main path is signing in and running an agent from a
+    // computer, so the access guide is the filled button there.
+    final accessGuide = webOwner
+        ? FilledButton.icon(
+            key: const Key('capture-empty-open-terminal-settings'),
+            onPressed: controller.openAccessSettings,
+            icon: const Icon(Icons.terminal, size: 15),
+            label: accessLabel,
+          )
+        : TextButton.icon(
+            key: const Key('capture-empty-open-terminal-settings'),
+            onPressed: controller.openAccessSettings,
+            icon: const Icon(Icons.terminal, size: 15),
+            label: accessLabel,
+          );
+    final showGuide = TextButton(
+      key: const Key('capture-empty-show-guide'),
+      onPressed: controller.showSetupGuide,
+      child: Text(copy('setup.show')),
     );
     return ColoredBox(
       color: context.viberColors.panel,
@@ -300,12 +370,32 @@ final class _CaptureMaster extends StatelessWidget {
             ),
           ),
           Expanded(
-            child:
-                running.isEmpty &&
-                    history.isEmpty &&
-                    controller.data?.captureNextCursor == null
+            child: guideActive && !guide && running.isEmpty && history.isEmpty
+                ? Align(
+                    alignment: Alignment.topLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        ViberSpacing.lg,
+                        ViberSpacing.lg,
+                        ViberSpacing.lg,
+                        0,
+                      ),
+                      child: Text(
+                        copy('capture.empty'),
+                        key: const Key('capture-empty-guide-placeholder'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  )
+                : !guide &&
+                      query.isEmpty &&
+                      running.isEmpty &&
+                      history.isEmpty &&
+                      controller.data?.captureNextCursor == null
                 ? CenteredMessage(
-                    icon: Icons.filter_alt_off,
+                    // The filter icon belongs to a filter that matched
+                    // nothing; an empty list is just empty.
+                    icon: Icons.adjust,
                     title: copy('capture.empty'),
                     detail: copy(
                       webOwner
@@ -316,54 +406,118 @@ final class _CaptureMaster extends StatelessWidget {
                         ? Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              FilledButton.icon(
+                              accessGuide,
+                              const SizedBox(height: ViberSpacing.sm),
+                              OutlinedButton.icon(
                                 key: const Key('capture-empty-create-manual'),
                                 onPressed: onCreateManual,
                                 icon: const Icon(Icons.add_link, size: 16),
-                                label: Text(
-                                  copy('capture.manual.create.action'),
-                                ),
+                                label: Text(copy('capture.manual.create')),
                               ),
-                              accessGuide,
+                              showGuide,
                             ],
                           )
-                        : accessGuide,
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [accessGuide, showGuide],
+                          ),
                   )
                 : ListView(
                     children: [
-                      SectionLabel(
-                        label: copy('capture.running'),
-                        count: running.length,
-                      ),
+                      if (guide) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            ViberSpacing.xl,
+                            ViberSpacing.xl,
+                            ViberSpacing.xl,
+                            ViberSpacing.lg,
+                          ),
+                          child: SetupGuide(
+                            controller: controller,
+                            copy: copy,
+                            onConnectOtherApp: onConnectOtherApp,
+                          ),
+                        ),
+                      ],
+                      if ((!guide && !noMatch) || running.isNotEmpty)
+                        SectionLabel(
+                          label: copy('capture.running'),
+                          count: running.length,
+                        ),
                       for (final capture in running)
                         _CaptureRow(
                           capture: capture,
                           copy: copy,
+                          cannotConnect: agentCannotConnect(
+                            capture,
+                            captureEnvironment(capture, environments),
+                          ),
                           activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      SectionLabel(
-                        label: copy('capture.history'),
-                        count: history.length,
-                      ),
+                      if ((!guide && !noMatch) || history.isNotEmpty)
+                        SectionLabel(
+                          label: copy('capture.history'),
+                          count: history.length,
+                        ),
                       for (final capture in history)
                         _CaptureRow(
                           capture: capture,
                           copy: copy,
+                          cannotConnect: agentCannotConnect(
+                            capture,
+                            captureEnvironment(capture, environments),
+                          ),
                           activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      if (running.isEmpty && history.isEmpty)
-                        SizedBox(
-                          height: 176,
-                          child: CenteredMessage(
-                            icon: Icons.filter_alt_off,
-                            title: copy('capture.search.no_match'),
-                            detail: copy('capture.search.load_hint'),
+                      if (noMatch)
+                        // A filter that matches nothing is a search result,
+                        // never the first-run state.
+                        CenteredMessage(
+                          key: const Key('capture-filter-no-match'),
+                          icon: Icons.filter_alt_off,
+                          title: copy.format('capture.search.no_match', {
+                            'filter': filter.trim(),
+                          }),
+                          detail: copy.sentences([
+                            copy('capture.search.hint'),
+                            if (controller.data?.captureNextCursor != null)
+                              copy('capture.search.load_hint'),
+                          ]),
+                          action: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              OutlinedButton.icon(
+                                key: const Key('capture-filter-clear'),
+                                onPressed: onClearFilter,
+                                icon: const Icon(
+                                  Icons.filter_alt_off,
+                                  size: 15,
+                                ),
+                                label: Text(
+                                  copy('capture.search.clear_action'),
+                                ),
+                              ),
+                              const SizedBox(height: ViberSpacing.xs),
+                              TextButton.icon(
+                                key: const Key(
+                                  'capture-filter-search-requests',
+                                ),
+                                onPressed: () => onSearchFor(filter.trim()),
+                                icon: const Icon(Icons.manage_search, size: 15),
+                                label: Text(
+                                  copy.format('capture.search.requests', {
+                                    'filter': filter.trim(),
+                                  }),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       if (controller.captureDirectoryError case final error?)
@@ -410,9 +564,13 @@ final class _CaptureRow extends StatelessWidget {
     required this.activityAt,
     required this.selected,
     required this.onPressed,
+    this.cannotConnect = false,
   });
 
   final CaptureRecord capture;
+
+  /// The agent cannot connect through ViberMate (see agentCannotConnect).
+  final bool cannotConnect;
   final AppCopy copy;
   final DateTime activityAt;
   final bool selected;
@@ -428,11 +586,18 @@ final class _CaptureRow extends StatelessWidget {
         capture.id;
     final activity = _relativeTime(activityAt, copy);
     final state = _localizedCopy(copy, 'capture.state', capture.state);
+    // The slot under the time carries the session's outcome; a launch that
+    // stopped before its agent started is the one outcome shown here.
+    final outcome = capture.stoppedBeforeStart
+        ? copy('capture.launch_incomplete.badge')
+        : cannotConnect
+        ? copy('capture.cannot_connect.badge')
+        : null;
     return Semantics(
       key: Key('capture-row-${capture.key}'),
       selected: selected,
       button: true,
-      label: '${capture.displayName}, $subtitle, $state',
+      label: [capture.displayName, subtitle, state, ?outcome].join(', '),
       child: Material(
         color: selected ? context.viberColors.selection : Colors.transparent,
         child: InkWell(
@@ -491,6 +656,22 @@ final class _CaptureRow extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ),
+                          if (outcome case final value?) ...[
+                            const SizedBox(width: ViberSpacing.sm),
+                            Text(
+                              value,
+                              key: Key('capture-outcome-${capture.key}'),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    // "Didn't start" is a failed outcome, as
+                                    // in the ledger; "Can't connect" is red.
+                                    color: capture.stoppedBeforeStart
+                                        ? context.viberColors.warning
+                                        : context.viberColors.danger,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
                         ],
                       ),
                     ],
@@ -537,6 +718,8 @@ final class _CaptureDetail extends StatelessWidget {
   const _CaptureDetail({
     required this.controller,
     required this.copy,
+    required this.guideActive,
+    required this.onConnectOtherApp,
     required this.showBack,
     required this.confirmRevoke,
     required this.onBack,
@@ -549,6 +732,10 @@ final class _CaptureDetail extends StatelessWidget {
 
   final WorkbenchController controller;
   final AppCopy copy;
+
+  /// The setup guide owns this pane while nothing is selected.
+  final bool guideActive;
+  final VoidCallback? onConnectOtherApp;
   final bool showBack;
   final bool confirmRevoke;
   final VoidCallback onBack;
@@ -561,6 +748,34 @@ final class _CaptureDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final capture = controller.selectedCapture;
+    if (capture == null && guideActive) {
+      // The detail pane sits in a Row that does not stretch its children.
+      return SizedBox.expand(
+        child: ColoredBox(
+          color: context.viberColors.panel,
+          child: SingleChildScrollView(
+            key: const Key('setup-guide-pane'),
+            padding: const EdgeInsets.fromLTRB(
+              ViberSpacing.xxl,
+              40,
+              ViberSpacing.xxl,
+              ViberSpacing.xxl,
+            ),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: SetupGuide(
+                  controller: controller,
+                  copy: copy,
+                  onConnectOtherApp: onConnectOtherApp,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (capture == null) {
       return CenteredMessage(icon: Icons.adjust, title: copy('capture.select'));
     }
@@ -607,6 +822,23 @@ final class _CaptureDetail extends StatelessWidget {
       color: context.viberColors.canvas,
       child: Column(
         children: [
+          // The way back stays while the session opened from the guide
+          // shows its Connected notice, so its header does not jump up the
+          // moment the first request arrives.
+          if (guideActive ||
+              (!showBack && controller.keepsSetupBack(capture.key)))
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),
+              color: context.viberColors.panel,
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('setup-back'),
+                onPressed: controller.backToSetupGuide,
+                icon: const Icon(Icons.arrow_back, size: 14),
+                label: Text(copy('setup.back')),
+              ),
+            ),
           if (controller.captureInspectionFailure case final failure?)
             ControlFailureNotice(
               message: failure.messageKey,
@@ -615,7 +847,7 @@ final class _CaptureDetail extends StatelessWidget {
             ),
           if (controller.errorMessage case final message?)
             InlineNotice(message: message, error: true),
-          if (notice case final value?)
+          if (notice case final value? when copy.maybe('notice.$value') != null)
             InlineNotice(
               message: copy('notice.$value'),
               onDismiss: controller.clearNotice,
@@ -659,6 +891,12 @@ final class _CaptureDetail extends StatelessWidget {
               if (success) onConfirmRevoke(false);
             },
           ),
+          if (controller.setupConnectedCaptureKey == capture.key)
+            SetupConnectedNotice(
+              capture: capture,
+              controller: controller,
+              copy: copy,
+            ),
           if (!accountMatches)
             InlineNotice(
               message: copy('environment.account.invalid'),
@@ -683,10 +921,18 @@ final class _CaptureDetail extends StatelessWidget {
                     ),
                   )
                 : controller.selectedCaptureLaunchIncomplete
-                ? CenteredMessage(
-                    icon: Icons.error_outline,
-                    title: copy('capture.launch_incomplete'),
-                    detail: copy('capture.launch_incomplete.detail'),
+                ? _LaunchStoppedMessage(
+                    capture: capture,
+                    controller: controller,
+                    copy: copy,
+                  )
+                : controller.selectedACP == null &&
+                      controller.captureConversations.isEmpty &&
+                      agentCannotConnect(capture, environment)
+                ? _CannotConnectMessage(
+                    capture: capture,
+                    controller: controller,
+                    copy: copy,
                   )
                 : controller.selectedACP != null
                 ? ACPObservationView(
@@ -729,6 +975,76 @@ final class _CaptureDetail extends StatelessWidget {
       }
     }
     return environment.routes.firstOrNull;
+  }
+}
+
+/// In place of the empty request list of an agent that cannot connect.
+final class _CannotConnectMessage extends StatelessWidget {
+  const _CannotConnectMessage({
+    required this.capture,
+    required this.controller,
+    required this.copy,
+  });
+
+  final CaptureRecord capture;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => CenteredMessage(
+    key: const Key('capture-cannot-connect'),
+    icon: Icons.error_outline,
+    title: copy('capture.client.compatibility.blocked'),
+    detail: cannotConnectDetail(copy, controller, capture),
+  );
+}
+
+/// In place of the request list of a launch that stopped before its agent
+/// started: why, and the one action that helps. Delete stays in the header.
+final class _LaunchStoppedMessage extends StatelessWidget {
+  const _LaunchStoppedMessage({
+    required this.capture,
+    required this.controller,
+    required this.copy,
+  });
+
+  final CaptureRecord capture;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final needsRoot = launchNeedsRoot(controller, capture);
+    final action = launchStoppedAction(
+      controller: controller,
+      copy: copy,
+      capture: capture,
+      keyPrefix: 'capture-launch',
+    );
+    return CenteredMessage(
+      key: const Key('capture-launch-stopped'),
+      icon: Icons.error_outline,
+      title: copy.format('capture.launch_incomplete', {
+        'agent': capture.displayName,
+      }),
+      detail: launchStoppedDetail(copy, controller, capture),
+      action: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ?action,
+          if (controller.rootCAError case final error? when needsRoot) ...[
+            const SizedBox(height: ViberSpacing.sm),
+            Text(
+              rootCAErrorMessage(copy, error),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -1928,9 +2244,18 @@ final class _CaptureContext extends StatelessWidget {
                             key: Key(
                               'capture-client-compatibility-${capture.key}',
                             ),
+                            capture: capture,
                             managed: capture.managedRun!,
                             conversations: conversations,
                             copy: copy,
+                            blocked: agentCannotConnect(
+                              capture,
+                              captureEnvironment(
+                                capture,
+                                environments,
+                                assignedId: assignment?.environmentId,
+                              ),
+                            ),
                           ),
                         ],
                       ],
@@ -2132,17 +2457,26 @@ final class _CaptureSummaryLine extends StatelessWidget {
   }
 }
 
+/// The agent build under the session title: its version and what ViberMate
+/// knows about that build, in words that say whether anything needs doing.
 final class _CaptureClientCompatibility extends StatelessWidget {
   const _CaptureClientCompatibility({
+    required this.capture,
     required this.managed,
     required this.conversations,
     required this.copy,
+    required this.blocked,
     super.key,
   });
 
+  final CaptureRecord capture;
   final ManagedRunSummary managed;
   final List<ConversationSummary> conversations;
   final AppCopy copy;
+
+  /// The agent cannot connect: unchecked, under a routing set that decrypts
+  /// its service.
+  final bool blocked;
 
   @override
   Widget build(BuildContext context) {
@@ -2163,41 +2497,57 @@ final class _CaptureClientCompatibility extends StatelessWidget {
     final reported = reportedVersions.length == 1
         ? reportedVersions.single
         : null;
-    final version =
-        adapter?.version ??
-        (reported == null
-            ? copy('capture.client.version_unreported')
-            : '$reported · ${copy('capture.client.version_reported')}');
-    final status = copy('capture.client.compatibility.${managed.recognition}');
-    final verified = managed.recognition == 'verified';
-    final color = verified
-        ? context.viberColors.verified
-        : managed.recognition == 'unknown'
-        ? context.viberColors.textMuted
-        : context.viberColors.warning;
-    return Tooltip(
-      message: '$status. ${copy('capture.client.version_help')}',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            verified ? Icons.verified_outlined : Icons.info_outline,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Flexible(
+    final version = adapter?.version != null
+        ? copy.format('capture.client.version', {'version': adapter!.version})
+        : reported != null
+        ? '${copy.format('capture.client.version', {'version': reported})} · '
+              '${copy('capture.client.version_reported')}'
+        : copy('capture.client.version_unknown');
+    final state = blocked ? 'blocked' : managed.recognition;
+    final status = copy('capture.client.compatibility.$state');
+    final colors = context.viberColors;
+    // Only a build that cannot work is a warning or worse. An official build
+    // that is not listed yet is common after an update and needs nothing.
+    final color = switch (state) {
+      'verified' => colors.verified,
+      'blocked' => colors.danger,
+      'unverified' => colors.warning,
+      _ => colors.textMuted,
+    };
+    final icon = switch (state) {
+      'verified' => Icons.verified_outlined,
+      'blocked' => Icons.error_outline,
+      'unverified' => Icons.warning_amber_rounded,
+      _ => Icons.info_outline,
+    };
+    final publisher = agentPublisher(capture);
+    final help = [
+      copy.format('capture.client.version_help', {
+        'agent': capture.displayName,
+      }),
+      if (state == 'recognized' && publisher != null)
+        copy.format('capture.client.recognized_help', {'publisher': publisher}),
+      if (blocked)
+        copy.format('capture.cannot_connect.detail', {
+          'agent': capture.displayName,
+        }),
+    ].join('\n\n');
+    final line = '$version · $status';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Tooltip(
+            message: state == 'recognized' && publisher != null
+                ? copy.format('capture.client.recognized_help', {
+                    'publisher': publisher,
+                  })
+                : status,
             child: Text(
-              version,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: monoStyle.copyWith(color: context.viberColors.textMuted),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              status,
+              line,
+              key: const Key('capture-client-line'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(
@@ -2205,8 +2555,31 @@ final class _CaptureClientCompatibility extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: color),
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 2),
+        // The explanation opens on click as well as on hover.
+        IconButton(
+          key: const Key('capture-client-help'),
+          tooltip: copy('capture.client.version_title'),
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              constraints: const BoxConstraints(maxWidth: 560),
+              title: Text(copy('capture.client.version_title')),
+              content: SelectionArea(child: Text(help)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(copy('common.dismiss')),
+                ),
+              ],
+            ),
+          ),
+          icon: Icon(Icons.help_outline, size: 12, color: colors.textFaint),
+          constraints: const BoxConstraints.tightFor(width: 18, height: 18),
+          padding: EdgeInsets.zero,
+        ),
+      ],
     );
   }
 }
@@ -2235,7 +2608,7 @@ final class _EnvironmentScopeControls extends StatelessWidget {
     final assigned = assignment?.environmentId;
     final assignedName = environments
         .where((environment) => environment.id == assigned)
-        .map((environment) => environment.name)
+        .map((environment) => environmentDisplayName(environment, copy))
         .firstOrNull;
     final latest = environments
         .where((environment) => environment.id == assigned)
@@ -2487,23 +2860,11 @@ final class _ManualCaptureCreateDialogState
     final copy = widget.copy;
     final created = _created;
     if (created != null) {
-      return AlertDialog(
-        title: Text(copy('capture.manual.delivery.title')),
-        content: SizedBox(
-          width: 470,
-          child: _ManualGrantDelivery(
-            grant: created.grant,
-            controller: widget.controller,
-            copy: copy,
-          ),
-        ),
-        actions: [
-          FilledButton(
-            key: const Key('manual-capture-delivery-done'),
-            onPressed: () => Navigator.pop(context),
-            child: Text(copy('capture.manual.delivery.done')),
-          ),
-        ],
+      return _ManualDeliveryDialog(
+        title: copy('capture.manual.delivery.title'),
+        grant: created.grant,
+        controller: widget.controller,
+        copy: copy,
       );
     }
     final environments = widget.controller.data!.environments
@@ -2520,6 +2881,12 @@ final class _ManualCaptureCreateDialogState
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  copy('capture.manual.create.intro'),
+                  key: const Key('manual-capture-intro'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 11),
                 CompactLabeledControl(
                   label: copy('capture.manual.name'),
                   child: TextFormField(
@@ -2532,7 +2899,7 @@ final class _ManualCaptureCreateDialogState
                       counterText: '',
                     ),
                     validator: (value) => value == null || value.trim().isEmpty
-                        ? copy('routes.validation.required')
+                        ? copy('capture.manual.name.required')
                         : null,
                   ),
                 ),
@@ -2547,7 +2914,9 @@ final class _ManualCaptureCreateDialogState
                       for (final environment in environments)
                         DropdownMenuItem(
                           value: environment.id,
-                          child: Text(environment.name),
+                          child: Text(
+                            environmentDisplayName(environment, copy),
+                          ),
                         ),
                     ],
                     onChanged: widget.controller.mutating
@@ -2632,7 +3001,15 @@ final class _ManualCaptureCreateDialogState
                     ),
                   )
                 else if (_context case final captureContext?)
-                  _ManualContextReview(context: captureContext, copy: copy)
+                  _ManualContextReview(
+                    context: captureContext,
+                    environment: environments
+                        .where(
+                          (value) => value.id == captureContext.environmentId,
+                        )
+                        .firstOrNull,
+                    copy: copy,
+                  )
                 else
                   InlineNotice(
                     message:
@@ -2745,23 +3122,11 @@ final class _ManualCaptureRotateDialogState
     final copy = widget.copy;
     final rotated = _rotated;
     if (rotated != null) {
-      return AlertDialog(
-        title: Text(copy('capture.manual.delivery.rotated.title')),
-        content: SizedBox(
-          width: 470,
-          child: _ManualGrantDelivery(
-            grant: rotated.grant,
-            controller: widget.controller,
-            copy: copy,
-          ),
-        ),
-        actions: [
-          FilledButton(
-            key: const Key('manual-capture-delivery-done'),
-            onPressed: () => Navigator.pop(context),
-            child: Text(copy('capture.manual.delivery.done')),
-          ),
-        ],
+      return _ManualDeliveryDialog(
+        title: copy('capture.manual.delivery.rotated.title'),
+        grant: rotated.grant,
+        controller: widget.controller,
+        copy: copy,
       );
     }
     return AlertDialog(
@@ -2815,31 +3180,91 @@ final class _ManualCaptureRotateDialogState
   }
 }
 
+/// The one place a proxy login's password is shown. It closes only from its
+/// own buttons, once the person says the values are saved: a click beside
+/// it or Escape would lose the password for good.
+final class _ManualDeliveryDialog extends StatelessWidget {
+  const _ManualDeliveryDialog({
+    required this.title,
+    required this.grant,
+    required this.controller,
+    required this.copy,
+  });
+
+  final String title;
+  final ManualCaptureGrant grant;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    child: AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 470,
+        child: _ManualGrantDelivery(
+          grant: grant,
+          controller: controller,
+          copy: copy,
+        ),
+      ),
+      actions: [
+        if (controller.accessSettingsAvailable)
+          OutlinedButton(
+            key: const Key('manual-capture-delivery-done-guide'),
+            onPressed: () {
+              Navigator.pop(context);
+              controller.openAccessSettings();
+            },
+            child: Text(copy('capture.manual.delivery.done_open_guide')),
+          ),
+        FilledButton(
+          key: const Key('manual-capture-delivery-done'),
+          onPressed: () => Navigator.pop(context),
+          child: Text(copy('capture.manual.delivery.done')),
+        ),
+      ],
+    ),
+  );
+}
+
+/// What the proxy login lets ViberMate see, as a neutral panel: the routing
+/// set by name and what it does with the app's requests, then the services
+/// it decrypts and records.
 final class _ManualContextReview extends StatelessWidget {
-  const _ManualContextReview({required this.context, required this.copy});
+  const _ManualContextReview({
+    required this.context,
+    required this.environment,
+    required this.copy,
+  });
 
   final ManualCaptureContext context;
+  final EnvironmentRecord? environment;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext buildContext) {
     final semantic = context.root != null;
+    final colors = buildContext.viberColors;
+    final set = environment == null
+        ? routingSetDisplayName(context.environmentId, null, copy)
+        : environmentDisplayName(environment!, copy);
+    final summary = copy.format(
+      !semantic
+          ? 'capture.manual.review.connection_only'
+          : context.environmentId == builtInRoutingSetId
+          ? 'capture.manual.review.builtin'
+          : 'capture.manual.review.semantic',
+      {'set': set},
+    );
     return Container(
+      key: const Key('manual-capture-review'),
       width: double.infinity,
-      padding: const EdgeInsets.all(9),
+      padding: const EdgeInsets.all(ViberSpacing.lg),
       decoration: BoxDecoration(
-        color:
-            (semantic
-                    ? buildContext.viberColors.warning
-                    : buildContext.viberColors.route)
-                .withValues(alpha: 0.07),
-        border: Border.all(
-          color:
-              (semantic
-                      ? buildContext.viberColors.warning
-                      : buildContext.viberColors.route)
-                  .withValues(alpha: 0.28),
-        ),
+        color: colors.rail,
+        border: Border.all(color: colors.dividerSoft),
         borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
@@ -2850,12 +3275,29 @@ final class _ManualContextReview extends StatelessWidget {
             style: Theme.of(buildContext).textTheme.titleSmall,
           ),
           const SizedBox(height: 4),
-          Text(
-            semantic
-                ? copy('capture.manual.review.semantic')
-                : copy('capture.manual.review.connection_only'),
-            style: Theme.of(buildContext).textTheme.bodySmall,
+          Tooltip(
+            // The exact version stays one hover away for whoever needs it.
+            message:
+                '${context.environmentId} · ${copy.format('common.revision', {'revision': context.environmentRevision})}',
+            child: Text(
+              summary,
+              style: Theme.of(buildContext).textTheme.bodySmall,
+            ),
           ),
+          if (semantic && context.protectedAuthorities.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              copy.format('capture.manual.review.hosts', {
+                'hosts': context.protectedAuthorities
+                    .map(_withoutDefaultPort)
+                    .join(', '),
+              }),
+              key: const Key('manual-capture-review-hosts'),
+              style: Theme.of(
+                buildContext,
+              ).textTheme.bodySmall?.copyWith(color: colors.text),
+            ),
+          ],
           const SizedBox(height: 6),
           Text(context.proxyAddress, style: monoStyle),
           if (context.socksAddress case final address?)
@@ -2863,21 +3305,15 @@ final class _ManualContextReview extends StatelessWidget {
               '${copy('settings.access.socks')}: $address',
               style: monoStyle,
             ),
-          Text(
-            '${context.environmentId}  ·  r${context.environmentRevision}',
-            style: monoStyle,
-          ),
-          if (context.protectedAuthorities.isNotEmpty)
-            Text(
-              context.protectedAuthorities.join('  ·  '),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: monoStyle,
-            ),
         ],
       ),
     );
   }
+
+  static String _withoutDefaultPort(String authority) =>
+      authority.endsWith(':443')
+      ? authority.substring(0, authority.length - 4)
+      : authority;
 }
 
 final class _ManualGrantDelivery extends StatefulWidget {
@@ -2918,6 +3354,40 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
           children: [
             InlineNotice(message: copy('capture.manual.delivery.once')),
             const SizedBox(height: 10),
+            // Where each value goes, before the values themselves.
+            for (final (index, step) in [
+              copy('capture.manual.delivery.steps.proxy'),
+              copy('capture.manual.delivery.steps.login'),
+              if (grant.root != null)
+                copy('capture.manual.delivery.steps.root'),
+            ].indexed)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      child: Text(
+                        '${index + 1}.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.text,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        step,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.text,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 6),
             _ManualValueRow(
               label: copy('capture.manual.delivery.proxy'),
               value: grant.proxyAddress,
@@ -3123,7 +3593,7 @@ final class _ManualValueRow extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 82,
+            width: 112,
             child: Text(label, style: Theme.of(context).textTheme.labelMedium),
           ),
           Expanded(
