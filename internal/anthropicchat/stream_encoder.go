@@ -444,7 +444,8 @@ func (encoder *clientStreamEncoder) StopReasoning(index int, value protocolcore.
 }
 
 // Terminal writes message_delta and message_stop: the mapped stop reason,
-// the usage, and the unserved safeguards.
+// the usage, and the unserved safeguards. Reasoning usage has no Anthropic
+// field, so its loss is declared.
 func (encoder *clientStreamEncoder) Terminal(response protocolcore.Response) ([]byte, error) {
 	encoder.mu.Lock()
 	defer encoder.mu.Unlock()
@@ -465,6 +466,7 @@ func (encoder *clientStreamEncoder) Terminal(response protocolcore.Response) ([]
 			Path: "$.stop_reason",
 		})
 	}
+	encoder.notices = append(encoder.notices, clientUsageNotices(response.Usage)...)
 	var encoded bytes.Buffer
 	err := appendTerminalEvents(&encoded, response.StopReason, response.Usage, encoder.safeguards)
 	return encoder.result(encoded.Bytes(), err)

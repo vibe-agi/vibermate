@@ -2,6 +2,7 @@ package anthropicchat
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -182,6 +183,52 @@ func TestClientStreamEncoderReportsUnservedSafeguardsAndApproximation(t *testing
 	notices := encoder.TranslationReport().Notices()
 	if len(notices) != 1 || notices[0].Code != protocolcore.NoticeStopReasonApproximated || notices[0].Path != "$.stop_reason" {
 		t.Fatalf("notices = %+v", notices)
+	}
+}
+
+// Anthropic usage has no reasoning field: Claude Code reads reasoning tokens
+// inside output_tokens. Both client encoders declare the loss whenever the
+// provider reported the count, zero included, and not when it did not.
+func TestClientEncodersDeclareReasoningUsage(t *testing.T) {
+	t.Parallel()
+	mustEncode := mustEncoded(t)
+	side, err := NewClientSide(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocolcore.Request{RequestedModel: "claude-opus-5-5"}
+	known := func(tokens int64) protocolcore.UsageValue {
+		return protocolcore.UsageValue{Tokens: tokens, Known: true, Source: "openai-responses"}
+	}
+	for _, test := range []struct {
+		name  string
+		usage protocolcore.Usage
+		want  string
+	}{
+		{"reasoning reported", protocolcore.Usage{Output: known(40), Reasoning: known(12)}, "reasoning_usage_not_forwarded $.usage"},
+		{"zero reasoning reported", protocolcore.Usage{Output: known(4), Reasoning: known(0)}, "reasoning_usage_not_forwarded $.usage"},
+		{"no reasoning count", protocolcore.Usage{Output: known(4)}, ""},
+	} {
+		response := testClientResponse(protocolcore.ContentBlock{Kind: protocolcore.BlockText, Text: "hi"})
+		response.Usage = test.usage
+
+		encoder := newTestClientStreamEncoder(t, request)
+		mustEncode(encoder.Start(protocolpath.StreamStart{ResponseID: "msg_1"}))
+		events := sseEvents(t, mustEncode(encoder.Terminal(response)))
+		if !strings.Contains(string(events[0].Data), `"output_tokens":`+strconv.FormatInt(test.usage.Output.Tokens, 10)+`,`) {
+			t.Fatalf("%s: message_delta = %s", test.name, events[0].Data)
+		}
+		if got := strings.Join(noticeLines(encoder.TranslationReport()), ","); got != test.want {
+			t.Fatalf("%s: stream notices = %q, want %q", test.name, got, test.want)
+		}
+
+		_, report, err := side.EncodeResponse(request, response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(noticeLines(report), ","); got != test.want {
+			t.Fatalf("%s: unary notices = %q, want %q", test.name, got, test.want)
+		}
 	}
 }
 

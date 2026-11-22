@@ -397,8 +397,10 @@ func TestPublicStreamReachesClaudeCodeWithItsCallHeld(t *testing.T) {
 		decoded.Usage.Reasoning.Tokens != 12 || len(decoded.Blocks) != 3 {
 		t.Fatalf("decoded = %+v", decoded)
 	}
-	if !terminal.TranslationReport().Empty() {
-		t.Fatalf("report = %v", noticeLines(terminal.TranslationReport()))
+	// The 12 reasoning tokens stay in output_tokens; Anthropic has no field
+	// for them, which the client encoder declares (design 7.6).
+	if got := noticeLines(terminal.TranslationReport()); !slices.Equal(got, []string{"reasoning_usage_not_forwarded $.usage"}) {
+		t.Fatalf("report = %v", got)
 	}
 	if err := terminal.Reject(); err != nil {
 		t.Fatal(err)

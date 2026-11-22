@@ -525,6 +525,19 @@ func reasoningContentNotice(path string) protocolcore.TranslationReport {
 	})
 }
 
+// clientUsageNotices declares what an Anthropic usage object cannot carry:
+// a known reasoning token count (design 7.6), which Anthropic folds into
+// output_tokens without a field of its own.
+func clientUsageNotices(usage protocolcore.Usage) []protocolcore.TranslationNotice {
+	if !usage.Reasoning.Known {
+		return nil
+	}
+	return []protocolcore.TranslationNotice{{
+		Code: protocolcore.NoticeReasoningUsageNotForwarded,
+		Path: "$.usage",
+	}}
+}
+
 func reasoningUsageNotice(path string) protocolcore.TranslationReport {
 	return protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 		Code: protocolcore.NoticeReasoningUsageNotForwarded,
@@ -728,6 +741,7 @@ func (codec *Codec) encodeClientResponse(
 			Path: "$.stop_reason",
 		})
 	}
+	notices = append(notices, clientUsageNotices(response.Usage)...)
 	var stopSequence *string
 	if response.StopReason == protocolcore.StopReasonStopSequence {
 		value := response.StopSequence
