@@ -123,11 +123,6 @@ func TranslatedClientInputProfile() ClientInputProfile {
 	return ClientInputProfile{translated: true}
 }
 
-// Translated reports the translated profile.
-func (profile ClientInputProfile) Translated() bool {
-	return profile.translated
-}
-
 type Options struct {
 	Resources            *protocolcore.ResourceLimits
 	MaxRequestBytes      int
