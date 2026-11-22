@@ -119,8 +119,14 @@ func TestClassifierTable(t *testing.T) {
 			protocolcore.ProviderError{Class: protocolcore.ProviderErrorServer, Status: 503}},
 		{"a server failure is never a capability", open, 500, errorBody("invalid_image", "input[0].content[0].image_url", "x"),
 			protocolcore.ProviderError{Class: protocolcore.ProviderErrorServer, Status: 500, Code: "invalid_image", Param: "input[0].content[0].image_url"}},
-		{"another client error", open, 409, errorBody("", "", "x"),
-			protocolcore.ProviderError{Class: protocolcore.ProviderErrorInvalidRequest, Status: 409, Code: "invalid_request_error"}},
+		{"a request timeout is a timeout", open, 408, errorBody("", "", "x"),
+			protocolcore.ProviderError{Class: protocolcore.ProviderErrorTimeout, Status: 408, Code: "invalid_request_error"}},
+		{"a conflict is a server failure", open, 409, errorBody("", "", "x"),
+			protocolcore.ProviderError{Class: protocolcore.ProviderErrorServer, Status: 409, Code: "invalid_request_error"}},
+		{"another client error", open, 410, errorBody("", "", "x"),
+			protocolcore.ProviderError{Class: protocolcore.ProviderErrorInvalidRequest, Status: 410, Code: "invalid_request_error"}},
+		{"451", open, 451, errorBody("", "", "x"),
+			protocolcore.ProviderError{Class: protocolcore.ProviderErrorInvalidRequest, Status: 451, Code: "invalid_request_error"}},
 		{"a string error", open, 400, []byte(`{"error":"Input exceeds the context window"}`),
 			protocolcore.ProviderError{Class: protocolcore.ProviderErrorContextWindow, Status: 400}},
 		{"an invalid status", open, 99, []byte(`{"error":{"code":"server_error"}}`),
@@ -228,6 +234,37 @@ func renderAnthropic(t testing.TB, request protocolcore.Request, class protocolc
 	t.Helper()
 	native := anthropicchat.RenderProviderError(request, class)
 	return string(native.ForDialect(protocolspec.DialectAnthropicMessages))
+}
+
+// Claude Code 2.1.329 retries a 408 and a 409 from the API, and never a 400
+// (its retry predicate, RRs in the bundle: x-should-retry "false" stops only
+// a 429, 529 or 503). An upstream 408 or 409 therefore renders with a status
+// Claude Code still retries, while other unlisted client errors stay final.
+func TestTransientClientErrorsRenderAsRetryable(t *testing.T) {
+	t.Parallel()
+
+	side, _ := newStreamSide(t)
+	request := streamRequest(t, "", false)
+	for _, test := range []struct {
+		status     int
+		wantStatus int
+		wantType   string
+		noRetry    bool
+	}{
+		{408, http.StatusGatewayTimeout, "timeout_error", false},
+		{409, http.StatusInternalServerError, "api_error", false},
+		{410, http.StatusBadRequest, "invalid_request_error", true},
+		{451, http.StatusBadRequest, "invalid_request_error", true},
+	} {
+		class := side.ClassifyRejection(request, test.status, nil, errorBody("", "", "x"))
+		native := anthropicchat.RenderProviderError(request, class)
+		dialect := protocolspec.DialectAnthropicMessages
+		body := string(native.ForDialect(dialect))
+		noRetry := native.HeadersForDialect(dialect).Get("X-Should-Retry") == "false"
+		if native.ClientStatus(dialect) != test.wantStatus || !strings.Contains(body, `"type":"`+test.wantType+`"`) || noRetry != test.noRetry {
+			t.Errorf("%d rendered as %d %s (x-should-retry false: %v)", test.status, native.ClientStatus(dialect), body, noRetry)
+		}
+	}
 }
 
 // TestRenderedClassesReachClaudeCodeAsItsRecoveryTokens checks the two

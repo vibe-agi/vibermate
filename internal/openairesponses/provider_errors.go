@@ -216,9 +216,13 @@ func (side *ProviderSide) classify(
 	case status == 529 || ((status == 503 || status == 0) &&
 		hasCode("server_is_overloaded", "slow_down", "policy_capacity_unavailable")):
 		result.Class = protocolcore.ProviderErrorOverloaded
-	case status == 504:
+	case status == 504 || status == 408:
+		// A request timeout is transient like a gateway timeout, and is
+		// rendered as one, so the client retries it as it would a 408.
 		result.Class = protocolcore.ProviderErrorTimeout
-	case status >= 500:
+	case status >= 500 || status == 409:
+		// A conflict is transient too: rendered as a server failure, it is
+		// retried as the client would retry a 409.
 		result.Class = protocolcore.ProviderErrorServer
 	case status != 0:
 		// Any other client error is still the upstream refusing the
