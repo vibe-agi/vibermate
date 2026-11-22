@@ -206,3 +206,54 @@ func TestResourceModelCloneAndTailSemantics(t *testing.T) {
 		t.Fatalf("tail semantics lost: %v", err)
 	}
 }
+
+// Every string of the new neutral arms is charged, including the media inside
+// tool-result parts and the unserved safeguard kinds.
+func TestResourceCountsNewNeutralFields(t *testing.T) {
+	base := Request{RequestedModel: "m", EffectiveModel: "m"}
+	baseCost, err := MeasureRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := base
+	request.UnservedSafeguards = []SafeguardKind{"sg"}
+	request.Messages = []Message{
+		{Role: "", Blocks: []ContentBlock{
+			{Kind: "", Reasoning: &Reasoning{Text: "a", TextSource: "bb", Seal: ReasoningSeal{Format: "ccc", ItemID: "dddd", Model: "e", Binding: "ff", Opaque: "ggg"}}},
+			{Kind: "", Media: &Media{Kind: "h", MediaType: "ii", Data: "jjj", URL: "k", FileID: "ll", FileSource: "mmm", Text: "n", Title: "oo"}},
+			{Kind: "", ToolResult: ToolResult{Parts: &ToolResultParts{Items: []ToolResultPart{
+				{Kind: "p", Text: "qq", ToolName: "rrr"},
+				{Kind: "", Media: &Media{MediaType: "ssss"}},
+			}}}},
+		}},
+	}
+	cost, err := MeasureRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 safeguard + reasoning (1+2+3+4+1+2+3=16) + media (1+2+3+1+2+3+1+2=15)
+	// + parts (1+2+3, then 4 of nested media) = 43 payload bytes.
+	if got := cost.PayloadBytes - baseCost.PayloadBytes; got != 43 {
+		t.Fatalf("new fields charged %d payload bytes, want 43", got)
+	}
+	cells := uint64(unsafe.Sizeof(SafeguardKind(""))) + uint64(unsafe.Sizeof(Message{})) +
+		3*uint64(unsafe.Sizeof(ContentBlock{})) + uint64(unsafe.Sizeof(Reasoning{})) +
+		2*uint64(unsafe.Sizeof(Media{})) + uint64(unsafe.Sizeof(ToolResultParts{})) +
+		2*uint64(unsafe.Sizeof(ToolResultPart{}))
+	if got := cost.StructureBytes - baseCost.StructureBytes; got != cells {
+		t.Fatalf("new fields charged %d structure bytes, want %d", got, cells)
+	}
+	response := Response{ID: "r", RequestedModel: "m", EffectiveModel: "m", ReportedModel: "m", StopReason: "end_turn"}
+	responseBase, err := MeasureResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Blocks = []ContentBlock{{Kind: "", Reasoning: &Reasoning{Text: "abc", Seal: ReasoningSeal{Opaque: "defg"}}}}
+	responseCost, err := MeasureResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseCost.PayloadBytes - responseBase.PayloadBytes; got != 7 {
+		t.Fatalf("response reasoning charged %d payload bytes, want 7", got)
+	}
+}

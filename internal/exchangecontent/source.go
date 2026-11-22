@@ -409,13 +409,37 @@ func (s *Source) reserveScratch(payload, structure uint64) error {
 	}
 	return nil
 }
-func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
-	if s.metadata.Mode != environment.ContentRecordingFull {
-		structure := uint64(unsafe.Sizeof(Block{}))
-		if b.Agent != nil {
-			structure += uint64(unsafe.Sizeof(AgentContext{}))
+
+// projectedBlockCount is how many stored blocks one neutral block becomes:
+// reasoning can become its text and its seal evidence, and a tool result is
+// followed by one evidence block per media part.
+func projectedBlockCount(b protocolcore.ContentBlock) uint64 {
+	switch {
+	case b.Kind == protocolcore.BlockReasoning:
+		return 2
+	case b.Kind == protocolcore.BlockToolResult && b.ToolResult.Parts != nil:
+		count := uint64(1)
+		for _, part := range b.ToolResult.Parts.Items {
+			if part.Media != nil {
+				count++
+			}
 		}
-		return s.reserveScratch(4096, structure)
+		return count
+	default:
+		return 1
+	}
+}
+
+func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
+	blocks := projectedBlockCount(b)
+	// Each extra stored block holds a fingerprint string and agent copy.
+	extraPayload := (blocks - 1) * 256
+	if s.metadata.Mode != environment.ContentRecordingFull {
+		structure := uint64(unsafe.Sizeof(Block{})) * blocks
+		if b.Agent != nil {
+			structure += uint64(unsafe.Sizeof(AgentContext{})) * blocks
+		}
+		return s.reserveScratch(4096+extraPayload, structure)
 	}
 	text := b.Text
 	if b.Kind == protocolcore.BlockRefusal {
@@ -427,12 +451,15 @@ func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
 	if b.Kind == protocolcore.BlockToolCall && b.ToolCall.EffectiveKind() != protocolcore.ToolKindFunction {
 		text = b.ToolCall.Input
 	}
+	if b.Kind == protocolcore.BlockReasoning && b.Reasoning != nil {
+		text = b.Reasoning.Text
+	}
 	out, err := sanitizerBound(uint64(len(text)))
 	if err != nil {
 		return err
 	}
-	payload := uint64(len(text)) + 4*out + 4096
-	structure := uint64(unsafe.Sizeof(Block{})) + 4096
+	payload := uint64(len(text)) + 4*out + 4096 + extraPayload
+	structure := uint64(unsafe.Sizeof(Block{}))*blocks + uint64(unsafe.Sizeof(AgentContext{}))*(blocks-1) + 4096
 	if b.Kind == protocolcore.BlockToolCall && b.ToolCall.EffectiveKind() == protocolcore.ToolKindFunction {
 		size := uint64(b.ToolCall.Arguments.ByteLen())
 		if err := s.reserveScratch(2*size+4096, 8192); err != nil {

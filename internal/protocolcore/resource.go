@@ -152,7 +152,40 @@ func (meter *resourceMeter) blocks(blocks []ContentBlock) {
 			block.ToolResult.Namespace, block.ToolResult.Name, block.ToolResult.Content)
 		meter.add(uint64(len(block.ToolCall.Arguments.value)), 0)
 		meter.extension(block.ProviderExtension)
+		meter.reasoning(block.Reasoning)
+		meter.media(block.Media)
+		meter.toolResultParts(block.ToolResult.Parts)
 		meter.agent(block.Agent)
+	}
+}
+
+func (meter *resourceMeter) reasoning(reasoning *Reasoning) {
+	if reasoning == nil {
+		return
+	}
+	meter.cells(1, unsafe.Sizeof(*reasoning))
+	meter.strings(reasoning.Text, string(reasoning.TextSource), string(reasoning.Seal.Format),
+		reasoning.Seal.ItemID, reasoning.Seal.Model, reasoning.Seal.Binding, reasoning.Seal.Opaque)
+}
+
+func (meter *resourceMeter) media(media *Media) {
+	if media == nil {
+		return
+	}
+	meter.cells(1, unsafe.Sizeof(*media))
+	meter.strings(string(media.Kind), media.MediaType, media.Data, media.URL, media.FileID,
+		string(media.FileSource), media.Text, media.Title)
+}
+
+func (meter *resourceMeter) toolResultParts(parts *ToolResultParts) {
+	if parts == nil {
+		return
+	}
+	meter.cells(1, unsafe.Sizeof(*parts))
+	meter.cells(len(parts.Items), unsafe.Sizeof(ToolResultPart{}))
+	for _, part := range parts.Items {
+		meter.strings(string(part.Kind), part.Text, part.ToolName)
+		meter.media(part.Media)
 	}
 }
 
@@ -208,6 +241,10 @@ func MeasureRequest(request Request) (ResourceCost, error) {
 	meter.cells(len(request.StopSequences), unsafe.Sizeof(""))
 	meter.strings(request.StopSequences...)
 	meter.evidence(request.ProtocolEvidence)
+	meter.cells(len(request.UnservedSafeguards), unsafe.Sizeof(SafeguardKind("")))
+	for _, kind := range request.UnservedSafeguards {
+		meter.strings(string(kind))
+	}
 	return meter.cost, meter.err
 }
 

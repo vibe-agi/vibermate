@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
@@ -31,7 +32,126 @@ type Failure struct {
 	Path              string
 	ProviderErrorCode string
 	NativeError       NativeProviderError `json:"-"`
-	cause             error
+	// Provider is the neutral class of an upstream rejection that a
+	// cross-dialect path classified; nil when nothing was classified.
+	Provider *ProviderError `json:"-"`
+	cause    error
+}
+
+// ProviderErrorClass is the neutral meaning of an upstream rejection, so a
+// client side can render it in its own dialect without provider text.
+type ProviderErrorClass string
+
+const (
+	ProviderErrorContextWindow     ProviderErrorClass = "context_window"      // input alone exceeds the window
+	ProviderErrorMaxTokensOverflow ProviderErrorClass = "max_tokens_overflow" // input plus max_output_tokens exceeds it
+	ProviderErrorReasoningState    ProviderErrorClass = "reasoning_state"     // invalid_encrypted_content
+	ProviderErrorImage             ProviderErrorClass = "image"
+	ProviderErrorDocument          ProviderErrorClass = "document"
+	ProviderErrorEffort            ProviderErrorClass = "effort"
+	ProviderErrorStructuredOutput  ProviderErrorClass = "structured_output"
+	ProviderErrorInvalidRequest    ProviderErrorClass = "invalid_request"
+	ProviderErrorRequestTooLarge   ProviderErrorClass = "request_too_large"
+	ProviderErrorAuthentication    ProviderErrorClass = "authentication"
+	ProviderErrorPermission        ProviderErrorClass = "permission"
+	ProviderErrorNotFound          ProviderErrorClass = "not_found"
+	ProviderErrorRateLimited       ProviderErrorClass = "rate_limited"
+	ProviderErrorUsageLimit        ProviderErrorClass = "usage_limit" // a plan window that resets later
+	ProviderErrorQuotaExhausted    ProviderErrorClass = "quota"       // credit; retrying cannot help
+	ProviderErrorOverloaded        ProviderErrorClass = "overloaded"
+	ProviderErrorTimeout           ProviderErrorClass = "timeout"
+	ProviderErrorServer            ProviderErrorClass = "server"
+	ProviderErrorPolicy            ProviderErrorClass = "policy"
+)
+
+func (class ProviderErrorClass) Valid() bool {
+	switch class {
+	case ProviderErrorContextWindow, ProviderErrorMaxTokensOverflow, ProviderErrorReasoningState,
+		ProviderErrorImage, ProviderErrorDocument, ProviderErrorEffort, ProviderErrorStructuredOutput,
+		ProviderErrorInvalidRequest, ProviderErrorRequestTooLarge, ProviderErrorAuthentication,
+		ProviderErrorPermission, ProviderErrorNotFound, ProviderErrorRateLimited, ProviderErrorUsageLimit,
+		ProviderErrorQuotaExhausted, ProviderErrorOverloaded, ProviderErrorTimeout, ProviderErrorServer,
+		ProviderErrorPolicy:
+		return true
+	default:
+		return false
+	}
+}
+
+// MaxProviderRetryAfter bounds a retry delay taken from provider metadata.
+const MaxProviderRetryAfter = 24 * time.Hour
+
+// ProviderError carries only a class, closed-vocabulary codes, known field
+// names and derived integers. It never holds provider text.
+type ProviderError struct {
+	Class  ProviderErrorClass
+	Status int    // provider HTTP status; 0 for an in-stream failure
+	Code   string // KnownClassifiedErrorCode only
+	Param  string // a known request field name only
+	// RetryAfter comes from headers or numeric body fields, never from prose.
+	RetryAfter   time.Duration
+	ResetsAt     int64 // unix seconds; 0 when unknown
+	LimitTokens  int   // context window when known; 0 when unknown
+	ActualTokens int   // estimated input tokens when known; 0 when unknown
+}
+
+func (provider ProviderError) Validate() error {
+	if !provider.Class.Valid() {
+		return errors.New("provider error class is unsupported")
+	}
+	if provider.Status != 0 && (provider.Status < 100 || provider.Status > 599) {
+		return errors.New("provider error status is invalid")
+	}
+	if KnownClassifiedErrorCode(provider.Code) != provider.Code {
+		return errors.New("provider error code is not in the closed vocabulary")
+	}
+	if !validProviderErrorParam(provider.Param) {
+		return errors.New("provider error field is invalid")
+	}
+	if provider.RetryAfter < 0 || provider.RetryAfter > MaxProviderRetryAfter {
+		return errors.New("provider retry delay is invalid")
+	}
+	if provider.ResetsAt < 0 || provider.LimitTokens < 0 || provider.ActualTokens < 0 {
+		return errors.New("provider error counts are negative")
+	}
+	return nil
+}
+
+// validProviderErrorParam admits a request field path such as
+// "reasoning.effort" or "input[3].content[0].image_url", never free text.
+func validProviderErrorParam(value string) bool {
+	if len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9', character == '_', character == '.',
+			character == '[', character == ']', character == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// KnownClassifiedErrorCode is the closed vocabulary a ProviderError may
+// carry: every KnownProviderErrorCode plus the codes translated rejection
+// classification names. It is separate on purpose: KnownProviderErrorCode
+// also reaches the client-visible error envelopes of the existing paths, so
+// widening it would change what their clients receive.
+func KnownClassifiedErrorCode(code string) string {
+	if known := KnownProviderErrorCode(code); known != "" {
+		return known
+	}
+	switch code {
+	case "model_not_found", "invalid_api_key", "server_is_overloaded", "slow_down",
+		"policy_capacity_unavailable", "usage_not_included", "content_policy_violation",
+		"cyber_policy", "credit_balance_exhausted":
+		return code
+	default:
+		return ""
+	}
 }
 
 // KnownProviderErrorCode is a closed diagnostic vocabulary, not a provider
@@ -89,6 +209,26 @@ type NativeProviderError struct {
 	eventName string
 	eventData json.RawMessage
 	headers   http.Header
+	// clientStatus is the HTTP status a client side chose for this error;
+	// zero keeps the provider's status.
+	clientStatus int
+}
+
+// WithClientStatus records the status the rendering client side requires,
+// for example 400 for a recovery token its client matches only on 400.
+func (native NativeProviderError) WithClientStatus(status int) NativeProviderError {
+	if native.dialect != "" && status >= 400 && status <= 599 {
+		native.clientStatus = status
+	}
+	return native
+}
+
+// ClientStatus returns the chosen status for a client of dialect, or 0.
+func (native NativeProviderError) ClientStatus(dialect protocolspec.Dialect) int {
+	if native.dialect != dialect {
+		return 0
+	}
+	return native.clientStatus
 }
 
 // WithHTTPBody retains the matching error envelope, including native request
