@@ -196,7 +196,11 @@ type Failure struct {
 	ClientPath     string
 	ProtocolReason protocolcore.Reason
 	ResponseIssue  ProviderResponseIssue
-	cause          error
+	// Provider is the neutral class a composed path gave an upstream
+	// rejection, an in-band failure or a provider admission refusal; nil on
+	// every other failure. It holds no provider text.
+	Provider *protocolcore.ProviderError `json:"-"`
+	cause    error
 }
 
 func (failure *Failure) Error() string {
@@ -241,6 +245,7 @@ func newProviderStatusFailure(
 		ProviderField:     diagnosis.field,
 		ProviderErrorCode: diagnosis.code,
 		NativeError:       diagnosis.native,
+		Provider:          diagnosis.provider,
 		cause:             errors.New("provider returned a non-success status"),
 	}
 }
@@ -290,9 +295,21 @@ func newFailure(
 		ProtocolReason:    protocolcore.ReasonOf(cause),
 		ProviderErrorCode: protocolcore.ProviderErrorCodeOf(cause),
 		NativeError:       protocolcore.NativeProviderErrorOf(cause),
+		Provider:          classifiedProviderErrorOf(cause),
 		cause:             cause,
 	}
 	return failure
+}
+
+// classifiedProviderErrorOf returns a copy of the class a composed path's
+// provider side gave a failure, or nil. An invalid class is never carried.
+func classifiedProviderErrorOf(cause error) *protocolcore.ProviderError {
+	var failure *protocolcore.Failure
+	if !errors.As(cause, &failure) || failure.Provider == nil || failure.Provider.Validate() != nil {
+		return nil
+	}
+	class := *failure.Provider
+	return &class
 }
 
 // structuralPath extracts the failure's location in the request's shape.

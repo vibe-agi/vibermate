@@ -2462,6 +2462,14 @@ type testPlanOptions struct {
 	selector           *codelibrary.AccountSelectorRevision
 	recording          environment.ContentRecordingPolicy
 	transform          messagetransform.Policy
+	// realm overrides the provider target's realm ("realm.provider").
+	realm string
+	// translated compiles with the test catalog that also holds a composed
+	// Anthropic to Responses pair (translated_responses_test.go).
+	translated bool
+	// restore builds the plan as a published revision is rebuilt, which
+	// skips the checks only candidates get.
+	restore bool
 }
 
 type testAccount struct {
@@ -2479,6 +2487,43 @@ func (catalog testAccountCatalog) LookupAccount(id string, _ string) (environmen
 
 func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environment.RequestPlan {
 	t.Helper()
+	aggregate, catalog, clientOrigin, requestPath := testEnvironment(t, options)
+	compiler := mustEnvironmentCompiler(t, catalog)
+	if options.translated {
+		compiler = mustTranslatedEnvironmentCompiler(t, catalog)
+	}
+	compile := compiler.Compile
+	if options.restore {
+		compile = compiler.Restore
+	}
+	snapshot, err := compile(aggregate)
+	if err != nil {
+		t.Fatalf("compile Environment: %v", err)
+	}
+	downstreamProtocol := options.downstreamProtocol
+	if downstreamProtocol == "" {
+		downstreamProtocol = wireprofile.ApplicationProtocolHTTP1
+	}
+	plan, err := snapshot.ResolveRequest(clientOrigin, environment.RequestFacts{
+		Target: protocolspec.RequestTarget{
+			Method: http.MethodPost, Path: requestPath,
+			Transport: protocolspec.ClientOperationTransportHTTP,
+		},
+		DownstreamProtocol: downstreamProtocol,
+	})
+	if err != nil {
+		t.Fatalf("resolve Environment request: %v", err)
+	}
+	return plan
+}
+
+// testEnvironment is the one-endpoint Environment, and its account catalog,
+// that mustEnvironmentRequestPlan compiles.
+func testEnvironment(
+	t *testing.T,
+	options testPlanOptions,
+) (environment.Environment, testAccountCatalog, originidentity.ClientOrigin, string) {
+	t.Helper()
 	clientProtocol := options.clientProtocol
 	if clientProtocol == "" {
 		clientProtocol = environment.ClientProtocolAnthropicMessages
@@ -2495,6 +2540,9 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	}
 	clientOrigin := mustClientOrigin(t, clientOriginValue)
 	realm := "realm.provider"
+	if options.realm != "" {
+		realm = options.realm
+	}
 	accountPolicy := environment.RouteAccountPolicy{
 		Revision: 5, Mode: environment.AccountSelectionFixed,
 	}
@@ -2604,61 +2652,62 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	if options.choice != nil {
 		aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = *options.choice
 	}
-	compiler := mustEnvironmentCompiler(t, catalog)
-	snapshot, err := compiler.Compile(aggregate)
-	if err != nil {
-		t.Fatalf("compile Environment: %v", err)
-	}
-	downstreamProtocol := options.downstreamProtocol
-	if downstreamProtocol == "" {
-		downstreamProtocol = wireprofile.ApplicationProtocolHTTP1
-	}
-	plan, err := snapshot.ResolveRequest(clientOrigin, environment.RequestFacts{
-		Target: protocolspec.RequestTarget{
-			Method: http.MethodPost, Path: requestPath,
-			Transport: protocolspec.ClientOperationTransportHTTP,
-		},
-		DownstreamProtocol: downstreamProtocol,
-	})
-	if err != nil {
-		t.Fatalf("resolve Environment request: %v", err)
-	}
-	return plan
+	return aggregate, catalog, clientOrigin, requestPath
 }
 
 func mustEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) environment.Compiler {
+	t.Helper()
+	return mustEnvironmentCompilerWith(t, accounts)
+}
+
+// testCodecPair is a catalog entry for a pair the test selector serves.
+func testCodecPair(
+	t *testing.T,
+	id string,
+	revision protocolspec.Revision,
+	client protocolspec.Dialect,
+	provider protocolspec.Dialect,
+) protocolspec.CodecPairDefinition {
 	t.Helper()
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
-	newPair := func(
-		id string,
-		revision protocolspec.Revision,
-		client protocolspec.Dialect,
-		provider protocolspec.Dialect,
-	) protocolspec.CodecPairDefinition {
-		pairID, pairErr := protocolspec.NewCodecPairID(id)
-		if pairErr != nil {
-			t.Fatal(pairErr)
-		}
-		return protocolspec.CodecPairDefinition{
-			ID: pairID, Revision: revision,
-			ClientDialect: client, ProviderDialect: provider,
-			ClientOperationIDs: operations.SemanticOperationIDs(client),
-			RequiredCapabilities: []protocolspec.ProviderCapability{
-				protocolspec.ProviderCapabilityMessages,
-				protocolspec.ProviderCapabilityStreaming,
-				protocolspec.ProviderCapabilityToolCalls,
-			},
-		}
+	pairID, err := protocolspec.NewCodecPairID(id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	protocols, err := protocolspec.NewCatalog(operations.Definitions(), []protocolspec.CodecPairDefinition{
-		newPair(anthropicchat.CodecPairID, anthropicchat.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat),
-		newPair(anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages),
-		newPair(responseschat.CodecPairID, responseschat.CodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat),
-		newPair(responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
-	})
+	return protocolspec.CodecPairDefinition{
+		ID: pairID, Revision: revision,
+		ClientDialect: client, ProviderDialect: provider,
+		ClientOperationIDs: operations.SemanticOperationIDs(client),
+		RequiredCapabilities: []protocolspec.ProviderCapability{
+			protocolspec.ProviderCapabilityMessages,
+			protocolspec.ProviderCapabilityStreaming,
+			protocolspec.ProviderCapabilityToolCalls,
+		},
+	}
+}
+
+// mustEnvironmentCompilerWith compiles with the four production pairs plus
+// extra.
+func mustEnvironmentCompilerWith(
+	t *testing.T,
+	accounts environment.AccountCatalog,
+	extra ...protocolspec.CodecPairDefinition,
+) environment.Compiler {
+	t.Helper()
+	operations, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := []protocolspec.CodecPairDefinition{
+		testCodecPair(t, anthropicchat.CodecPairID, anthropicchat.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat),
+		testCodecPair(t, anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages),
+		testCodecPair(t, responseschat.CodecPairID, responseschat.CodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat),
+		testCodecPair(t, responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
+	}
+	protocols, err := protocolspec.NewCatalog(operations.Definitions(), append(pairs, extra...))
 	if err != nil {
 		t.Fatal(err)
 	}

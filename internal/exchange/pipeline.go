@@ -25,6 +25,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -80,6 +81,9 @@ type Pipeline struct {
 	now                      func() time.Time
 	rawEvidence              rawevidence.Observer
 	reportRawEvidenceFailure func(error)
+	// reasoningRejections is the rejected-seal memory composed paths read
+	// through ProviderContext.RejectedSeal (design 8.6).
+	reasoningRejections *reasoningRejections
 
 	ownerContext context.Context
 	cancelOwner  context.CancelCauseFunc
@@ -155,6 +159,7 @@ func New(options Options) (*Pipeline, error) {
 		now:                      options.Now,
 		rawEvidence:              options.RawEvidence,
 		reportRawEvidenceFailure: options.ReportRawEvidenceFailure,
+		reasoningRejections:      newReasoningRejections(maxReasoningRejections),
 		ownerContext:             ownerContext,
 		cancelOwner:              cancelOwner,
 		operations:               make(map[*operation]struct{}),
@@ -631,6 +636,9 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
+	if err := checkTranslatedTarget(selection, protocolPath); err != nil {
+		return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
+	}
 	decoded, clientRequestReport, err := pipeline.decodeAdmitted(request, protocolPath, logicalBody)
 	result.Translation = result.Translation.Merge(clientRequestReport)
 	if err != nil {
@@ -654,11 +662,17 @@ func (pipeline *Pipeline) executeCandidate(
 	}
 	if request.admitted == nil {
 		decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+		// Without body admission the provider side's own admission runs here,
+		// right after the decode it would otherwise follow.
+		if err := admitProviderRequest(request.exchangeID, protocolPath, decoded); err != nil {
+			return err
+		}
 	}
 	decodedForEvidence := decoded
 	captured.request = &decodedForEvidence
 	pipeline.observeRequest(request, captured)
-	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequest(
+	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequestFor(
+		pipeline.providerContext(selection.targetRef, selection.target.Origin(), credential.mode, credential.account.ID),
 		decoded,
 		logicalBody,
 		request.protocolHeaders(),
@@ -744,7 +758,21 @@ func (pipeline *Pipeline) executeCandidate(
 	}
 	pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 	if decoded.Stream {
-		return pipeline.executeStream(
+		err = pipeline.executeStream(
+			ctx,
+			request,
+			selection,
+			protocolPath,
+			decoded,
+			frozenRequest,
+			downstream,
+			ledger,
+			result,
+			captured,
+			transformTurn,
+		)
+	} else {
+		err = pipeline.executeComplete(
 			ctx,
 			request,
 			selection,
@@ -758,19 +786,80 @@ func (pipeline *Pipeline) executeCandidate(
 			transformTurn,
 		)
 	}
-	return pipeline.executeComplete(
-		ctx,
-		request,
-		selection,
-		protocolPath,
-		decoded,
-		frozenRequest,
-		downstream,
-		ledger,
-		result,
-		captured,
-		transformTurn,
-	)
+	pipeline.rememberRejectedReasoning(protocolPath, decoded, err)
+	return err
+}
+
+// providerContext carries the frozen target facts of one attempt to a
+// composed provider side (design 4.3). The encode site builds it from the
+// frozen selection and credential, the stream site from the frozen provider
+// request built from them, and a dry run from the account it would select;
+// all three call this one function, so a reasoning seal minted on one turn
+// carries the binding the next turn's replay checks. The binding's endpoint
+// is the upstream target, and a request on the client's own credential binds
+// to ClientCredentialAccount.
+func (pipeline *Pipeline) providerContext(
+	targetRef string,
+	origin originidentity.ProviderOrigin,
+	mode providerauth.CredentialMode,
+	accountID string,
+) protocolpath.ProviderContext {
+	if mode != providerauth.CredentialManaged {
+		accountID = protocolpath.ClientCredentialAccount
+	}
+	target := protocolpath.TargetGeneric
+	switch {
+	case upstreamendpoint.IsOfficialAPIOrigin(origin):
+		target = protocolpath.TargetOpenAIPlatform
+	case upstreamendpoint.IsChatGPTCodexOrigin(origin):
+		target = protocolpath.TargetChatGPTCodex
+	}
+	return protocolpath.ProviderContext{
+		Target:           target,
+		ReasoningBinding: protocolpath.NewReasoningBinding(targetRef, accountID),
+		RejectedSeal:     pipeline.reasoningRejections.contains,
+	}
+}
+
+// providerContextOf rebuilds an attempt's ProviderContext from its frozen
+// provider request.
+func (pipeline *Pipeline) providerContextOf(frozen providertransport.Request) protocolpath.ProviderContext {
+	account, _ := frozen.AccountRef()
+	return pipeline.providerContext(frozen.TargetRef(), frozen.Target().Origin(), frozen.CredentialMode(), account.ID)
+}
+
+// checkTranslatedTarget is the exchange's defence for the stage-1 compliance
+// boundary (design 13.1 item 4): a composed path translates another
+// dialect's requests, and a ChatGPT plan serves only its own clients. The
+// compiler refuses such a route in every candidate; this refuses one a
+// restored revision still holds. Paths built with New, including the Chat
+// paths a restored revision may route to chatgpt.com, keep serving.
+func checkTranslatedTarget(selection frozenSelection, path *protocolpath.Path) error {
+	if path.IsComposed() && selection.chatGPTPlan {
+		return errTranslatedChatGPTTarget
+	}
+	return nil
+}
+
+// errTranslatedChatGPTTarget is the exchange's own refusal; the data plane
+// reads no Environment authority symbols, so it does not wrap the compiler's
+// ErrTranslatedChatGPTRoute.
+var errTranslatedChatGPTTarget = errors.New("a translated route reached a ChatGPT plan, which serves only clients of its own protocol")
+
+// rememberRejectedReasoning feeds the rejected-seal memory (design 8.6): when
+// a composed path's upstream refused the request's reasoning state, over HTTP
+// or in band, its seals are dropped from the next turn instead of failing it
+// again.
+func (pipeline *Pipeline) rememberRejectedReasoning(path *protocolpath.Path, request protocolcore.Request, err error) {
+	if err == nil || !path.IsComposed() {
+		return
+	}
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Provider == nil ||
+		failure.Provider.Class != protocolcore.ProviderErrorReasoningState {
+		return
+	}
+	pipeline.reasoningRejections.recordRequest(request)
 }
 
 // Decode once for selectors, codecs and semantic evidence. The ClientRequest
@@ -1602,7 +1691,7 @@ func (pipeline *Pipeline) executeComplete(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			classifyProviderRejectionResponse(response, selection),
+			classifyProviderRejectionResponse(response, selection, protocolPath, decoded, request.exchangeID),
 		)
 	}
 	if !contentTypeMatches(response.Header.Get("Content-Type"), "application/json") {
@@ -2517,7 +2606,7 @@ func (pipeline *Pipeline) executeStream(
 
 		statusCode := response.StatusCode
 		if statusCode < 200 || statusCode > 299 {
-			providerField := classifyProviderRejectionResponse(response, selection)
+			providerField := classifyProviderRejectionResponse(response, selection, protocolPath, decoded, request.exchangeID)
 			_ = response.Body.Close()
 			failure := newProviderStatusFailure(
 				request.exchangeID,
@@ -2642,7 +2731,7 @@ func (pipeline *Pipeline) executeStream(
 					protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err)))
 		}
 
-		stream, err := protocolPath.Streaming().NewStream(decoded)
+		stream, err := protocolPath.NewStreamFor(pipeline.providerContextOf(frozenRequest), decoded)
 		if err != nil {
 			_ = streamBody.Close()
 			return pipeline.failStream(
@@ -3347,15 +3436,39 @@ type providerRejection struct {
 	field  ProviderField
 	code   string
 	native protocolcore.NativeProviderError
+	// provider is the class a composed path gave the rejection; nil when the
+	// path does not translate rejections.
+	provider *protocolcore.ProviderError
 }
 
-func classifyProviderRejectionResponse(response *http.Response, selection frozenSelection) providerRejection {
-	body, err := newLogicalResponseStream(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
+// classifyProviderRejectionResponse diagnoses an upstream HTTP rejection.
+// A same-dialect path keeps the provider's native error for its client. A
+// composed path classifies the rejection on its provider side and renders it
+// as a native error of the client's dialect, carrying the class too (design
+// 8.1); the provider-dialect error never crosses. Any other cross-dialect
+// path keeps the generic envelope.
+func classifyProviderRejectionResponse(
+	response *http.Response,
+	selection frozenSelection,
+	path *protocolpath.Path,
+	request protocolcore.Request,
+	exchangeID string,
+) providerRejection {
+	logical, err := newLogicalResponseStream(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
 	if err != nil {
-		return providerRejection{}
+		return translateProviderRejection(providerRejection{}, response, nil, path, request, exchangeID)
 	}
-	defer body.Close()
-	diagnosis := classifyProviderRejection(body, selection.codecPlan.ProviderDialect())
+	defer logical.Close()
+	body, err := readBounded(logical, maxProviderErrorBytes)
+	diagnosis := providerRejection{}
+	if err == nil {
+		diagnosis = diagnoseProviderRejection(body, selection.codecPlan.ProviderDialect())
+	} else {
+		body = nil
+	}
+	if path.IsComposed() {
+		return translateProviderRejection(diagnosis, response, body, path, request, exchangeID)
+	}
 	if selection.codecPlan.ClientDialect() != selection.codecPlan.ProviderDialect() {
 		diagnosis.native = protocolcore.NativeProviderError{}
 	} else {
@@ -3367,6 +3480,59 @@ func classifyProviderRejectionResponse(response *http.Response, selection frozen
 	return diagnosis
 }
 
+// translateProviderRejection replaces the provider-dialect native error with
+// the composed path's rendering. An unreadable or oversized body is
+// classified by status and headers alone. The rendered error keeps its own
+// headers (retry-after, x-should-retry); the provider's never reach the
+// client.
+func translateProviderRejection(
+	diagnosis providerRejection,
+	response *http.Response,
+	body []byte,
+	path *protocolpath.Path,
+	request protocolcore.Request,
+	exchangeID string,
+) providerRejection {
+	diagnosis.native = protocolcore.NativeProviderError{}
+	if !path.IsComposed() {
+		return diagnosis
+	}
+	native, class, translated := path.TranslateProviderRejection(request, response.StatusCode, response.Header, body)
+	if !translated {
+		return diagnosis
+	}
+	if class.Class == protocolcore.ProviderErrorPolicy {
+		native = withAnthropicRequestID(native, path.Client().Dialect(), exchangeID)
+	}
+	diagnosis.native = native
+	diagnosis.provider = &class
+	return diagnosis
+}
+
+// withAnthropicRequestID gives a rendered Anthropic error the envelope
+// Claude Code shows for a policy refusal, with the Exchange ID as its
+// request_id (design 8.3). Other dialects and any body that does not wrap
+// the rendered error unchanged keep the plain envelope.
+func withAnthropicRequestID(
+	native protocolcore.NativeProviderError,
+	dialect protocolspec.Dialect,
+	exchangeID string,
+) protocolcore.NativeProviderError {
+	payload := native.ForDialect(dialect)
+	if dialect != protocolspec.DialectAnthropicMessages || len(payload) == 0 || exchangeID == "" {
+		return native
+	}
+	body, err := json.Marshal(struct {
+		Type      string          `json:"type"`
+		RequestID string          `json:"request_id"`
+		Error     json.RawMessage `json:"error"`
+	}{Type: "error", RequestID: exchangeID, Error: payload})
+	if err != nil {
+		return native
+	}
+	return native.WithHTTPBody(body)
+}
+
 func classifyProviderRejection(reader io.Reader, dialect protocolspec.Dialect) providerRejection {
 	if reader == nil {
 		return providerRejection{}
@@ -3375,6 +3541,10 @@ func classifyProviderRejection(reader io.Reader, dialect protocolspec.Dialect) p
 	if err != nil {
 		return providerRejection{}
 	}
+	return diagnoseProviderRejection(body, dialect)
+}
+
+func diagnoseProviderRejection(body []byte, dialect protocolspec.Dialect) providerRejection {
 	var native struct {
 		Error json.RawMessage `json:"error"`
 	}

@@ -106,6 +106,9 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 	}
+	if err := checkTranslatedTarget(selection, path); err != nil {
+		return DryRunResult{}, newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
+	}
 	decoded, _, err := pipeline.decodeAdmitted(request, path, logicalBody)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
@@ -128,8 +131,16 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	}
 	if request.admitted == nil {
 		decoded = mergeClientProtocolEvidence(decoded, request.ClientProtocolEvidence())
+		if err := admitProviderRequest(request.exchangeID, path, decoded); err != nil {
+			return DryRunResult{}, err
+		}
 	}
-	providerRequest, _, err := path.EncodeProviderRequest(decoded, logicalBody, request.protocolHeaders())
+	// The same frozen target facts a run would encode for, with the account
+	// this dry run would select.
+	providerRequest, _, err := path.EncodeProviderRequestFor(
+		pipeline.providerContext(selection.targetRef, selection.target.Origin(), candidate.mode, candidate.account.ID),
+		decoded, logicalBody, request.protocolHeaders(),
+	)
 	if err != nil {
 		return DryRunResult{}, newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 	}
