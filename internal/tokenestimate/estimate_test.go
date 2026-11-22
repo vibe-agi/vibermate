@@ -220,6 +220,9 @@ func TestPDFPagesCountsPageObjectsOnly(t *testing.T) {
 		{"tree only", pdfWithPages(0, " "), 1},
 		{"page at the end", "<< /Type /Page", 1},
 		{"page at the end twice", "/Type /Page /Type /Page", 2},
+		// Up to 16 whitespace bytes may separate the key from its name.
+		{"sixteen whitespace bytes", pdfWithPages(1, " ") + "<< /Type" + strings.Repeat(" ", 16) + "/Page >>", 2},
+		{"seventeen whitespace bytes", pdfWithPages(1, " ") + "<< /Type" + strings.Repeat(" ", 17) + "/Page >>", 1},
 		{"page label is not a page", "<< /Type /PageLabel >> << /Type /Page>>", 1},
 		{"empty", "", 1},
 	} {
@@ -241,9 +244,11 @@ func TestPDFPagesFindsMarkersAcrossChunkBoundaries(t *testing.T) {
 
 	marker := "/Type /Page>>"
 	for offset := pdfScanChunk - len(marker) - 2; offset <= pdfScanChunk+2; offset++ {
-		document := strings.Repeat("x", offset) + marker + strings.Repeat("y", 10)
-		if got := PDFPages(strings.NewReader(document)); got != 1 {
-			t.Fatalf("marker at %d: PDFPages = %d", offset, got)
+		// One whole page before the boundary, so a lost straddling marker
+		// shows as one page instead of hiding behind the one-page floor.
+		document := marker + strings.Repeat("x", offset-len(marker)) + marker + strings.Repeat("y", 10)
+		if got := PDFPages(strings.NewReader(document)); got != 2 {
+			t.Fatalf("marker at %d: PDFPages = %d, want 2", offset, got)
 		}
 		document = strings.Repeat("x", offset) + "/Type" + strings.Repeat(" ", 3) + "/Pages" + strings.Repeat("y", 10) + marker
 		if got := PDFPages(strings.NewReader(document)); got != 1 {
