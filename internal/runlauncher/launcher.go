@@ -842,13 +842,20 @@ func (launcher *Launcher) heartbeat(
 	program string,
 ) <-chan error {
 	failure := make(chan error, 1)
-	// The same moments as a local recovery's, told about the Server when
-	// the run signed in to one.
-	lost, restored := "cli.run.appClosed", "cli.run.reconnected"
-	if launcher.config.Remote != nil {
-		lost, restored = "cli.run.serverLost", "cli.run.serverRestored"
+	// A run signed in to a Server says so in the person's language. ACP
+	// shares this heartbeat, and its agent keeps reaching its service
+	// while the App is away, so a local run keeps its own lines.
+	lost := func() {
+		launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
 	}
-	agent := launchAgent(grant, program)
+	restored := func() {
+		launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection restored.")
+	}
+	if launcher.config.Remote != nil {
+		agent := launchAgent(grant, program)
+		lost = func() { launcher.writeLocalizedHeartbeatDiagnostic("cli.run.serverLost", agent) }
+		restored = func() { launcher.writeLocalizedHeartbeatDiagnostic("cli.run.serverRestored", agent) }
+	}
 	go func() {
 		timer := time.NewTimer(launcher.config.HeartbeatInterval)
 		defer timer.Stop()
@@ -869,7 +876,7 @@ func (launcher *Launcher) heartbeat(
 				}
 				if retryableControlFailure(err) {
 					if !reconnecting {
-						launcher.writeLocalizedHeartbeatDiagnostic(lost, agent)
+						lost()
 						reconnecting = true
 					}
 					// Do not measure an outage from the last successful heartbeat:
@@ -886,7 +893,7 @@ func (launcher *Launcher) heartbeat(
 					return
 				}
 				if reconnecting {
-					launcher.writeLocalizedHeartbeatDiagnostic(restored, agent)
+					restored()
 					reconnecting = false
 				}
 				timer.Reset(launcher.config.HeartbeatInterval)

@@ -111,6 +111,10 @@ func testRemoteSessionBoundary(t *testing.T, scenario string) {
 	if code, err := launcher.Run(ctx, request); err != nil || code != 0 {
 		t.Fatalf("baseline code=%d err=%v", code, err)
 	}
+	// The start line names the agent and the Server in the app's words.
+	if started := "vibermate: starting true through the ViberMate Server at " + target.Origin() + "."; !strings.Contains(log.String(), started) {
+		t.Fatalf("remote start line missing %q: %q", started, log.String())
+	}
 
 	if scenario == "labels" {
 		for _, label := range []string{strings.Repeat("a", 121), strings.Repeat("a", 119) + "\u00e9", strings.Repeat("\u754c", 41), " project ", "   "} {
