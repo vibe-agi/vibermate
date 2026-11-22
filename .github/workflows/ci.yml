@@ -208,6 +208,11 @@ jobs:
           export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
           go test -count=1 -run '^TestInstalledCodex(ConfigOverridesSurviveCommandScopes|CaptureOwnsOrdinaryProxyFeatures|CaptureStrictConfiguration|StableExecCyberSyntax|ProxyGuardPreservesUnknownFeatureErrors|BootstrapProxyFallbackStaysCaptureOwned|CaptureIsolationStartupContract|ManagedAuthEmptyHomeAndCaptureIsolation|ManagedAuthResumesOpenAIHistoryWithoutLogin|ManagedAuthOverridesInheritedStaticBearer|ManagedAuthRejectsInheritedCommandAuthBeforeExecution|RecoversTransientHTTPFailureThroughLauncher)$' ./internal/runlauncher
           go test -count=1 -run '^TestInstalledCodex(ReadsManagedAccount|ReadsEnterpriseWorkspaceRequirements|OfficialAPIModelCatalog)$' ./internal/productruntime
+          if [ "$(uname -s)" = Darwin ]; then
+            test "$(uname -m)" = arm64
+            VIBERMATE_REQUIRE_SIGNER_RECOGNITION=1 \
+              go test -count=1 -run '^TestInstalledCodexIsRecognizedByItsSigner$' ./internal/clientadapter
+          fi
 
   race:
     needs: generated-structural
