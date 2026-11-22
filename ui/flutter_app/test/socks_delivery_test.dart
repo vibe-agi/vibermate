@@ -64,8 +64,13 @@ void main() {
         if (mode == 'unknown') {
           expect(toggle, findsNothing);
           expect(socks, findsNothing);
+          // The old 'Availability unknown' line is gone, not just hidden.
           expect(
-            find.text(copy('settings.access.network.unknown')),
+            find.text(
+              language == AppLanguage.english
+                  ? 'Availability unknown'
+                  : '可用性未知',
+            ),
             findsNothing,
           );
         } else {
@@ -95,12 +100,19 @@ void main() {
         }
         // The VLESS engine line sits with the network exits now.
         for (final key in const [
-          'settings.access.vless.unknown',
           'settings.access.vless.installed',
           'settings.access.vless.absent',
         ]) {
           expect(find.text(copy(key)), findsNothing);
         }
+        expect(
+          find.text(
+            language == AppLanguage.english
+                ? 'VLESS engine availability unknown'
+                : 'VLESS 内核可用性未知',
+          ),
+          findsNothing,
+        );
         expect(tester.takeException(), isNull);
         if (mode == 'enabled') {
           await _render(tester, reviewDirectory, 'settings-${language.name}');

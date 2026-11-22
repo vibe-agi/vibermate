@@ -229,7 +229,6 @@ final class AppCopy {
     'acp.tool_calls': '{count} tool-call notifications',
     'acp.user': 'You → Agent',
     'acp.agent': 'Agent → Editor',
-    'acp.setup.title': 'Connect an ACP editor',
     'acp.setup.limitation':
         'ViberMate only observes editor sessions. Routing, accounts, scripts (including privacy scripts) and network exits don\'t apply to them.',
     'acp.setup.agent': 'Agent',
@@ -255,9 +254,6 @@ final class AppCopy {
     'acp.setup.content': 'Save user and assistant text',
     'acp.setup.server': 'Runtime Server URL (empty = local App)',
     'acp.setup.copy': 'Copy editor configuration',
-    'acp.setup.copied': 'Configuration copied',
-    'acp.setup.failed':
-        'Could not copy. Select the configuration text and copy it manually.',
     'acp.setup.help.local':
         'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file.',
     'acp.setup.help.remote':
@@ -2567,15 +2563,12 @@ final class AppCopy {
     'settings.access.socks.purpose':
         'For apps you point at ViberMate by hand with a proxy login. Claude Code and Codex don\'t need it.',
     'settings.access.network.disabled': 'Not enabled',
-    'settings.access.network.unknown': 'Availability unknown',
     'settings.access.vless.installed': 'VLESS engine installed',
     'settings.access.vless.absent': 'VLESS engine not installed',
-    'settings.access.vless.unknown': 'VLESS engine availability unknown',
     'settings.access.detail.server':
         'Connect an Agent from your computer. If you only need the browser, you are already connected.',
     'settings.access.detail.local':
         'Start Claude Code or Codex from Terminal or an editor, and connect other devices.',
-    'settings.access.local.title': 'On this Mac',
     'settings.access.local.no_account':
         'Using ViberMate on this Mac needs no sign-in or domain.',
     'settings.access.editor.title': 'Use from an editor (optional)',
@@ -2946,7 +2939,6 @@ final class AppCopy {
     'settings.root_ca.unavailable':
         'Root certificate trust management is available only on the local macOS Desktop.',
     'settings.root_ca.copy_fingerprint': 'Copy fingerprint',
-    'settings.root_ca.copied': 'Fingerprint copied',
     'settings.runtime': 'Runtime source',
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
@@ -3423,7 +3415,6 @@ final class AppCopy {
     'terminal.run.choose_set':
         'To use your accounts and scripts, choose a routing set above.',
     'terminal.run.copy': 'Copy {client} launch command',
-    'terminal.run.copied': '{client} command copied',
     'terminal.run.copy_failed': 'Could not copy command',
     'terminal.run.environment':
         'Specific routing set · vibermate run --env <environment-id> -- <command>',
@@ -3680,7 +3671,6 @@ final class AppCopy {
     'acp.tool_calls': '{count} 条工具调用通知',
     'acp.user': '你 → Agent',
     'acp.agent': 'Agent → 编辑器',
-    'acp.setup.title': '接入 ACP 编辑器',
     'acp.setup.limitation': 'ViberMate 只观察编辑器会话，不会对其应用流量策略、账号、脚本（包括隐私脚本）和网络出口。',
     'acp.setup.agent': 'Agent',
     'acp.setup.step.install': '安装适配器',
@@ -3702,8 +3692,6 @@ final class AppCopy {
     'acp.setup.content': '保存用户与助手文本',
     'acp.setup.server': 'Runtime Server URL（留空使用本地 App）',
     'acp.setup.copy': '复制编辑器配置',
-    'acp.setup.copied': '配置已复制',
-    'acp.setup.failed': '复制失败。请选中下方配置文本手动复制。',
     'acp.setup.help.local': '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。',
     'acp.setup.help.remote':
         '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。远程连接时，请先在编辑器所在机器使用同一个 URL 执行 vibermate login --server。',
@@ -5634,13 +5622,10 @@ final class AppCopy {
     'settings.access.socks.purpose':
         '用于通过代理登录、手动指向 ViberMate 的应用。Claude Code 和 Codex 不需要它。',
     'settings.access.network.disabled': '未启用',
-    'settings.access.network.unknown': '可用性未知',
     'settings.access.vless.installed': 'VLESS 内核已安装',
     'settings.access.vless.absent': 'VLESS 内核未安装',
-    'settings.access.vless.unknown': 'VLESS 内核可用性未知',
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '从终端或编辑器启动 Claude Code 或 Codex，并接入其他设备。',
-    'settings.access.local.title': '这台电脑',
     'settings.access.local.no_account': '在这台 Mac 上使用 ViberMate 无需登录或域名。',
     'settings.access.editor.title': '从编辑器使用（可选）',
     'settings.access.editor.detail':
@@ -5954,7 +5939,6 @@ final class AppCopy {
     'settings.root_ca.conflict': '根证书状态已变化，或另一项信任操作仍在进行。请重新检查后再试。',
     'settings.root_ca.unavailable': '根证书信任管理仅在本机 macOS Desktop 上可用。',
     'settings.root_ca.copy_fingerprint': '复制指纹',
-    'settings.root_ca.copied': '指纹已复制',
     'settings.runtime': '运行时来源',
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',
@@ -6360,7 +6344,6 @@ final class AppCopy {
     'terminal.run.after_set': '请求会按「{name}」流量策略处理，其中的账号、脚本和网络出口都会生效。',
     'terminal.run.choose_set': '要使用你的账号和脚本，请在上方选择流量策略。',
     'terminal.run.copy': '复制 {client} 启动命令',
-    'terminal.run.copied': '已复制 {client} 命令',
     'terminal.run.copy_failed': '无法复制命令',
     'terminal.run.environment':
         '指定流量策略 · vibermate run --env <environment-id> -- <command>',
