@@ -710,6 +710,9 @@ final class _StartWithRoutingSet extends StatelessWidget {
           routingSetId: environment.id,
           keyPrefix: 'environment-launch',
           requirement: false,
+          // Routing has no Terminal card of its own: until the command is
+          // set up, the card leads there.
+          onSetUpCommand: controller.openAccessSettings,
         ),
       ],
     ),

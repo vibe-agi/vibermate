@@ -295,8 +295,10 @@ final class LaunchCommandCard extends StatelessWidget {
     this.keyPrefix = 'managed-run',
     this.lead = true,
     this.requirement = true,
+    this.installHint = true,
     this.codexFooter,
     this.onUseRoutingSet,
+    this.onSetUpCommand,
     super.key,
   });
 
@@ -324,6 +326,14 @@ final class LaunchCommandCard extends StatelessWidget {
   /// 'Use a routing set instead', which opens Routing.
   final VoidCallback? onUseRoutingSet;
 
+  /// 'Set up the vibermate command first…' while it is not set up. Left
+  /// out where the Terminal command card right above already says so.
+  final bool installHint;
+
+  /// 'Open Terminal setup' beside that line, for a page with no way of its
+  /// own to set the command up. The lead line then waits until it is.
+  final VoidCallback? onSetUpCommand;
+
   static const double _labelWidth = 92;
 
   @override
@@ -338,6 +348,7 @@ final class LaunchCommandCard extends StatelessWidget {
     // full path is not known yet; it takes at most a few seconds.
     final enabled =
         ready && (!local || controller.terminalReach != TerminalReach.checking);
+    final setUp = ready ? null : onSetUpCommand;
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 480;
@@ -388,14 +399,33 @@ final class LaunchCommandCard extends StatelessWidget {
           key: Key('$keyPrefix-launch-card'),
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (lead) ...[
+            if (lead && setUp == null) ...[
               Text(copy('terminal.run.lead'), style: muted),
               const SizedBox(height: ViberSpacing.md),
             ],
-            if (!ready) ...[
-              Text(
-                copy('terminal.run.install_first'),
-                style: Theme.of(context).textTheme.bodySmall,
+            if (!ready && installHint) ...[
+              Wrap(
+                spacing: ViberSpacing.md,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    copy('terminal.run.install_first'),
+                    key: Key('$keyPrefix-install-first'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (setUp != null)
+                    TextButton.icon(
+                      key: Key('$keyPrefix-set-up-command'),
+                      onPressed: setUp,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: ViberSpacing.xs,
+                        ),
+                      ),
+                      icon: const Icon(Icons.terminal, size: 14),
+                      label: Text(copy('capture.empty.action')),
+                    ),
+                ],
               ),
               const SizedBox(height: ViberSpacing.sm),
             ],

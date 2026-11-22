@@ -18,6 +18,7 @@ void main() {
   Future<(WorkbenchController, List<String>)> open(
     WidgetTester tester, {
     bool fresh = false,
+    bool commandReady = true,
     AppLanguage language = AppLanguage.english,
     Size size = const Size(1440, 900),
   }) async {
@@ -44,7 +45,11 @@ void main() {
         : PreviewFixture(
             api: PreviewControlApi(),
             terminalCommands: PreviewTerminalCommandService(
-              initial: previewFreshTerminalCommand(PreviewFreshStage.command),
+              initial: previewFreshTerminalCommand(
+                commandReady
+                    ? PreviewFreshStage.command
+                    : PreviewFreshStage.start,
+              ),
             ),
           );
     final controller = WorkbenchController(
@@ -133,6 +138,52 @@ void main() {
     );
     expect(find.byKey(const Key('environment-disabled')), findsNothing);
     await tester.pump(const Duration(seconds: 3));
+    await close(tester, controller);
+  });
+
+  testWidgets('before the command is set up, the card leads to its setup', (
+    tester,
+  ) async {
+    final (controller, _) = await open(tester, commandReady: false);
+    await openRoutingSet(tester, controller, 'work');
+    final launch = find.byKey(const Key('environment-launch'));
+    expect(
+      find.descendant(
+        of: launch,
+        matching: find.text(
+          'Set up the vibermate command first, then copy a command below.',
+        ),
+      ),
+      findsOne,
+    );
+    // One instruction, not two: the lead line waits for the command.
+    expect(
+      find.descendant(
+        of: launch,
+        matching: find.text(
+          'In Terminal, go to your project folder and run one of these:',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<TextButton>(
+            find.byKey(const Key('environment-launch-copy-claude')),
+          )
+          .onPressed,
+      isNull,
+    );
+    final setUp = find.byKey(const Key('environment-launch-set-up-command'));
+    expect(
+      find.descendant(of: setUp, matching: find.text('Open Terminal setup')),
+      findsOne,
+    );
+    await tester.tap(setUp);
+    await settle(tester);
+    expect(controller.section, WorkbenchSection.settings);
+    expect(find.byKey(const Key('terminal-command-panel')), findsOne);
+    expect(find.byKey(const Key('terminal-command-install')), findsOne);
     await close(tester, controller);
   });
 
