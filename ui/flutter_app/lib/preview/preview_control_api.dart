@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -101,8 +102,36 @@ final class PreviewControlApi
   @override
   launchEnvironmentSnapshots() async => const [];
   @override
-  Future<RuntimeStorageLocation>
-  storageLocation() async => RuntimeStorageLocation(
+  Future<RuntimeStorageLocation> storageLocation() async =>
+      _seedConfiguration ? _seededStorageLocation() : _freshStorageLocation();
+
+  RuntimeStorageLocation _freshStorageLocation() => RuntimeStorageLocation(
+    dataDirectory:
+        '/Users/mira/Library/Application Support/io.vibermate.desktop',
+    databasePath:
+        '/Users/mira/Library/Application Support/io.vibermate.desktop/runtime.db',
+    collectedAt: _now,
+    databaseBytes: 448 << 10,
+    walBytes: 32 << 10,
+    sharedMemoryBytes: 32 << 10,
+    evidenceBytes: 0,
+    reusableBytes: 0,
+    filesystemAvailableBytes: 24 * 1024 * 1024 * 1024,
+    lowSpaceThresholdBytes: 1024 * 1024 * 1024,
+    capacityState: 'healthy',
+    cleanupPreview: const DeletionReleased(
+      exchanges: 0,
+      envelopes: 0,
+      activities: 0,
+      connections: 0,
+      attempts: 0,
+      approvals: 0,
+      assignments: 0,
+      captures: 0,
+    ),
+  );
+
+  RuntimeStorageLocation _seededStorageLocation() => RuntimeStorageLocation(
     dataDirectory:
         '/Users/mira/Library/Application Support/io.vibermate.desktop',
     databasePath:
@@ -131,17 +160,27 @@ final class PreviewControlApi
   );
 
   @override
-  Future<DeletionReleased> evidenceClearPreview() async =>
-      const DeletionReleased(
-        exchanges: 744,
-        envelopes: 3055,
-        activities: 795,
-        connections: 148,
-        attempts: 761,
-        approvals: 12,
-        assignments: 20,
-        captures: 20,
-      );
+  Future<DeletionReleased> evidenceClearPreview() async => !_seedConfiguration
+      ? const DeletionReleased(
+          exchanges: 0,
+          envelopes: 0,
+          activities: 0,
+          connections: 0,
+          attempts: 0,
+          approvals: 0,
+          assignments: 0,
+          captures: 0,
+        )
+      : const DeletionReleased(
+          exchanges: 744,
+          envelopes: 3055,
+          activities: 795,
+          connections: 148,
+          attempts: 761,
+          approvals: 12,
+          assignments: 20,
+          captures: 20,
+        );
 
   @override
   Future<AccountFacts> accountFacts(
@@ -216,17 +255,31 @@ final class PreviewControlApi
     ControlProblem? upstreamModelFailure,
     bool seedCaptures = true,
     bool seedRuntimeUsers = true,
+    bool seedConfiguration = true,
     bool retainConversationBodies = true,
     String productBuild = 'preview',
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
        _upstreamModelFailure = upstreamModelFailure,
        _retainConversationBodies = retainConversationBodies,
+       _seedConfiguration = seedConfiguration,
        _productBuild = productBuild {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
     }
     if (!seedRuntimeUsers) _runtimeUsers.clear();
-    _environments = _initialEnvironments();
+    // The seeded routing sets reach their accounts and services through
+    // firstWhere, so they are built before an unseeded install drops those.
+    _environments = seedConfiguration
+        ? _initialEnvironments()
+        : [_systemEnvironment()];
+    if (!seedConfiguration) {
+      _accounts.clear();
+      _endpoints.removeWhere(
+        (endpoint) => !_builtInEndpointIds.contains(endpoint.id),
+      );
+      // The shipped default: no rules, and nothing waits for a decision.
+      _rules = const ConnectionRuleSet(revision: 1, rules: [], mode: 'monitor');
+    }
     for (final environment in _environments) {
       _environmentHistory[_environmentRevisionKey(
             environment.id,
@@ -237,6 +290,33 @@ final class PreviewControlApi
         _environmentDraftCounters[environment.id] = environment.revision;
       }
     }
+    if (seedCaptures) _seedSessions();
+  }
+
+  /// A fresh install: no sessions, accounts, extra services or routing sets,
+  /// no rules, approvals or usage, an untrusted root certificate, and (through
+  /// [previewFreshTerminalCommand]) a Terminal command that is not set up.
+  ///
+  /// [stage] fixes one point of the first run, so each state of the setup
+  /// guide can be rendered and tested. [arrive] plays a short timeline instead:
+  /// the first request arriving, or a launch that stops before its agent starts.
+  factory PreviewControlApi.freshInstall({
+    PreviewFreshStage stage = PreviewFreshStage.start,
+    PreviewFreshArrival? arrive,
+    String productBuild = 'preview',
+  }) {
+    final api = PreviewControlApi(
+      seedCaptures: false,
+      seedRuntimeUsers: false,
+      seedConfiguration: false,
+      productBuild: productBuild,
+    );
+    api._stageFreshInstall(stage);
+    if (arrive != null) api._playFreshArrival(arrive);
+    return api;
+  }
+
+  void _seedSessions() {
     for (var index = 0; index < 8; index += 1) {
       final id = 'run-${index + 1}';
       final capture = CaptureRecord(
@@ -353,14 +433,211 @@ final class PreviewControlApi
       lastObservedAt: manual.manualCapture!.lastObservedAt,
     );
     _manualVersions[manualId] = manual.manualCapture!.credentialRevision;
-    if (!seedCaptures) {
-      _captures.clear();
-      _assignments.clear();
-      _manualRecords.clear();
-      _manualVersions.clear();
+  }
+
+  static const _builtInEndpointIds = {
+    'target.anthropic.official',
+    'target.openai.official',
+    'target.codex.official',
+  };
+
+  /// Sets up the fresh install at [stage]. Every stage after [start] has the
+  /// Terminal command ready; that half lives in the Terminal command service.
+  void _stageFreshInstall(PreviewFreshStage stage) {
+    switch (stage) {
+      case PreviewFreshStage.start || PreviewFreshStage.command:
+        break;
+      case PreviewFreshStage.trusted:
+        setRootTrustForPreview(installed: true);
+      case PreviewFreshStage.waiting:
+        addFreshRun(codex: false, phase: PreviewFreshRunPhase.waiting);
+      case PreviewFreshStage.failed:
+        addFreshRun(codex: true, phase: PreviewFreshRunPhase.neverStarted);
+      case PreviewFreshStage.observed:
+        // The guide is on screen first; the first request then arrives on the
+        // next read, as it would a few seconds after the agent started.
+        final id = addFreshRun(
+          codex: false,
+          phase: PreviewFreshRunPhase.waiting,
+        );
+        _observeOnDashboardRead = (id: id, read: _dashboardReads + 2);
     }
   }
 
+  void _playFreshArrival(PreviewFreshArrival arrive) {
+    switch (arrive) {
+      case PreviewFreshArrival.firstRequest:
+        _arrivalTimers.add(
+          Timer(const Duration(seconds: 8), () {
+            if (_closed) return;
+            final id = addFreshRun(
+              codex: false,
+              phase: PreviewFreshRunPhase.waiting,
+            );
+            _arrivalTimers.add(
+              Timer(const Duration(seconds: 8), () {
+                if (!_closed) observeFreshRun(id);
+              }),
+            );
+          }),
+        );
+      case PreviewFreshArrival.failedLaunch:
+        _arrivalTimers.add(
+          Timer(const Duration(seconds: 8), () {
+            if (!_closed) {
+              addFreshRun(
+                codex: true,
+                phase: PreviewFreshRunPhase.neverStarted,
+              );
+            }
+          }),
+        );
+    }
+  }
+
+  final List<Timer> _arrivalTimers = [];
+  int _dashboardReads = 0;
+  ({String id, int read})? _observeOnDashboardRead;
+  int _freshRuns = 0;
+
+  /// The number of requests each preview session holds; seeded sessions keep
+  /// their fixed counts.
+  final Map<String, int> _exchangeCounts = {};
+
+  int _exchangeCount(CaptureRecord capture) =>
+      _exchangeCounts[capture.id] ?? (capture.id == 'run-1' ? 224 : 24);
+
+  /// Adds one `vibermate run` launch on the built-in routing set, at [phase]
+  /// of its first minute, and returns its id.
+  String addFreshRun({
+    required bool codex,
+    required PreviewFreshRunPhase phase,
+    String recognition = 'verified',
+    String? version,
+  }) {
+    _requireOpen();
+    _freshRuns += 1;
+    final id = 'run-fresh-$_freshRuns';
+    final started = phase != PreviewFreshRunPhase.neverStarted;
+    final observed = phase == PreviewFreshRunPhase.observed;
+    final createdAt = _now.subtract(const Duration(minutes: 2));
+    final observedAt = _now.subtract(const Duration(minutes: 1));
+    final capture = CaptureRecord(
+      key: 'managed_run:$id',
+      id: id,
+      kind: 'managed_run',
+      displayName: codex ? 'Codex' : 'Claude Code',
+      state: started ? 'attached' : 'finished',
+      observation: observed ? 'observed' : 'waiting_for_traffic',
+      createdAt: createdAt,
+      updatedAt: observed ? observedAt : createdAt,
+      activityAt: observed ? observedAt : createdAt,
+      managedRun: ManagedRunSummary(
+        executableLabel: codex ? 'codex' : 'claude',
+        cwd: '/Users/mira/Code/my-project',
+        canonicalExecutablePath: codex
+            ? '/opt/homebrew/bin/codex'
+            : '/Users/mira/.local/bin/claude',
+        recognition: recognition,
+        clientAdapter: recognition == 'unverified' && version == null
+            ? null
+            : CaptureClientAdapter(
+                id: codex ? 'codex-cli' : 'claude-code',
+                revision: 1,
+                version: version ?? (codex ? '0.145.0' : '2.1.220'),
+                catalogRevision: 1,
+                source: recognition == 'recognized'
+                    ? 'publisher_signature'
+                    : 'prelaunch_digest_catalog',
+                installShape: codex
+                    ? 'npm_wrapper_native_child'
+                    : 'native_single_binary',
+                launchRecipe: codex ? 'codex_responses_http' : 'node_env_proxy',
+              ),
+        expiresAt: _now.add(const Duration(hours: 1)),
+        localUserLabel: 'mira',
+        homeDirectory: '/Users/mira',
+        operatingSystem: 'darwin',
+        operatingSystemVersion: '26.0',
+        architecture: 'arm64',
+        timeZone: 'Asia/Singapore',
+        machineId: _previewMachineId,
+        machineRegistrationRevision: 1,
+        workspaceId: _identity(40),
+        workspaceLabel: 'my-project',
+        workspaceEvidence: 'local_launcher',
+        workspaceDerivationRevision: 1,
+        processId: started ? 8100 + _freshRuns : null,
+        firstObservedAt: observed ? observedAt : null,
+      ),
+    );
+    _captures[capture.key] = capture;
+    _exchangeCounts[id] = observed ? 1 : 0;
+    final environment = _environments.firstWhere(
+      (value) => value.id == 'system_transparent',
+    );
+    _assignments[capture.key] = CaptureAssignment(
+      captureKey: capture.key,
+      captureId: capture.id,
+      captureKind: capture.kind,
+      environmentId: environment.id,
+      environmentRevision: environment.revision,
+      environmentDigest: environment.digest,
+      launchEnvironmentRevision: environment.revision,
+      launchEnvironmentDigest: environment.digest,
+      revision: 1,
+      source: 'launch',
+      updatedAt: capture.createdAt,
+    );
+    return id;
+  }
+
+  /// The first request of a waiting fresh run arrives.
+  void observeFreshRun(String id) {
+    _requireOpen();
+    final capture = _captures['managed_run:$id'];
+    final managed = capture?.managedRun;
+    if (capture == null || managed == null || !capture.running) {
+      throw StateError('no running preview run $id');
+    }
+    final observedAt = _now.subtract(const Duration(minutes: 1));
+    _captures[capture.key] = CaptureRecord(
+      key: capture.key,
+      id: capture.id,
+      kind: capture.kind,
+      displayName: capture.displayName,
+      state: capture.state,
+      observation: 'observed',
+      createdAt: capture.createdAt,
+      updatedAt: observedAt,
+      activityAt: observedAt,
+      managedRun: ManagedRunSummary(
+        executableLabel: managed.executableLabel,
+        cwd: managed.cwd,
+        canonicalExecutablePath: managed.canonicalExecutablePath,
+        recognition: managed.recognition,
+        clientAdapter: managed.clientAdapter,
+        expiresAt: managed.expiresAt,
+        localUserLabel: managed.localUserLabel,
+        homeDirectory: managed.homeDirectory,
+        operatingSystem: managed.operatingSystem,
+        operatingSystemVersion: managed.operatingSystemVersion,
+        architecture: managed.architecture,
+        timeZone: managed.timeZone,
+        machineId: managed.machineId,
+        machineRegistrationRevision: managed.machineRegistrationRevision,
+        workspaceId: managed.workspaceId,
+        workspaceLabel: managed.workspaceLabel,
+        workspaceEvidence: managed.workspaceEvidence,
+        workspaceDerivationRevision: managed.workspaceDerivationRevision,
+        processId: managed.processId,
+        firstObservedAt: observedAt,
+      ),
+    );
+    _exchangeCounts[id] = 1;
+  }
+
+  final bool _seedConfiguration;
   final String _productBuild;
 
   final int _dashboardCaptureLimit;
@@ -718,31 +995,33 @@ final class PreviewControlApi
   final Map<String, EnvironmentDraft> _environmentDrafts = {};
   final Map<String, int> _environmentDraftCounters = {};
 
+  static EnvironmentRecord _systemEnvironment() => _environment(
+    id: 'system_transparent',
+    name: 'System Transparent',
+    revision: 1,
+    digestCharacter: '1',
+    systemOwned: true,
+    endpoints: [
+      _originalClientEndpoint(
+        id: 'system-anthropic',
+        origin: 'https://api.anthropic.com',
+        protocol: 'anthropic_messages',
+      ),
+      _originalClientEndpoint(
+        id: 'system-openai',
+        origin: 'https://api.openai.com',
+        protocol: 'openai_responses',
+      ),
+      _originalClientEndpoint(
+        id: 'system-chatgpt',
+        origin: 'https://chatgpt.com',
+        protocol: 'openai_responses',
+      ),
+    ],
+  );
+
   List<EnvironmentRecord> _initialEnvironments() => [
-    _environment(
-      id: 'system_transparent',
-      name: 'System Transparent',
-      revision: 1,
-      digestCharacter: '1',
-      systemOwned: true,
-      endpoints: [
-        _originalClientEndpoint(
-          id: 'system-anthropic',
-          origin: 'https://api.anthropic.com',
-          protocol: 'anthropic_messages',
-        ),
-        _originalClientEndpoint(
-          id: 'system-openai',
-          origin: 'https://api.openai.com',
-          protocol: 'openai_responses',
-        ),
-        _originalClientEndpoint(
-          id: 'system-chatgpt',
-          origin: 'https://chatgpt.com',
-          protocol: 'openai_responses',
-        ),
-      ],
-    ),
+    _systemEnvironment(),
     _environment(
       id: 'work',
       name: 'Work',
@@ -951,6 +1230,10 @@ final class PreviewControlApi
   Future<RuntimeStatus> loadRuntimeStatus() async {
     _requireOpen();
     return RuntimeStatus(
+      // A fresh Mac has no SOCKS5 listener and no VLESS support set up.
+      networkAccess: _seedConfiguration
+          ? null
+          : const HostNetworkAccess(socksAddress: null, vlessAvailable: false),
       ready: true,
       productBuild: _productBuild,
       state: 'initialized',
@@ -970,6 +1253,12 @@ final class PreviewControlApi
   @override
   Future<DashboardData> loadDashboard() async {
     _requireOpen();
+    _dashboardReads += 1;
+    if (_observeOnDashboardRead case final pending?
+        when _dashboardReads >= pending.read) {
+      _observeOnDashboardRead = null;
+      observeFreshRun(pending.id);
+    }
     final capturePage = await captures(limit: _dashboardCaptureLimit);
     return DashboardData(
       status: await loadRuntimeStatus(),
@@ -3451,7 +3740,7 @@ final class PreviewControlApi
                     candidate.id == route.accountPolicy.fixedAccountId,
               )
               .firstOrNull;
-    final count = capture.id == 'run-1' ? 224 : 24;
+    final count = _exchangeCount(capture);
     final values = List.generate(count, (index) {
       final reasonCode = switch (index) {
         214 || 215 => 'provider_status_rejected',
@@ -3522,7 +3811,9 @@ final class PreviewControlApi
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
         title: index % 4 == 0 ? 'Tool-assisted request' : 'Agent exchange',
-        status: _retainConversationBodies && index == count - 1
+        // The newest of many requests is still streaming; a single first
+        // request has already completed.
+        status: _retainConversationBodies && index == count - 1 && count > 1
             ? 'pending'
             : succeeded
             ? 'succeeded'
@@ -3663,7 +3954,7 @@ final class PreviewControlApi
         ? '$client-session-${capture.id}'
         : '$client-session-${capture.id}-$sessionVariant';
     final responseId = 'response-${capture.id}-exchange-${index + 1}';
-    final exchangeCount = capture.id == 'run-1' ? 224 : 24;
+    final exchangeCount = _exchangeCount(capture);
     final observedAt = _now.subtract(
       Duration(minutes: (exchangeCount - 1 - index) * 4),
     );
@@ -3744,12 +4035,14 @@ final class PreviewControlApi
   @override
   Future<List<ApprovalRecord>> pendingApprovals() async {
     _requireOpen();
+    if (!_seedConfiguration) return const [];
     return _approval.state == 'pending' ? [_approval] : const [];
   }
 
   @override
   Future<List<ApprovalRecord>> decidedApprovals() async {
     _requireOpen();
+    if (!_seedConfiguration) return const [];
     ApprovalRecord past(
       String id,
       String host,
@@ -3821,6 +4114,16 @@ final class PreviewControlApi
   Future<ScriptActivity> scriptActivity({int days = 7}) async {
     _requireOpen();
     final since = _now.subtract(Duration(days: days));
+    if (!_seedConfiguration) {
+      return ScriptActivity(
+        since: since,
+        coveredFrom: since,
+        generatedAt: _now,
+        requests: _allPreviewActivities().length,
+        truncated: false,
+        scripts: const [],
+      );
+    }
     // Matches the script outcomes on the first preview session's requests.
     return ScriptActivity(
       since: since,
@@ -4033,6 +4336,7 @@ final class PreviewControlApi
               ],
       );
     }
+    if (!_seedConfiguration) return _emptyUsageReport(query);
     const cost = RuntimeCostEstimate(
       nanoUsd: 46035000,
       pricedCalls: 18,
@@ -4137,6 +4441,48 @@ final class PreviewControlApi
               ),
             ],
       groups: grouped ? [group] : const [],
+    );
+  }
+
+  RuntimeUsageReport _emptyUsageReport(RuntimeUsageQuery query) {
+    const none = RuntimeTokenAggregate(
+      tokens: 0,
+      knownCalls: 0,
+      unknownCalls: 0,
+    );
+    final grouped = query.groupBy.isNotEmpty;
+    return RuntimeUsageReport(
+      generatedAt: _now,
+      period: RuntimeUsagePeriod(
+        from: query.from,
+        until: query.until,
+        timeZone: query.timeZone,
+      ),
+      snapshot: List.filled(64, 'a').join(),
+      collection: _usageCollection,
+      pricing: RuntimePricingInfo(state: 'ready', updatedAt: _now),
+      total: grouped
+          ? null
+          : const RuntimeUsageGroup(
+              id: 'all',
+              label: 'All',
+              agentApiCalls: 0,
+              succeeded: 0,
+              failed: 0,
+              canceled: 0,
+              tokens: RuntimeTokenUsage(
+                inputUncached: none,
+                cacheWrite: none,
+                cacheRead: none,
+                output: none,
+                reasoning: none,
+              ),
+              cost: RuntimeCostEstimate(),
+            ),
+      dimension: query.groupBy,
+      filters: query.filters,
+      days: const [],
+      groups: const [],
     );
   }
 
@@ -4281,10 +4627,13 @@ final class PreviewControlApi
   Future<ConnectionPage> connections({String? cursor, int limit = 50}) async {
     _requireOpen();
     final offset = _previewOffset(cursor, 'connections');
-    final end = (offset + limit).clamp(0, _connectionEvidence.length).toInt();
+    final evidence = _seedConfiguration
+        ? _connectionEvidence
+        : const <ConnectionRecord>[];
+    final end = (offset + limit).clamp(0, evidence.length).toInt();
     return ConnectionPage(
-      items: _connectionEvidence.sublist(offset, end),
-      nextCursor: end < _connectionEvidence.length ? 'connections-$end' : null,
+      items: evidence.sublist(offset, end),
+      nextCursor: end < evidence.length ? 'connections-$end' : null,
     );
   }
 
@@ -4295,10 +4644,13 @@ final class PreviewControlApi
   }) async {
     _requireOpen();
     final offset = _previewOffset(cursor, 'egress');
-    final end = (offset + limit).clamp(0, _egressEvidence.length).toInt();
+    final evidence = _seedConfiguration
+        ? _egressEvidence
+        : const <EgressAttemptRecord>[];
+    final end = (offset + limit).clamp(0, evidence.length).toInt();
     return EgressAttemptPage(
-      items: _egressEvidence.sublist(offset, end),
-      nextCursor: end < _egressEvidence.length ? 'egress-$end' : null,
+      items: evidence.sublist(offset, end),
+      nextCursor: end < evidence.length ? 'egress-$end' : null,
     );
   }
 
@@ -5087,6 +5439,10 @@ Evidence line 16''';
   @override
   Future<void> close() async {
     _closed = true;
+    for (final timer in _arrivalTimers) {
+      timer.cancel();
+    }
+    _arrivalTimers.clear();
   }
 }
 
@@ -5259,3 +5615,45 @@ final class _PreviewNetwork {
         '${text(groups.skip(bestStart + bestLength))}';
   }
 }
+
+/// A point of the first run that the fresh-install preview can start at.
+enum PreviewFreshStage {
+  /// Nothing set up: no Terminal command, root certificate not trusted.
+  start,
+
+  /// The Terminal command is ready.
+  command,
+
+  /// The Terminal command is ready and the root certificate trusted.
+  trusted,
+
+  /// Claude Code is running and has not sent a request yet.
+  waiting,
+
+  /// A Codex launch stopped before Codex started.
+  failed,
+
+  /// Claude Code is waiting, and its first request arrives on the next read.
+  observed;
+
+  static PreviewFreshStage? parse(String? value) =>
+      values.where((stage) => stage.name == value).firstOrNull;
+}
+
+/// A short timeline the fresh-install preview plays from its start.
+enum PreviewFreshArrival {
+  /// After 8 s Claude Code starts; 8 s later its first request arrives.
+  firstRequest,
+
+  /// After 8 s a Codex launch stops before Codex starts.
+  failedLaunch;
+
+  static PreviewFreshArrival? parse(String? value) => switch (value) {
+    '1' => firstRequest,
+    'failed' => failedLaunch,
+    _ => null,
+  };
+}
+
+/// How far one fresh `vibermate run` launch got.
+enum PreviewFreshRunPhase { waiting, observed, neverStarted }

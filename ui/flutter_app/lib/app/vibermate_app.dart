@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../core/api/control_api.dart';
@@ -15,8 +16,7 @@ import '../core/preferences/workbench_preferences.dart';
 import '../features/workbench/workbench_controller.dart';
 import '../features/workbench/workbench_shell.dart';
 import '../features/account/member_portal.dart';
-import '../preview/preview_control_api.dart';
-import '../preview/preview_terminal_command.dart';
+import '../preview/preview_dataset.dart';
 import '../core/bootstrap/root_trust_installer_contract.dart';
 import '../preview/preview_root_trust_installer.dart';
 
@@ -188,9 +188,14 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       final loadedPreferences = widget.loadedPreferences;
       RuntimeConnection? liveRuntime;
       if (widget.previewMode) {
-        final preview = PreviewControlApi(seedRuntimeUsers: _previewServer);
+        // On the Web, `/?dataset=fresh#/` previews a fresh install; see
+        // PreviewDataset. The macOS preview has no query.
+        final fixture = PreviewDataset.fromQuery(
+          kIsWeb ? Uri.base.queryParameters : const {},
+        ).build(seedRuntimeUsers: _previewServer);
+        final preview = fixture.api;
         api = preview;
-        terminalCommands = PreviewTerminalCommandService();
+        terminalCommands = fixture.terminalCommands;
         closeRuntime = preview.close;
         rootTrustInstaller = PreviewRootTrustInstaller(preview);
       } else {
