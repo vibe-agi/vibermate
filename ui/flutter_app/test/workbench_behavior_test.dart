@@ -575,7 +575,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('empty Captures shows Agent and Web proxy launch paths', (
+  testWidgets('with the guide hidden, empty Sessions keeps the launch paths', (
     tester,
   ) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -583,7 +583,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No sessions yet.',
+        empty: 'No sessions yet',
         detail: 'Start Codex or Claude through ViberMate from Terminal.',
         settings: 'Terminal command',
         web: false,
@@ -591,7 +591,7 @@ void main() {
       (
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
-        empty: '还没有运行记录。',
+        empty: '还没有运行记录',
         detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
         settings: '终端命令',
         web: false,
@@ -599,7 +599,7 @@ void main() {
       (
         size: Size(1180, 760),
         language: AppLanguage.english,
-        empty: 'No sessions yet.',
+        empty: 'No sessions yet',
         detail:
             'Start an Agent from Terminal, or create a proxy login for another client.',
         settings: 'Web & client access',
@@ -608,7 +608,7 @@ void main() {
       (
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
-        empty: '还没有运行记录。',
+        empty: '还没有运行记录',
         detail: '从终端启动 Agent，或为其他客户端创建专属代理登录。',
         settings: '网页与客户端接入',
         web: true,
@@ -633,6 +633,9 @@ void main() {
             : null,
       );
       await controller.initialize();
+      // A fresh install opens on the setup guide; hiding it leaves today's
+      // empty state with its two ways in.
+      controller.hideSetupGuide();
       await tester.pumpWidget(
         MaterialApp(
           theme: ViberTheme.light(),
@@ -642,6 +645,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text(scenario.empty), findsOneWidget);
+      expect(find.byKey(const Key('capture-empty-show-guide')), findsOneWidget);
       expect(find.text(scenario.detail), findsOneWidget);
       expect(
         find.byKey(const Key('capture-empty-create-manual')),

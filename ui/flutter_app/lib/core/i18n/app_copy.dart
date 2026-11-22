@@ -809,7 +809,7 @@ final class AppCopy {
     'evidence_search.match.time': 'time',
     'capture.running': 'Running now',
     'capture.history': 'History',
-    'capture.empty': 'No sessions yet.',
+    'capture.empty': 'No sessions yet',
     'capture.empty.detail':
         'Start Codex or Claude through ViberMate from Terminal.',
     'capture.empty.web.detail':
@@ -818,14 +818,68 @@ final class AppCopy {
     'capture.empty.web.action': 'Open access and launch guide',
     'capture.load_more': 'Load older sessions',
     'capture.select': 'Select a session to see its requests.',
+    'setup.title': 'Connect Claude Code or Codex',
+    'setup.intro':
+        'ViberMate shows every request your agent sends. Your agent keeps its own sign-in, so you don\'t need to add Accounts or set up Routing to start.',
+    'setup.step': 'Step {number}',
+    'setup.status.done': 'Done',
+    'setup.status.todo': 'To do',
+    'setup.status.waiting': 'Waiting',
+    'setup.status.failed': 'Didn\'t start',
+    'setup.command.title': 'Set up the vibermate command',
+    'setup.command.detail':
+        'Adds the vibermate command for Terminal (in ~/.local/bin). Nothing else on your Mac changes.',
+    'setup.command.open_settings': 'Open Terminal settings',
+    'setup.start.title': 'Start Claude Code or Codex',
+    'setup.start.detail':
+        'In Terminal, go to your project folder and run one of these. Keep ViberMate open while you work.',
+    'setup.start.copy': 'Copy',
+    'setup.start.copied': 'Copied',
+    'setup.start.codex_requirement':
+        'Codex only: needs ViberMate\'s certificate trusted on this Mac. macOS asks for your password once.',
+    'setup.start.install_trust': 'Install and trust',
+    'setup.start.waiting':
+        'Waiting for your agent… This page updates by itself.',
+    'setup.start.done': '{agent} started.',
+    'setup.start.copy_again': 'Copy command again',
+    'setup.prompt.title': 'Send your first prompt',
+    'setup.prompt.detail':
+        'Type anything in your agent. Its requests appear here within a few seconds.',
+    'setup.prompt.done': 'Your agent\'s requests are arriving.',
+    'setup.server.install.title': 'Install vibermate and sign in',
+    'setup.server.install.detail':
+        'On the computer where your agent runs, install ViberMate, then sign in to this Server in Terminal:',
+    'setup.server.start.detail':
+        'In Terminal, go to your project folder and run one of these.',
+    'setup.footer.other_app':
+        'Using another app? Connect it with a proxy login',
+    'setup.footer.doctor':
+        'Something not working? Run vibermate doctor in Terminal',
+    'setup.footer.doctor.copy': 'Copy vibermate doctor',
+    'setup.hide': 'Hide guide',
+    'setup.show': 'Show setup guide',
+    'setup.back': 'Back to setup guide',
+    'setup.connected':
+        'Connected. Every request from {agent} appears below as it happens.',
+    'setup.connected.saved':
+        'ViberMate keeps the full text of your agent\'s requests and replies on this Mac for {days} days. It isn\'t encrypted; only your Mac account protects it.',
+    'setup.connected.saved.server':
+        'ViberMate keeps the full text of your agent\'s requests and replies on the Server for {days} days.',
+    'setup.connected.saved.metadata':
+        'ViberMate keeps the details of each request, without its text, for {days} days.',
+    'setup.connected.manage': 'Manage saved data',
+    'setup.connected.next':
+        'Next, if you like: send requests with another account, or choose which sites your agent may reach.',
     'capture.assignment.missing': 'No routing set attached',
     'capture.assignment.unavailable': 'Routing set information unavailable',
     'capture.detail.unavailable': 'Run details are temporarily unavailable',
     'capture.detail.unavailable.detail':
         'The runtime could not load these details. Retry to read them again; this does not mean the run has no requests.',
-    'capture.launch_incomplete': 'Launch did not complete',
+    'capture.launch_incomplete': 'This launch stopped before {agent} started',
     'capture.launch_incomplete.detail':
-        'No routing set was attached and no traffic was recorded. Check the launch error in Terminal, correct the routing set if needed, then run the command again. You can delete this empty record.',
+        'Terminal shows the reason. The most common ones: Codex needs this Mac to trust ViberMate\'s certificate, or Terminal couldn\'t find the agent. Fix it, then run the command again. You can delete this record.',
+    'capture.launch_incomplete.detail.codex_root':
+        'Codex needs ViberMate\'s certificate trusted on this Mac. Install and trust it, then run the command again.',
     'capture.managed': 'Managed run',
     'capture.manual': 'Manual session',
     'capture.source.managed.short': 'vibermate run',
@@ -3971,20 +4025,64 @@ final class AppCopy {
     'evidence_search.match.time': '时间',
     'capture.running': '正在运行',
     'capture.history': '历史记录',
-    'capture.empty': '还没有运行记录。',
+    'capture.empty': '还没有运行记录',
     'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
     'capture.empty.web.detail': '从终端启动 Agent，或为其他客户端创建专属代理登录。',
     'capture.empty.action': '打开终端设置',
     'capture.empty.web.action': '打开接入与启动指南',
     'capture.load_more': '加载更早的运行记录',
     'capture.select': '请选择一条运行记录以检查其证据。',
+    'setup.title': '接入 Claude Code 或 Codex',
+    'setup.intro':
+        'ViberMate 会显示 Agent 发出的每个请求。Agent 继续使用自己的登录，开始使用前无需添加账号或设置流量策略。',
+    'setup.step': '第 {number} 步',
+    'setup.status.done': '已完成',
+    'setup.status.todo': '待完成',
+    'setup.status.waiting': '等待中',
+    'setup.status.failed': '未启动',
+    'setup.command.title': '设置 vibermate 命令',
+    'setup.command.detail':
+        '为终端添加 vibermate 命令（位于 ~/.local/bin），不会改动这台 Mac 上的其他内容。',
+    'setup.command.open_settings': '打开终端设置',
+    'setup.start.title': '启动 Claude Code 或 Codex',
+    'setup.start.detail': '在终端中进入项目目录，运行下面任一命令。使用 Agent 期间请保持 ViberMate 打开。',
+    'setup.start.copy': '复制',
+    'setup.start.copied': '已复制',
+    'setup.start.codex_requirement':
+        '仅 Codex：需要这台 Mac 信任 ViberMate 证书。macOS 会要求输入一次密码。',
+    'setup.start.install_trust': '安装并信任',
+    'setup.start.waiting': '正在等待 Agent……此页面会自动更新。',
+    'setup.start.done': '{agent} 已启动。',
+    'setup.start.copy_again': '再次复制命令',
+    'setup.prompt.title': '发送第一条消息',
+    'setup.prompt.detail': '在 Agent 中随便输入一句话，几秒内它的请求就会显示在这里。',
+    'setup.prompt.done': 'Agent 的请求已开始显示。',
+    'setup.server.install.title': '安装 vibermate 并登录',
+    'setup.server.install.detail': '在运行 Agent 的电脑上安装 ViberMate，然后在终端中登录此服务器：',
+    'setup.server.start.detail': '在终端中进入项目目录，运行下面任一命令。',
+    'setup.footer.other_app': '使用其他应用？用代理登录接入',
+    'setup.footer.doctor': '遇到问题？在终端运行 vibermate doctor',
+    'setup.footer.doctor.copy': '复制 vibermate doctor',
+    'setup.hide': '隐藏指南',
+    'setup.show': '显示设置指南',
+    'setup.back': '返回设置指南',
+    'setup.connected': '已接入。{agent} 的每个请求都会实时显示在下方。',
+    'setup.connected.saved':
+        'ViberMate 会在这台 Mac 上保存 Agent 请求与回复的完整内容 {days} 天。数据未加密，仅由你的 Mac 账户权限保护。',
+    'setup.connected.saved.server':
+        'ViberMate 会在服务器上保存 Agent 请求与回复的完整内容 {days} 天。',
+    'setup.connected.saved.metadata': 'ViberMate 会保存每个请求的详情（不含内容）{days} 天。',
+    'setup.connected.manage': '管理已保存的数据',
+    'setup.connected.next': '可选的下一步：使用其他账号发送请求，或选择 Agent 可以访问哪些网站。',
     'capture.assignment.missing': '未绑定流量策略',
     'capture.assignment.unavailable': '策略信息暂不可用',
     'capture.detail.unavailable': '运行记录详情暂时无法读取',
     'capture.detail.unavailable.detail': 'Runtime 未能读取详情。请重试；这不代表该运行记录没有请求。',
-    'capture.launch_incomplete': '启动未完成',
+    'capture.launch_incomplete': '本次启动在 {agent} 运行前已停止',
     'capture.launch_incomplete.detail':
-        '本次启动未绑定流量策略，也没有记录到流量。请查看终端中的启动错误，按需修正策略后重新运行命令。此空记录可以删除。',
+        '原因显示在终端中。最常见的原因：Codex 需要这台 Mac 信任 ViberMate 的证书，或终端找不到 Agent 命令。处理后请重新运行命令。此记录可以删除。',
+    'capture.launch_incomplete.detail.codex_root':
+        'Codex 需要这台 Mac 信任 ViberMate 的证书。请安装并信任后重新运行命令。',
     'capture.managed': '托管运行',
     'capture.manual': '手动捕获',
     'capture.source.managed.short': 'vibermate run',

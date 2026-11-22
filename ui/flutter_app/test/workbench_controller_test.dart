@@ -1181,7 +1181,10 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text('Launch did not complete'), findsOneWidget);
+        expect(
+          find.text('This launch stopped before codex started'),
+          findsOneWidget,
+        );
         expect(find.text('No routing set attached'), findsOneWidget);
         expect(
           find.textContaining('capture_assignment_not_found'),

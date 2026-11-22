@@ -1971,6 +1971,8 @@ final class WorkbenchController extends ChangeNotifier
       _inventoryFailureStatus = null;
       data = updated;
       _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
+      // The detail of the selected session loads below either way.
+      _selectionChangedForSetup = false;
       loading = false;
       _startProviderAccountQuotaPolling();
       notifyListeners();
@@ -2055,8 +2057,15 @@ final class WorkbenchController extends ChangeNotifier
       data = _mergePolledDashboard(previous, updated);
       _repairDashboardSelections(data!);
       _startProviderAccountQuotaPolling();
-      if (hadInventoryFailure || !_sameDashboard(previous, data!)) {
+      final setupSelection = _selectionChangedForSetup;
+      _selectionChangedForSetup = false;
+      if (hadInventoryFailure ||
+          setupSelection ||
+          !_sameDashboard(previous, data!)) {
         notifyListeners();
+      }
+      if (setupSelection && selectedCapture != null) {
+        unawaited(_loadCaptureDetail(selectedCapture!));
       }
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
@@ -2567,6 +2576,97 @@ final class WorkbenchController extends ChangeNotifier
     if (serverManagement && (runtimeUsers == null || serverAccess == null)) {
       unawaited(refreshServerManagement());
     }
+  }
+
+  /// Hidden with 'Hide guide' for the rest of this app session.
+  bool setupGuideHidden = false;
+
+  /// Shown again from Access and launch, even after the first request.
+  bool _setupGuideRequested = false;
+
+  /// The session whose first request completed the setup guide. It carries
+  /// the 'Connected' notice until that is dismissed.
+  String? setupConnectedCaptureKey;
+
+  bool? _setupGuideWasEligible;
+  bool _selectionChangedForSetup = false;
+
+  /// Whether Sessions shows the setup guide when its filter is empty: until
+  /// the first request of any session arrives, unless it was hidden. Decided
+  /// from every loaded session, never from a filtered list.
+  bool get setupGuideEligible => _setupGuideEligibleFor(data);
+
+  bool _setupGuideEligibleFor(DashboardData? value) {
+    if (value == null || setupGuideHidden || !accessSettingsAvailable) {
+      return false;
+    }
+    if (_setupGuideRequested) return true;
+    return value.captureNextCursor == null &&
+        !value.captures.any((capture) => capture.observation == 'observed');
+  }
+
+  void hideSetupGuide() {
+    if (setupGuideHidden) return;
+    setupGuideHidden = true;
+    _setupGuideRequested = false;
+    final current = data;
+    if (current != null) _repairDashboardSelections(current);
+    final capture = selectedCapture;
+    if (capture != null && selectedAssignment == null && !detailLoading) {
+      unawaited(_loadCaptureDetail(capture));
+    }
+    notifyListeners();
+  }
+
+  /// Opens Sessions on the setup guide, from Access and launch.
+  void showSetupGuide() {
+    setupGuideHidden = false;
+    _setupGuideRequested = true;
+    _setupGuideWasEligible = true;
+    section = WorkbenchSection.captures;
+    operationNotice = null;
+    if (selectedCaptureKey != null) {
+      selectedCaptureKey = null;
+      _resetCaptureDetail();
+    }
+    notifyListeners();
+    unawaited(refreshSetupFacts());
+  }
+
+  /// Leaves the session opened from the guide and shows the guide again.
+  void backToSetupGuide() {
+    if (selectedCaptureKey == null) return;
+    selectedCaptureKey = null;
+    _resetCaptureDetail();
+    operationNotice = null;
+    notifyListeners();
+  }
+
+  void dismissSetupConnected() {
+    if (setupConnectedCaptureKey == null) return;
+    setupConnectedCaptureKey = null;
+    notifyListeners();
+  }
+
+  /// Rereads what the guide's steps depend on. The guide calls this when it
+  /// first shows and the window regains focus; never on the five-second poll,
+  /// because the Terminal command check starts the packaged binary.
+  Future<void> refreshSetupFacts() async {
+    if (_disposed) return;
+    await Future.wait([
+      if (terminalManagement)
+        refreshTerminalCommand(quiet: terminalCommand != null),
+      if (rootTrustManagement) refreshRootCA(quiet: rootCAStatus != null),
+      // A Server's guide shows its own address in the commands.
+      if (!terminalManagement && serverManagement && serverAccess == null)
+        refreshServerManagement(quiet: true),
+    ]);
+  }
+
+  /// Settings > Safety and data, where saved requests are kept and deleted.
+  void openSafetySettings() {
+    selectSection(WorkbenchSection.settings);
+    selectSettingsTab(settingsDestinations.indexOf(SettingsDestination.safety));
   }
 
   void openUpdateSettings() {
@@ -4097,7 +4197,49 @@ final class WorkbenchController extends ChangeNotifier
     final captureExists =
         previousCaptureKey != null &&
         updated.captures.any((capture) => capture.key == previousCaptureKey);
-    if (forceCaptureDefault || !captureExists) {
+    final guide = _setupGuideEligibleFor(updated);
+    final connected =
+        _setupGuideWasEligible == true && !guide && !setupGuideHidden
+        ? _newestObservedCapture(updated)
+        : null;
+    _setupGuideWasEligible = guide;
+    final selected = captureExists
+        ? updated.captures.firstWhere(
+            (capture) => capture.key == previousCaptureKey,
+          )
+        : null;
+    // A launch that stopped before its agent started gives way to the next
+    // run, so the moment it connects shows the session that did.
+    final successor = selected != null && selected.stoppedBeforeStart
+        ? updated.captures
+              .where(
+                (capture) =>
+                    capture.kind == 'managed_run' &&
+                    capture.running &&
+                    capture.createdAt.isAfter(selected.createdAt),
+              )
+              .fold<CaptureRecord?>(
+                null,
+                (newest, capture) =>
+                    newest == null ||
+                        capture.createdAt.isAfter(newest.createdAt)
+                    ? capture
+                    : newest,
+              )
+        : null;
+    if (connected != null) {
+      // The guide's last step just completed: open the session that did it.
+      selectedCaptureKey = connected.key;
+      setupConnectedCaptureKey = connected.key;
+      _selectionChangedForSetup = connected.key != previousCaptureKey;
+    } else if (successor != null) {
+      selectedCaptureKey = successor.key;
+      _selectionChangedForSetup = true;
+    } else if (guide) {
+      // The guide owns the wide pane: nothing is opened for the person, and
+      // a session they opened themselves stays open.
+      if (!captureExists) selectedCaptureKey = null;
+    } else if (forceCaptureDefault || !captureExists) {
       final running =
           updated.captures
               .where((capture) => capture.running)
@@ -4136,6 +4278,17 @@ final class WorkbenchController extends ChangeNotifier
     if (!endpointExists) {
       selectedEndpointId = updated.endpoints.firstOrNull?.id;
     }
+  }
+
+  static CaptureRecord? _newestObservedCapture(DashboardData value) {
+    CaptureRecord? newest;
+    for (final capture in value.captures) {
+      if (capture.observation != 'observed') continue;
+      if (newest == null || capture.activityAt.isAfter(newest.activityAt)) {
+        newest = capture;
+      }
+    }
+    return newest;
   }
 
   void _resetCaptureDetail() {
@@ -5595,6 +5748,10 @@ final class WorkbenchController extends ChangeNotifier
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_disposed) return;
+    if (state == AppLifecycleState.resumed && setupGuideEligible) {
+      // Back from Terminal, where the person may have just set something up.
+      unawaited(refreshSetupFacts());
+    }
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {

@@ -17,6 +17,7 @@ import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
 import 'session_ledger.dart';
+import 'setup_guide.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
 
@@ -43,9 +44,19 @@ final class _CapturesViewState extends State<CapturesView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 760;
+        // The setup guide is decided from every loaded session; a filter
+        // that matches nothing is a search result, never a fresh install.
+        final guideActive =
+            widget.controller.setupGuideEligible && _filter.trim().isEmpty;
+        final connectOtherApp = _canCreateManual(widget.controller)
+            ? () => _openCreateManualCapture(context)
+            : null;
         final master = _CaptureMaster(
           controller: widget.controller,
           copy: widget.copy,
+          guide: guideActive && narrow,
+          guideActive: guideActive,
+          onConnectOtherApp: connectOtherApp,
           filter: _filter,
           filterController: _filterController,
           onFilter: (value) => setState(() => _filter = value),
@@ -63,6 +74,8 @@ final class _CapturesViewState extends State<CapturesView> {
         final detail = _CaptureDetail(
           controller: widget.controller,
           copy: widget.copy,
+          guideActive: guideActive && !narrow,
+          onConnectOtherApp: connectOtherApp,
           showBack: narrow,
           confirmRevoke: _confirmRevoke,
           onBack: () => setState(() {
@@ -187,10 +200,20 @@ final class _CapturesViewState extends State<CapturesView> {
   }
 }
 
+bool _canCreateManual(WorkbenchController controller) =>
+    (controller.webPrincipal == null || controller.webPrincipal!.owner) &&
+    (controller.data?.environments.any(
+          (environment) => environment.state == 'active',
+        ) ??
+        false);
+
 final class _CaptureMaster extends StatelessWidget {
   const _CaptureMaster({
     required this.controller,
     required this.copy,
+    required this.guide,
+    required this.guideActive,
+    required this.onConnectOtherApp,
     required this.filter,
     required this.filterController,
     required this.onFilter,
@@ -202,6 +225,13 @@ final class _CaptureMaster extends StatelessWidget {
 
   final WorkbenchController controller;
   final AppCopy copy;
+
+  /// Narrow layout: the setup guide sits at the top of the list body.
+  final bool guide;
+
+  /// The setup guide is on screen here or in the wide pane.
+  final bool guideActive;
+  final VoidCallback? onConnectOtherApp;
   final String filter;
   final TextEditingController filterController;
   final ValueChanged<String> onFilter;
@@ -231,12 +261,7 @@ final class _CaptureMaster extends StatelessWidget {
     final history = controller.historicalCaptures
         .where(matches)
         .toList(growable: false);
-    final canCreateManual =
-        (controller.webPrincipal == null || controller.webPrincipal!.owner) &&
-        (controller.data?.environments.any(
-              (environment) => environment.state == 'active',
-            ) ??
-            false);
+    final canCreateManual = _canCreateManual(controller);
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
     final accessGuide = TextButton.icon(
       key: const Key('capture-empty-open-terminal-settings'),
@@ -249,6 +274,11 @@ final class _CaptureMaster extends StatelessWidget {
               : 'capture.empty.web.action',
         ),
       ),
+    );
+    final showGuide = TextButton(
+      key: const Key('capture-empty-show-guide'),
+      onPressed: controller.showSetupGuide,
+      child: Text(copy('setup.show')),
     );
     return ColoredBox(
       color: context.viberColors.panel,
@@ -300,10 +330,27 @@ final class _CaptureMaster extends StatelessWidget {
             ),
           ),
           Expanded(
-            child:
-                running.isEmpty &&
-                    history.isEmpty &&
-                    controller.data?.captureNextCursor == null
+            child: guideActive && !guide && running.isEmpty && history.isEmpty
+                ? Align(
+                    alignment: Alignment.topLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        ViberSpacing.lg,
+                        ViberSpacing.lg,
+                        ViberSpacing.lg,
+                        0,
+                      ),
+                      child: Text(
+                        copy('capture.empty'),
+                        key: const Key('capture-empty-guide-placeholder'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  )
+                : !guide &&
+                      running.isEmpty &&
+                      history.isEmpty &&
+                      controller.data?.captureNextCursor == null
                 ? CenteredMessage(
                     icon: Icons.filter_alt_off,
                     title: copy('capture.empty'),
@@ -325,16 +372,36 @@ final class _CaptureMaster extends StatelessWidget {
                                 ),
                               ),
                               accessGuide,
+                              showGuide,
                             ],
                           )
-                        : accessGuide,
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [accessGuide, showGuide],
+                          ),
                   )
                 : ListView(
                     children: [
-                      SectionLabel(
-                        label: copy('capture.running'),
-                        count: running.length,
-                      ),
+                      if (guide) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            ViberSpacing.xl,
+                            ViberSpacing.xl,
+                            ViberSpacing.xl,
+                            ViberSpacing.lg,
+                          ),
+                          child: SetupGuide(
+                            controller: controller,
+                            copy: copy,
+                            onConnectOtherApp: onConnectOtherApp,
+                          ),
+                        ),
+                      ],
+                      if (!guide || running.isNotEmpty)
+                        SectionLabel(
+                          label: copy('capture.running'),
+                          count: running.length,
+                        ),
                       for (final capture in running)
                         _CaptureRow(
                           capture: capture,
@@ -344,10 +411,11 @@ final class _CaptureMaster extends StatelessWidget {
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      SectionLabel(
-                        label: copy('capture.history'),
-                        count: history.length,
-                      ),
+                      if (!guide || history.isNotEmpty)
+                        SectionLabel(
+                          label: copy('capture.history'),
+                          count: history.length,
+                        ),
                       for (final capture in history)
                         _CaptureRow(
                           capture: capture,
@@ -357,7 +425,7 @@ final class _CaptureMaster extends StatelessWidget {
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      if (running.isEmpty && history.isEmpty)
+                      if (!guide && running.isEmpty && history.isEmpty)
                         SizedBox(
                           height: 176,
                           child: CenteredMessage(
@@ -537,6 +605,8 @@ final class _CaptureDetail extends StatelessWidget {
   const _CaptureDetail({
     required this.controller,
     required this.copy,
+    required this.guideActive,
+    required this.onConnectOtherApp,
     required this.showBack,
     required this.confirmRevoke,
     required this.onBack,
@@ -549,6 +619,10 @@ final class _CaptureDetail extends StatelessWidget {
 
   final WorkbenchController controller;
   final AppCopy copy;
+
+  /// The setup guide owns this pane while nothing is selected.
+  final bool guideActive;
+  final VoidCallback? onConnectOtherApp;
   final bool showBack;
   final bool confirmRevoke;
   final VoidCallback onBack;
@@ -561,6 +635,34 @@ final class _CaptureDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final capture = controller.selectedCapture;
+    if (capture == null && guideActive) {
+      // The detail pane sits in a Row that does not stretch its children.
+      return SizedBox.expand(
+        child: ColoredBox(
+          color: context.viberColors.panel,
+          child: SingleChildScrollView(
+            key: const Key('setup-guide-pane'),
+            padding: const EdgeInsets.fromLTRB(
+              ViberSpacing.xxl,
+              40,
+              ViberSpacing.xxl,
+              ViberSpacing.xxl,
+            ),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: SetupGuide(
+                  controller: controller,
+                  copy: copy,
+                  onConnectOtherApp: onConnectOtherApp,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     if (capture == null) {
       return CenteredMessage(icon: Icons.adjust, title: copy('capture.select'));
     }
@@ -607,6 +709,19 @@ final class _CaptureDetail extends StatelessWidget {
       color: context.viberColors.canvas,
       child: Column(
         children: [
+          if (guideActive)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),
+              color: context.viberColors.panel,
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('setup-back'),
+                onPressed: controller.backToSetupGuide,
+                icon: const Icon(Icons.arrow_back, size: 14),
+                label: Text(copy('setup.back')),
+              ),
+            ),
           if (controller.captureInspectionFailure case final failure?)
             ControlFailureNotice(
               message: failure.messageKey,
@@ -659,6 +774,12 @@ final class _CaptureDetail extends StatelessWidget {
               if (success) onConfirmRevoke(false);
             },
           ),
+          if (controller.setupConnectedCaptureKey == capture.key)
+            SetupConnectedNotice(
+              capture: capture,
+              controller: controller,
+              copy: copy,
+            ),
           if (!accountMatches)
             InlineNotice(
               message: copy('environment.account.invalid'),
@@ -685,7 +806,9 @@ final class _CaptureDetail extends StatelessWidget {
                 : controller.selectedCaptureLaunchIncomplete
                 ? CenteredMessage(
                     icon: Icons.error_outline,
-                    title: copy('capture.launch_incomplete'),
+                    title: copy.format('capture.launch_incomplete', {
+                      'agent': capture.displayName,
+                    }),
                     detail: copy('capture.launch_incomplete.detail'),
                   )
                 : controller.selectedACP != null

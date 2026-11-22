@@ -31,7 +31,7 @@ void main() {
     final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese);
 
     expect(chinese('nav.captures'), '运行记录');
-    expect(chinese('capture.empty'), '还没有运行记录。');
+    expect(chinese('capture.empty'), '还没有运行记录');
     expect(chinese('capture.session'), '查看客户端会话');
     expect(chinese('conversation.exchange'), 'Agent 调用');
     expect(chinese('exchange.attempt.one'), '1 次上游尝试');
