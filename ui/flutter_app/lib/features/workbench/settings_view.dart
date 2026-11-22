@@ -1546,6 +1546,11 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
     final remote =
         controller.serverManagement || controller.webPrincipal != null;
     final codexNeedsRoot = setupRootTrusted(controller) == false;
+    // This Mac's Server listens on this Mac only: a browser here can open
+    // it, another computer cannot.
+    final browserOnly =
+        controller.connectionGuide.security ==
+        ServerConnectionSecurity.loopbackHttp;
     return _SettingsPaneLayout(
       scrollKey: const Key('settings-access-scroll'),
       children: [
@@ -1635,8 +1640,20 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
                   childrenPadding: EdgeInsets.zero,
                   shape: const Border(),
                   collapsedShape: const Border(),
-                  title: Text(copy('settings.access.team.title')),
-                  subtitle: Text(copy('settings.access.team.optional')),
+                  title: Text(
+                    copy(
+                      browserOnly
+                          ? 'settings.access.browser.title'
+                          : 'settings.access.team.title',
+                    ),
+                  ),
+                  subtitle: Text(
+                    copy(
+                      browserOnly
+                          ? 'settings.access.browser.detail'
+                          : 'settings.access.team.optional',
+                    ),
+                  ),
                   children: [
                     _RemoteAccessGuide(controller: controller, copy: copy),
                   ],
@@ -1960,7 +1977,7 @@ final class _RemoteAccessGuide extends StatelessWidget {
             key: const Key('settings-access-manage-users'),
             onPressed: controller.openRuntimeUsersSettings,
             icon: const Icon(Icons.group_outlined, size: 15),
-            label: Text(copy('settings.tab.users')),
+            label: Text(copy('server.access.manage_users')),
           ),
         ),
         const SizedBox(height: 8),
@@ -2132,7 +2149,14 @@ final class _ServerIpAllowlistPanelState
                   ? copy.format('server.ip_allowlist.restricted', {
                       'count': allowlist.ranges.length,
                     })
-                  : copy('server.ip_allowlist.open'),
+                  // On this Mac's own address nothing outside reaches it
+                  // directly, so 'Any address' would be a false alarm.
+                  : copy(
+                      widget.controller.connectionGuide.security ==
+                              ServerConnectionSecurity.loopbackHttp
+                          ? 'server.ip_allowlist.none'
+                          : 'server.ip_allowlist.open',
+                    ),
               key: const Key('server-ip-allowlist-state'),
             ),
             const SizedBox(height: 4),
@@ -2978,21 +3002,14 @@ String _rootCAGuideMessage(AppCopy copy, RootCAGuideIntent intent) =>
       RootCAGuideIntent.replace => copy('settings.root_ca.guide.replace'),
     };
 
-final class _ServerAccessPanel extends StatefulWidget {
+final class _ServerAccessPanel extends StatelessWidget {
   const _ServerAccessPanel({required this.controller, required this.copy});
 
   final WorkbenchController controller;
   final AppCopy copy;
 
   @override
-  State<_ServerAccessPanel> createState() => _ServerAccessPanelState();
-}
-
-final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
-  @override
   Widget build(BuildContext context) {
-    final controller = widget.controller;
-    final copy = widget.copy;
     final access = controller.serverAccess;
     final guide = controller.connectionGuide;
     if (!guide.available) {
@@ -3023,6 +3040,60 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
       );
     }
     final encrypted = guide.security == ServerConnectionSecurity.https;
+    // The Mac app's Server listens on this Mac only, so its address means
+    // nothing on another computer.
+    final loopback = guide.security == ServerConnectionSecurity.loopbackHttp;
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    final login = 'vibermate login --server ${controller.runtimeServerURL}';
+    String numbered(int number, String key) => copy.format(
+      'terminal.run.step',
+      {'number': number, 'title': copy(key)},
+    );
+    Widget step(String title, String detail) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 3),
+        Text(detail, style: muted),
+        const SizedBox(height: 7),
+      ],
+    );
+    final loginCommand = _RunCommand(
+      client: copy('server.login.command.client'),
+      command: login,
+      copyLabel: copy('server.login.command.copy'),
+      enabled: guide.available,
+      copy: copy,
+    );
+    final runCommands = Column(
+      children: [
+        for (final (index, client) in const ['claude', 'codex'].indexed) ...[
+          _RunCommand(
+            client: client == 'claude' ? 'Claude' : 'Codex',
+            command:
+                'vibermate run --server ${controller.runtimeServerURL} -- $client',
+            copyLabel: copy.format('terminal.run.copy', {
+              'client': client == 'claude' ? 'Claude' : 'Codex',
+            }),
+            enabled: guide.available,
+            copy: copy,
+          ),
+          if (index == 0) const SizedBox(height: 7),
+        ],
+      ],
+    );
+    final session = _ServerAccessFact(
+      icon: Icons.login,
+      title: copy('server.access.session.title'),
+      detail: copy('server.access.session.detail'),
+    );
+    final divider = [
+      const SizedBox(height: 10),
+      Divider(height: 1, color: context.viberColors.dividerSoft),
+      const SizedBox(height: 9),
+    ];
     return Column(
       key: const Key('server-runtime-access'),
       children: [
@@ -3042,7 +3113,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3079,17 +3150,15 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                               message: copy('server.access.description'),
                               dismissLabel: copy('common.dismiss'),
                             ),
-                            if (guide.available) ...[
-                              const SizedBox(width: 8),
-                              _AccessTransportBadge(
-                                label: copy(
-                                  encrypted
-                                      ? 'server.access.transport.https'
-                                      : 'server.access.transport.http',
-                                ),
-                                encrypted: encrypted,
+                            const SizedBox(width: 8),
+                            _AccessTransportBadge(
+                              label: copy(
+                                encrypted
+                                    ? 'server.access.transport.https'
+                                    : 'server.access.transport.http',
                               ),
-                            ],
+                              encrypted: encrypted,
+                            ),
                           ],
                         ),
                         const SizedBox(height: 9),
@@ -3098,32 +3167,14 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                           CompactLoadingMessage(
                             label: copy('server.access.loading'),
                           )
-                        else if (guide.available) ...[
-                          if (!encrypted) ...[
-                            InlineNotice(
-                              message: copy(
-                                guide.security ==
-                                        ServerConnectionSecurity.loopbackHttp
-                                    ? 'settings.server_connection.local_http'
-                                    : 'server.access.http_warning',
-                              ),
-                              error:
-                                  guide.security ==
-                                  ServerConnectionSecurity.remoteHttp,
+                        else if (!encrypted)
+                          InlineNotice(
+                            message: copy(
+                              loopback
+                                  ? 'settings.server_connection.local_http'
+                                  : 'server.access.http_warning',
                             ),
-                            const SizedBox(height: 8),
-                          ],
-                          _ServerAccessFact(
-                            icon: Icons.login,
-                            title: copy('server.access.session.title'),
-                            detail: copy('server.access.session.detail'),
-                          ),
-                        ] else
-                          OutlinedButton.icon(
-                            onPressed: () =>
-                                unawaited(controller.refreshServerManagement()),
-                            icon: const Icon(Icons.refresh, size: 15),
-                            label: Text(copy('common.retry')),
+                            error: !loopback,
                           ),
                         if (controller.serverManagementError
                             case final error?) ...[
@@ -3135,93 +3186,102 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                             error: true,
                           ),
                         ],
-                        if (guide.available) ...[
-                          const SizedBox(height: 10),
-                          Divider(
-                            height: 1,
-                            color: context.viberColors.dividerSoft,
-                          ),
-                          const SizedBox(height: 9),
-                          Text(
-                            copy('server.web.title'),
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            copy('server.web.detail'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: context.viberColors.textMuted,
-                                ),
-                          ),
-                          const SizedBox(height: 7),
-                          _RunCommand(
-                            client: 'Web',
-                            command: controller.runtimeWebURL,
-                            copyLabel: copy('server.web.copy'),
-                            enabled: true,
-                            copy: copy,
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        Divider(
-                          height: 1,
-                          color: context.viberColors.dividerSoft,
-                        ),
                         const SizedBox(height: 9),
-                        Text(
-                          copy('server.login.command.title'),
-                          style: Theme.of(context).textTheme.labelLarge,
+                        step(
+                          copy('server.web.title'),
+                          copy('server.web.detail'),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          copy('server.login.command.detail'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: context.viberColors.textMuted),
-                        ),
-                        const SizedBox(height: 7),
                         _RunCommand(
-                          client: copy('server.login.command.client'),
-                          command:
-                              'vibermate login --server ${controller.runtimeServerURL}',
-                          copyLabel: copy('server.login.command.copy'),
-                          enabled: guide.available,
+                          client: 'Web',
+                          command: controller.runtimeWebURL,
+                          copyLabel: copy('server.web.copy'),
+                          enabled: true,
                           copy: copy,
                         ),
-                        const SizedBox(height: 10),
-                        Text(
-                          copy('server.run.title'),
-                          style: Theme.of(context).textTheme.labelLarge,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          copy('server.run.detail'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: context.viberColors.textMuted),
-                        ),
-                        const SizedBox(height: 7),
-                        Column(
-                          children: [
-                            for (final (index, client) in const [
-                              'claude',
-                              'codex',
-                            ].indexed) ...[
-                              _RunCommand(
-                                client: client == 'claude' ? 'Claude' : 'Codex',
-                                command:
-                                    'vibermate run --server ${controller.runtimeServerURL} -- $client',
-                                copyLabel: copy.format('terminal.run.copy', {
-                                  'client': client == 'claude'
-                                      ? 'Claude'
-                                      : 'Codex',
-                                }),
-                                enabled: guide.available,
-                                copy: copy,
+                        ...divider,
+                        if (loopback) ...[
+                          // Another computer would reach itself at this
+                          // address; say what works instead.
+                          InlineNotice(
+                            key: const Key('server-access-loopback'),
+                            message: copy('server.access.loopback'),
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const Key('server-access-deployment-guide'),
+                              onPressed: () => unawaited(
+                                launchUrl(
+                                  Uri.parse(copy('deployment.docs_url')),
+                                  mode: LaunchMode.externalApplication,
+                                ),
                               ),
-                              if (index == 0) const SizedBox(height: 7),
-                            ],
-                          ],
-                        ),
+                              icon: const Icon(Icons.open_in_new, size: 14),
+                              label: Text(copy('server.access.run_server')),
+                            ),
+                          ),
+                          // Kept for people who reach this Mac through an
+                          // SSH tunnel.
+                          CompactDisclosure(
+                            key: const Key('server-access-technical-details'),
+                            toggleKey: const Key(
+                              'server-access-technical-details-toggle',
+                            ),
+                            label: copy('common.technical_details'),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                session,
+                                const SizedBox(height: 9),
+                                step(
+                                  copy('server.login.command.title'),
+                                  copy('server.login.command.detail'),
+                                ),
+                                loginCommand,
+                                const SizedBox(height: 10),
+                                step(
+                                  copy('server.run.title'),
+                                  copy('server.run.detail'),
+                                ),
+                                runCommands,
+                              ],
+                            ),
+                          ),
+                        ] else ...[
+                          step(
+                            numbered(1, 'server.install.title'),
+                            copy('server.install.detail'),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const Key('server-access-install-guide'),
+                              onPressed: () => unawaited(
+                                launchUrl(
+                                  Uri.parse(copy('server.install.url')),
+                                  mode: LaunchMode.externalApplication,
+                                ),
+                              ),
+                              icon: const Icon(Icons.open_in_new, size: 14),
+                              label: Text(copy('server.install.guide')),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          step(
+                            numbered(2, 'server.login.command.title'),
+                            copy('server.login.command.detail'),
+                          ),
+                          loginCommand,
+                          const SizedBox(height: 8),
+                          session,
+                          const SizedBox(height: 10),
+                          step(
+                            numbered(3, 'server.run.title'),
+                            copy('server.run.detail'),
+                          ),
+                          runCommands,
+                        ],
                       ],
                     ),
                   ),

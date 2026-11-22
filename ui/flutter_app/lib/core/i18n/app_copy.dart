@@ -2573,6 +2573,9 @@ final class AppCopy {
     'settings.access.other.detail':
         'A browser, another computer, or ViberMate on a server.',
     'settings.access.team.title': 'Browser or another device',
+    'settings.access.browser.title': 'Open in a browser on this Mac',
+    'settings.access.browser.detail':
+        'The Web address of the ViberMate on this Mac.',
     'settings.access.team.optional':
         'Optional for local App use. Expand for the Web address and remote login steps.',
     'settings.access.team.detail':
@@ -2966,6 +2969,8 @@ final class AppCopy {
     'server.ip_allowlist.help':
         'Only clients whose address is inside one of these networks can reach this Server: the Web workbench, sign-in and Agent traffic. Leave the list empty to allow any address. The Server machine itself is always allowed. If no allowed network can reach the Server any more, run vibermated server ip-allowlist clear on the Server machine.',
     'server.ip_allowlist.open': 'Any address can connect.',
+    'server.ip_allowlist.none':
+        'No allowlist set: the Server doesn\'t filter connections by address.',
     'server.ip_allowlist.restricted':
         'Only the networks below can connect ({count}).',
     'server.ip_allowlist.client': 'This browser connects from {address}.',
@@ -3008,6 +3013,15 @@ final class AppCopy {
     'server.ip_allowlist.error.failed': 'The list was not saved: {error}',
     'server.access.description':
         'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
+    'server.access.loopback':
+        'Other computers can\'t connect directly to the ViberMate on this Mac. To use ViberMate from several computers, run ViberMate Server on a machine they can all reach.',
+    'server.access.run_server': 'How to run ViberMate Server',
+    'server.access.manage_users': 'Manage who can sign in',
+    'server.install.title': 'Install ViberMate on the other computer',
+    'server.install.detail':
+        'Install the app, then set up the vibermate command in its Settings → Access and launch. On Linux, install the .deb or .rpm package.',
+    'server.install.guide': 'Install guide',
+    'server.install.url': 'https://github.com/vibe-agi/vibermate#get-started',
     'server.access.loading': 'Reading Server access…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -3351,14 +3365,14 @@ final class AppCopy {
     'usage.personal.succeeded': '{count} succeeded',
     'usage.personal.empty':
         'No retained Agent traffic is linked to this account yet. Sign in from the CLI, then start a managed Claude or Codex run.',
-    'server.login.command.title': '1. Sign in on the client machine',
+    'server.login.command.title': 'Sign in once',
     'server.login.command.detail':
         'Run once, then enter the runtime user username and password.',
     'server.login.command.client': 'Login',
     'server.login.command.copy': 'Copy login command',
-    'server.run.title': 'Connect a client',
+    'server.run.title': 'Start Claude Code or Codex',
     'server.run.detail':
-        '2. Start Claude or Codex. Every request still passes through ViberMate and is captured.',
+        'Its requests to the AI service go through ViberMate and appear in Sessions.',
     'preferences.warning.corrupt':
         'Saved workspace state was invalid. ViberMate opened a safe default; your next navigation change will repair it.',
     'preferences.warning.future_schema':
@@ -5606,6 +5620,8 @@ final class AppCopy {
     'settings.access.other.title': '其他接入方式',
     'settings.access.other.detail': '浏览器、其他电脑，或在服务器上运行的 ViberMate。',
     'settings.access.team.title': '从浏览器或其他设备接入',
+    'settings.access.browser.title': '在本机浏览器中打开',
+    'settings.access.browser.detail': '这台 Mac 上 ViberMate 的网页地址。',
     'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
@@ -5942,6 +5958,7 @@ final class AppCopy {
     'server.ip_allowlist.help':
         '只有地址属于这些网段的客户端才能连接本 Server，包括 Web 工作台、登录和 Agent 流量。列表为空表示允许任何地址。Server 所在的机器本身始终允许访问。如果没有任何允许的网络还能连上 Server，请在 Server 机器上运行 vibermated server ip-allowlist clear。',
     'server.ip_allowlist.open': '任何地址都可以连接。',
+    'server.ip_allowlist.none': '未设置白名单：Server 不按地址过滤连接。',
     'server.ip_allowlist.restricted': '只有下面的网段可以连接（{count} 个）。',
     'server.ip_allowlist.client': '当前浏览器的地址是 {address}。',
     'server.ip_allowlist.app': '本 App 在这台电脑上管理 Server，始终允许访问。',
@@ -5977,6 +5994,16 @@ final class AppCopy {
     'server.ip_allowlist.error.failed': '白名单未保存：{error}',
     'server.access.description':
         '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
+    'server.access.loopback':
+        '其他电脑无法直接连接这台 Mac 上的 ViberMate。若要在多台电脑上使用 ViberMate，请在它们都能访问的机器上运行 ViberMate Server。',
+    'server.access.run_server': '如何运行 ViberMate Server',
+    'server.access.manage_users': '管理可登录的用户',
+    'server.install.title': '在另一台电脑上安装 ViberMate',
+    'server.install.detail':
+        '安装 App 后，在其「设置 → 接入与启动」中设置 vibermate 命令。Linux 请安装 .deb 或 .rpm 包。',
+    'server.install.guide': '安装指南',
+    'server.install.url':
+        'https://github.com/vibe-agi/vibermate/blob/main/README.zh-CN.md#开始使用',
     'server.access.loading': '正在读取 Server 访问方式…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -6270,12 +6297,12 @@ final class AppCopy {
     'usage.personal.succeeded': '成功 {count} 次',
     'usage.personal.empty':
         '这个账号还没有关联到已保留的 Agent 流量。请先在 CLI 登录，再启动一次托管的 Claude 或 Codex 运行。',
-    'server.login.command.title': '1. 在客户端机器登录',
+    'server.login.command.title': '登录一次',
     'server.login.command.detail': '只需运行一次，然后输入运行用户的用户名与密码。',
     'server.login.command.client': '登录',
     'server.login.command.copy': '复制登录命令',
-    'server.run.title': '连接客户端',
-    'server.run.detail': '2. 启动 Claude 或 Codex。每个请求仍会经过 ViberMate 并被捕获。',
+    'server.run.title': '启动 Claude Code 或 Codex',
+    'server.run.detail': '它发往 AI 服务的请求会经过 ViberMate，并显示在运行记录中。',
     'preferences.warning.corrupt':
         '已保存的工作台状态无效。ViberMate 已使用安全默认值打开；下次导航变更会修复该状态。',
     'preferences.warning.future_schema':

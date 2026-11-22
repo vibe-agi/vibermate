@@ -19,6 +19,7 @@ void main() {
     PreviewFreshStage stage = PreviewFreshStage.command,
     AppLanguage language = AppLanguage.english,
     bool server = true,
+    String runtimeTarget = 'This Mac',
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -28,6 +29,7 @@ void main() {
       terminalCommands: fixture.terminalCommands,
       previewMode: true,
       serverManagement: server,
+      runtimeTarget: runtimeTarget,
       rootTrustManagement: true,
       rootTrustInstaller: PreviewRootTrustInstaller(fixture.api),
       closeRuntime: fixture.api.close,
@@ -158,11 +160,27 @@ void main() {
   });
 
   testWidgets('only the Users pane opens the remote guide', (tester) async {
-    final controller = await open(tester);
+    // The Mac app's Server listens on 127.0.0.1.
+    final controller = await open(
+      tester,
+      runtimeTarget: 'http://127.0.0.1:9666',
+    );
     controller.openAccessSettings(focus: AccessFocus.remote);
     await settle(tester);
     expect(controller.remoteConnectionGuideRequested, isTrue);
     expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
+    // The Mac app's Server listens on this Mac only: the section is for a
+    // browser here, and says what another computer needs instead.
+    expect(find.text('Open in a browser on this Mac'), findsOneWidget);
+    expect(find.byKey(const Key('server-access-loopback')), findsOneWidget);
+    expect(find.text('Manage who can sign in'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('server-runtime-access')),
+        matching: find.textContaining('vibermate login --server'),
+      ),
+      findsNothing,
+    );
     // Leaving Settings forgets the request.
     controller.selectSection(WorkbenchSection.captures);
     expect(controller.remoteConnectionGuideRequested, isFalse);
