@@ -21,6 +21,7 @@ import 'runtime_connection_guide.dart';
 import 'server_deployment_guide.dart';
 import 'network_exit_usage.dart';
 import 'workbench_controller.dart';
+import 'routing_set_name.dart';
 
 final class SettingsView extends StatelessWidget {
   const SettingsView({required this.controller, required this.copy, super.key});
@@ -3114,7 +3115,10 @@ final class _RuntimeUserPolicyDialogState
   Widget build(BuildContext context) {
     final records =
         widget.controller.data?.environments ?? const <EnvironmentRecord>[];
-    final labels = {for (final value in records) value.id: value.name};
+    final labels = {
+      for (final value in records)
+        value.id: environmentDisplayName(value, widget.copy),
+    };
     final ids = {...labels.keys, ..._selected}.toList()..sort();
     final calls = int.tryParse(_calls.text.trim()) ?? 0;
     final tokens = int.tryParse(_tokens.text.trim()) ?? 0;

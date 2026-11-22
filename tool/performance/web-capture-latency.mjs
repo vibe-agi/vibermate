@@ -288,7 +288,7 @@ try {
   await trialPage.locator('flt-semantics[role="button"]')
     .filter({ hasText: 'Cancel' }).last().click();
   await trialPage.locator('flt-semantics[role="button"]')
-    .filter({ hasText: 'System Transparent, active' }).last().click({ timeout: 10_000 });
+    .filter({ hasText: 'Forward as-is, active' }).last().click({ timeout: 10_000 });
   await trialPage.locator('flt-semantics[role="button"]')
     .filter({ hasText: 'Try configuration' }).first().click();
   const originalDryRunResponse = trialPage.waitForResponse(response =>

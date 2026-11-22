@@ -21,6 +21,7 @@ import 'settings_view.dart' show rootCAErrorMessage;
 import 'setup_guide.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
+import 'routing_set_name.dart';
 
 final class CapturesView extends StatefulWidget {
   const CapturesView({required this.controller, required this.copy, super.key});
@@ -2443,7 +2444,7 @@ final class _EnvironmentScopeControls extends StatelessWidget {
     final assigned = assignment?.environmentId;
     final assignedName = environments
         .where((environment) => environment.id == assigned)
-        .map((environment) => environment.name)
+        .map((environment) => environmentDisplayName(environment, copy))
         .firstOrNull;
     final latest = environments
         .where((environment) => environment.id == assigned)
@@ -2755,7 +2756,9 @@ final class _ManualCaptureCreateDialogState
                       for (final environment in environments)
                         DropdownMenuItem(
                           value: environment.id,
-                          child: Text(environment.name),
+                          child: Text(
+                            environmentDisplayName(environment, copy),
+                          ),
                         ),
                     ],
                     onChanged: widget.controller.mutating
@@ -2771,6 +2774,14 @@ final class _ManualCaptureCreateDialogState
                           },
                   ),
                 ),
+                if (_environmentId == builtInRoutingSetId) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    copy('environment.builtin.description'),
+                    key: const Key('manual-capture-environment-description'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 9),
                 CompactLabeledControl(
                   label: copy('capture.manual.client_class'),

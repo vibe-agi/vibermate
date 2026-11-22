@@ -13,6 +13,7 @@ import 'account_selector_editor.dart';
 import 'built_in_script_templates.g.dart';
 import 'message_transform_editor.dart';
 import 'workbench_controller.dart';
+import 'routing_set_name.dart';
 
 final class CodeLibraryView extends StatefulWidget {
   const CodeLibraryView({
@@ -2856,7 +2857,7 @@ final class _ScriptUsageLine extends StatelessWidget {
           }),
         if (!value.active) copy('code_library.used_by.disabled'),
       ];
-      return '${value.environmentName} · ${parts.join(' · ')}';
+      return '${routingSetDisplayName(value.environmentId, value.environmentName, copy)} · ${parts.join(' · ')}';
     }
 
     return Text.rich(

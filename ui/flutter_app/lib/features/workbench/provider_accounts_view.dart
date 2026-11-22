@@ -310,6 +310,12 @@ final class _ProviderAccountsViewState extends State<ProviderAccountsView> {
                         ? 'provider_accounts.empty'
                         : 'provider_accounts.no_results',
                   ),
+                  // Accounts are optional; say so before anyone pastes a
+                  // key they did not need to share.
+                  detail: query.isEmpty
+                      ? '${copy('provider_accounts.empty.detail')}\n\n'
+                            '${copy('provider_accounts.empty.when')}'
+                      : null,
                   action: query.isEmpty && endpoints.isNotEmpty
                       ? OutlinedButton.icon(
                           onPressed: controller.inventoryMutating

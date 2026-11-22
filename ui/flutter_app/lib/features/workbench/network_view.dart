@@ -10,6 +10,7 @@ import '../../core/i18n/app_copy.dart';
 import 'control_failure_notice.dart';
 import 'workbench_controller.dart';
 import 'native_tool_approval_row.dart';
+import 'routing_set_name.dart';
 
 enum _NetworkPanel { approvals, rules, connections, egress }
 
@@ -1000,9 +1001,14 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
     final copy = widget.copy;
     final source =
         record.sourceLabel ?? copy('network.connections.unknown_source');
-    final environment =
-        record.environmentName ??
-        copy('network.connections.unknown_environment');
+    final environment = record.environmentId != null
+        ? routingSetDisplayName(
+            record.environmentId!,
+            record.environmentName,
+            copy,
+          )
+        : record.environmentName ??
+              copy('network.connections.unknown_environment');
     final decision = record.decision == null
         ? copy('network.connections.undecided')
         : _localizedWire(copy, 'network.value.decision', record.decision!);
@@ -2721,6 +2727,8 @@ String _connectionSearchText(ConnectionRecord record, AppCopy copy) =>
       record.sourceConfidence,
       record.environmentId,
       record.environmentName,
+      if (record.environmentId case final id?)
+        routingSetDisplayName(id, record.environmentName, copy),
       record.requestedHost,
       record.observedSni,
       record.routeHost,

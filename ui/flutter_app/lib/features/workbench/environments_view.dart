@@ -22,6 +22,7 @@ import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
 import 'provider_account_facts.dart';
 import 'route_account_scope_editor.dart';
+import 'routing_set_name.dart';
 import 'workbench_controller.dart';
 
 final class EnvironmentsView extends StatefulWidget {
@@ -208,11 +209,12 @@ final class _EnvironmentDirectory extends StatelessWidget {
           final environment = environments[index];
           final selected = environment.id == selectedId;
           final routes = environment.routes.length;
+          final name = environmentDisplayName(environment, copy);
           return Semantics(
             selected: selected,
             button: true,
             label:
-                '${environment.name}, ${environment.state}, '
+                '$name, ${environment.state}, '
                 '${copy.format('environment.routes', {'count': '$routes'})}',
             child: Material(
               color: selected
@@ -263,7 +265,7 @@ final class _EnvironmentDirectory extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              environment.name,
+                              name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall,
@@ -383,7 +385,8 @@ final class _EnvironmentDetail extends StatelessWidget {
                         padding: EdgeInsets.zero,
                       ),
                       Text(
-                        value.name,
+                        environmentDisplayName(value, copy),
+                        key: const Key('environment-title'),
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       if (historical)
@@ -404,6 +407,16 @@ final class _EnvironmentDetail extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (isBuiltInRoutingSet(value)) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      copy('environment.builtin.description'),
+                      key: const Key('environment-builtin-description'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.text,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 3),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -559,7 +572,7 @@ final class _EnvironmentDetail extends StatelessWidget {
           child: value.clientEndpoints.isEmpty
               ? CenteredMessage(
                   icon: Icons.compare_arrows,
-                  title: value.name,
+                  title: environmentDisplayName(value, copy),
                   detail: copy(
                     value.systemOwned
                         ? 'environment.connection_only'
@@ -683,7 +696,7 @@ void _confirmDeleteEnvironment(
       builder: (_) => DeletionConfirmation(
         copy: copy,
         title: copy('deletion.environment.title'),
-        subject: environment.name,
+        subject: environmentDisplayName(environment, copy),
         consequence: copy('deletion.environment.consequence'),
         onConfirm: () async {
           final result = await controller.deleteEnvironment(environment.id);
@@ -5396,7 +5409,10 @@ final class _EnvironmentImpactReview extends StatelessWidget {
           const SizedBox(height: 13),
           _EditorSectionLabel(label: copy('environment.impact.summary')),
           const SizedBox(height: 5),
-          Text(candidate.name, style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            environmentDisplayName(candidate, copy),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
           SelectableText(
             '${candidate.id} · r${candidate.revision} · ${copy('environment.state.${candidate.state}')}',
             style: monoStyle.copyWith(color: context.viberColors.textMuted),

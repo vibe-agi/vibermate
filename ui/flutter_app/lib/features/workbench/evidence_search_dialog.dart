@@ -11,6 +11,7 @@ import '../../core/i18n/app_copy.dart';
 import 'control_failure_notice.dart';
 import 'conversation_timeline.dart';
 import 'workbench_controller.dart';
+import 'routing_set_name.dart';
 
 Future<void> showEvidenceSearchDialog(
   BuildContext context, {
@@ -415,7 +416,8 @@ final class _EvidenceSearchRow extends StatelessWidget {
     final scope = [
       metadata.workspaceLabel,
       metadata.captureLabel,
-      activity.environmentId,
+      if (activity.environmentId.isNotEmpty)
+        routingSetDisplayName(activity.environmentId, null, copy),
       activity.accountId ?? '',
     ].where((value) => value.isNotEmpty).join('  ·  ');
     final fields = hit.matches

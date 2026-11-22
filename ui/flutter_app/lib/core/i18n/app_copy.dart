@@ -612,7 +612,11 @@ final class AppCopy {
         'Could not save the note. Your draft is kept; try again.',
     'provider_accounts.note.conflict':
         'This account changed elsewhere. Nothing was overwritten. Copy your draft before closing and reopening the editor.',
-    'provider_accounts.empty': 'Add your first upstream account',
+    'provider_accounts.empty': 'No accounts yet',
+    'provider_accounts.empty.detail':
+        'You don\'t need one to start: Claude Code and Codex keep using their own sign-in.',
+    'provider_accounts.empty.when':
+        'Accounts are used through a routing set, to send requests to another service or account, or to run an agent that isn\'t signed in.',
     'provider_accounts.no_results': 'No accounts match your search',
     'provider_accounts.service': 'Credential service',
     'provider_accounts.clear_search': 'Clear search',
@@ -1568,6 +1572,9 @@ final class AppCopy {
     'environment.history.semantics':
         'Read-only frozen routing set revision {revision}',
     'environment.system_managed': 'Built-in · read-only',
+    'environment.builtin.name': 'Forward as-is',
+    'environment.builtin.description':
+        'Used when you start an agent without --env. Each agent keeps its own service and login, and its requests are recorded.',
     'environment.route.default': 'Default',
     'environment.route.fallback': 'Candidate',
     'environment.account.invalid':
@@ -3861,7 +3868,11 @@ final class AppCopy {
     'provider_accounts.note.invalid': '请填写不超过 256 字的单行备注。',
     'provider_accounts.note.failed': '备注未能保存，草稿已保留，请重试。',
     'provider_accounts.note.conflict': '账号已在别处更新，未覆盖。请先保留当前输入，再关闭并重新编辑。',
-    'provider_accounts.empty': '添加第一个上游账号',
+    'provider_accounts.empty': '还没有账号',
+    'provider_accounts.empty.detail':
+        '开始使用不需要账号：Claude Code 和 Codex 会继续使用自己的登录。',
+    'provider_accounts.empty.when':
+        '账号要通过流量策略使用，用于把请求发往其他服务或账号，或让未登录的 Agent 运行。',
     'provider_accounts.no_results': '没有匹配的账号，请调整搜索内容',
     'provider_accounts.service': '凭据适用服务',
     'provider_accounts.clear_search': '清空搜索',
@@ -4674,6 +4685,9 @@ final class AppCopy {
     'environment.history.detail': '只读流量策略版本 {revision}；当前配置未发生改变。',
     'environment.history.semantics': '只读的冻结流量策略版本 {revision}',
     'environment.system_managed': '内置 · 只读',
+    'environment.builtin.name': '原样转发',
+    'environment.builtin.description':
+        '不带 --env 启动 Agent 时使用：Agent 保持原服务和登录，请求会被记录。',
     'environment.route.default': '默认',
     'environment.route.fallback': '候选',
     'environment.account.invalid': '该账号尚未关联到所选上游服务，或地址与认证类型不兼容。',
