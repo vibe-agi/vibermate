@@ -14,12 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/anthropicchat"
-	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
-	"github.com/vibe-agi/vibermate/internal/responseschat"
 )
 
 // The protocol goldens characterize the four existing protocol paths over
@@ -49,30 +46,32 @@ type protocolGoldenPath struct {
 	requests string // fixture name prefix: "claude" or "codex"
 }
 
+// protocolGoldenPaths builds every path of the production table exactly as
+// production does when no body-admission policy overrides resource limits.
 func protocolGoldenPaths(t *testing.T) []protocolGoldenPath {
 	t.Helper()
-	anthropic, err := anthropicchat.NewProtocolPath(anthropicchat.DefaultOptions())
+	specs, err := productionProtocolPaths()
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages, err := anthropicchat.NewMessagesProtocolPath(anthropicchat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
+	paths := make([]protocolGoldenPath, 0, len(specs))
+	for _, spec := range specs {
+		path, err := spec.Build(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests := ""
+		switch spec.Definition.ClientDialect {
+		case protocolspec.DialectAnthropicMessages:
+			requests = "claude"
+		case protocolspec.DialectOpenAIResponses:
+			requests = "codex"
+		default:
+			t.Fatalf("no golden requests for client dialect %s", spec.Definition.ClientDialect)
+		}
+		paths = append(paths, protocolGoldenPath{name: spec.Definition.ID.String(), path: path, requests: requests})
 	}
-	responses, err := responseschat.NewProtocolPath(responseschat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	passthrough, err := responseschat.NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return []protocolGoldenPath{
-		{name: anthropicchat.CodecPairID, path: anthropic, requests: "claude"},
-		{name: anthropicchat.MessagesCodecPairID, path: messages, requests: "claude"},
-		{name: responseschat.CodecPairID, path: responses, requests: "codex"},
-		{name: responseschat.ResponsesPassthroughCodecPairID, path: passthrough, requests: "codex"},
-	}
+	return paths
 }
 
 func TestProtocolGolden(t *testing.T) {
