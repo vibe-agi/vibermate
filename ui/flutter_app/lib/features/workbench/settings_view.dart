@@ -2579,62 +2579,74 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
                 ),
             ],
           ),
-          // What the certificate is for, and that Codex needs it, is always
-          // on the page rather than behind a help button.
+          // Everything below lines up with the title, beside the icon.
           Padding(
-            padding: const EdgeInsets.only(left: 26, top: 2),
-            child: Text(
-              copy('settings.root_ca.detail'),
-              key: const Key('root-ca-purpose'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
+            padding: const EdgeInsets.only(left: 26),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _body(context, status, localDesktop),
             ),
           ),
-          const SizedBox(height: 10),
-          if (!localDesktop)
-            InlineNotice(
-              message: copy('settings.root_ca.unavailable'),
-              error: false,
-            )
-          else if (controller.rootCALoading && status == null)
-            CompactLoadingMessage(label: copy('common.loading'))
-          else if (status == null)
-            _RootCAUnavailable(
-              message: copy('settings.root_ca.load_failed'),
-              recovery: copy('settings.root_ca.load_recovery'),
-              retryLabel: copy('settings.root_ca.retry'),
-              onRetry: () => unawaited(controller.refreshRootCA()),
-            )
-          else
-            _RootCAStatusBody(
-              status: status,
-              copy: copy,
-              mutating: controller.rootCAMutating || controller.rootCALoading,
-              error: controller.rootCAError,
-              onInstall: () =>
-                  unawaited(confirmRootTrustInstall(context, controller, copy)),
-              onRemove: () => unawaited(controller.openRootCARemovalGuide()),
-              onReplace: _confirmReplace,
-              onRestart: () => unawaited(controller.restartForRootReset()),
-              restartRequired: controller.rootCARestartRequired,
-              guideIntent: controller.rootCAGuideIntent,
-              canReplace: controller.runningCaptures.isEmpty,
-              onRetry: () => unawaited(controller.refreshRootCA()),
-            ),
-          if (controller.operationNotice == 'root_ca_updated') ...[
-            const SizedBox(height: 8),
-            InlineNotice(
-              key: const Key('root-ca-updated'),
-              message: copy('settings.root_ca.updated'),
-              onDismiss: controller.clearNotice,
-              dismissLabel: copy('common.dismiss'),
-            ),
-          ],
         ],
       ),
     );
   }
+
+  List<Widget> _body(
+    BuildContext context,
+    RootCAStatus? status,
+    bool localDesktop,
+  ) => [
+    // What the certificate is for, and that Codex needs it, is always
+    // on the page rather than behind a help button.
+    Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(
+        copy('settings.root_ca.detail'),
+        key: const Key('root-ca-purpose'),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      ),
+    ),
+    const SizedBox(height: 10),
+    if (!localDesktop)
+      InlineNotice(message: copy('settings.root_ca.unavailable'), error: false)
+    else if (controller.rootCALoading && status == null)
+      CompactLoadingMessage(label: copy('common.loading'))
+    else if (status == null)
+      _RootCAUnavailable(
+        message: copy('settings.root_ca.load_failed'),
+        recovery: copy('settings.root_ca.load_recovery'),
+        retryLabel: copy('settings.root_ca.retry'),
+        onRetry: () => unawaited(controller.refreshRootCA()),
+      )
+    else
+      _RootCAStatusBody(
+        status: status,
+        copy: copy,
+        mutating: controller.rootCAMutating || controller.rootCALoading,
+        error: controller.rootCAError,
+        onInstall: () =>
+            unawaited(confirmRootTrustInstall(context, controller, copy)),
+        onRemove: () => unawaited(controller.openRootCARemovalGuide()),
+        onReplace: _confirmReplace,
+        onRestart: () => unawaited(controller.restartForRootReset()),
+        restartRequired: controller.rootCARestartRequired,
+        guideIntent: controller.rootCAGuideIntent,
+        canReplace: controller.runningCaptures.isEmpty,
+        onRetry: () => unawaited(controller.refreshRootCA()),
+      ),
+    if (controller.operationNotice == 'root_ca_updated') ...[
+      const SizedBox(height: 8),
+      InlineNotice(
+        key: const Key('root-ca-updated'),
+        message: copy('settings.root_ca.updated'),
+        onDismiss: controller.clearNotice,
+        dismissLabel: copy('common.dismiss'),
+      ),
+    ],
+  ];
 
   Future<void> _confirmReplace() async {
     if (controller.rootCAStatus?.certificatePresent != 'absent') {
