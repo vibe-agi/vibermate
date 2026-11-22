@@ -105,6 +105,7 @@ const (
 	eventText assemblerEventKind = iota + 1
 	eventRefusal
 	eventTextDone
+	eventRefusalDone
 	eventReasoning
 	eventReasoningDone
 	eventToolCall
@@ -116,6 +117,11 @@ type assemblerEvent struct {
 	text      string
 	reasoning protocolcore.Reasoning
 	call      protocolcore.ToolCall
+}
+
+// closesText reports a final value for a text or refusal block.
+func (event assemblerEvent) closesText() bool {
+	return event.kind == eventTextDone || event.kind == eventRefusalDone
 }
 
 func (event assemblerEvent) interleaveBytes() int {
@@ -272,9 +278,19 @@ func (assembler *Assembler) Refusal(key, delta string) ([]byte, error) {
 
 // TextDone closes a text or refusal block with its final value: a missing
 // suffix of the streamed text is emitted, a block that streamed nothing is
-// emitted whole, and streamed text that is not a prefix of final fails.
+// emitted whole, and streamed text that is not a prefix of final fails. A key
+// that has had no event yet becomes a text block; a refusal part that streamed
+// nothing is closed with RefusalDone instead.
 func (assembler *Assembler) TextDone(key, final string) ([]byte, error) {
 	return assembler.submit(assemblerEvent{kind: eventTextDone, key: key, text: final})
+}
+
+// RefusalDone closes a refusal block with its final value, as TextDone does
+// for text. A key that has had no event yet becomes a refusal block, so a
+// refusal delivered only whole (ChatGPT sends only item.done) stays a
+// refusal; a key that holds a text block fails.
+func (assembler *Assembler) RefusalDone(key, final string) ([]byte, error) {
+	return assembler.submit(assemblerEvent{kind: eventRefusalDone, key: key, text: final})
 }
 
 // Reasoning streams reasoning text. An empty delta opens the block, or is a
@@ -434,7 +450,7 @@ func (assembler *Assembler) write(live *bytes.Buffer, encoded []byte) error {
 func (assembler *Assembler) block(event assemblerEvent) (*assembledBlock, error) {
 	kind := assembledText
 	switch event.kind {
-	case eventRefusal:
+	case eventRefusal, eventRefusalDone:
 		kind = assembledRefusal
 	case eventReasoning, eventReasoningDone:
 		kind = assembledReasoning
@@ -548,7 +564,7 @@ func (assembler *Assembler) applyText(block *assembledBlock, event assemblerEven
 			return err
 		}
 	}
-	if event.kind != eventTextDone {
+	if !event.closesText() {
 		if event.text == "" {
 			return nil
 		}

@@ -3,6 +3,7 @@ package protocolpath
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -540,6 +541,48 @@ func TestAssemblerRefusals(t *testing.T) {
 	}
 }
 
+// A refusal delivered only whole (the minimal ChatGPT shape sends just
+// item.done) stays a refusal on both kinds of client encoder.
+func TestAssemblerRefusalDeliveredWhole(t *testing.T) {
+	t.Parallel()
+	refusal := protocolcore.ContentBlock{Kind: protocolcore.BlockRefusal, Refusal: "I can't help with that."}
+	for name, test := range map[string]struct {
+		encoder ClientStreamEncoder
+		live    string
+		notices []protocolcore.NoticeCode
+	}{
+		"text fallback":  {recordingEncoder{}, "T0[ t0:I can't help with that. ]0 ", []protocolcore.NoticeCode{protocolcore.NoticeRefusalRenderedAsText}},
+		"native refusal": {refusalEncoder{}, "F0[ f0:I can't help with that. ]F0 ", nil},
+	} {
+		assembler := newTestAssembler(t, test.encoder, "", AssemblerOptions{})
+		tape := &eventTape{t: t}
+		tape.record(assembler.RefusalDone("1:0", refusal.Refusal))
+		if tape.live.String() != test.live {
+			t.Fatalf("%s: live = %q", name, tape.live.String())
+		}
+		terminal := finish(t, assembler, terminalResponse(protocolcore.StopReasonEndTurn, refusal))
+		var notices []protocolcore.NoticeCode
+		for _, notice := range terminal.TranslationReport().Notices() {
+			notices = append(notices, notice.Code)
+		}
+		if !slices.Equal(notices, test.notices) {
+			t.Fatalf("%s: notices = %v", name, notices)
+		}
+		if release := approve(t, terminal); release != "E:end_turn" {
+			t.Fatalf("%s: release = %q", name, release)
+		}
+	}
+	// A refusal that streamed first closes the same way.
+	streamed := newTestAssembler(t, refusalEncoder{}, "", AssemblerOptions{})
+	tape := &eventTape{t: t}
+	tape.record(streamed.Refusal("1:0", "I can't"))
+	tape.record(streamed.RefusalDone("1:0", refusal.Refusal))
+	if tape.live.String() != "F0[ f0:I can't f0: help with that. ]F0 " {
+		t.Fatalf("streamed live = %q", tape.live.String())
+	}
+	finish(t, streamed, terminalResponse(protocolcore.StopReasonEndTurn, refusal))
+}
+
 func TestAssemblerRejectsInvalidOrdering(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(*Assembler) error{
@@ -562,6 +605,13 @@ func TestAssemblerRejectsInvalidOrdering(t *testing.T) {
 				return nil
 			}
 			_, err := a.Refusal("a", "y")
+			return err
+		},
+		"refusal final on a text key": func(a *Assembler) error {
+			if _, err := a.Text("a", "x"); err != nil {
+				return nil
+			}
+			_, err := a.RefusalDone("a", "x")
 			return err
 		},
 		"terminal twice": func(a *Assembler) error {
