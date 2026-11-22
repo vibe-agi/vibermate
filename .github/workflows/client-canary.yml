@@ -118,7 +118,9 @@ jobs:
   report:
     name: report a failing release
     needs: [codex-latest, claude-latest]
-    if: failure()
+    # Only the default branch reports: a canary dispatched on a branch is a
+    # probe of that branch's tests, and its failures belong to that branch.
+    if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
