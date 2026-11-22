@@ -5044,6 +5044,7 @@ final class WorkbenchController extends ChangeNotifier
           directoryBodies.every((value) => value == false);
       if (!_captureViewChosen &&
           available.isEmpty &&
+          capture.kind == 'managed_run' &&
           capture.running &&
           capture.observation == 'waiting_for_traffic') {
         // Nothing to summarise yet: the request list says what it waits for,

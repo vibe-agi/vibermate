@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
@@ -148,6 +149,51 @@ void main() {
     );
     expect(controller.selectedCaptureKey, running.key);
     expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('a waiting proxy login keeps its own empty state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewFixture.freshInstall().terminalCommands,
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    await controller.initialize();
+    final dashboard = controller.data!;
+    final manual = dashboard.captures.firstWhere((value) => value.isManual);
+    final waiting = CaptureRecord(
+      key: manual.key,
+      id: manual.id,
+      kind: manual.kind,
+      displayName: manual.displayName,
+      state: manual.state,
+      observation: 'waiting_for_traffic',
+      createdAt: manual.createdAt,
+      updatedAt: manual.updatedAt,
+      manualCapture: ManualCaptureSummary(
+        clientClass: manual.manualCapture!.clientClass,
+        lifetime: manual.manualCapture!.lifetime,
+        credentialRevision: manual.manualCapture!.credentialRevision,
+      ),
+    );
+    expect(waiting.stoppedBeforeStart, isFalse);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.textContaining('Type a prompt in ${manual.displayName}'),
+      findsNothing,
+    );
     await close(tester, controller);
   });
 }

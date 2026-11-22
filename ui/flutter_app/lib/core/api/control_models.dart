@@ -7290,9 +7290,11 @@ final class CaptureRecord {
 
   /// A `vibermate run` launch that finished before its agent started. The
   /// launcher records the process ID only once the agent is running, and a
-  /// launch it stops on a failed check finishes without one.
+  /// launch it stops on a failed check finishes without one. ACP records are
+  /// never counted: their own view explains them.
   bool get stoppedBeforeStart =>
       kind == 'managed_run' &&
+      !isACP &&
       !running &&
       observation == 'waiting_for_traffic' &&
       managedRun?.processId == null;

@@ -215,5 +215,47 @@ void main() {
       isTrue,
     );
     expect(agentCannotConnect(run('claude', 'unverified'), null), isFalse);
+    // A session that delivered a request evidently connected.
+    final connected = run('claude', 'unverified');
+    expect(
+      agentCannotConnect(
+        CaptureRecord(
+          key: connected.key,
+          id: connected.id,
+          kind: connected.kind,
+          displayName: connected.displayName,
+          state: connected.state,
+          observation: 'observed',
+          createdAt: connected.createdAt,
+          updatedAt: connected.updatedAt,
+          managedRun: connected.managedRun,
+        ),
+        research,
+      ),
+      isFalse,
+    );
+  });
+
+  test('ACP records never count as a launch that did not start', () {
+    CaptureRecord record({String? transport}) => CaptureRecord(
+      key: 'managed_run:acp',
+      id: 'acp',
+      kind: 'managed_run',
+      displayName: 'Codex',
+      state: 'finished',
+      observation: 'waiting_for_traffic',
+      createdAt: DateTime.utc(2026, 8, 10),
+      updatedAt: DateTime.utc(2026, 8, 10),
+      transport: transport,
+      managedRun: ManagedRunSummary(
+        executableLabel: 'codex',
+        cwd: '/tmp',
+        canonicalExecutablePath: '/usr/local/bin/codex',
+        recognition: 'verified',
+        expiresAt: DateTime.utc(2026, 8, 11),
+      ),
+    );
+    expect(record().stoppedBeforeStart, isTrue);
+    expect(record(transport: 'acp_stdio').stoppedBeforeStart, isFalse);
   });
 }

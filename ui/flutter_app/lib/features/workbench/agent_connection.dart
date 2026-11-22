@@ -42,8 +42,10 @@ String? agentPublisher(CaptureRecord capture) =>
 /// builds and only when the routing set protects some service.
 bool agentCannotConnect(CaptureRecord capture, EnvironmentRecord? environment) {
   final managed = capture.managedRun;
+  // A session that delivered a request evidently connected.
   if (managed == null ||
       managed.recognition != 'unverified' ||
+      capture.observation == 'observed' ||
       environment == null) {
     return false;
   }

@@ -208,6 +208,7 @@ final class _SessionLedgerState extends State<SessionLedger> {
     final selectedCapture = controller.selectedCapture;
     final waiting =
         selectedCapture != null &&
+            selectedCapture.kind == 'managed_run' &&
             selectedCapture.running &&
             selectedCapture.observation == 'waiting_for_traffic'
         ? selectedCapture
