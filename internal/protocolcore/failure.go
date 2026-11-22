@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -87,7 +88,7 @@ type ProviderError struct {
 	Class  ProviderErrorClass
 	Status int    // provider HTTP status; 0 for an in-stream failure
 	Code   string // KnownClassifiedErrorCode only
-	Param  string // a known request field name only
+	Param  string // KnownProviderErrorParam only
 	// RetryAfter comes from headers or numeric body fields, never from prose.
 	RetryAfter   time.Duration
 	ResetsAt     int64 // unix seconds; 0 when unknown
@@ -105,8 +106,8 @@ func (provider ProviderError) Validate() error {
 	if KnownClassifiedErrorCode(provider.Code) != provider.Code {
 		return errors.New("provider error code is not in the closed vocabulary")
 	}
-	if !validProviderErrorParam(provider.Param) {
-		return errors.New("provider error field is invalid")
+	if provider.Param != "" && KnownProviderErrorParam(provider.Param) != provider.Param {
+		return errors.New("provider error field is not a known request field")
 	}
 	if provider.RetryAfter < 0 || provider.RetryAfter > MaxProviderRetryAfter {
 		return errors.New("provider retry delay is invalid")
@@ -117,22 +118,80 @@ func (provider ProviderError) Validate() error {
 	return nil
 }
 
-// validProviderErrorParam admits a request field path such as
-// "reasoning.effort" or "input[3].content[0].image_url", never free text.
-func validProviderErrorParam(value string) bool {
-	if len(value) > 128 {
-		return false
+// knownProviderErrorFields are the OpenAI Responses request fields an
+// upstream error.param may name, with every array index written [N]. The
+// list is closed: anything else, provider text or an echoed value included,
+// is never carried.
+var knownProviderErrorFields = func() map[string]struct{} {
+	fields := []string{
+		"model", "input", "instructions", "tools", "tool_choice", "parallel_tool_calls",
+		"max_output_tokens", "max_tool_calls", "temperature", "top_p", "top_logprobs",
+		"store", "stream", "stream_options", "include", "include[N]", "metadata",
+		"prompt_cache_key", "prompt_cache_retention", "previous_response_id", "conversation",
+		"truncation", "service_tier", "safety_identifier", "user", "background",
+		"reasoning", "reasoning.effort", "reasoning.summary",
+		"text", "text.verbosity", "text.format", "text.format.type", "text.format.name",
+		"text.format.schema", "text.format.strict", "text.format.description",
+		"tool_choice.type", "tool_choice.name", "tool_choice.tools",
 	}
-	for _, character := range value {
-		switch {
-		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z',
-			character >= '0' && character <= '9', character == '_', character == '.',
-			character == '[', character == ']', character == '-':
-		default:
-			return false
+	// Input items, their content parts, reasoning summaries and tool outputs.
+	item := []string{
+		"", ".type", ".id", ".role", ".status", ".phase", ".content", ".encrypted_content",
+		".summary", ".summary[N]", ".summary[N].text", ".call_id", ".name", ".namespace",
+		".arguments", ".input", ".output",
+	}
+	part := []string{"", ".type", ".text", ".image_url", ".file_id", ".file_data", ".file_url", ".filename", ".detail"}
+	for _, member := range item {
+		fields = append(fields, "input[N]"+member)
+	}
+	for _, list := range []string{"content", "output"} {
+		for _, member := range part {
+			fields = append(fields, "input[N]."+list+"[N]"+member)
 		}
 	}
-	return true
+	// Function, custom and namespace tools, and a namespace's own tools.
+	tool := []string{"", ".type", ".name", ".description", ".parameters", ".strict", ".format", ".defer_loading", ".tools"}
+	for _, member := range tool {
+		fields = append(fields, "tools[N]"+member, "tools[N].tools[N]"+member)
+	}
+	known := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		known[field] = struct{}{}
+	}
+	return known
+}()
+
+// KnownProviderErrorParam returns param when it names a known OpenAI
+// Responses request field, such as "reasoning.effort" or
+// "input[3].content[0].image_url", and "" otherwise. Array indexes of up to
+// four digits are kept, since they point into ViberMate's own request; every
+// other byte must match the closed field list.
+func KnownProviderErrorParam(param string) string {
+	if param == "" || len(param) > 128 {
+		return ""
+	}
+	var shape strings.Builder
+	for index := 0; index < len(param); index++ {
+		if param[index] != '[' {
+			shape.WriteByte(param[index])
+			continue
+		}
+		end := strings.IndexByte(param[index:], ']')
+		if end < 2 || end > 5 {
+			return ""
+		}
+		for _, digit := range param[index+1 : index+end] {
+			if digit < '0' || digit > '9' {
+				return ""
+			}
+		}
+		shape.WriteString("[N]")
+		index += end
+	}
+	if _, known := knownProviderErrorFields[shape.String()]; !known {
+		return ""
+	}
+	return param
 }
 
 // KnownClassifiedErrorCode is the closed vocabulary a ProviderError may

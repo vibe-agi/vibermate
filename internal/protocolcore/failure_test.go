@@ -97,6 +97,8 @@ func TestProviderErrorValidation(t *testing.T) {
 		"unknown code":       {Class: ProviderErrorInvalidRequest, Code: "Your prompt mentions private text"},
 		"param with prose":   {Class: ProviderErrorInvalidRequest, Param: "the input field"},
 		"param too long":     {Class: ProviderErrorInvalidRequest, Param: strings.Repeat("p", 129)},
+		"param shaped a key": {Class: ProviderErrorInvalidRequest, Param: "sk-proj-AbC123_xyz"},
+		"param unknown":      {Class: ProviderErrorInvalidRequest, Param: "input[3].secret_value"},
 		"negative retry":     {Class: ProviderErrorRateLimited, RetryAfter: -time.Second},
 		"retry beyond a day": {Class: ProviderErrorRateLimited, RetryAfter: 25 * time.Hour},
 		"negative tokens":    {Class: ProviderErrorContextWindow, LimitTokens: -1},
@@ -104,6 +106,37 @@ func TestProviderErrorValidation(t *testing.T) {
 	} {
 		if err := providerError.Validate(); err == nil {
 			t.Fatalf("%s accepted", name)
+		}
+	}
+}
+
+// A provider's error.param is rendered into client-visible messages, so only
+// known OpenAI Responses request fields pass, with array indexes kept.
+func TestKnownProviderErrorParamIsAClosedVocabulary(t *testing.T) {
+	t.Parallel()
+	for _, param := range []string{
+		"model", "input", "instructions", "max_output_tokens", "reasoning.effort", "reasoning.summary",
+		"text.format", "text.format.schema", "text.format.strict", "text.verbosity", "tool_choice", "include[0]",
+		"input[3]", "input[3].encrypted_content", "input[12].content[0].image_url", "input[2].content[1].file_data",
+		"input[2].content[1].file_url", "input[7].output[0].image_url", "input[5].call_id", "input[5].arguments",
+		"tools[4]", "tools[4].name", "tools[4].parameters", "tools[0].tools[2].name", "input[9999].content[9999].text",
+	} {
+		if KnownProviderErrorParam(param) != param {
+			t.Fatalf("KnownProviderErrorParam(%q) refused a known field", param)
+		}
+		if err := (ProviderError{Class: ProviderErrorInvalidRequest, Status: 400, Param: param}).Validate(); err != nil {
+			t.Fatalf("Param %q: %v", param, err)
+		}
+	}
+	for _, param := range []string{
+		"", "sk-proj-AbC123_xyz", "sk-ant-api03-abcdef", "resp_0123456789abcdef", "org-AbCdEf123",
+		"input[3].secret_value", "input[3].content[0].image_url.sk-proj-abc", "Input", "input.3.content",
+		"input[]", "input[x]", "input[-1]", "input[10000]", "input[3]]", "input[3", "input[3]content",
+		"reasoning..effort", ".model", "model.", "reasoning.effort[0]", "text.format.sk_live_123",
+		"the input field", strings.Repeat("input[0].", 15) + "content",
+	} {
+		if got := KnownProviderErrorParam(param); got != "" {
+			t.Fatalf("KnownProviderErrorParam(%q) = %q, want it refused", param, got)
 		}
 	}
 }
