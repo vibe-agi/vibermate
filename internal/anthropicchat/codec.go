@@ -104,6 +104,30 @@ func (profile ProviderRequestProfile) validate() error {
 	return nil
 }
 
+// ClientInputProfile selects how the Anthropic client side decodes a request.
+// The zero value is the strict profile the Chat path has always used: it
+// refuses what the neutral model cannot carry for Chat and declares the
+// rest.
+type ClientInputProfile struct {
+	translated bool
+}
+
+// TranslatedClientInputProfile is the profile of a pair whose provider side
+// carries media, rich tool results and positioned reasoning (design 6). On
+// top of the strict profile it decodes image and document blocks as media,
+// keeps tool-result parts and tool_reference loads, keeps defer_loading,
+// drops Claude Code's billing attribution line, turns thinking signatures
+// into reasoning seals, records requested safeguards as unserved and drops
+// server-tool history from an earlier native turn. Each loss is declared.
+func TranslatedClientInputProfile() ClientInputProfile {
+	return ClientInputProfile{translated: true}
+}
+
+// Translated reports the translated profile.
+func (profile ClientInputProfile) Translated() bool {
+	return profile.translated
+}
+
 type Options struct {
 	Resources            *protocolcore.ResourceLimits
 	MaxRequestBytes      int
@@ -113,6 +137,9 @@ type Options struct {
 	MaxToolCalls         int
 	SSE                  ssewire.Options
 	ProviderRequest      ProviderRequestProfile
+	// ClientInput selects the client decode profile; the zero value is the
+	// strict profile.
+	ClientInput ClientInputProfile
 }
 
 func DefaultOptions() Options {

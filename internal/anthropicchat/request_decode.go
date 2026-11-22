@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 type anthropicRequestWire struct {
@@ -71,12 +73,75 @@ type anthropicToolReferenceBlockWire struct {
 	ToolName string `json:"tool_name"`
 }
 
+// anthropicTranslatedRequestWire adds the root members only the translated
+// profile models. The strict profile keeps declaring them as unknown fields.
+type anthropicTranslatedRequestWire struct {
+	anthropicRequestWire
+	Safeguards []json.RawMessage `json:"safeguards,omitempty"`
+}
+
+// anthropicTranslatedToolDefinitionWire adds defer_loading, which only the
+// translated profile models.
+type anthropicTranslatedToolDefinitionWire struct {
+	anthropicToolDefinitionWire
+	DeferLoading *bool `json:"defer_loading,omitempty"`
+}
+
+type anthropicThinkingBlockWire struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+type anthropicRedactedThinkingBlockWire struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
+}
+
+type anthropicImageBlockWire struct {
+	Type         string          `json:"type"`
+	Source       json.RawMessage `json:"source"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
+type anthropicDocumentBlockWire struct {
+	Type         string          `json:"type"`
+	Source       json.RawMessage `json:"source"`
+	Title        *string         `json:"title,omitempty"`
+	Context      json.RawMessage `json:"context,omitempty"`
+	Citations    json.RawMessage `json:"citations,omitempty"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
+type anthropicDocumentCitationsWire struct {
+	Enabled bool `json:"enabled"`
+}
+
+type anthropicMediaSourceWire struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
+}
+
 type requestDecodeMode uint8
 
 const (
 	requestDecodeStrict requestDecodeMode = iota
 	requestDecodeNative
+	// requestDecodeTranslated decodes JSON as strictly as requestDecodeStrict
+	// and applies the translated client input profile.
+	requestDecodeTranslated
 )
+
+// maxSafeguardEntries bounds the safeguards a request may list. Claude Code
+// sends one.
+const maxSafeguardEntries = 64
+
+// clientAttributionPrefix starts the system block Claude Code adds for
+// Anthropic billing attribution.
+const clientAttributionPrefix = "x-anthropic-billing-header:"
 
 // Native JSON is forwarded from the original source, not regenerated from the
 // inspection view. Unknown nested fields therefore stay on the wire. Known
@@ -152,10 +217,16 @@ type anthropicDiagnosticsWire struct {
 	PreviousMessageID json.RawMessage `json:"previous_message_id,omitempty"`
 }
 
+// DecodeClientRequest decodes a client request with the codec's client input
+// profile.
 func (codec *Codec) DecodeClientRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	return codec.decodeClientRequest(body, requestDecodeStrict)
+	mode := requestDecodeStrict
+	if codec.options.ClientInput.translated {
+		mode = requestDecodeTranslated
+	}
+	return codec.decodeClientRequest(body, mode, false)
 }
 
 // DecodeCompatibleClientRequest produces the neutral inspection view for an
@@ -165,12 +236,15 @@ func (codec *Codec) DecodeClientRequest(
 func (codec *Codec) DecodeCompatibleClientRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	return codec.decodeClientRequest(body, requestDecodeNative)
+	return codec.decodeClientRequest(body, requestDecodeNative, false)
 }
 
+// decodeClientRequest decodes one Messages request. countTokens decodes a
+// count_tokens body, which has no max_tokens.
 func (codec *Codec) decodeClientRequest(
 	body []byte,
 	mode requestDecodeMode,
+	countTokens bool,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
 	if len(body) == 0 || len(body) > codec.options.MaxRequestBytes {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
@@ -189,14 +263,26 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
-	var wire anthropicRequestWire
-	unknownReport, err := mode.fields(body, &wire, "$", budget)
+	var translatedWire anthropicTranslatedRequestWire
+	var destination any = &translatedWire.anthropicRequestWire
+	if mode == requestDecodeTranslated {
+		destination = &translatedWire
+	}
+	unknownReport, err := mode.fields(body, destination, "$", budget)
 	if err != nil {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
+	wire := translatedWire.anthropicRequestWire
 	var report protocolcore.TranslationReportBuilder
 	if err := protocolcore.AppendReportWithin(&report, unknownReport, budget); err != nil {
+		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+	}
+	unservedSafeguards, safeguardReport, err := decodeSafeguards(translatedWire.Safeguards, budget)
+	if err != nil {
+		return protocolcore.Request{}, report.Build(), err
+	}
+	if err := protocolcore.AppendReportWithin(&report, safeguardReport, budget); err != nil {
 		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 
@@ -208,7 +294,7 @@ func (codec *Codec) decodeClientRequest(
 		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
 
-	messages := make([]protocolcore.Message, len(wire.Messages))
+	messages := make([]protocolcore.Message, 0, len(wire.Messages))
 	for index, rawMessage := range wire.Messages {
 		// A message carries options beside its role and content that this
 		// dialect does not model, such as the per-message output_config Claude
@@ -244,7 +330,12 @@ func (codec *Codec) decodeClientRequest(
 		if decodeErr != nil {
 			return protocolcore.Request{}, report.Build(), decodeErr
 		}
-		messages[index] = decoded
+		// Only the translated profile drops blocks, and a message whose every
+		// block was dropped (server-tool history alone) leaves the
+		// conversation rather than becoming an empty message.
+		if len(decoded.Blocks) != 0 {
+			messages = append(messages, decoded)
+		}
 		if err := protocolcore.AppendReportWithin(&report, messageReport, budget); err != nil {
 			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 		}
@@ -256,10 +347,16 @@ func (codec *Codec) decodeClientRequest(
 		// Claude Code's `defer_loading` among them — and refusing the request
 		// over one made the client unusable. Design 07 §2.3 keeps the unknown
 		// field visible instead of letting a typed unmarshal erase it, and
-		// §3.2 permits the loss because it is declared.
-		var tool anthropicToolDefinitionWire
+		// §3.2 permits the loss because it is declared. The translated
+		// profile models defer_loading itself.
+		var translatedTool anthropicTranslatedToolDefinitionWire
+		var toolDestination any = &translatedTool.anthropicToolDefinitionWire
+		if mode == requestDecodeTranslated {
+			toolDestination = &translatedTool
+		}
 		toolPath := fmt.Sprintf("$.tools[%d]", index)
-		unknownTool, unknownErr := mode.fields(rawTool, &tool, toolPath, budget)
+		unknownTool, unknownErr := mode.fields(rawTool, toolDestination, toolPath, budget)
+		tool := translatedTool.anthropicToolDefinitionWire
 		if unknownErr != nil {
 			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,
@@ -274,6 +371,7 @@ func (codec *Codec) decodeClientRequest(
 		if decodeErr != nil {
 			return protocolcore.Request{}, report.Build(), decodeErr
 		}
+		decoded.DeferLoading = translatedTool.DeferLoading != nil && *translatedTool.DeferLoading
 		tools[index] = decoded
 		if err := protocolcore.AppendReportWithin(&report, toolReport, budget); err != nil {
 			return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
@@ -351,6 +449,17 @@ func (codec *Codec) decodeClientRequest(
 		Temperature:     wire.Temperature,
 		TopP:            wire.TopP,
 		StopSequences:   append([]string(nil), wire.StopSequences...),
+		// Set only by the translated profile; nil otherwise.
+		UnservedSafeguards: unservedSafeguards,
+	}
+	if countTokens && request.MaxOutputTokens == 0 &&
+		request.Reasoning.Thinking == protocolcore.ThinkingModeEnabled {
+		// A count_tokens body has no max_tokens, yet Claude Code sends
+		// thinking {type:"enabled", budget_tokens} there for models without
+		// adaptive thinking. The neutral model requires an enabled budget
+		// below the output limit, so the limit is set just above the budget.
+		// Nothing is sent upstream and a count never reads the limit.
+		request.MaxOutputTokens = request.Reasoning.BudgetTokens + 1
 	}
 	if err := codec.ValidateRequest(request); err != nil {
 		return protocolcore.Request{}, report.Build(), protocolcore.NewFailure(
@@ -360,6 +469,56 @@ func (codec *Codec) decodeClientRequest(
 		)
 	}
 	return request.Clone(), report.Build(), nil
+}
+
+// decodeSafeguards reads the translated profile's root safeguards: server-side
+// checks the client asks the API to run, such as Claude Code auto mode's
+// dangerous_tool_use classifier. A translated route runs none of them, so
+// each entry is declared and a known kind is recorded as unserved, for the
+// response to report honestly. Nothing else of an entry is kept: its
+// classifier context never leaves the machine.
+func decodeSafeguards(
+	entries []json.RawMessage,
+	budget *protocolcore.ResourceBudget,
+) ([]protocolcore.SafeguardKind, protocolcore.TranslationReport, error) {
+	if len(entries) == 0 {
+		return nil, protocolcore.TranslationReport{}, nil
+	}
+	if len(entries) > maxSafeguardEntries {
+		return nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidClientRequest,
+			"$.safeguards",
+			errors.New("safeguard count exceeds its limit"),
+		)
+	}
+	var kinds []protocolcore.SafeguardKind
+	var report protocolcore.TranslationReportBuilder
+	for index, entry := range entries {
+		path := fmt.Sprintf("$.safeguards[%d]", index)
+		var fields map[string]json.RawMessage
+		var kind string
+		if json.Unmarshal(entry, &fields) != nil || fields == nil ||
+			json.Unmarshal(fields["type"], &kind) != nil || kind == "" {
+			return nil, report.Build(), protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				path,
+				errors.New("safeguard is not an object with a type"),
+			)
+		}
+		if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+			Code: protocolcore.NoticeSafeguardsNotServed,
+			Path: path,
+		}), budget); err != nil {
+			return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
+		}
+		// Only a known kind is reported back; an unknown one is declared and
+		// otherwise left alone, since no status can be claimed for it.
+		known := protocolcore.SafeguardKind(kind)
+		if known == protocolcore.SafeguardDangerousToolUse && !slices.Contains(kinds, known) {
+			kinds = append(kinds, known)
+		}
+	}
+	return kinds, report.Build(), nil
 }
 
 func decodeDiagnostics(
@@ -697,7 +856,7 @@ func (codec *Codec) decodeSystem(
 			err,
 		)
 	}
-	blocks := make([]protocolcore.ContentBlock, len(rawBlocks))
+	blocks := make([]protocolcore.ContentBlock, 0, len(rawBlocks))
 	var report protocolcore.TranslationReportBuilder
 	for index, rawBlock := range rawBlocks {
 		var blockWire anthropicTextBlockWire
@@ -723,7 +882,20 @@ func (codec *Codec) decodeSystem(
 				err,
 			)
 		}
-		blocks[index] = block
+		if mode == requestDecodeTranslated && clientAttributionBlock(blockWire.Text) {
+			// Anthropic billing attribution means nothing to another
+			// provider, changes on every request (so it would make every
+			// request a prompt-cache miss) and carries the prompt ID. The
+			// raw client evidence still records it (design 6.2).
+			if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeClientAttributionNotForwarded,
+				Path: fmt.Sprintf("$.system[%d]", index),
+			}), budget); err != nil {
+				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.system", err)
+			}
+			continue
+		}
+		blocks = append(blocks, block)
 		if rawPresent(blockWire.CacheControl) {
 			if err := protocolcore.AppendReportWithin(&report, cacheNotice(fmt.Sprintf("$.system[%d].cache_control", index)), budget); err != nil {
 				return nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.system", err)
@@ -731,6 +903,14 @@ func (codec *Codec) decodeSystem(
 		}
 	}
 	return blocks, report.Build(), nil
+}
+
+// clientAttributionBlock reports Claude Code's billing attribution block: a
+// single line that starts with x-anthropic-billing-header:. A block with
+// more lines is kept, since it is not attribution alone.
+func clientAttributionBlock(text string) bool {
+	return strings.HasPrefix(text, clientAttributionPrefix) &&
+		!strings.ContainsAny(strings.TrimSuffix(text, "\n"), "\r\n")
 }
 
 // decodeInstructionMessage carries a system or developer message. The IR
@@ -877,6 +1057,18 @@ func (codec *Codec) decodeMessage(
 			return protocolcore.Message{}, report.Build(),
 				protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 		}
+		if mode == requestDecodeTranslated {
+			translated, handled, err := codec.decodeTranslatedBlock(role, header.Type, rawBlock, path, budget, &report)
+			if err != nil {
+				return protocolcore.Message{}, report.Build(), err
+			}
+			if handled {
+				if translated != nil {
+					blocks = append(blocks, *translated)
+				}
+				continue
+			}
+		}
 		switch header.Type {
 		case "text":
 			var blockWire anthropicTextBlockWire
@@ -992,11 +1184,28 @@ func (codec *Codec) decodeMessage(
 				return protocolcore.Message{}, report.Build(),
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".tool_use_id", err)
 			}
-			content, native, err := decodeToolResultContent(
-				blockWire.Content,
-				path+".content",
-				mode,
-			)
+			var content string
+			var parts *protocolcore.ToolResultParts
+			var native [][]byte
+			if mode == requestDecodeTranslated {
+				var partsReport protocolcore.TranslationReport
+				content, parts, partsReport, err = decodeTranslatedToolResultContent(
+					blockWire.Content,
+					path+".content",
+					budget,
+				)
+				if err == nil {
+					if appendErr := protocolcore.AppendReportWithin(&report, partsReport, budget); appendErr != nil {
+						err = protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", appendErr)
+					}
+				}
+			} else {
+				content, native, err = decodeToolResultContent(
+					blockWire.Content,
+					path+".content",
+					mode,
+				)
+			}
 			if err != nil {
 				return protocolcore.Message{}, report.Build(), err
 			}
@@ -1004,6 +1213,7 @@ func (codec *Codec) decodeMessage(
 				Key:     key,
 				Content: content,
 				IsError: blockWire.IsError,
+				Parts:   parts,
 			})
 			if err != nil {
 				return protocolcore.Message{}, report.Build(),
@@ -1073,6 +1283,11 @@ func (codec *Codec) decodeMessage(
 				errors.New("content block type is unsupported"),
 			)
 		}
+	}
+	if len(blocks) == 0 && mode == requestDecodeTranslated {
+		// Every block was dropped as server-tool history; the caller leaves
+		// the message out.
+		return protocolcore.Message{Role: role}, report.Build(), nil
 	}
 	message := protocolcore.Message{Role: role, Blocks: blocks}
 	if err := message.Validate(); err != nil {
@@ -1319,4 +1534,315 @@ func cacheNotice(path string) protocolcore.TranslationReport {
 		Code: protocolcore.NoticeCacheControlNotForwarded,
 		Path: path,
 	})
+}
+
+// decodeTranslatedBlock decodes the content blocks the translated profile
+// handles differently from the strict one. handled is false for every other
+// block, which the shared decoder then handles; a handled block that is
+// dropped returns no block.
+func (codec *Codec) decodeTranslatedBlock(
+	role protocolcore.Role,
+	kind string,
+	raw []byte,
+	path string,
+	budget *protocolcore.ResourceBudget,
+	report *protocolcore.TranslationReportBuilder,
+) (*protocolcore.ContentBlock, bool, error) {
+	switch {
+	case kind == "image" || kind == "document":
+		if role != protocolcore.RoleUser {
+			return nil, true, protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				path,
+				errors.New("media block is not in a user message"),
+			)
+		}
+		media, mediaReport, err := decodeMedia(kind, raw, path)
+		if err != nil {
+			return nil, true, err
+		}
+		block, err := protocolcore.NewMediaBlock(media)
+		if err != nil {
+			return nil, true, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+		}
+		if err := protocolcore.AppendReportWithin(report, mediaReport, budget); err != nil {
+			return nil, true, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+		}
+		return &block, true, nil
+	case kind == "thinking" || kind == "redacted_thinking":
+		if role != protocolcore.RoleAssistant {
+			return nil, true, protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				path,
+				errors.New("provider thinking block is not in an assistant message"),
+			)
+		}
+		block, err := decodeReasoningBlock(kind, raw, path)
+		if err != nil {
+			return nil, true, err
+		}
+		return &block, true, nil
+	case role == protocolcore.RoleAssistant && serverToolHistory(kind):
+		// A conversation that began on a native Anthropic route keeps the
+		// server tools' calls and results in its history. Another provider
+		// cannot replay them, and refusing them would fail every later turn.
+		if err := protocolcore.AppendReportWithin(report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+			Code: protocolcore.NoticeServerToolHistoryNotForwarded,
+			Path: path,
+		}), budget); err != nil {
+			return nil, true, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+		}
+		return nil, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+// serverToolHistory names the blocks a server tool leaves in an assistant
+// turn: its call (server_tool_use, or mcp_tool_use for the MCP connector) and
+// every *_tool_result except the client's own tool_result.
+func serverToolHistory(kind string) bool {
+	switch {
+	case kind == "server_tool_use", kind == "mcp_tool_use":
+		return true
+	case kind == "tool_result":
+		return false
+	default:
+		return strings.HasSuffix(kind, "_tool_result") && len(kind) > len("_tool_result")
+	}
+}
+
+// decodeReasoningBlock decodes a replayed thinking or redacted_thinking block
+// as positioned reasoning. A signature that is a seal ViberMate minted for a
+// Responses reasoning item becomes that seal; any other signature is
+// Anthropic's own and stays opaque, for an Anthropic provider only.
+func decodeReasoningBlock(kind string, raw []byte, path string) (protocolcore.ContentBlock, error) {
+	var reasoning protocolcore.Reasoning
+	if kind == "redacted_thinking" {
+		var wire anthropicRedactedThinkingBlockWire
+		if err := decodeStrict(raw, &wire); err != nil {
+			return protocolcore.ContentBlock{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+		}
+		reasoning = protocolcore.Reasoning{
+			Redacted: true,
+			Seal:     protocolcore.ReasoningSeal{Format: protocolcore.SealAnthropicRedacted, Opaque: wire.Data},
+		}
+	} else {
+		var wire anthropicThinkingBlockWire
+		if err := decodeStrict(raw, &wire); err != nil {
+			return protocolcore.ContentBlock{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+		}
+		reasoning.Text = wire.Thinking
+		// Only Responses seals are ever minted into an Anthropic signature;
+		// a vma1. seal there is not ViberMate's and stays opaque too.
+		if seal, source, ok := protocolcore.ParseReasoningSeal(wire.Signature); ok &&
+			seal.Format == protocolcore.SealResponsesEncrypted {
+			reasoning.TextSource, reasoning.Seal = source, seal
+		} else if wire.Signature != "" {
+			reasoning.Seal = protocolcore.ReasoningSeal{Format: protocolcore.SealAnthropicSignature, Opaque: wire.Signature}
+		}
+	}
+	block, err := protocolcore.NewReasoningBlock(reasoning)
+	if err != nil {
+		return protocolcore.ContentBlock{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+	}
+	return block, nil
+}
+
+// decodeMedia decodes an image or document block, in a user message or a tool
+// result, without decoding its payload.
+func decodeMedia(kind string, raw []byte, path string) (protocolcore.Media, protocolcore.TranslationReport, error) {
+	invalid := func(at string, err error) (protocolcore.Media, protocolcore.TranslationReport, error) {
+		return protocolcore.Media{}, protocolcore.TranslationReport{},
+			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, at, err)
+	}
+	var notices []protocolcore.TranslationNotice
+	var source json.RawMessage
+	media := protocolcore.Media{Kind: protocolcore.MediaImage}
+	if kind == "image" {
+		var wire anthropicImageBlockWire
+		if err := decodeStrict(raw, &wire); err != nil {
+			return invalid(path, err)
+		}
+		source = wire.Source
+		if rawPresent(wire.CacheControl) {
+			notices = append(notices, protocolcore.TranslationNotice{Code: protocolcore.NoticeCacheControlNotForwarded, Path: path + ".cache_control"})
+		}
+	} else {
+		var wire anthropicDocumentBlockWire
+		if err := decodeStrict(raw, &wire); err != nil {
+			return invalid(path, err)
+		}
+		media.Kind, source = protocolcore.MediaDocument, wire.Source
+		if wire.Title != nil {
+			media.Title = *wire.Title
+		}
+		// A document's context is text the model reads beside the document.
+		// The neutral model has no place for it, and dropping model-visible
+		// text would change the answer, so it is refused, not declared.
+		if rawPresent(wire.Context) {
+			return protocolcore.Media{}, protocolcore.TranslationReport{}, protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedClientInput,
+				path+".context",
+				errors.New("document context cannot be represented by the configured provider dialect"),
+			)
+		}
+		if rawPresent(wire.Citations) {
+			var citations anthropicDocumentCitationsWire
+			if err := decodeStrict(wire.Citations, &citations); err != nil {
+				return invalid(path+".citations", err)
+			}
+			if citations.Enabled {
+				notices = append(notices, protocolcore.TranslationNotice{Code: protocolcore.NoticeCitationsNotForwarded, Path: path + ".citations"})
+			}
+		}
+		if rawPresent(wire.CacheControl) {
+			notices = append(notices, protocolcore.TranslationNotice{Code: protocolcore.NoticeCacheControlNotForwarded, Path: path + ".cache_control"})
+		}
+	}
+	var header struct {
+		Type string `json:"type"`
+	}
+	if !rawPresent(source) || json.Unmarshal(source, &header) != nil {
+		return invalid(path+".source", errors.New("media source is not an object"))
+	}
+	supported := map[string]bool{"base64": true, "url": true, "file": true}
+	if media.Kind == protocolcore.MediaDocument {
+		supported["text"] = true
+	}
+	if !supported[header.Type] {
+		// Content-block documents and future source kinds have no neutral
+		// form.
+		return protocolcore.Media{}, protocolcore.TranslationReport{}, protocolcore.NewFailure(
+			protocolcore.ReasonUnsupportedClientInput,
+			path+".source.type",
+			errors.New("media source type cannot be represented by the configured provider dialect"),
+		)
+	}
+	var wire anthropicMediaSourceWire
+	if err := decodeStrict(source, &wire); err != nil {
+		return invalid(path+".source", err)
+	}
+	// Each source type names exactly its own payload member.
+	payloads := 0
+	for _, value := range []string{wire.Data, wire.URL, wire.FileID} {
+		if value != "" {
+			payloads++
+		}
+	}
+	switch header.Type {
+	case "base64":
+		if payloads != 1 || wire.Data == "" || wire.MediaType == "" {
+			return invalid(path+".source", errors.New("base64 media source is incomplete"))
+		}
+		media.MediaType, media.Data = wire.MediaType, wire.Data
+	case "text":
+		if payloads != 1 || wire.Data == "" || wire.MediaType != "text/plain" {
+			return invalid(path+".source", errors.New("text document source is incomplete"))
+		}
+		media.MediaType, media.Text = wire.MediaType, wire.Data
+	case "url":
+		if payloads != 1 || wire.URL == "" || wire.MediaType != "" {
+			return invalid(path+".source", errors.New("URL media source is invalid"))
+		}
+		media.URL = wire.URL
+	case "file":
+		if payloads != 1 || wire.FileID == "" || wire.MediaType != "" {
+			return invalid(path+".source", errors.New("file media source is invalid"))
+		}
+		media.FileID, media.FileSource = wire.FileID, protocolspec.DialectAnthropicMessages
+	}
+	if err := media.Validate(); err != nil {
+		return invalid(path+".source", err)
+	}
+	return media, protocolcore.NewTranslationReport(notices...), nil
+}
+
+// decodeTranslatedToolResultContent keeps a tool result's block list as
+// ordered parts: text, images, documents and tool_reference loads. Content is
+// the concatenation of the text parts, exactly as the strict decoder builds
+// it, so every reader of Content keeps its meaning. A string or an empty list
+// has no parts.
+func decodeTranslatedToolResultContent(
+	raw json.RawMessage,
+	path string,
+	budget *protocolcore.ResourceBudget,
+) (string, *protocolcore.ToolResultParts, protocolcore.TranslationReport, error) {
+	if !rawPresent(raw) {
+		return "", nil, protocolcore.TranslationReport{}, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil, protocolcore.TranslationReport{}, nil
+	}
+	var rawParts []json.RawMessage
+	if err := json.Unmarshal(raw, &rawParts); err != nil {
+		return "", nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
+	}
+	if len(rawParts) == 0 {
+		return "", nil, protocolcore.TranslationReport{}, nil
+	}
+	if len(rawParts) > protocolcore.MaxToolResultParts {
+		return "", nil, protocolcore.TranslationReport{}, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidClientRequest,
+			path,
+			errors.New("tool result part count exceeds its limit"),
+		)
+	}
+	parts := make([]protocolcore.ToolResultPart, 0, len(rawParts))
+	var combined strings.Builder
+	var report protocolcore.TranslationReportBuilder
+	for index, rawPart := range rawParts {
+		partPath := fmt.Sprintf("%s[%d]", path, index)
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(rawPart, &header); err != nil {
+			return "", nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, partPath, err)
+		}
+		var notices protocolcore.TranslationReport
+		switch header.Type {
+		case "text":
+			var wire anthropicTextBlockWire
+			if err := decodeStrict(rawPart, &wire); err != nil {
+				return "", nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, partPath, err)
+			}
+			var declared []protocolcore.TranslationNotice
+			if rawPresent(wire.Citations) {
+				declared = append(declared, protocolcore.TranslationNotice{Code: protocolcore.NoticeCitationsNotForwarded, Path: partPath + ".citations"})
+			}
+			if rawPresent(wire.CacheControl) {
+				declared = append(declared, protocolcore.TranslationNotice{Code: protocolcore.NoticeCacheControlNotForwarded, Path: partPath + ".cache_control"})
+			}
+			notices = protocolcore.NewTranslationReport(declared...)
+			parts = append(parts, protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartText, Text: wire.Text})
+			combined.WriteString(wire.Text)
+		case "image", "document":
+			media, mediaReport, err := decodeMedia(header.Type, rawPart, partPath)
+			if err != nil {
+				return "", nil, report.Build(), err
+			}
+			notices = mediaReport
+			parts = append(parts, protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartMedia, Media: &media})
+		case "tool_reference":
+			var reference anthropicToolReferenceBlockWire
+			if err := decodeStrict(rawPart, &reference); err != nil || !validToolReferenceName(reference.ToolName) {
+				if err == nil {
+					err = errors.New("tool reference is invalid")
+				}
+				return "", nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, partPath, err)
+			}
+			parts = append(parts, protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartToolReference, ToolName: reference.ToolName})
+		default:
+			return "", nil, report.Build(), protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedClientInput,
+				partPath+".type",
+				errors.New("tool result block type cannot be represented by the configured provider dialect"),
+			)
+		}
+		if err := protocolcore.AppendReportWithin(&report, notices, budget); err != nil {
+			return "", nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$.messages", err)
+		}
+	}
+	return combined.String(), &protocolcore.ToolResultParts{Items: parts}, report.Build(), nil
 }
