@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // Some files inside a workspace run as code, or are loaded as executable
@@ -28,8 +29,11 @@ var executionBearingFiles = []string{".envrc", ".mcp.json"}
 // (found with Lstat, as insideWorkspace does) joined with the remaining
 // components. Every component of each path relative to realRoot is compared
 // case-insensitively: the recognized tier exists only on macOS, whose default
-// file system ignores case, so ".GIT/hooks" is ".git/hooks". Any resolution
-// error counts as execution-bearing.
+// file system ignores case, so ".GIT/hooks" is ".git/hooks". An HFS+ volume
+// also ignores some Unicode format characters in a name (U+200C to U+200F,
+// U+202A to U+202E, U+206A to U+206F and U+FEFF, as Git's is_hfs_dotgit
+// knows), so every format character (category Cf) is removed before the
+// comparison. Any resolution error counts as execution-bearing.
 func executionBearing(realRoot, candidate string) bool {
 	if executionBearingRelative(realRoot, candidate) {
 		return true
@@ -85,6 +89,7 @@ func executionBearingRelative(root, path string) bool {
 		return false
 	}
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		component = withoutFormatCharacters(component)
 		for _, name := range executionBearingDirectories {
 			if strings.EqualFold(component, name) {
 				return true
@@ -97,4 +102,16 @@ func executionBearingRelative(root, path string) bool {
 		}
 	}
 	return false
+}
+
+// withoutFormatCharacters is component with every Unicode format character
+// removed. Removing more than HFS+ ignores can only make a name compare as
+// protected, which asks.
+func withoutFormatCharacters(component string) string {
+	return strings.Map(func(character rune) rune {
+		if unicode.Is(unicode.Cf, character) {
+			return -1
+		}
+		return character
+	}, component)
 }

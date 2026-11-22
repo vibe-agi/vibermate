@@ -44,6 +44,8 @@ func TestExecutionBearingPathsAreAskedOnTheRecognizedBasis(t *testing.T) {
 		".vscode/tasks.json", ".idea/workspace.xml", ".husky/pre-commit",
 		".devcontainer/devcontainer.json", "sub/.envrc", ".mcp.json", ".hg/hgrc",
 		"a/.git/config",
+		// U+200C, which HFS+ ignores in a name: this is .git/hooks/x there.
+		".g\u200cit/hooks/x",
 	}
 	link := filepath.Join(root, "link")
 	linkErr := os.Symlink(filepath.Join(root, ".git"), link)
@@ -101,9 +103,20 @@ func TestExecutionBearingComparesLexicalAndResolvedPaths(t *testing.T) {
 		"deep/a/.Husky/x":       true,
 		"x/.ENVRC":              true,
 		".MCP.json":             true,
+		// HFS+ ignores Unicode format characters in a name, as Git's
+		// is_hfs_dotgit does, so these name the protected entries too.
+		".g\u200cit/hooks/pre-commit": true, // U+200C ZERO WIDTH NON-JOINER
+		".git\u200d/config":           true, // U+200D ZERO WIDTH JOINER
+		"\ufeff.git/config":           true, // U+FEFF ZERO WIDTH NO-BREAK SPACE
+		".hus\u206aky/pre-commit":     true, // U+206A INHIBIT SYMMETRIC SWAPPING
+		"sub/.env\u202erc":            true, // U+202E RIGHT-TO-LEFT OVERRIDE
+		".mcp\u200e.json":             true, // U+200E LEFT-TO-RIGHT MARK
+		// Removing them must not make an unrelated name protected.
+		".g\u200citignore":  false,
+		"src/\u200bmain.go": false, // U+200B ZERO WIDTH SPACE
 	} {
 		if got := executionBearing(root, filepath.Join(root, filepath.FromSlash(relative))); got != want {
-			t.Errorf("executionBearing(%s) = %v, want %v", relative, got, want)
+			t.Errorf("executionBearing(%q) = %v, want %v", relative, got, want)
 		}
 	}
 	if executionBearing(root, root) {
@@ -127,7 +140,7 @@ func TestExecutionBearingComparesLexicalAndResolvedPaths(t *testing.T) {
 		"dangling":         true, // the nearest existing ancestor does not resolve
 	} {
 		if got := executionBearing(root, filepath.Join(root, filepath.FromSlash(relative))); got != want {
-			t.Errorf("executionBearing(%s) = %v, want %v", relative, got, want)
+			t.Errorf("executionBearing(%q) = %v, want %v", relative, got, want)
 		}
 	}
 }
