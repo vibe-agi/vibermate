@@ -3838,13 +3838,16 @@ final class PreviewControlApi
               _ => const <ScriptOutcome>[],
             };
       final succeeded = reasonCode == null;
+      // A fresh run's first request is the prompt someone just typed.
+      final toolCall =
+          index % 4 == 0 && !_exchangeCounts.containsKey(capture.id);
       final conversation = _previewConversation(capture, index);
       return ActivityRecord(
         scripts: scripts,
         contentAvailable: _retainConversationBodies,
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
-        title: index % 4 == 0 ? 'Tool-assisted request' : 'Agent exchange',
+        title: toolCall ? 'Tool-assisted request' : 'Agent exchange',
         // The newest of many requests is still streaming; a single first
         // request has already completed.
         status: _retainConversationBodies && index == count - 1 && count > 1
@@ -3856,8 +3859,8 @@ final class PreviewControlApi
         requestPreview: !_retainConversationBodies
             ? null
             : ActivityRequestPreview(
-                kind: index % 4 == 0 ? 'tool_call' : 'text',
-                text: index % 4 == 0 ? 'workspace.read' : _previewPrompt(index),
+                kind: toolCall ? 'tool_call' : 'text',
+                text: toolCall ? 'workspace.read' : _previewPrompt(index),
                 truncated: false,
               ),
         source: ActivitySourceRef(
