@@ -735,11 +735,13 @@ func (codec *Codec) decodeSystem(
 
 // decodeInstructionMessage carries a system or developer message. The IR
 // requires instruction content to be text, which is also all this dialect can
-// express in one.
+// express in one. The blocks' cache breakpoints and citations have no place
+// in the joined text, so each one is declared rather than dropped silently.
 func (codec *Codec) decodeInstructionMessage(
 	messageIndex int,
 	role protocolcore.Role,
 	wire anthropicMessageWire,
+	budget *protocolcore.ResourceBudget,
 ) (protocolcore.Message, protocolcore.TranslationReport, error) {
 	fail := func(err error) (
 		protocolcore.Message,
@@ -754,12 +756,13 @@ func (codec *Codec) decodeInstructionMessage(
 			)
 	}
 	var text string
+	var report protocolcore.TranslationReportBuilder
 	if err := json.Unmarshal(wire.Content, &text); err != nil {
 		var blocks []anthropicTextBlockWire
 		if blockErr := json.Unmarshal(wire.Content, &blocks); blockErr != nil {
 			return fail(errors.New("instruction content is not text"))
 		}
-		for _, block := range blocks {
+		for blockIndex, block := range blocks {
 			if block.Type != "text" {
 				return protocolcore.Message{}, protocolcore.TranslationReport{},
 					protocolcore.NewFailure(
@@ -769,6 +772,20 @@ func (codec *Codec) decodeInstructionMessage(
 					)
 			}
 			text += block.Text
+			path := fmt.Sprintf("$.messages[%d].content[%d]", messageIndex, blockIndex)
+			if rawPresent(block.Citations) {
+				if err := protocolcore.AppendReportWithin(&report, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeCitationsNotForwarded,
+					Path: path + ".citations",
+				}), budget); err != nil {
+					return fail(err)
+				}
+			}
+			if rawPresent(block.CacheControl) {
+				if err := protocolcore.AppendReportWithin(&report, cacheNotice(path+".cache_control"), budget); err != nil {
+					return fail(err)
+				}
+			}
 		}
 	}
 	block, err := protocolcore.NewTextBlock(text)
@@ -782,7 +799,7 @@ func (codec *Codec) decodeInstructionMessage(
 	if err := message.Validate(); err != nil {
 		return fail(err)
 	}
-	return message, protocolcore.TranslationReport{}, nil
+	return message, report.Build(), nil
 }
 
 func (codec *Codec) decodeMessage(
@@ -799,7 +816,7 @@ func (codec *Codec) decodeMessage(
 		// as the top-level system parameter. Design 07 §3.2 normalizes it to
 		// the same IR role and keeps it where it was: hoisting it to the front
 		// would change what the model was told and when.
-		return codec.decodeInstructionMessage(messageIndex, role, wire)
+		return codec.decodeInstructionMessage(messageIndex, role, wire, budget)
 	default:
 		return protocolcore.Message{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
