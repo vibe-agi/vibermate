@@ -204,32 +204,43 @@ final class CodexCertificateRow extends StatelessWidget {
     );
     return Semantics(
       container: true,
-      child: Column(
-        key: Key('$keyPrefix-codex-requirement'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (narrow) ...[
-            label,
-            const SizedBox(height: ViberSpacing.sm),
-            button,
-          ] else
-            Row(
-              children: [
-                Expanded(child: label),
-                const SizedBox(width: ViberSpacing.md),
-                button,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Too narrow for the pill beside the button: stack them.
+          final stacked = narrow || constraints.maxWidth < 440;
+          return Column(
+            key: Key('$keyPrefix-codex-requirement'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (stacked) ...[
+                label,
+                const SizedBox(height: ViberSpacing.sm),
+                // The guide's phone layout gives every button the full
+                // width; elsewhere it keeps its size.
+                if (narrow)
+                  button
+                else
+                  Align(alignment: Alignment.centerLeft, child: button),
+              ] else
+                Row(
+                  children: [
+                    Expanded(child: label),
+                    const SizedBox(width: ViberSpacing.md),
+                    button,
+                  ],
+                ),
+              if (explain) ...[
+                const SizedBox(height: ViberSpacing.xs),
+                Text(
+                  copy('setup.start.codex_requirement'),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
               ],
-            ),
-          if (explain) ...[
-            const SizedBox(height: ViberSpacing.xs),
-            Text(
-              copy('setup.start.codex_requirement'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ],
-        ],
+            ],
+          );
+        },
       ),
     );
   }
