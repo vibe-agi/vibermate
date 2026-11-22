@@ -44,7 +44,7 @@ func TestTheUnverifiedClientWarningIsLocalized(t *testing.T) {
 		Recognition: clientadapter.RecognitionUnverified,
 	})
 	warning := stderr.String()
-	if !strings.Contains(warning, "claude") || !strings.Contains(warning, "信任根") {
+	if !strings.Contains(warning, "claude") || !strings.Contains(warning, "\u4fe1\u4efb\u6839") {
 		t.Fatalf("the warning is not the Chinese one: %q", warning)
 	}
 }
