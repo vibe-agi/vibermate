@@ -356,6 +356,8 @@ void main() {
     tester,
   ) async {
     final controller = await open(tester, stage: PreviewFreshStage.observed);
+    // Not the shipped 30 days, so a fixed number cannot pass for it.
+    api.setRetentionForPreview('system_transparent', retentionDays: 14);
     expect(find.byKey(const Key('setup-guide-pane')), findsOneWidget);
     expect(controller.selectedCaptureKey, isNull);
 
@@ -375,12 +377,8 @@ void main() {
       ),
       findsOneWidget,
     );
-    final days = controller.data!.environments
-        .singleWhere((value) => value.systemOwned)
-        .contentRecording
-        .retentionDays;
     expect(
-      find.textContaining('on this Mac for $days days'),
+      find.textContaining('on this Mac for 14 days'),
       findsOneWidget,
       reason: 'the retention comes from the routing set',
     );
@@ -459,6 +457,54 @@ void main() {
     controller.hideSetupGuide();
     await tester.pump(const Duration(milliseconds: 300));
     expect(back, findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('older pages of sessions keep the guide away', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // An install with history beyond the first page, none of it loaded yet
+    // with a request: a real user's history, not a first run.
+    final api = PreviewControlApi(
+      seedCaptures: false,
+      seedRuntimeUsers: false,
+      seedConfiguration: false,
+      dashboardCaptureLimit: 2,
+    );
+    for (var index = 0; index < 3; index += 1) {
+      api.addFreshRun(codex: false, phase: PreviewFreshRunPhase.neverStarted);
+    }
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewFixture.freshInstall(
+        stage: PreviewFreshStage.command,
+      ).terminalCommands,
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.data!.captureNextCursor, isNotNull);
+    expect(
+      controller.data!.captures.where(
+        (value) => value.observation == 'observed',
+      ),
+      isEmpty,
+    );
+    expect(controller.setupGuideEligible, isFalse);
+    expect(find.byKey(const Key('setup-guide')), findsNothing);
+    expect(
+      find.byKey(const Key('capture-empty-guide-placeholder')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('captures-load-more')), findsOneWidget);
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });

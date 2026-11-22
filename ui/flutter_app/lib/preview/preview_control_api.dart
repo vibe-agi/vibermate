@@ -1324,6 +1324,27 @@ final class PreviewControlApi
     }, 'rootCAMaterial');
   }
 
+  /// Keeps [environmentId]'s request content for [retentionDays], in place,
+  /// so what the app says about that set can be checked against a value
+  /// other than the shipped default.
+  void setRetentionForPreview(
+    String environmentId, {
+    required int retentionDays,
+  }) {
+    _requireOpen();
+    final index = _environments.indexWhere(
+      (environment) => environment.id == environmentId,
+    );
+    if (index < 0) throw StateError('no preview routing set $environmentId');
+    final environment = _environments[index];
+    _environments[index] = environment.copyWith(
+      contentRecording: EnvironmentContentRecordingPolicy(
+        mode: environment.contentRecording.mode,
+        retentionDays: retentionDays,
+      ),
+    );
+  }
+
   void setRootTrustForPreview({required bool installed}) {
     _requireOpen();
     _rootCAStatus = _rootCAStatus.copyWith(
@@ -4848,6 +4869,8 @@ final class PreviewControlApi
     );
     _manualRecords[id] = record;
     _manualVersions[id] = 1;
+    // A new proxy login has no requests until its app uses the proxy.
+    _exchangeCounts[id] = 0;
     _captures['manual_capture:$id'] = CaptureRecord(
       key: 'manual_capture:$id',
       id: id,
