@@ -24,11 +24,21 @@ var clientDecisionPackages = []string{
 	"internal/toolpolicy",
 }
 
-// clientExecutionCalls are the standard-library entry points that start or
-// replace a process without os/exec.
+// clientExecutionCalls are the exported functions of the standard library and
+// golang.org/x/sys, on any platform, that start or replace a process without
+// os/exec. The platform packages themselves stay importable: the workspace
+// containment checks may need their file-system calls. A raw system call by
+// number is beyond a lexical rule.
 var clientExecutionCalls = map[string]map[string]struct{}{
-	"os":      {"StartProcess": {}},
-	"syscall": {"Exec": {}, "ForkExec": {}},
+	"os": {"StartProcess": {}},
+	"syscall": {
+		"Exec": {}, "ForkExec": {}, "StartProcess": {},
+		"CreateProcess": {}, "CreateProcessAsUser": {},
+	},
+	"golang.org/x/sys/unix": {"Exec": {}},
+	"golang.org/x/sys/windows": {
+		"CreateProcess": {}, "CreateProcessAsUser": {}, "ShellExecute": {},
+	},
 }
 
 const clientExecutionMessage = "this package decides what a client is and what it may do; it must never run the client (ADR 0026)"

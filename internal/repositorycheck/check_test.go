@@ -606,6 +606,13 @@ func TestClientExecutionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"internal/toolpolicy/gate.go:5: client-execution-boundary",
 		"internal/toolpolicy/gate.go:8: client-execution-boundary",
 		"internal/capturerun/manager.go:3: client-execution-boundary",
+		"internal/captureadmission/admission.go:10: client-execution-boundary",
+		"internal/captureadmission/admission.go:14: client-execution-boundary",
+		"internal/capturecontrol/handler.go:9: client-execution-boundary",
+		"internal/capturecontrol/handler.go:11: client-execution-boundary",
+		"internal/capturecontrol/handler.go:13: client-execution-boundary",
+		"internal/capturecontrol/handler.go:15: client-execution-boundary",
+		"internal/capturecontrol/handler.go:17: client-execution-boundary",
 	} {
 		if !strings.Contains(err.Error(), location) {
 			t.Fatalf("public Check did not report %s: %v", location, err)
