@@ -407,15 +407,12 @@ final class _EnvironmentDetail extends StatelessWidget {
                       ),
                     ],
                   ),
-                  if (isBuiltInRoutingSet(value)) ...[
+                  // On a narrow pane the line moves into the scrolling body,
+                  // so the header never outgrows the screen.
+                  if (isBuiltInRoutingSet(value) &&
+                      constraints.maxWidth >= _builtInDescriptionInHeader) ...[
                     const SizedBox(height: 3),
-                    Text(
-                      copy('environment.builtin.description'),
-                      key: const Key('environment-builtin-description'),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: context.viberColors.text,
-                      ),
-                    ),
+                    _BuiltInDescription(copy: copy),
                   ],
                   const SizedBox(height: 3),
                   Row(
@@ -579,34 +576,75 @@ final class _EnvironmentDetail extends StatelessWidget {
                         : 'environment.no_client_flows',
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
-                  itemCount:
-                      value.clientEndpoints.length + (historical ? 0 : 1),
-                  itemBuilder: (context, index) => !historical && index == 0
-                      ? _LiveSessions(
-                          controller: controller,
-                          environment: value,
-                          copy: copy,
-                        )
-                      : _ClientEndpointPlan(
-                          controller: controller,
-                          environment: value,
-                          clientEndpoint: value
-                              .clientEndpoints[historical ? index : index - 1],
-                          endpoints: endpoints,
-                          accounts: accounts,
-                          copy: copy,
-                          activationEnabled:
-                              !historical &&
-                              !value.systemOwned &&
-                              !controller.environmentMutating,
-                        ),
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final description =
+                        isBuiltInRoutingSet(value) &&
+                        constraints.maxWidth < _builtInDescriptionInHeader;
+                    final lead = description ? 1 : 0;
+                    return ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+                      itemCount:
+                          lead +
+                          value.clientEndpoints.length +
+                          (historical ? 0 : 1),
+                      itemBuilder: (context, position) {
+                        if (description && position == 0) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _BuiltInDescription(copy: copy),
+                          );
+                        }
+                        final index = position - lead;
+                        return !historical && index == 0
+                            ? _LiveSessions(
+                                controller: controller,
+                                environment: value,
+                                copy: copy,
+                              )
+                            : _ClientEndpointPlan(
+                                controller: controller,
+                                environment: value,
+                                clientEndpoint:
+                                    value.clientEndpoints[historical
+                                        ? index
+                                        : index - 1],
+                                endpoints: endpoints,
+                                accounts: accounts,
+                                copy: copy,
+                                activationEnabled:
+                                    !historical &&
+                                    !value.systemOwned &&
+                                    !controller.environmentMutating,
+                              );
+                      },
+                    );
+                  },
                 ),
         ),
       ],
     );
   }
+}
+
+/// Below this width the header leaves the built-in set's description to the
+/// scrolling body.
+const _builtInDescriptionInHeader = 580.0;
+
+/// When the built-in routing set is used, under its name.
+final class _BuiltInDescription extends StatelessWidget {
+  const _BuiltInDescription({required this.copy});
+
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    copy('environment.builtin.description'),
+    key: const Key('environment-builtin-description'),
+    style: Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.text),
+  );
 }
 
 /// The sessions running on this routing set right now, so an edit's reach is
