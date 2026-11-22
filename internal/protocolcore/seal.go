@@ -171,10 +171,17 @@ func SealDigest(seal ReasoningSeal) [32]byte {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte("vibermate/reasoning-seal\x00"))
 	var length [8]byte
+	// The payload can be megabytes and SHA-256 has no WriteString, so fields
+	// are hashed through a small buffer rather than converted whole.
+	var chunk [4096]byte
 	for _, field := range []string{string(seal.Format), seal.ItemID, seal.Model, seal.Binding, seal.Opaque} {
 		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
 		_, _ = hash.Write(length[:])
-		_, _ = hash.Write([]byte(field))
+		for rest := field; rest != ""; {
+			count := copy(chunk[:], rest)
+			_, _ = hash.Write(chunk[:count])
+			rest = rest[count:]
+		}
 	}
 	var digest [32]byte
 	copy(digest[:], hash.Sum(nil))

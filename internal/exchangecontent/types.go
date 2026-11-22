@@ -1041,9 +1041,15 @@ func mediaEvidence(media protocolcore.Media) string {
 }
 
 func omittedEvidenceBlock(source, kind, evidence string, agent *AgentContext) Block {
+	// Evidence can be a 16 MiB payload. SHA-256 has no WriteString, so it is
+	// hashed through a small buffer rather than converted to bytes whole.
 	hash := sha256.New()
-	// WriteString on a hash does not copy the evidence first.
-	_, _ = io.WriteString(hash, evidence)
+	var chunk [4096]byte
+	for rest := evidence; rest != ""; {
+		count := copy(chunk[:], rest)
+		_, _ = hash.Write(chunk[:count])
+		rest = rest[count:]
+	}
 	return Block{
 		Kind: string(protocolcore.BlockProviderExtension), Availability: AvailabilityOmitted,
 		OriginalSize: len(evidence), ProviderSource: source, ProviderKind: kind,

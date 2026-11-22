@@ -132,6 +132,9 @@ func TestMediaValidation(t *testing.T) {
 		{Kind: MediaImage, MediaType: "image/jpeg", FileID: "file_1", FileSource: protocolspec.DialectAnthropicMessages},
 		{Kind: MediaDocument, MediaType: "application/pdf", Data: "JVBERi0=", Title: "Report"},
 		{Kind: MediaDocument, MediaType: "text/plain", Text: "plain body", Title: "notes.txt"},
+		// Anthropic URL and file sources carry no media type.
+		{Kind: MediaImage, URL: "https://example.com/a"},
+		{Kind: MediaDocument, FileID: "file_2", FileSource: protocolspec.DialectAnthropicMessages},
 	}
 	for index, media := range valid {
 		block, err := NewMediaBlock(media)
@@ -146,6 +149,9 @@ func TestMediaValidation(t *testing.T) {
 	invalid := map[string]Media{
 		"two sources":            {Kind: MediaImage, MediaType: "image/png", Data: "a", URL: "https://example.com/a.png"},
 		"no source":              {Kind: MediaImage, MediaType: "image/png"},
+		"inline without type":    {Kind: MediaImage, Data: "a"},
+		"document data no type":  {Kind: MediaDocument, Data: "a"},
+		"text without type":      {Kind: MediaDocument, Text: "body"},
 		"image of PDF type":      {Kind: MediaImage, MediaType: "application/pdf", Data: "a"},
 		"svg image":              {Kind: MediaImage, MediaType: "image/svg+xml", Data: "a"},
 		"document of image type": {Kind: MediaDocument, MediaType: "image/png", Data: "a"},

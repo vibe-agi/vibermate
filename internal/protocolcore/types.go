@@ -501,7 +501,9 @@ const (
 // Media is an attachment in its source form. Data stays the base64 text the
 // client sent; codecs never decode it.
 type Media struct {
-	Kind      MediaKind
+	Kind MediaKind
+	// MediaType comes from a closed set per kind; it may be empty only for a
+	// URL or file reference.
 	MediaType string
 	// Exactly one of Data, URL, FileID and Text is set.
 	Data   string
@@ -515,10 +517,17 @@ type Media struct {
 }
 
 func (media Media) Validate() error {
+	// A URL or file reference names its content elsewhere, and Anthropic
+	// sends such sources without a media type; inline data always has one.
+	referenced := media.URL != "" || media.FileID != ""
 	switch media.Kind {
 	case MediaImage:
 		switch media.MediaType {
 		case "image/png", "image/jpeg", "image/gif", "image/webp":
+		case "":
+			if !referenced {
+				return errors.New("inline image has no media type")
+			}
 		default:
 			return errors.New("image media type is unsupported")
 		}
@@ -532,6 +541,10 @@ func (media Media) Validate() error {
 				return errors.New("PDF document carries text")
 			}
 		case "text/plain":
+		case "":
+			if !referenced {
+				return errors.New("inline document has no media type")
+			}
 		default:
 			return errors.New("document media type is unsupported")
 		}
