@@ -120,7 +120,7 @@ func writeExchangeFailure(
 		// request merely because a generic 5xx looks transient.
 		writer.Header().Set("X-Should-Retry", "false")
 	}
-	writer.WriteHeader(exchangeStatus(err))
+	writer.WriteHeader(exchangeStatus(dialect, err))
 	_ = json.NewEncoder(writer).Encode(
 		exchangeFailureEnvelope(dialect, reason, err),
 	)
@@ -151,7 +151,7 @@ func writeExchangeFailureDownstream(
 	}
 	envelope, envelopeErr := exchange.NewResponseEnvelope(
 		exchange.ResponseModeJSON,
-		exchangeStatus(err),
+		exchangeStatus(dialect, err),
 		headers,
 	)
 	if envelopeErr != nil {
