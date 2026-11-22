@@ -410,12 +410,12 @@ func TestTranslatedReasoningIsBoundToTheRouteAndReplayedOnTheNextTurn(t *testing
 		body.Store == nil || *body.Store {
 		t.Fatalf("provider request = %s %s", sent.RelativePath(), sent.Body())
 	}
-	for name := range sent.Headers() {
-		lower := strings.ToLower(name)
-		if strings.HasPrefix(lower, "anthropic-") || strings.HasPrefix(lower, "x-claude-code-") ||
-			strings.HasPrefix(lower, "x-stainless-") {
-			t.Fatalf("client header %q reached the Responses upstream: %v", name, sent.Headers())
-		}
+	// Exactly the provider side's own header: nothing of Claude Code's
+	// envelope (Anthropic-*, X-Claude-Code-*, X-Stainless-*, its Anthropic-Beta)
+	// and no Codex identity header. The transport adds authentication and
+	// the wire profile's User-Agent when it sends.
+	if headers := sent.Headers(); len(headers) != 1 || headers.Get("Accept") != "text/event-stream" {
+		t.Fatalf("provider request headers = %v", headers)
 	}
 	// The cyber finalizer runs after re-admission on a managed account of the
 	// public API, as it does for Codex.
@@ -714,6 +714,28 @@ func TestTranslatedRejectionsBecomeTheAnthropicErrorsClaudeCodeRecoversFrom(t *t
 			hold:  HoldPolicy{MaxTransportResends: 1, MaxDuration: time.Second, AllowResendAfterProviderResponse: true},
 			class: protocolcore.ProviderErrorOverloaded, status: 529, errorType: "overloaded_error",
 			message: "The upstream service is overloaded.",
+		},
+		// A gateway's bare rejection: no readable error object, so the class
+		// comes from the status and headers alone.
+		{
+			name:      "rate limited with an empty body",
+			responses: []*http.Response{rejection(429, "", "Retry-After", "7")},
+			class:     protocolcore.ProviderErrorRateLimited, status: 429, errorType: "rate_limit_error",
+			message: "The upstream service is rate limiting this account.", retryAfter: "7",
+		},
+		{
+			name: "rate limited with an oversized body",
+			responses: []*http.Response{rejection(429, `{"error":{"code":"insufficient_quota","message":"`+
+				strings.Repeat("x", maxProviderErrorBytes)+`"}}`, "Retry-After", "7")},
+			class: protocolcore.ProviderErrorRateLimited, status: 429, errorType: "rate_limit_error",
+			message: "The upstream service is rate limiting this account.", retryAfter: "7",
+		},
+		{
+			name: "rate limited with an unsupported encoding",
+			responses: []*http.Response{rejection(429, openAIError("insufficient_quota", secret, ""),
+				"Retry-After", "7", "Content-Encoding", "br")},
+			class: protocolcore.ProviderErrorRateLimited, status: 429, errorType: "rate_limit_error",
+			message: "The upstream service is rate limiting this account.", retryAfter: "7",
 		},
 		{
 			name:      "policy",
