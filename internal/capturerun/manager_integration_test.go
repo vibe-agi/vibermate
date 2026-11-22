@@ -218,6 +218,13 @@ func TestRecognizedRunEvidenceNamesItsClient(t *testing.T) {
 	clock := newClock(time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC))
 	indexed := newManagerWithClients(t, store, clock, clients)
 	unindexed := newManager(t, store, clock)
+	// A recognized row carries the index's whole value, not only its client,
+	// so the carrier is held to the policy bits too once a row grants any.
+	claude, claudeFound := clients.Client(catalog.Revision(), "claude")
+	codex, codexFound := clients.Client(catalog.Revision(), "codex")
+	if !claudeFound || claude.ID != "claude-code" || !codexFound || codex.ID != "codex-cli" {
+		t.Fatalf("the built-in index named %+v and %+v", claude, codex)
+	}
 
 	for _, testCase := range []struct {
 		name        string
@@ -227,10 +234,8 @@ func TestRecognizedRunEvidenceNamesItsClient(t *testing.T) {
 		adapter     *clientadapter.Evidence
 		want        clientadapter.RecognizedClient
 	}{
-		{"recognized claude", "claude", catalog.Revision(), clientadapter.RecognitionRecognized, nil,
-			clientadapter.RecognizedClient{ID: "claude-code"}},
-		{"recognized codex", "codex", catalog.Revision(), clientadapter.RecognitionRecognized, nil,
-			clientadapter.RecognizedClient{ID: "codex-cli"}},
+		{"recognized claude", "claude", catalog.Revision(), clientadapter.RecognitionRecognized, nil, claude},
+		{"recognized codex", "codex", catalog.Revision(), clientadapter.RecognitionRecognized, nil, codex},
 		{"verified claude", "claude", catalog.Revision(), clientadapter.RecognitionVerified, &verified,
 			clientadapter.RecognizedClient{}},
 		{"unverified claude", "claude", catalog.Revision(), clientadapter.RecognitionUnverified, nil,

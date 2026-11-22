@@ -13,7 +13,8 @@ import (
 )
 
 // The Runtime names a recognized run's client only from the catalog its host
-// passed in (ADR 0026), on both proxy authorization and the run reader. A
+// passed in (ADR 0026), on both proxy authorization and the run reader, and
+// what it carries is the index its catalog and operator switch describe. A
 // Runtime given no catalog names none, which fails closed.
 func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 	t.Parallel()
@@ -22,13 +23,18 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		catalog clientadapter.Catalog
+		state   clientadapter.ProtectionSwitch
 		want    map[string]string
 	}{
-		{"with the host catalog", catalog, map[string]string{
+		{"with the host catalog", catalog, clientadapter.ProtectionsOn, map[string]string{
 			"claude": "claude-code",
 			"codex":  "codex-cli",
 		}},
-		{"without a catalog", clientadapter.Catalog{}, map[string]string{
+		{"with the host catalog and the switch off", catalog, clientadapter.ProtectionsOff, map[string]string{
+			"claude": "claude-code",
+			"codex":  "codex-cli",
+		}},
+		{"without a catalog", clientadapter.Catalog{}, clientadapter.ProtectionsOn, map[string]string{
 			"claude": "",
 			"codex":  "",
 		}},
@@ -36,18 +42,30 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
+			var index clientadapter.RecognizedClients
+			if testCase.catalog.Valid() {
+				var err error
+				index, err = clientadapter.NewRecognizedClients(testCase.catalog, testCase.state)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
 			options.ClientCatalog = testCase.catalog
+			options.RecognizedClientProtections = testCase.state
 			runtime := startTestRuntime(t, options)
 			defer shutdownRuntime(t, runtime)
 			for label, want := range testCase.want {
 				evidence, view := recognizedRunEvidence(t, runtime, label, catalog.Revision())
-				// The index decides only which client a run is here; what
-				// the policy grants that client is pinned in clientadapter.
-				if evidence.RecognizedClient.ID != want ||
-					evidence.RecognizedClient != view.RecognizedClient {
-					t.Fatalf("%s: evidence %+v, view %+v, want client %q",
-						label, evidence.RecognizedClient, view.RecognizedClient, want)
+				// The Runtime decides which client a run is and carries the
+				// index's value for it, switch included; what the policy
+				// grants that client is pinned in clientadapter.
+				expected, _ := index.Client(catalog.Revision(), label)
+				if expected.ID != want ||
+					evidence.RecognizedClient != expected ||
+					view.RecognizedClient != expected {
+					t.Fatalf("%s: evidence %+v, view %+v, want %+v naming %q",
+						label, evidence.RecognizedClient, view.RecognizedClient, expected, want)
 				}
 			}
 			evidence, view := recognizedRunEvidence(t, runtime, "claude", catalog.Revision()-1)
