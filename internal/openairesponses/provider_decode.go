@@ -593,15 +593,115 @@ func invalidProvider(path string, cause error) error {
 	)
 }
 
+// responsesEventFramer is the SSE framing both Responses stream drivers
+// share: the native relay (ProviderStream) and the translating driver of a
+// composed path. It bounds the received wire bytes, decodes SSE frames, and
+// admits each event's payload: response budget reservation, a non-empty type,
+// no duplicate member names, and an SSE event name that is either absent or
+// equal to the payload type. Each driver keeps its own rules for the [DONE]
+// marker and for events after the terminal.
+type responsesEventFramer struct {
+	decoder   *ssewire.Decoder
+	resources *protocolcore.ResourceBudget
+	maxBytes  int
+	wireBytes int
+}
+
+func newResponsesEventFramer(maxBytes int, resources *protocolcore.ResourceBudget) (*responsesEventFramer, error) {
+	options := ssewire.DefaultOptions()
+	options.MaxLineBytes = maxBytes
+	options.MaxEventBytes = maxBytes
+	options.MaxPendingBytes = maxBytes
+	decoder, err := ssewire.NewDecoder(options)
+	if err != nil {
+		return nil, err
+	}
+	return &responsesEventFramer{decoder: decoder, resources: resources, maxBytes: maxBytes}, nil
+}
+
+// feed bounds and decodes one received fragment into complete SSE events.
+func (framer *responsesEventFramer) feed(fragment []byte) ([]ssewire.Event, error) {
+	if framer.wireBytes+len(fragment) > framer.maxBytes {
+		return nil, protocolcore.NewFailure(
+			protocolcore.ReasonStreamLimitExceeded,
+			"$",
+			errors.New("Responses stream exceeds the configured byte limit"),
+		)
+	}
+	framer.wireBytes += len(fragment)
+	events, err := framer.decoder.Feed(fragment)
+	if err != nil {
+		return nil, protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$", err)
+	}
+	return events, nil
+}
+
+// finish reports a frame left incomplete at EOF.
+func (framer *responsesEventFramer) finish() error {
+	if err := framer.decoder.Finish(); err != nil {
+		return protocolcore.NewFailure(protocolcore.ReasonTruncatedEventStream, "$", err)
+	}
+	return nil
+}
+
+// isDoneMarker reports the [DONE] marker some Responses services send after
+// the terminal event.
+func isDoneMarker(event ssewire.Event) bool {
+	return bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]"))
+}
+
+// admit checks one event payload and returns its type.
+func (framer *responsesEventFramer) admit(event ssewire.Event) (string, error) {
+	return framer.admitDecoded(event, func(data []byte) string {
+		var header struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(data, &header) != nil {
+			return ""
+		}
+		return header.Type
+	})
+}
+
+// admitDecoded is admit for a driver that reads more of a payload than its
+// type, so the payload is decoded once: decode reads it and returns its
+// type, or "" when it is not a typed JSON object.
+func (framer *responsesEventFramer) admitDecoded(event ssewire.Event, decode func([]byte) string) (string, error) {
+	if err := framer.resources.ReserveJSON(event.Data); err != nil {
+		return "", protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$", err)
+	}
+	kind := decode(event.Data)
+	if kind == "" {
+		return "", protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$",
+			errors.New("Responses SSE event is invalid"),
+		)
+	}
+	if err := rejectDuplicateNames(event.Data); err != nil {
+		return "", protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$",
+			err,
+		)
+	}
+	if event.Name != "message" && event.Name != kind {
+		return "", protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$",
+			errors.New("Responses SSE event name does not match its payload"),
+		)
+	}
+	return kind, nil
+}
+
 type ProviderStream struct {
 	mu sync.Mutex
 
 	codec               *Codec
-	resources           *protocolcore.ResourceBudget
 	request             protocolcore.Request
-	decoder             *ssewire.Decoder
+	framer              *responsesEventFramer
 	held                bytes.Buffer
-	wireBytes           int
 	clientBytes         int
 	barrier             bool
 	terminal            *protocolcore.Response
@@ -626,20 +726,15 @@ func (codec *Codec) NewProviderStream(request protocolcore.Request) (*ProviderSt
 			errors.New("request is not configured for streaming"),
 		)
 	}
-	options := ssewire.DefaultOptions()
-	options.MaxLineBytes = codec.options.MaxResponseBytes
-	options.MaxEventBytes = codec.options.MaxResponseBytes
-	options.MaxPendingBytes = codec.options.MaxResponseBytes
-	decoder, err := ssewire.NewDecoder(options)
+	framer, err := newResponsesEventFramer(codec.options.MaxResponseBytes, codec.responseBudget())
 	if err != nil {
 		return nil, err
 	}
 	return &ProviderStream{
-		codec:     codec,
-		resources: codec.responseBudget(),
-		request:   request.Clone(),
-		decoder:   decoder,
-		output:    make(map[int]json.RawMessage),
+		codec:   codec,
+		request: request.Clone(),
+		framer:  framer,
+		output:  make(map[int]json.RawMessage),
 	}, nil
 }
 
@@ -653,23 +748,14 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 			errors.New("Responses stream is not writable"),
 		)
 	}
-	if stream.wireBytes+len(fragment) > stream.codec.options.MaxResponseBytes {
-		stream.failed = true
-		return nil, protocolcore.NewFailure(
-			protocolcore.ReasonStreamLimitExceeded,
-			"$",
-			errors.New("Responses stream exceeds the configured byte limit"),
-		)
-	}
-	stream.wireBytes += len(fragment)
-	events, err := stream.decoder.Feed(fragment)
+	events, err := stream.framer.feed(fragment)
 	if err != nil {
 		stream.failed = true
-		return nil, protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$", err)
+		return nil, err
 	}
 	var safe bytes.Buffer
 	for _, event := range events {
-		if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+		if isDoneMarker(event) {
 			if stream.terminal == nil {
 				stream.failed = true
 				return nil, protocolcore.NewFailure(
@@ -691,39 +777,13 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 			return nil, protocolcore.NewFailure(protocolcore.ReasonStreamStateViolation, "$",
 				errors.New("event arrived after the Responses terminal event"))
 		}
-		if err := stream.resources.ReserveJSON(event.Data); err != nil {
+		kind, err := stream.framer.admit(event)
+		if err != nil {
 			stream.failed = true
-			return nil, protocolcore.NewFailure(protocolcore.ReasonMalformedEventStream, "$", err)
-		}
-		var header struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(event.Data, &header); err != nil || header.Type == "" {
-			stream.failed = true
-			return nil, protocolcore.NewFailure(
-				protocolcore.ReasonMalformedEventStream,
-				"$",
-				errors.New("Responses SSE event is invalid"),
-			)
-		}
-		if err := rejectDuplicateNames(event.Data); err != nil {
-			stream.failed = true
-			return nil, protocolcore.NewFailure(
-				protocolcore.ReasonMalformedEventStream,
-				"$",
-				err,
-			)
-		}
-		if event.Name != "message" && event.Name != header.Type {
-			stream.failed = true
-			return nil, protocolcore.NewFailure(
-				protocolcore.ReasonMalformedEventStream,
-				"$",
-				errors.New("Responses SSE event name does not match its payload"),
-			)
+			return nil, err
 		}
 		stream.progress++
-		switch header.Type {
+		switch kind {
 		case "keepalive":
 			// Native Codex renews its idle budget on SSE data events, not
 			// comments. A keepalive must neither arm the tool barrier nor
@@ -837,13 +897,13 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 			}
 			_ = json.Unmarshal(event.Data, &failure) // framing/JSON validated above
 			raw := event.Data
-			if header.Type == "response.failed" {
+			if kind == "response.failed" {
 				raw = failure.Response.Error
 			} else if rawPresent(failure.Error) {
 				raw = failure.Error
 			}
 			failureErr := protocolcore.NewNativeProviderFailure("$", protocolspec.DialectOpenAIResponses, raw)
-			if header.Type == "error" {
+			if kind == "error" {
 				// Native clients may ignore a notification and keep reading.
 				// Only response.failed is an explicit failed terminal. Deliver
 				// this non-executable event even while tool output is held, but
@@ -858,13 +918,13 @@ func (stream *ProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, 
 				continue
 			}
 			stream.failed = true
-			failureErr.NativeError = failureErr.NativeError.WithStreamEvent(header.Type, event.Data)
+			failureErr.NativeError = failureErr.NativeError.WithStreamEvent(kind, event.Data)
 			return safe.Bytes(), failureErr
 		}
 		// Preserve event order: after the first potentially actionable item,
 		// all subsequent events (including success) stay behind approval. The
 		// positive non-actionable set also makes new event kinds fail closed.
-		stream.barrier = stream.barrier || !nonActionableResponseEvent(header.Type, event.Data)
+		stream.barrier = stream.barrier || !nonActionableResponseEvent(kind, event.Data)
 		clientEvent, err := stream.clientEvent(event)
 		if err != nil {
 			stream.failed = true
@@ -981,9 +1041,9 @@ func (stream *ProviderStream) FinishDecoded(
 			errors.New("Responses stream cannot be finished"),
 		)
 	}
-	if err := stream.decoder.Finish(); err != nil {
+	if err := stream.framer.finish(); err != nil {
 		stream.failed = true
-		return nil, protocolcore.NewFailure(protocolcore.ReasonTruncatedEventStream, "$", err)
+		return nil, err
 	}
 	if stream.terminal == nil {
 		stream.failed = true
