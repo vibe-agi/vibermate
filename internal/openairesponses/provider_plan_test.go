@@ -186,6 +186,10 @@ func TestReasoningReplayChecks(t *testing.T) {
 		{name: "another binding's seal", context: replayContext, following: true, want: dropped,
 			reasoning: with(func(seal *protocolcore.ReasoningSeal) { seal.Binding = "ffffffffffffffffffffffffffffffff" })},
 		{name: "a seal under a zero context", context: protocolpath.ProviderContext{}, following: true, want: dropped, reasoning: sealed},
+		{name: "an unbound seal under a zero context", context: protocolpath.ProviderContext{}, following: true, want: replayed,
+			reasoning: with(func(seal *protocolcore.ReasoningSeal) { seal.Binding = "" })},
+		{name: "an unbound seal under a bound context", context: replayContext, following: true, want: dropped,
+			reasoning: with(func(seal *protocolcore.ReasoningSeal) { seal.Binding = "" })},
 		// 5. The rejected-seal memory does not hold it.
 		{name: "a seal the provider refused", reasoning: sealed, context: rejecting, following: true, want: dropped},
 		// 6. An item follows it in its assistant message.
@@ -412,5 +416,24 @@ func TestProviderProfileSwitches(t *testing.T) {
 	}
 	if _, err := NewProviderSide(ProviderSideOptions{MaxRequestBytes: 1, Profile: ProviderRequestProfile{}}); err == nil {
 		t.Error("a zero profile was accepted")
+	}
+}
+
+// TestEffortForBudget pins each arm of design 6.4's budget approximation.
+func TestEffortForBudget(t *testing.T) {
+	t.Parallel()
+	for budget, want := range map[int]protocolcore.ReasoningEffort{
+		1024:  protocolcore.ReasoningEffortLow,
+		4095:  protocolcore.ReasoningEffortLow,
+		4096:  protocolcore.ReasoningEffortMedium,
+		16383: protocolcore.ReasoningEffortMedium,
+		16384: protocolcore.ReasoningEffortHigh,
+		32767: protocolcore.ReasoningEffortHigh,
+		32768: protocolcore.ReasoningEffortXHigh,
+		64000: protocolcore.ReasoningEffortXHigh,
+	} {
+		if got := effortForBudget(budget); got != want {
+			t.Errorf("effortForBudget(%d) = %s, want %s", budget, got, want)
+		}
 	}
 }

@@ -862,6 +862,9 @@ func toolCallItem(path string, call protocolcore.ToolCall, notices *planNotices)
 			return planItem{}, err
 		}
 	}
+	if call.Arguments.ByteLen() > protocolcore.MaxToolJSONBytes {
+		return planItem{}, exceedsProviderLimit(path+".arguments", "tool call argument bytes")
+	}
 	return planItem{
 		kind:      planItemFunctionCall,
 		callID:    callID,

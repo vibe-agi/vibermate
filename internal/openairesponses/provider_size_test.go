@@ -212,6 +212,64 @@ func TestEncoderFailsBeforeReadmission(t *testing.T) {
 		_, err = newPlanSide(t, nil).planRequest(protocolpath.ProviderContext{}, request)
 		failureAt(t, err, "$.messages[2].blocks[0]")
 	})
+	t.Run("joined instructions", func(t *testing.T) {
+		t.Parallel()
+		side := newPlanSide(t, func(profile *ProviderRequestProfile) {
+			profile.InstructionPlacement = InstructionPlacementInstructions
+		})
+		request := planRequestFor(t, userText(t, "go"))
+		request.System = []protocolcore.ContentBlock{
+			textBlock(t, strings.Repeat("s", protocolcore.MaxTextBytes/2+1)),
+			textBlock(t, strings.Repeat("s", protocolcore.MaxTextBytes/2)),
+		}
+		_, err := side.planRequest(protocolpath.ProviderContext{}, request)
+		failureAt(t, err, "$.system")
+		// One developer message holds them as separate parts.
+		if _, err := newPlanSide(t, nil).planRequest(protocolpath.ProviderContext{}, request); err != nil {
+			t.Fatalf("developer-message placement refused: %v", err)
+		}
+	})
+	t.Run("a list output's joined text", func(t *testing.T) {
+		t.Parallel()
+		half := strings.Repeat("t", protocolcore.MaxTextBytes/2)
+		result, err := protocolcore.NewToolResultBlock(protocolcore.ToolResult{
+			Key:     callKey(t, "toolu_1"),
+			Content: half + half,
+			Parts: &protocolcore.ToolResultParts{Items: []protocolcore.ToolResultPart{
+				{Kind: protocolcore.ToolResultPartText, Text: half},
+				{Kind: protocolcore.ToolResultPartText, Text: half},
+			}},
+		})
+		request := planRequestFor(t, userText(t, "go"),
+			protocolcore.Message{Role: protocolcore.RoleAssistant, Blocks: []protocolcore.ContentBlock{readCallBlock(t, "toolu_1")}},
+			protocolcore.Message{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{mustBlock(t, result, err)}})
+		_, err = newPlanSide(t, nil).planRequest(protocolpath.ProviderContext{}, request)
+		failureAt(t, err, "$.messages[2].blocks[0]")
+	})
+	t.Run("a tool schema", func(t *testing.T) {
+		t.Parallel()
+		schema, err := protocolcore.NewJSONObject([]byte(`{"type":"object","description":"`+strings.Repeat("d", protocolcore.MaxToolJSONBytes)+`"}`), 16<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := planRequestFor(t, userText(t, "go"))
+		request.Tools[0].InputSchema = schema
+		_, err = newPlanSide(t, nil).planRequest(protocolpath.ProviderContext{}, request)
+		failureAt(t, err, "$.tools[0].input_schema")
+	})
+	t.Run("tool call arguments", func(t *testing.T) {
+		t.Parallel()
+		arguments, err := protocolcore.NewJSONObject([]byte(`{"path":"`+strings.Repeat("p", protocolcore.MaxToolJSONBytes)+`"}`), 16<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call, err := protocolcore.NewToolCallBlock(protocolcore.ToolCall{Key: callKey(t, "toolu_1"), Name: "Read", Arguments: arguments})
+		request := planRequestFor(t, userText(t, "go"),
+			protocolcore.Message{Role: protocolcore.RoleAssistant, Blocks: []protocolcore.ContentBlock{mustBlock(t, call, err)}},
+			protocolcore.Message{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{readResultBlock(t, "toolu_1")}})
+		_, err = newPlanSide(t, nil).planRequest(protocolpath.ProviderContext{}, request)
+		failureAt(t, err, "$.messages[1].blocks[0].arguments")
+	})
 	t.Run("reasoning state", func(t *testing.T) {
 		t.Parallel()
 		side := newPlanSide(t, nil)

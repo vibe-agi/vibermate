@@ -22,6 +22,67 @@ type wireItem struct {
 	Arguments string          `json:"arguments"`
 	Encrypted string          `json:"encrypted_content"`
 	Output    json.RawMessage `json:"output"`
+	Content   []wirePart      `json:"content"`
+	Summary   []wirePart      `json:"summary"`
+}
+
+// wirePart is one content part of an input item.
+type wirePart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL string `json:"image_url"`
+	FileData string `json:"file_data"`
+	FileURL  string `json:"file_url"`
+	Filename string `json:"filename"`
+}
+
+// assertSDKInputParts checks that the SDK filed each user-message part under
+// the variant its type names, with the same values.
+func assertSDKInputParts(t *testing.T, index int, parts []responses.ResponseInputContentUnionParam, want []wirePart) {
+	t.Helper()
+	if len(parts) != len(want) {
+		t.Fatalf("SDK item %d has %d parts, want %d", index, len(parts), len(want))
+	}
+	for partIndex, part := range parts {
+		expected := want[partIndex]
+		var ok bool
+		switch expected.Type {
+		case "input_text":
+			ok = part.OfInputText != nil && part.OfInputText.Text == expected.Text
+		case "input_image":
+			ok = part.OfInputImage != nil && part.OfInputImage.ImageURL.Value == expected.ImageURL
+		case "input_file":
+			ok = part.OfInputFile != nil && part.OfInputFile.FileData.Value == expected.FileData &&
+				part.OfInputFile.FileURL.Value == expected.FileURL && part.OfInputFile.Filename.Value == expected.Filename
+		}
+		if !ok {
+			t.Fatalf("SDK item %d part %d = %+v, want %+v", index, partIndex, part, expected)
+		}
+	}
+}
+
+// assertSDKOutputParts does the same for a function_call_output's list.
+func assertSDKOutputParts(t *testing.T, index int, parts []responses.ResponseFunctionCallOutputItemUnionParam, want []wirePart) {
+	t.Helper()
+	if len(parts) != len(want) {
+		t.Fatalf("SDK item %d has %d output parts, want %d", index, len(parts), len(want))
+	}
+	for partIndex, part := range parts {
+		expected := want[partIndex]
+		var ok bool
+		switch expected.Type {
+		case "input_text":
+			ok = part.OfInputText != nil && part.OfInputText.Text == expected.Text
+		case "input_image":
+			ok = part.OfInputImage != nil && part.OfInputImage.ImageURL.Value == expected.ImageURL
+		case "input_file":
+			ok = part.OfInputFile != nil && part.OfInputFile.FileData.Value == expected.FileData &&
+				part.OfInputFile.FileURL.Value == expected.FileURL && part.OfInputFile.Filename.Value == expected.Filename
+		}
+		if !ok {
+			t.Fatalf("SDK item %d output part %d = %+v, want %+v", index, partIndex, part, expected)
+		}
+	}
 }
 
 // assertOracleAccepts unmarshals an encoded body into the official SDK's
@@ -139,6 +200,12 @@ func assertOracleAccepts(t *testing.T, body []byte) {
 			if phase := item.GetPhase(); want.Phase != "" && (phase == nil || *phase != want.Phase) {
 				t.Fatalf("SDK item %d phase = %v, want %s", index, phase, want.Phase)
 			}
+			if want.Role == "user" || want.Role == "developer" {
+				if item.OfMessage == nil {
+					t.Fatalf("SDK item %d is not an input message: %+v", index, item)
+				}
+				assertSDKInputParts(t, index, item.OfMessage.Content.OfInputItemContentList, want.Content)
+			}
 		case "function_call":
 			call := item.OfFunctionCall
 			if call == nil || call.CallID != want.CallID || call.Name != want.Name || call.Arguments != want.Arguments {
@@ -155,16 +222,22 @@ func assertOracleAccepts(t *testing.T, body []byte) {
 					t.Fatalf("SDK item %d string output = %+v", index, output.Output)
 				}
 			} else {
-				var parts []json.RawMessage
-				if err := json.Unmarshal(want.Output, &parts); err != nil ||
-					len(output.Output.OfResponseFunctionCallOutputItemArray) != len(parts) {
-					t.Fatalf("SDK item %d list output = %+v", index, output.Output)
+				var parts []wirePart
+				if err := json.Unmarshal(want.Output, &parts); err != nil {
+					t.Fatal(err)
 				}
+				assertSDKOutputParts(t, index, output.Output.OfResponseFunctionCallOutputItemArray, parts)
 			}
 		case "reasoning":
 			reasoning := item.OfReasoning
-			if reasoning == nil || reasoning.ID != want.ID || reasoning.EncryptedContent.Value != want.Encrypted {
+			if reasoning == nil || reasoning.ID != want.ID || reasoning.EncryptedContent.Value != want.Encrypted ||
+				len(reasoning.Summary) != len(want.Summary) {
 				t.Fatalf("SDK item %d reasoning = %+v", index, reasoning)
+			}
+			for summaryIndex, summary := range reasoning.Summary {
+				if summary.Text != want.Summary[summaryIndex].Text {
+					t.Fatalf("SDK item %d summary %d = %q", index, summaryIndex, summary.Text)
+				}
 			}
 		default:
 			t.Fatalf("item %d has an unexpected type %s", index, want.Type)

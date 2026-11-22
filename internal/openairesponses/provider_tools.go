@@ -124,6 +124,11 @@ func planTools(request protocolcore.Request, notices *planNotices) ([]planTool, 
 		if err != nil {
 			return nil, nil, protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".input_schema", err)
 		}
+		// Re-admission bounds a tool's parameters more tightly than the
+		// client decoder bounds its schema.
+		if len(parameters) > protocolcore.MaxToolJSONBytes {
+			return nil, nil, exceedsProviderLimit(path+".input_schema", "tool schema bytes")
+		}
 		normalized = normalized || removed
 		tools = append(tools, planTool{
 			name:        name,
