@@ -233,9 +233,10 @@ vibermate trust --server https://vibermate.home.arpa:9666 --system-roots
 
 ## Automatic public HTTPS
 
-In the App or owner Web workbench, **Settings → Access & launch → Deploy with
-your own domain** generates native commands or `.env.public` settings after
-you enter the domain/contact email and accept the issuer's terms. It does not
+In the App or owner Web workbench, **Settings → Access and launch → Other ways
+to connect → Run ViberMate on a server with your own domain** generates native
+commands or `.env.public` settings after you enter the domain/contact email
+and accept the issuer's terms. It does not
 change the current Runtime, execute commands or request certificates. Existing
 certificate files and private-network deployment use the corresponding sections
 of this guide.
