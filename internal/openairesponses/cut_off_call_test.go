@@ -76,7 +76,8 @@ func TestCutOffCallEndsTheTurnAtTheOutputLimit(t *testing.T) {
 				decoded.Blocks[0].Kind != protocolcore.BlockText {
 				t.Fatalf("decoded = %+v", decoded)
 			}
-			if notices := noticeLines(result.terminal.TranslationReport()); !slices.Contains(notices, "incomplete_tool_call_not_forwarded $.output[1]") {
+			// Declared once, though the stream and the terminal both see it.
+			if notices := noticeLines(result.terminal.TranslationReport()); !slices.Equal(notices, []string{"incomplete_tool_call_not_forwarded $.output[1]"}) {
 				t.Fatalf("notices = %v", notices)
 			}
 
@@ -96,6 +97,47 @@ func TestCutOffCallEndsTheTurnAtTheOutputLimit(t *testing.T) {
 				t.Fatalf("aggregated = %+v, want %+v", got, decoded)
 			}
 		})
+	}
+}
+
+// The reviewer's probe: the call is the turn's only output. Nothing is left
+// to show, so the client gets the stream's one empty text block and
+// max_tokens.
+func TestCutOffOnlyCallGivesAnEmptyAnswerAtTheOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	side, _ := newStreamSide(t)
+	request := streamRequest(t, "summarized", true)
+	payloads := []string{
+		`{"type":"response.created","response":{"id":"resp_1","created_at":1,"model":"m","status":"in_progress","output":[]}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"Bash","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"comm"}`,
+		cutOffTerminal("incomplete", "incomplete", cutOffCall),
+	}
+	checkOpenAIEvents(t, payloads...)
+	result := everySplit(t, side, request, sseWire(t, payloads...))
+	if got := eventNames(t, result.live); !slices.Equal(got, []string{"message_start"}) {
+		t.Fatalf("live events = %v", got)
+	}
+	client := approved(t, result)
+	if bytes.Contains(client, []byte(`"tool_use"`)) {
+		t.Fatalf("the cut-off call reached the client:\n%s", client)
+	}
+	message := accumulate(t, client)
+	if len(message.Content) != 1 || message.Content[0].Type != "text" || message.Content[0].Text != "" || message.StopReason != "max_tokens" {
+		t.Fatalf("message = %+v", message)
+	}
+	if intents := result.terminal.ToolIntents(); len(intents) != 0 {
+		t.Fatalf("intents = %+v", intents)
+	}
+	if notices := noticeLines(result.terminal.TranslationReport()); !slices.Equal(notices, []string{"incomplete_tool_call_not_forwarded $.output[0]"}) {
+		t.Fatalf("notices = %v", notices)
+	}
+	status := `"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}`
+	unary, notices := mustDecodeUnary(t, cutOffCall, status, "")
+	if unary.StopReason != protocolcore.StopReasonMaxTokens || len(unary.Blocks) != 1 || unary.Blocks[0].Kind != protocolcore.BlockText ||
+		unary.Blocks[0].Text != "" || !slices.Equal(notices, []string{"incomplete_tool_call_not_forwarded $.output[0]"}) {
+		t.Fatalf("unary = %+v, notices %v", unary, notices)
 	}
 }
 
