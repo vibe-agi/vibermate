@@ -42,12 +42,13 @@ func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	t.Parallel()
 
-	// Claude Code has its stream fallback grant, proven by C1, and Codex its
-	// keepalive grant, proven by C4, and its unconditional WebSocket
-	// fallback, proven by C3. Each row names its identity proof (C5). Claude
-	// Code's workspace tools wait for their own proof, so the tool gate's
-	// recognized basis stays inactive.
+	// Claude Code has its stream fallback grant, proven by C1, and its
+	// workspace tools grant, proven by C2. Codex has its keepalive grant,
+	// proven by C4, and its unconditional WebSocket fallback, proven by C3.
+	// Each row names its identity proof (C5). The table is now the one ADR
+	// 0026 designs.
 	claudeFallback := Canary{"internal/runlauncher", "TestInstalledClaudeLeavesStreamFallbackToCore"}
+	claudeTools := Canary{"internal/runlauncher", "TestInstalledClaudeWorkspaceToolsMatchTheClassifier"}
 	claudeIdentity := Canary{"internal/clientadapter", "TestInstalledClaudeIsRecognizedByItsSigner"}
 	codexKeepalive := Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
 	codexFallback := Canary{"internal/loopbackproxy", "TestInstalledCodexFallsBackToHTTPAfterProxy426"}
@@ -58,6 +59,7 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 			IdentityCanary: claudeIdentity,
 			Grants: []ProtectionGrant{
 				{FeatureCoreOwnedStreamingFallback, ProofLaunchInstruction, claudeFallback},
+				{FeatureStructuredWorkspaceTools, ProofRequestDefinitions, claudeTools},
 			},
 		},
 		{
@@ -75,8 +77,11 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("RecognizedClientPolicies() = %+v, want %+v", got, want)
 	}
+	if designed := designedRecognizedClientPolicies(); !reflect.DeepEqual(want, designed) {
+		t.Fatalf("the pinned table %+v differs from the designed table %+v", want, designed)
+	}
 	for clientID, features := range map[string]Feature{
-		"claude-code": FeatureCoreOwnedStreamingFallback,
+		"claude-code": FeatureCoreOwnedStreamingFallback | FeatureStructuredWorkspaceTools,
 		"codex-cli":   FeatureResponsesDataKeepalive,
 		"other":       0,
 		"":            0,
@@ -92,8 +97,8 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	}{
 		{"codex-cli", "linux", []Canary{codexKeepalive, codexFallback}},
 		{"codex-cli", "darwin", []Canary{codexKeepalive, codexFallback, codexIdentity}},
-		{"claude-code", "linux", []Canary{claudeFallback}},
-		{"claude-code", "darwin", []Canary{claudeFallback, claudeIdentity}},
+		{"claude-code", "linux", []Canary{claudeFallback, claudeTools}},
+		{"claude-code", "darwin", []Canary{claudeFallback, claudeTools, claudeIdentity}},
 		{"other", "darwin", nil},
 		{"", "darwin", nil},
 	} {
@@ -439,18 +444,14 @@ func TestRecognizedClientsNameOnlyTheCurrentRevision(t *testing.T) {
 	}
 
 	// The live table names both clients, grants Claude Code its stream
-	// fallback and Codex its keepalive; a stored run at another revision
-	// names neither.
+	// fallback and workspace tools and Codex its keepalive; a stored run at
+	// another revision names neither.
 	live, err := NewRecognizedClients(catalog, ProtectionsOn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for label, want := range map[string]RecognizedClient{
-		"claude": {
-			ID:          "claude-code",
-			Policy:      FeatureCoreOwnedStreamingFallback,
-			Protections: FeatureCoreOwnedStreamingFallback,
-		},
+		"claude": {ID: "claude-code", Policy: claude, Protections: claude},
 		"codex": {
 			ID:          "codex-cli",
 			Policy:      FeatureResponsesDataKeepalive,
@@ -642,13 +643,13 @@ func TestRecognizedClientsHonourTheSwitch(t *testing.T) {
 		}
 	}
 	// The live table: the switch withdraws Claude Code's fallback and
-	// Codex's keepalive and keeps each policy.
+	// workspace tools and Codex's keepalive, and keeps each policy.
 	live, err := NewRecognizedClients(catalog, ProtectionsOff)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for label, want := range map[string]RecognizedClient{
-		"claude": {ID: "claude-code", Policy: FeatureCoreOwnedStreamingFallback},
+		"claude": {ID: "claude-code", Policy: claude},
 		"codex":  {ID: "codex-cli", Policy: FeatureResponsesDataKeepalive},
 	} {
 		if got, found := live.Client(catalog.Revision(), label); !found || got != want || !got.SwitchedOff() {

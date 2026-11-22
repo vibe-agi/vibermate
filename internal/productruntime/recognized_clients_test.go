@@ -27,8 +27,8 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 		state   clientadapter.ProtectionSwitch
 		want    map[string]string
 		// granted is the basis a recognized run's connections get for the
-		// one protection the policy grants its client: the stream fallback
-		// for Claude Code, the data keepalive for Codex.
+		// protections the policy grants its client: the stream fallback and
+		// the workspace tools for Claude Code, the data keepalive for Codex.
 		granted clientadapter.ProtectionBasis
 	}{
 		{"with the host catalog", catalog, clientadapter.ProtectionsOn, map[string]string{
@@ -73,10 +73,11 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 						label, evidence.RecognizedClient, view.RecognizedClient, expected, want)
 				}
 				// On the Runtime's own admission each client has the basis
-				// for its own grant only, and the switch withdraws it.
+				// for its own grants only, and the switch withdraws them.
 				granted := clientadapter.FeatureResponsesDataKeepalive
 				if label == "claude" {
-					granted = clientadapter.FeatureCoreOwnedStreamingFallback
+					granted = clientadapter.FeatureCoreOwnedStreamingFallback |
+						clientadapter.FeatureStructuredWorkspaceTools
 				}
 				for _, feature := range []clientadapter.Feature{
 					clientadapter.FeatureResponsesDataKeepalive,
@@ -84,7 +85,7 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 					clientadapter.FeatureStructuredWorkspaceTools,
 				} {
 					want := clientadapter.ProtectionNone
-					if feature == granted {
+					if granted.Includes(feature) {
 						want = testCase.granted
 					}
 					if got := admission.ProtectionBasis(feature); got != want {
@@ -97,17 +98,20 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 					t.Fatalf("%s: SwitchedOff() = %v, want %v", label, evidence.RecognizedClient.SwitchedOff(), switchedOff)
 				}
 			}
-			for label, feature := range map[string]clientadapter.Feature{
-				"codex":  clientadapter.FeatureResponsesDataKeepalive,
-				"claude": clientadapter.FeatureCoreOwnedStreamingFallback,
-			} {
+			for _, label := range []string{"codex", "claude"} {
 				evidence, view, admission := recognizedRunEvidence(t, runtime, label, catalog.Revision()-1)
 				if evidence.RecognizedClient != (clientadapter.RecognizedClient{}) ||
 					view.RecognizedClient != (clientadapter.RecognizedClient{}) {
 					t.Fatalf("a %s run at another catalog revision named %+v", label, evidence.RecognizedClient)
 				}
-				if got := admission.ProtectionBasis(feature); got != clientadapter.ProtectionNone {
-					t.Fatalf("a %s run at another catalog revision has %s basis %s", label, feature.Name(), got)
+				for _, feature := range []clientadapter.Feature{
+					clientadapter.FeatureResponsesDataKeepalive,
+					clientadapter.FeatureCoreOwnedStreamingFallback,
+					clientadapter.FeatureStructuredWorkspaceTools,
+				} {
+					if got := admission.ProtectionBasis(feature); got != clientadapter.ProtectionNone {
+						t.Fatalf("a %s run at another catalog revision has %s basis %s", label, feature.Name(), got)
+					}
 				}
 			}
 		})

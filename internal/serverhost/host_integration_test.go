@@ -1398,10 +1398,12 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	}
 	// The Server's Runtime names the client the companion's claim was
 	// validated for, with what the policy grants it (ADR 0026): the stream
-	// fallback, which the companion's own launcher applies.
-	fallback := clientadapter.FeatureCoreOwnedStreamingFallback
+	// fallback, which the companion's own launcher applies, and the
+	// workspace tools, which need a local-launcher workspace a companion
+	// never has.
+	claude := clientadapter.FeatureCoreOwnedStreamingFallback | clientadapter.FeatureStructuredWorkspaceTools
 	if view, err := host.Runtime().CaptureRunReader().GetRun(context.Background(), grant.Run.ID); err != nil ||
-		view.RecognizedClient != (clientadapter.RecognizedClient{ID: "claude-code", Policy: fallback, Protections: fallback}) {
+		view.RecognizedClient != (clientadapter.RecognizedClient{ID: "claude-code", Policy: claude, Protections: claude}) {
 		t.Fatalf("the recognized companion run named %+v, %v", view.RecognizedClient, err)
 	}
 
