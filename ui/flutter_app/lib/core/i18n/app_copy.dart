@@ -3458,6 +3458,7 @@ final class AppCopy {
     'terminal.state_detail.checking': 'Checking that Terminal finds it…',
     'terminal.state_detail.full_path_works':
         'Works with the full path {path}. To type just vibermate, run the PATH line once.',
+    'terminal.state_detail.full_path_only': 'Works with the full path {path}.',
     'terminal.path.run_once': 'Run once in Terminal, then open a new window',
     'terminal.path.full_path': 'Or start with the full path',
     'terminal.path.copy_line': 'Copy the PATH line',
@@ -6380,6 +6381,7 @@ final class AppCopy {
     'terminal.state_detail.checking': '正在检查终端能否找到它…',
     'terminal.state_detail.full_path_works':
         '使用完整路径 {path} 可以启动。若想直接输入 vibermate，请运行一次 PATH 设置命令。',
+    'terminal.state_detail.full_path_only': '使用完整路径 {path} 可以启动。',
     'terminal.path.run_once': '在终端中运行一次，然后新开一个窗口',
     'terminal.path.full_path': '或使用完整路径启动',
     'terminal.path.copy_line': '复制 PATH 设置命令',

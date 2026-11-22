@@ -381,8 +381,10 @@ final class _SetupGuideState extends State<SetupGuide> {
         state: state,
         title: copy('setup.command.title'),
         copy: copy,
+        // A finished step is one line, and the PATH line it would point at is
+        // on Access and launch: only what works is said here.
         summary: status != null && progress.reach == TerminalReach.fullPathWorks
-            ? copy.format('terminal.state_detail.full_path_works', {
+            ? copy.format('terminal.state_detail.full_path_only', {
                 'path': vibermateFullPath(status),
               })
             : copy('terminal.state_detail.current'),

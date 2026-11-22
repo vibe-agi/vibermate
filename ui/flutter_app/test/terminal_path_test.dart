@@ -574,7 +574,14 @@ echo "$target"''');
           'Works with the full path ~/.local/bin/vibermate. To type just '
           'vibermate, run the PATH line once.';
       expect(inStep('command', find.text('Done')), findsOne);
-      expect(inStep('command', find.text(works)), findsOne);
+      // The finished step is one line, without the PATH line it points at.
+      expect(
+        inStep(
+          'command',
+          find.text('Works with the full path ~/.local/bin/vibermate.'),
+        ),
+        findsOne,
+      );
       controller.openAccessSettings();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
