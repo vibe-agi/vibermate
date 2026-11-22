@@ -12,9 +12,10 @@ Build with `make build-flutter-app`, open `dist/ViberMate.app`, and use the CLI
 inside that same bundle while testing. Do not leave a released App running and
 assume it supports the current-source CLI. No ViberMate account is required locally.
 
-In Settings -> Access & launch -> Connect an ACP editor, choose the editor and
-Agent, enter absolute executable paths, and copy the configuration. Merge only
-the new entry; preserve existing editor settings and environment values.
+In Settings → Access and launch → Use from an editor (optional), choose the
+agent and the editor, enter absolute executable paths, and copy the
+configuration. Merge only the new entry; preserve existing editor settings
+and environment values.
 
 Install one adapter separately. The current isolated acceptance versions are:
 

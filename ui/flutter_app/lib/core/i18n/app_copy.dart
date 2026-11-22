@@ -229,7 +229,20 @@ final class AppCopy {
     'acp.tool_calls': '{count} tool-call notifications',
     'acp.user': 'You → Agent',
     'acp.agent': 'Agent → Editor',
-    'acp.setup.title': 'Connect an ACP editor',
+    'acp.setup.limitation':
+        'ViberMate only observes editor sessions. Routing, accounts, scripts (including privacy scripts) and network exits don\'t apply to them.',
+    'acp.setup.agent': 'Agent',
+    'acp.setup.step.install': 'Install the adapter',
+    'acp.setup.step.choose': 'Choose your editor',
+    'acp.setup.step.copy':
+        'Copy the configuration into your editor\'s settings',
+    'acp.setup.install.copy': 'Copy install command',
+    'acp.setup.install.claude_node': 'Needs Node 22 or newer.',
+    'acp.setup.install.cursor':
+        'Cursor CLI needs no adapter: it speaks ACP itself.',
+    'acp.setup.guide': 'Setup guide',
+    'acp.setup.guide_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/acp-quickstart.md',
     'acp.login_required':
         'The Agent reports that login is required. Complete its authentication in the editor, then retry. This is the Agent’s account, not your ViberMate Runtime login.',
     'acp.setup.detail':
@@ -241,9 +254,6 @@ final class AppCopy {
     'acp.setup.content': 'Save user and assistant text',
     'acp.setup.server': 'Runtime Server URL (empty = local App)',
     'acp.setup.copy': 'Copy editor configuration',
-    'acp.setup.copied': 'Configuration copied',
-    'acp.setup.failed':
-        'Could not copy. Select the configuration text and copy it manually.',
     'acp.setup.help.local':
         'Merge the generated object into the editor’s settings and keep existing environment values. Do not replace the whole settings file.',
     'acp.setup.help.remote':
@@ -850,13 +860,14 @@ final class AppCopy {
     'setup.command.detail':
         'Adds the vibermate command for Terminal (in ~/\u2060.local/\u2060bin). Nothing else on your Mac changes.',
     'setup.command.open_settings': 'Open Terminal settings',
+    'setup.command.check': 'Check again',
     'setup.start.title': 'Start Claude Code or Codex',
     'setup.start.detail':
         'In Terminal, go to your project folder and run one of these. Keep ViberMate open while you work.',
     'setup.start.copy': 'Copy',
     'setup.start.copied': 'Copied',
     'setup.start.codex_requirement':
-        'Codex only: needs ViberMate\'s certificate trusted on this Mac. macOS asks for your password once.',
+        'Codex only: this Mac must trust ViberMate\'s certificate. macOS asks for your password once.',
     'setup.start.install_trust': 'Install and trust',
     'setup.start.codex_ready':
         'Codex: this Mac trusts ViberMate\'s certificate.',
@@ -1108,6 +1119,9 @@ final class AppCopy {
     'common.save': 'Save changes',
     'common.add': 'Add',
     'common.copy': 'Copy {field}',
+    'common.copied': 'Copied',
+    'common.copy_failed':
+        'Couldn\'t copy. Select the text and copy it yourself.',
     'common.time.now': 'now',
     'common.time.minutes': '{count}m',
     'common.time.hours': '{count}h',
@@ -1604,8 +1618,12 @@ final class AppCopy {
     'environment.routes': '{count} upstream routes',
     'environment.live.title': 'Running on it now · {count}',
     'environment.live.none':
-        'No session is running on it. Changes apply when one starts.',
+        'No session is running on it. Start one with a command above.',
+    'environment.live.disabled':
+        'Agents can\'t start with this routing set while it\'s disabled. Running sessions keep going.',
+    'environment.disabled_marker': 'Disabled',
     'environment.live.started_on': 'started on revision {revision}',
+    'environment.launch.title': 'Start with this routing set',
     'environment.select': 'Select a routing set.',
     'environment.history.loading': 'Loading the frozen routing set revision…',
     'environment.history.frozen': 'Frozen evidence',
@@ -2534,10 +2552,9 @@ final class AppCopy {
     'settings.tab.access': 'Access and launch',
     'settings.tab.safety': 'Safety and data',
     'settings.tab.users': 'Users',
-    'settings.section_detail.general':
-        'Appearance, language, transparent capture and updates',
+    'settings.section_detail.general': 'Appearance, language and updates',
     'settings.section_detail.access':
-        'Terminal command, editors, browser and other devices',
+        'Start Claude Code or Codex from Terminal or an editor',
     'settings.section_detail.users': 'Who can sign in to this Runtime',
     'settings.section_detail.safety':
         'Certificates, storage, backups and cleanup',
@@ -2547,19 +2564,31 @@ final class AppCopy {
         'These choices affect this workbench only; they do not change captured traffic or team accounts.',
     'settings.access.title': 'Access and launch',
     'settings.access.socks': 'SOCKS5 proxy',
+    'settings.access.socks.purpose':
+        'For apps you point at ViberMate by hand with a proxy login. Claude Code and Codex don\'t need it.',
     'settings.access.network.disabled': 'Not enabled',
-    'settings.access.network.unknown': 'Availability unknown',
     'settings.access.vless.installed': 'VLESS engine installed',
     'settings.access.vless.absent': 'VLESS engine not installed',
-    'settings.access.vless.unknown': 'VLESS engine availability unknown',
     'settings.access.detail.server':
         'Connect an Agent from your computer. If you only need the browser, you are already connected.',
     'settings.access.detail.local':
-        'Set up the Terminal entry used to start managed Claude and Codex runs.',
-    'settings.access.local.title': 'On this Mac',
+        'Start Claude Code or Codex from Terminal or an editor, and connect other devices.',
     'settings.access.local.no_account':
-        'Local App runs do not need a Web account, domain or browser certificate.',
+        'Using ViberMate on this Mac needs no sign-in or domain.',
+    'settings.access.editor.title': 'Use from an editor (optional)',
+    'settings.access.editor.detail':
+        'Zed, JetBrains or VS Code start Claude Code or Codex through ViberMate (ACP).',
+    'settings.access.transparent.title': 'Transparent capture (experimental)',
+    'settings.access.transparent.badge': 'Experimental',
+    'settings.access.transparent.detail':
+        'Experimental. Only needed for agents you start with vibermate run --transparent; ordinary vibermate run works without it.',
+    'settings.access.other.title': 'Other ways to connect',
+    'settings.access.other.detail':
+        'A browser, another computer, or ViberMate on a server.',
     'settings.access.team.title': 'Browser or another device',
+    'settings.access.browser.title': 'Open in a browser on this Mac',
+    'settings.access.browser.detail':
+        'The Web address of the ViberMate on this Mac.',
     'settings.access.team.optional':
         'Optional for local App use. Expand for the Web address and remote login steps.',
     'settings.access.team.detail':
@@ -2568,7 +2597,7 @@ final class AppCopy {
     'settings.safety.detail':
         'Server connections, AI traffic inspection and stored data are separate controls.',
     'settings.server_connection.title': 'Server HTTPS',
-    'deployment.title': 'Deploy with your own domain',
+    'deployment.title': 'Run ViberMate on a server with your own domain',
     'deployment.detail':
         'ViberMate can obtain and renew a public HTTPS certificate. No separate Caddy installation is needed.',
     'deployment.configure': 'Configure automatic HTTPS',
@@ -2681,9 +2710,9 @@ final class AppCopy {
     'settings.server_connection.tls.expires': 'Expires',
     'settings.server_connection.tls.fingerprint': 'Leaf SHA-256 fingerprint',
     'settings.server_connection.tls.error': 'Last certificate error',
-    'settings.runtime_ca.title': 'AI traffic inspection certificate (Proxy CA)',
+    'settings.runtime_ca.title': 'ViberMate certificate',
     'settings.runtime_ca.detail':
-        'Used for AI destinations captured by this Runtime. Supported managed runs receive scoped trust automatically. Browser-only users do not need to install it.',
+        'Agents you start with vibermate run --server trust it automatically, so Claude Code, Codex and the browser need no installation. Also called the Proxy CA; in Keychain Access it is named “ViberMate Local Root”.',
     'settings.runtime_ca.fingerprint': 'SHA-256 fingerprint',
     'settings.runtime_ca.expires': 'Expires (UTC)',
     'settings.runtime_ca.guide':
@@ -2769,7 +2798,7 @@ final class AppCopy {
     'settings.storage.backup_target': 'New backup directory',
     'settings.storage.backup_confirm': 'Create backup',
     'settings.storage.backup_confirmation':
-        'ViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
+        'This backup includes the private key of ViberMate\'s certificate. Anyone who has it could read HTTPS traffic on a Mac that trusts this certificate. Keep the backup private.\n\nViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup also contains unencrypted evidence; keep it private.',
     'settings.storage.backup_created':
         'Verified backup created. Provider credentials and external TLS files were not included.',
     'settings.storage.restore_title': 'Restore this backup?',
@@ -2851,19 +2880,28 @@ final class AppCopy {
         'before anything is written. Request and response bodies, tool '
         'arguments and query strings are stored as sent, so a secret written '
         'into a prompt is retained.',
-    'settings.root_ca.title': 'Local Root Certificate',
+    'settings.root_ca.title': 'ViberMate certificate',
     'settings.root_ca.detail':
-        'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
+        'ViberMate uses this certificate to read your agents\' encrypted requests. Claude Code is set up automatically on every run. Codex only accepts certificates this Mac trusts, so choose Install and trust once before you run vibermate run -- codex. macOS then trusts this certificate for HTTPS in the apps you use under your macOS account; ViberMate uses it only for connections that go through ViberMate. You can undo this with Removal steps.',
     'settings.root_ca.scope':
-        'Managed launches configure process-level trust for supported clients.',
+        'ViberMate uses this certificate to read your agents\' encrypted requests. Agents you start with vibermate run, Claude Code and Codex included, trust it automatically. Install it only for other apps that send traffic through ViberMate.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
-    'settings.root_ca.status.needs_trust': 'Installed, not trusted',
-    'settings.root_ca.status.not_installed': 'Generated, not installed',
+    'settings.root_ca.status.needs_trust':
+        'Installed, not trusted · needed for Codex',
+    'settings.root_ca.status.not_installed':
+        'Not trusted yet · needed for Codex',
     'settings.root_ca.status.unknown': 'Trust status unavailable',
     'settings.root_ca.fingerprint': 'SHA-256 fingerprint',
     'settings.root_ca.validity': 'Valid {from} → {to}',
     'settings.root_ca.private_key':
-        'The private key stays in ViberMate local storage and is never exported.',
+        'The private key stays on this Mac. Backups you create include it, so keep them private.',
+    'settings.root_ca.details': 'Certificate details',
+    'settings.root_ca.proxy_ca':
+        'Also called the Proxy CA. In Keychain Access it is named “ViberMate Local Root”.',
+    'settings.root_ca.confirm_install.title':
+        'Trust ViberMate\'s certificate on this Mac?',
+    'settings.root_ca.confirm_install.detail':
+        'Codex needs this to send requests through ViberMate. Apps on this Mac will then accept connections that ViberMate reads. ViberMate backups contain the certificate\'s private key, so keep them private. macOS will ask for your password; you can undo this later with Removal steps.',
     'settings.root_ca.install': 'Install and trust',
     'settings.root_ca.trust': 'Trust certificate',
     'settings.root_ca.remove': 'Removal steps',
@@ -2888,7 +2926,8 @@ final class AppCopy {
         'The current certificate could not be installed and trusted. No different certificate was used; check again, then retry.',
     'settings.root_ca.install.not_confirmed':
         'macOS returned without a trusted result for this exact certificate. Check again, then retry.',
-    'settings.root_ca.updated': 'Root certificate trust updated.',
+    'settings.root_ca.updated':
+        'This Mac\'s trust in ViberMate\'s certificate was updated.',
     'settings.root_ca.restart_required':
         'The old certificate is no longer trusted. Restart ViberMate to create a new one.',
     'settings.root_ca.load_failed':
@@ -2904,7 +2943,6 @@ final class AppCopy {
     'settings.root_ca.unavailable':
         'Root certificate trust management is available only on the local macOS Desktop.',
     'settings.root_ca.copy_fingerprint': 'Copy fingerprint',
-    'settings.root_ca.copied': 'Fingerprint copied',
     'settings.runtime': 'Runtime source',
     'settings.preview': 'Deterministic Preview data',
     'settings.live': 'Local ViberMate runtime',
@@ -2943,6 +2981,8 @@ final class AppCopy {
     'server.ip_allowlist.help':
         'Only clients whose address is inside one of these networks can reach this Server: the Web workbench, sign-in and Agent traffic. Leave the list empty to allow any address. The Server machine itself is always allowed. If no allowed network can reach the Server any more, run vibermated server ip-allowlist clear on the Server machine.',
     'server.ip_allowlist.open': 'Any address can connect.',
+    'server.ip_allowlist.none':
+        'No allowlist set: the Server doesn\'t filter connections by address.',
     'server.ip_allowlist.restricted':
         'Only the networks below can connect ({count}).',
     'server.ip_allowlist.client': 'This browser connects from {address}.',
@@ -2985,6 +3025,15 @@ final class AppCopy {
     'server.ip_allowlist.error.failed': 'The list was not saved: {error}',
     'server.access.description':
         'Use your personal Runtime username and password. Install the vibermate CLI and your Agent on the client computer before running these commands.',
+    'server.access.loopback':
+        'Other computers can\'t connect directly to the ViberMate on this Mac. To use ViberMate from several computers, run ViberMate Server on a machine they can all reach.',
+    'server.access.run_server': 'How to run ViberMate Server',
+    'server.access.manage_users': 'Manage who can sign in',
+    'server.install.title': 'Install ViberMate on the other computer',
+    'server.install.detail':
+        'Install the app, then set up the vibermate command in its Settings → Access and launch. On Linux, download the archive for your machine from the latest release and extract it.',
+    'server.install.guide': 'Install guide',
+    'server.install.url': 'https://github.com/vibe-agi/vibermate#get-started',
     'server.access.loading': 'Reading Server access…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -3328,14 +3377,14 @@ final class AppCopy {
     'usage.personal.succeeded': '{count} succeeded',
     'usage.personal.empty':
         'No retained Agent traffic is linked to this account yet. Sign in from the CLI, then start a managed Claude or Codex run.',
-    'server.login.command.title': '1. Sign in on the client machine',
+    'server.login.command.title': 'Sign in once',
     'server.login.command.detail':
         'Run once, then enter the runtime user username and password.',
     'server.login.command.client': 'Login',
     'server.login.command.copy': 'Copy login command',
-    'server.run.title': 'Connect a client',
+    'server.run.title': 'Start Claude Code or Codex',
     'server.run.detail':
-        '2. Start Claude or Codex. Every request still passes through ViberMate and is captured.',
+        'Its requests to the AI service go through ViberMate and appear in Sessions.',
     'preferences.warning.corrupt':
         'Saved workspace state was invalid. ViberMate opened a safe default; your next navigation change will repair it.',
     'preferences.warning.future_schema':
@@ -3346,14 +3395,30 @@ final class AppCopy {
         'Workspace preferences could not be saved. Runtime evidence is unaffected; another navigation change will retry.',
     'terminal.title': 'Terminal command',
     'terminal.description':
-        'Use vibermate from Terminal to start managed Agent runs.',
-    'terminal.run.title': 'Start a managed run',
+        'The vibermate command starts Claude Code or Codex through ViberMate from Terminal.',
+    'terminal.run.title': 'Start Claude Code or Codex',
     'terminal.run.detail':
-        'Run from Terminal so the Agent keeps its TTY and the launcher can prove the workspace boundary.',
+        'Your agent starts as usual with its own sign-in, and its requests appear in Sessions.',
     'terminal.run.install_first':
-        'Install or repair the Terminal command before copying a launch command.',
+        'Set up the vibermate command first, then copy a command below.',
+    'terminal.run.lead':
+        'In Terminal, go to your project folder and run one of these:',
+    'terminal.run.requirement':
+        'Claude Code or Codex must already be installed and start when you type claude or codex in Terminal.',
+    'terminal.run.use_routing_set': 'Use a routing set instead',
+    'terminal.run.step': '{number}. {title}',
+    'terminal.run.step.install': 'Set up the vibermate command',
+    'terminal.run.step.trust': 'Codex only: trust ViberMate\'s certificate',
+    'terminal.run.step.copy':
+        'Copy a command and run it in your project folder',
+    'terminal.run.send_through': 'Send requests through',
+    'terminal.run.builtin_choice':
+        'Forward as-is · record only, original destination',
+    'terminal.run.after_set':
+        'Requests follow the {name} routing set: its accounts, scripts and network exits apply.',
+    'terminal.run.choose_set':
+        'To use your accounts and scripts, choose a routing set above.',
     'terminal.run.copy': 'Copy {client} launch command',
-    'terminal.run.copied': '{client} command copied',
     'terminal.run.copy_failed': 'Could not copy command',
     'terminal.run.environment':
         'Specific routing set · vibermate run --env <environment-id> -- <command>',
@@ -3370,13 +3435,15 @@ final class AppCopy {
         'ViberMate manages only its exact ~/.local/bin/vibermate symlink and private ownership record. Shell profiles are never edited.',
     'terminal.manual_resolution':
         'This item is not proven to belong to ViberMate, so the App will not replace or remove it.',
-    'terminal.state.not_installed': 'Set up',
+    'terminal.state.not_installed': 'Not set up',
     'terminal.state.current': 'Ready',
     'terminal.state.source_updated': 'Update available',
     'terminal.state.source_missing': 'Needs attention',
     'terminal.state.target_missing': 'Repair needed',
     'terminal.state.unowned_target': 'Location in use',
     'terminal.state.conflict': 'Needs attention',
+    'terminal.state.not_on_path': 'Installed · Terminal can\'t find it yet',
+    'terminal.state.checking': 'Checking Terminal…',
     'terminal.state_detail.not_installed':
         'Set it up once, then copy an Agent launch command below.',
     'terminal.state_detail.current': 'vibermate is ready to use in Terminal.',
@@ -3390,14 +3457,26 @@ final class AppCopy {
         'Another item already uses the vibermate Terminal location. ViberMate left it unchanged.',
     'terminal.state_detail.conflict':
         'This Terminal entry changed outside ViberMate. It was left unchanged.',
+    'terminal.state_detail.not_on_path':
+        'A new Terminal window can\'t find vibermate yet, because your shell doesn\'t look in ~/.local/bin. Run this line once, then open a new window. Until then, use the full path below.',
+    'terminal.state_detail.checking': 'Checking that Terminal finds it…',
+    'terminal.state_detail.full_path_works':
+        'Works with the full path {path}. To type just vibermate, run the PATH line once.',
+    'terminal.state_detail.full_path_only': 'Works with the full path {path}.',
+    'terminal.path.run_once': 'Run once in Terminal, then open a new window',
+    'terminal.path.full_path': 'Or start with the full path',
+    'terminal.path.copy_line': 'Copy the PATH line',
+    'terminal.path.copy_full': 'Copy the full-path command',
+    'terminal.path.unknown':
+        'If Terminal says “command not found”, use the full path shown below.',
     'terminal.action.install': 'Set up command',
     'terminal.action.refresh': 'Use updated command',
     'terminal.action.repair': 'Repair command',
     'terminal.action.remove': 'Remove from Terminal',
     'terminal.action.clean_record': 'Clean stale record',
-    'terminal.confirm.install.title': 'Install vibermate for Terminal?',
+    'terminal.confirm.install.title': 'Set up the vibermate command?',
     'terminal.confirm.install.detail':
-        'Create a ViberMate-owned symbolic link at {target}. No existing object will be replaced.',
+        'ViberMate will add the vibermate command at {target}. It won\'t replace any existing file or change your shell settings.',
     'terminal.confirm.refresh.title': 'Acknowledge the packaged update?',
     'terminal.confirm.refresh.detail':
         'Refresh the private ownership record for {target}. The existing link is not replaced.',
@@ -3408,7 +3487,8 @@ final class AppCopy {
     'terminal.confirm.remove.detail':
         'Remove {target} only if its exact link and ownership record still belong to this App.',
     'terminal.confirm.boundary':
-        'A changed or unowned file is refused. Conversation and traffic evidence are unaffected.',
+        'You can remove it here at any time. Your saved sessions are not affected.',
+    'terminal.confirm.remove.boundary': 'Your saved sessions are not affected.',
     'terminal.notice.installed': 'Terminal command installed.',
     'terminal.notice.refreshed': 'Terminal command update acknowledged.',
     'terminal.notice.auto_refreshed':
@@ -3416,7 +3496,7 @@ final class AppCopy {
     'terminal.notice.auto_repaired':
         'The existing Terminal command link was repaired automatically.',
     'terminal.attention':
-        'Check Terminal command in Settings → Access & launch.',
+        'Check Terminal command in Settings → Access and launch.',
     'terminal.notice.repaired': 'Terminal command repaired and ready.',
     'terminal.notice.removed': 'Owned Terminal command removed.',
     'terminal.error.unavailable':
@@ -3596,7 +3676,17 @@ final class AppCopy {
     'acp.tool_calls': '{count} 条工具调用通知',
     'acp.user': '你 → Agent',
     'acp.agent': 'Agent → 编辑器',
-    'acp.setup.title': '接入 ACP 编辑器',
+    'acp.setup.limitation': 'ViberMate 只观察编辑器会话，不会对其应用流量策略、账号、脚本（包括隐私脚本）和网络出口。',
+    'acp.setup.agent': 'Agent',
+    'acp.setup.step.install': '安装适配器',
+    'acp.setup.step.choose': '选择编辑器',
+    'acp.setup.step.copy': '把配置复制到编辑器设置中',
+    'acp.setup.install.copy': '复制安装命令',
+    'acp.setup.install.claude_node': '需要 Node 22 或更高版本。',
+    'acp.setup.install.cursor': 'Cursor CLI 无需适配器，它本身支持 ACP。',
+    'acp.setup.guide': '设置指南',
+    'acp.setup.guide_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/acp-quickstart.md',
     'acp.login_required':
         'Agent 提示需要登录。请在编辑器中完成 Agent 身份验证后重试。这是 Agent 的账号，不是 ViberMate Runtime 登录。',
     'acp.setup.detail':
@@ -3607,8 +3697,6 @@ final class AppCopy {
     'acp.setup.content': '保存用户与助手文本',
     'acp.setup.server': 'Runtime Server URL（留空使用本地 App）',
     'acp.setup.copy': '复制编辑器配置',
-    'acp.setup.copied': '配置已复制',
-    'acp.setup.failed': '复制失败。请选中下方配置文本手动复制。',
     'acp.setup.help.local': '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。',
     'acp.setup.help.remote':
         '请把生成的对象合并到编辑器设置中，并保留已有环境变量；不要覆盖整个设置文件。远程连接时，请先在编辑器所在机器使用同一个 URL 执行 vibermate login --server。',
@@ -4113,6 +4201,7 @@ final class AppCopy {
     'setup.command.detail':
         '为终端添加 vibermate 命令（位于 ~/\u2060.local/\u2060bin），不会改动这台 Mac 上的其他内容。',
     'setup.command.open_settings': '打开终端设置',
+    'setup.command.check': '重新检查',
     'setup.start.title': '启动 Claude Code 或 Codex',
     'setup.start.detail': '在终端中进入项目目录，运行下面任一命令。使用 Agent 期间请保持 ViberMate 打开。',
     'setup.start.copy': '复制',
@@ -4326,6 +4415,8 @@ final class AppCopy {
     'common.save': '保存更改',
     'common.add': '添加',
     'common.copy': '复制{field}',
+    'common.copied': '已复制',
+    'common.copy_failed': '无法复制。请选中文字后手动复制。',
     'common.time.now': '刚刚',
     'common.time.minutes': '{count} 分前',
     'common.time.hours': '{count} 小时前',
@@ -4750,8 +4841,11 @@ final class AppCopy {
     'environment.path.exit_account': '由账号指定',
     'environment.routes': '{count} 条上游路由',
     'environment.live.title': '正在使用 · {count}',
-    'environment.live.none': '当前没有会话在使用；更改将在下次启动时生效。',
+    'environment.live.none': '还没有运行记录在使用它。可用上方命令启动。',
+    'environment.live.disabled': '停用期间，无法用此流量策略启动 Agent；运行中的记录不受影响。',
+    'environment.disabled_marker': '已停用',
     'environment.live.started_on': '启动于修订 {revision}',
+    'environment.launch.title': '使用此流量策略启动',
     'environment.select': '请选择一条流量策略。',
     'environment.history.loading': '正在读取冻结的流量策略版本…',
     'environment.history.frozen': '冻结证据',
@@ -5525,8 +5619,8 @@ final class AppCopy {
     'settings.tab.access': '接入与启动',
     'settings.tab.safety': '安全与数据',
     'settings.tab.users': '用户',
-    'settings.section_detail.general': '外观、语言、透明捕获与更新',
-    'settings.section_detail.access': '终端命令、编辑器、浏览器与其他设备',
+    'settings.section_detail.general': '外观、语言与更新',
+    'settings.section_detail.access': '从终端或编辑器启动 Claude Code 或 Codex',
     'settings.section_detail.users': '谁可以登录此 Runtime',
     'settings.section_detail.safety': '证书、存储、备份与清理',
     'settings.tab.proxy': '网络出口',
@@ -5534,22 +5628,32 @@ final class AppCopy {
     'settings.preferences.detail': '这里只改变当前工作台的显示方式，不会修改捕获流量或团队账号。',
     'settings.access.title': '接入与启动',
     'settings.access.socks': 'SOCKS5 代理',
+    'settings.access.socks.purpose':
+        '用于通过代理登录、手动指向 ViberMate 的应用。Claude Code 和 Codex 不需要它。',
     'settings.access.network.disabled': '未启用',
-    'settings.access.network.unknown': '可用性未知',
     'settings.access.vless.installed': 'VLESS 内核已安装',
     'settings.access.vless.absent': 'VLESS 内核未安装',
-    'settings.access.vless.unknown': 'VLESS 内核可用性未知',
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
-    'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
-    'settings.access.local.title': '这台电脑',
-    'settings.access.local.no_account': '本机 App 启动不需要网页账号、域名或浏览器证书。',
+    'settings.access.detail.local': '从终端或编辑器启动 Claude Code 或 Codex，并接入其他设备。',
+    'settings.access.local.no_account': '在这台 Mac 上使用 ViberMate 无需登录或域名。',
+    'settings.access.editor.title': '从编辑器使用（可选）',
+    'settings.access.editor.detail':
+        '让 Zed、JetBrains 或 VS Code 通过 ViberMate（ACP）启动 Claude Code 或 Codex。',
+    'settings.access.transparent.title': '透明捕获（实验性）',
+    'settings.access.transparent.badge': '实验性',
+    'settings.access.transparent.detail':
+        '实验性功能。仅用于通过 vibermate run --transparent 启动的 Agent；普通的 vibermate run 不需要它。',
+    'settings.access.other.title': '其他接入方式',
+    'settings.access.other.detail': '浏览器、其他电脑，或在服务器上运行的 ViberMate。',
     'settings.access.team.title': '从浏览器或其他设备接入',
+    'settings.access.browser.title': '在本机浏览器中打开',
+    'settings.access.browser.detail': '这台 Mac 上 ViberMate 的网页地址。',
     'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '服务器连接、AI 流量检查和数据留存分别管理，互不混淆。',
     'settings.server_connection.title': '服务器 HTTPS',
-    'deployment.title': '使用自有域名部署',
+    'deployment.title': '使用自有域名在服务器上运行 ViberMate',
     'deployment.detail': 'ViberMate 可自动申请和续期公网 HTTPS 证书，无需另外安装 Caddy。',
     'deployment.configure': '配置自动 HTTPS',
     'deployment.other': '已有证书或私网部署',
@@ -5649,9 +5753,9 @@ final class AppCopy {
     'settings.server_connection.tls.expires': '有效期至',
     'settings.server_connection.tls.fingerprint': '叶证书 SHA-256 指纹',
     'settings.server_connection.tls.error': '最近一次证书错误',
-    'settings.runtime_ca.title': 'AI 流量检查证书（代理 CA）',
+    'settings.runtime_ca.title': 'ViberMate 证书',
     'settings.runtime_ca.detail':
-        '用于检查经过当前 Runtime 的 AI 流量。受支持的托管启动会自动获得进程级信任；只用网页无需安装。',
+        '通过 vibermate run --server 启动的 Agent 会自动信任它，因此 Claude Code、Codex 和网页都无需安装。它也称为代理 CA，在“钥匙串访问”中名为“ViberMate Local Root”。',
     'settings.runtime_ca.fingerprint': 'SHA-256 指纹',
     'settings.runtime_ca.expires': '有效期至（UTC）',
     'settings.runtime_ca.guide':
@@ -5726,7 +5830,7 @@ final class AppCopy {
     'settings.storage.backup_target': '新备份目录',
     'settings.storage.backup_confirm': '创建备份',
     'settings.storage.backup_confirmation':
-        'ViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
+        '此备份包含 ViberMate 证书的私钥。拿到它的人可以读取信任该证书的 Mac 上的 HTTPS 流量，请妥善保管备份。\n\nViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份还包含未加密的证据，请妥善保管。',
     'settings.storage.backup_created': '可验证备份已创建；未包含服务商凭据和外部 TLS 文件。',
     'settings.storage.restore_title': '恢复这个备份？',
     'settings.storage.restore_source': '已验证备份',
@@ -5794,17 +5898,23 @@ final class AppCopy {
     'settings.storage.credentials':
         '凭证头的值（Authorization、API key、Cookie）在写入之前就已移除。'
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
-    'settings.root_ca.title': '本机根证书',
+    'settings.root_ca.title': 'ViberMate 证书',
     'settings.root_ca.detail':
-        '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
-    'settings.root_ca.scope': '托管启动会自动配置受支持客户端的进程级信任。',
+        'ViberMate 用这张证书读取 Agent 的加密请求。Claude Code 每次运行都会自动配置；Codex 只接受这台 Mac 信任的证书，所以首次运行 vibermate run -- codex 前，请先点一次「安装并信任」。之后，你的 macOS 账户中的应用都会在 HTTPS 连接中信任这张证书，但 ViberMate 只把它用于经过 ViberMate 的连接。可以通过「查看移除步骤」撤销。',
+    'settings.root_ca.scope':
+        'ViberMate 用这张证书读取 Agent 的加密请求。通过 vibermate run 启动的 Agent（包括 Claude Code 和 Codex）会自动信任它。只有其他要经过 ViberMate 的应用才需要安装它。',
     'settings.root_ca.status.trusted': '已安装并信任',
-    'settings.root_ca.status.needs_trust': '已安装，尚未信任',
-    'settings.root_ca.status.not_installed': '已生成，尚未安装',
+    'settings.root_ca.status.needs_trust': '已安装但未信任 · Codex 需要',
+    'settings.root_ca.status.not_installed': '尚未信任 · Codex 需要',
     'settings.root_ca.status.unknown': '无法读取信任状态',
     'settings.root_ca.fingerprint': 'SHA-256 指纹',
     'settings.root_ca.validity': '有效期 {from} → {to}',
-    'settings.root_ca.private_key': '私钥仅保存在本机 ViberMate 存储中，永不导出。',
+    'settings.root_ca.private_key': '私钥只保存在这台 Mac 上；你创建的备份会包含它，请妥善保管。',
+    'settings.root_ca.details': '证书详情',
+    'settings.root_ca.proxy_ca': '也称为代理 CA。它在“钥匙串访问”中名为“ViberMate Local Root”。',
+    'settings.root_ca.confirm_install.title': '要在这台 Mac 上信任 ViberMate 的证书吗？',
+    'settings.root_ca.confirm_install.detail':
+        'Codex 需要它才能通过 ViberMate 发送请求。信任后，这台 Mac 上的应用会接受由 ViberMate 读取的连接。ViberMate 备份包含该证书的私钥，请妥善保管。macOS 会要求输入密码；之后可通过「查看移除步骤」撤销。',
     'settings.root_ca.install': '安装并信任',
     'settings.root_ca.trust': '信任证书',
     'settings.root_ca.remove': '查看移除步骤',
@@ -5828,7 +5938,7 @@ final class AppCopy {
         '未能安装并信任当前证书；ViberMate 没有改用其他证书。请重新检查后再试。',
     'settings.root_ca.install.not_confirmed':
         'macOS 返回后，仍未确认这张精确证书已受信任。请重新检查后再试。',
-    'settings.root_ca.updated': '本机根证书信任状态已更新。',
+    'settings.root_ca.updated': '这台 Mac 对 ViberMate 证书的信任状态已更新。',
     'settings.root_ca.restart_required': '旧证书已不再受信。请重新启动 ViberMate 以生成新证书。',
     'settings.root_ca.load_failed': '无法读取 macOS 信任状态。请重试；本次未修改系统信任设置。',
     'settings.root_ca.load_recovery': '若重试仍失败，请先重新打开 ViberMate，不要直接修改钥匙串。',
@@ -5838,7 +5948,6 @@ final class AppCopy {
     'settings.root_ca.conflict': '根证书状态已变化，或另一项信任操作仍在进行。请重新检查后再试。',
     'settings.root_ca.unavailable': '根证书信任管理仅在本机 macOS Desktop 上可用。',
     'settings.root_ca.copy_fingerprint': '复制指纹',
-    'settings.root_ca.copied': '指纹已复制',
     'settings.runtime': '运行时来源',
     'settings.preview': '确定性预览数据',
     'settings.live': '本地 ViberMate 运行时',
@@ -5874,6 +5983,7 @@ final class AppCopy {
     'server.ip_allowlist.help':
         '只有地址属于这些网段的客户端才能连接本 Server，包括 Web 工作台、登录和 Agent 流量。列表为空表示允许任何地址。Server 所在的机器本身始终允许访问。如果没有任何允许的网络还能连上 Server，请在 Server 机器上运行 vibermated server ip-allowlist clear。',
     'server.ip_allowlist.open': '任何地址都可以连接。',
+    'server.ip_allowlist.none': '未设置白名单：Server 不按地址过滤连接。',
     'server.ip_allowlist.restricted': '只有下面的网段可以连接（{count} 个）。',
     'server.ip_allowlist.client': '当前浏览器的地址是 {address}。',
     'server.ip_allowlist.app': '本 App 在这台电脑上管理 Server，始终允许访问。',
@@ -5909,6 +6019,16 @@ final class AppCopy {
     'server.ip_allowlist.error.failed': '白名单未保存：{error}',
     'server.access.description':
         '使用你的个人运行用户账号和密码。执行下列命令前，请先在客户端电脑上安装 vibermate CLI 和要使用的 Agent。',
+    'server.access.loopback':
+        '其他电脑无法直接连接这台 Mac 上的 ViberMate。若要在多台电脑上使用 ViberMate，请在它们都能访问的机器上运行 ViberMate Server。',
+    'server.access.run_server': '如何运行 ViberMate Server',
+    'server.access.manage_users': '管理可登录的用户',
+    'server.install.title': '在另一台电脑上安装 ViberMate',
+    'server.install.detail':
+        '安装 App 后，在其「设置 → 接入与启动」中设置 vibermate 命令。Linux 请从最新发布下载对应架构的压缩包并解压。',
+    'server.install.guide': '安装指南',
+    'server.install.url':
+        'https://github.com/vibe-agi/vibermate/blob/main/README.zh-CN.md#开始使用',
     'server.access.loading': '正在读取 Server 访问方式…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -6202,12 +6322,12 @@ final class AppCopy {
     'usage.personal.succeeded': '成功 {count} 次',
     'usage.personal.empty':
         '这个账号还没有关联到已保留的 Agent 流量。请先在 CLI 登录，再启动一次托管的 Claude 或 Codex 运行。',
-    'server.login.command.title': '1. 在客户端机器登录',
+    'server.login.command.title': '登录一次',
     'server.login.command.detail': '只需运行一次，然后输入运行用户的用户名与密码。',
     'server.login.command.client': '登录',
     'server.login.command.copy': '复制登录命令',
-    'server.run.title': '连接客户端',
-    'server.run.detail': '2. 启动 Claude 或 Codex。每个请求仍会经过 ViberMate 并被捕获。',
+    'server.run.title': '启动 Claude Code 或 Codex',
+    'server.run.detail': '它发往 AI 服务的请求会经过 ViberMate，并显示在运行记录中。',
     'preferences.warning.corrupt':
         '已保存的工作台状态无效。ViberMate 已使用安全默认值打开；下次导航变更会修复该状态。',
     'preferences.warning.future_schema':
@@ -6215,12 +6335,24 @@ final class AppCopy {
     'preferences.warning.unavailable': '无法读取工作台偏好。本次会话仍可继续；后续变更会重试保存。',
     'preferences.warning.save_failed': '无法保存工作台偏好。运行时证据不受影响；下次导航变更会重试。',
     'terminal.title': '终端命令',
-    'terminal.description': '在终端中使用 vibermate 启动托管的 Agent 运行。',
-    'terminal.run.title': '启动托管运行',
-    'terminal.run.detail': '请从终端运行，让 Agent 保留 TTY，并由启动器证明工作区边界。',
-    'terminal.run.install_first': '安装或修复终端命令后，才能复制启动命令。',
+    'terminal.description':
+        'vibermate 命令可在终端中通过 ViberMate 启动 Claude Code 或 Codex。',
+    'terminal.run.title': '启动 Claude Code 或 Codex',
+    'terminal.run.detail': 'Agent 会照常启动并使用自己的登录，它的请求会显示在「运行记录」中。',
+    'terminal.run.install_first': '请先设置 vibermate 命令，再复制下方命令。',
+    'terminal.run.lead': '在终端中进入项目目录，运行以下任一命令：',
+    'terminal.run.requirement':
+        '需先安装 Claude Code 或 Codex，并确认在终端输入 claude 或 codex 能直接启动。',
+    'terminal.run.use_routing_set': '改用流量策略',
+    'terminal.run.step': '{number}. {title}',
+    'terminal.run.step.install': '设置 vibermate 命令',
+    'terminal.run.step.trust': '仅 Codex：信任 ViberMate 证书',
+    'terminal.run.step.copy': '复制命令并在项目目录中运行',
+    'terminal.run.send_through': '请求发送方式',
+    'terminal.run.builtin_choice': '原样转发 · 仅记录，按原目标发送',
+    'terminal.run.after_set': '请求会按「{name}」流量策略处理，其中的账号、脚本和网络出口都会生效。',
+    'terminal.run.choose_set': '要使用你的账号和脚本，请在上方选择流量策略。',
     'terminal.run.copy': '复制 {client} 启动命令',
-    'terminal.run.copied': '已复制 {client} 命令',
     'terminal.run.copy_failed': '无法复制命令',
     'terminal.run.environment':
         '指定流量策略 · vibermate run --env <environment-id> -- <command>',
@@ -6242,6 +6374,8 @@ final class AppCopy {
     'terminal.state.target_missing': '需要修复',
     'terminal.state.unowned_target': '位置已占用',
     'terminal.state.conflict': '需要处理',
+    'terminal.state.not_on_path': '已安装 · 终端暂时找不到它',
+    'terminal.state.checking': '正在检查终端…',
     'terminal.state_detail.not_installed': '设置一次后，即可在下方复制 Agent 启动命令。',
     'terminal.state_detail.current': '现在可以在终端中使用 vibermate。',
     'terminal.state_detail.source_updated': 'ViberMate 已更新，请确认新命令后再使用。',
@@ -6250,14 +6384,25 @@ final class AppCopy {
     'terminal.state_detail.unowned_target':
         '另一个项目占用了 vibermate 的终端位置，ViberMate 未对它做任何修改。',
     'terminal.state_detail.conflict': '此终端入口在 ViberMate 外发生了变化，现已保持原样。',
+    'terminal.state_detail.not_on_path':
+        '新开的终端窗口还找不到 vibermate，因为你的 shell 不会在 ~/.local/bin 中查找命令。请运行一次下面这行，然后新开一个窗口；在此之前，可以使用下方的完整路径。',
+    'terminal.state_detail.checking': '正在检查终端能否找到它…',
+    'terminal.state_detail.full_path_works':
+        '使用完整路径 {path} 可以启动。若想直接输入 vibermate，请运行一次 PATH 设置命令。',
+    'terminal.state_detail.full_path_only': '使用完整路径 {path} 可以启动。',
+    'terminal.path.run_once': '在终端中运行一次，然后新开一个窗口',
+    'terminal.path.full_path': '或使用完整路径启动',
+    'terminal.path.copy_line': '复制 PATH 设置命令',
+    'terminal.path.copy_full': '复制完整路径命令',
+    'terminal.path.unknown': '如果终端提示“command not found”，请使用下方显示的完整路径。',
     'terminal.action.install': '设置终端命令',
     'terminal.action.refresh': '使用新命令',
     'terminal.action.repair': '一键修复',
     'terminal.action.remove': '从终端移除',
     'terminal.action.clean_record': '清理失效记录',
-    'terminal.confirm.install.title': '为终端安装 vibermate？',
+    'terminal.confirm.install.title': '设置 vibermate 命令？',
     'terminal.confirm.install.detail':
-        '在 {target} 创建由 ViberMate 管理的符号链接；不会替换任何现有对象。',
+        'ViberMate 将在 {target} 添加 vibermate 命令，不会替换已有文件，也不会修改你的 shell 配置。',
     'terminal.confirm.refresh.title': '确认打包命令更新？',
     'terminal.confirm.refresh.detail': '刷新 {target} 的私有归属记录，不会替换已有链接。',
     'terminal.confirm.repair.title': '修复终端命令？',
@@ -6265,7 +6410,8 @@ final class AppCopy {
         '只清理 ViberMate 精确匹配的失效记录，再重新创建 {target}；不会替换任何现有对象。',
     'terminal.confirm.remove.title': '移除终端命令？',
     'terminal.confirm.remove.detail': '只有当 {target} 的精确链接和归属记录仍属于此 App 时才会移除。',
-    'terminal.confirm.boundary': '已变化或无归属的文件会被拒绝；对话与流量证据不受影响。',
+    'terminal.confirm.boundary': '随时可以在这里移除，已保存的运行记录不受影响。',
+    'terminal.confirm.remove.boundary': '已保存的运行记录不受影响。',
     'terminal.notice.installed': '终端命令已安装。',
     'terminal.notice.refreshed': '已确认终端命令更新。',
     'terminal.notice.auto_refreshed': '终端命令已随 App 更新同步。新启动的运行将使用更新后的命令。',

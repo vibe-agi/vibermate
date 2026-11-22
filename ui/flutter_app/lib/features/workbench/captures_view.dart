@@ -293,6 +293,11 @@ final class _CaptureMaster extends StatelessWidget {
         controller.data?.environments ?? const <EnvironmentRecord>[];
     final noMatch = query.isNotEmpty && running.isEmpty && history.isEmpty;
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
+    // On this Mac the empty list leads to the Terminal command; elsewhere
+    // the agent runs on another computer, so to the remote guide.
+    final accessFocus = controller.terminalManagement
+        ? AccessFocus.terminal
+        : AccessFocus.remote;
     final accessLabel = Text(
       copy(
         controller.terminalManagement
@@ -305,13 +310,13 @@ final class _CaptureMaster extends StatelessWidget {
     final accessGuide = webOwner
         ? FilledButton.icon(
             key: const Key('capture-empty-open-terminal-settings'),
-            onPressed: controller.openAccessSettings,
+            onPressed: () => controller.openAccessSettings(focus: accessFocus),
             icon: const Icon(Icons.terminal, size: 15),
             label: accessLabel,
           )
         : TextButton.icon(
             key: const Key('capture-empty-open-terminal-settings'),
-            onPressed: controller.openAccessSettings,
+            onPressed: () => controller.openAccessSettings(focus: accessFocus),
             icon: const Icon(Icons.terminal, size: 15),
             label: accessLabel,
           );

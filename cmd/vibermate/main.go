@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -30,6 +31,7 @@ const (
 	keyCapturePreparationTimedOut = "cli.error.capturePreparationTimedOut"
 	keyRuntimePath                = "cli.error.runtimePathUnavailable"
 	keyLaunchFailed               = "cli.error.launchFailed"
+	keyExecutableNotFound         = "cli.error.executableNotFound"
 	keyEnvironmentMissing         = "cli.error.environmentNotFound"
 	keyEnvironmentDown            = "cli.error.environmentUnavailable"
 	keyClientTargetNotConfigured  = "cli.error.clientTargetNotConfigured"
@@ -305,15 +307,25 @@ func executeContext(
 	case errors.As(err, &callFailure):
 		_ = renderCLIMessage(environment, stderr, "cli.error.controlFailureDetail", map[string]string{"details": callFailure.SafeSummary()})
 	}
+	key := launchFailureKey(err)
 	if acp != nil {
 		if errors.Is(err, runlauncher.ErrACPUnavailable) {
 			return max(code, 1), "cli.error.acpUnavailable"
 		}
-		if launchFailureKey(err) == keyLaunchFailed {
+		// A missing adapter keeps the ACP message, which explains the
+		// adapter's absolute path.
+		if key == keyLaunchFailed || key == keyExecutableNotFound {
 			return max(code, 1), "cli.error.acpLaunchFailed"
 		}
 	}
-	return code, launchFailureKey(err)
+	if key == keyExecutableNotFound {
+		// Name only what the person typed, never a path from their PATH.
+		if renderCLIMessage(environment, stderr, key, map[string]string{"command": run.command[0]}) != nil {
+			return 1, reasonRenderFailed
+		}
+		return max(code, 1), ""
+	}
+	return code, key
 }
 
 func launchFailureKey(err error) string {
@@ -372,6 +384,11 @@ func launchFailureKey(err error) string {
 	}
 	if errors.Is(err, runlauncher.ErrEnvironmentUnavailable) {
 		return keyEnvironmentDown
+	}
+	// Terminal has no such program: missing, or only a shell alias or
+	// function, which a launched process cannot see.
+	if errors.Is(err, exec.ErrNotFound) {
+		return keyExecutableNotFound
 	}
 	return keyLaunchFailed
 }

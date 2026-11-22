@@ -33,27 +33,72 @@ each of these with screenshots.
 
 **macOS 14+ (Apple silicon and Intel)**
 
+1. Install ViberMate:
+
+   ```sh
+   brew install --cask vibe-agi/tap/vibermate
+   ```
+
+2. Open ViberMate. Sessions shows a setup guide.
+3. Set up the `vibermate` command, from the guide or from **Settings → Access
+   and launch**. If Terminal then says `command not found: vibermate`, open a
+   new Terminal window; if it still can't find it, the app shows the line that
+   adds `~/.local/bin` to your PATH, and the full-path command that works
+   meanwhile. ViberMate never edits your shell profile itself.
+4. Codex only: in ViberMate, open **Settings → Safety and data → ViberMate
+   certificate** and choose **Install and trust**. Claude Code doesn't need
+   this.
+5. In your project folder, run `vibermate run -- claude` (or `codex`). Keep
+   ViberMate open while you work.
+6. You don't need an account or a routing set: your agent keeps its own
+   sign-in, and its requests go through the built-in **Forward as-is** set,
+   which only records them.
+
+On Intel Macs, Claude Code connects through ViberMate only at the version this
+release was tested with (2.1.220).
+
+ViberMate keeps the full text of each conversation on your Mac for 30 days,
+unencrypted. A routing set can keep less, and **Settings → Safety and data**
+deletes what is kept.
+
+**Linux server (x86-64 and ARM64)**
+
+Download the archive for your machine from the
+[latest release](https://github.com/vibe-agi/vibermate/releases/latest),
+extract it, and start the server:
+
 ```sh
-brew install --cask vibe-agi/tap/vibermate
+./vibermated server
 ```
 
-Open ViberMate, go to **Settings → Access & launch → Terminal command** and set
-up the `vibermate` command. Then, in your project:
+Open <http://127.0.0.1:9666> and create the owner account with the key from
+`./vibermated server recovery-key`. To reach the server from other devices,
+follow the [deployment guide](docs/deployment.md).
 
-```sh
-vibermate run -- claude    # or: vibermate run -- codex
-```
+**Have your own public domain?** ViberMate obtains, renews and hot-loads HTTPS
+certificates without a separate Caddy installation. Open **Settings → Access and
+launch → Other ways to connect → Run ViberMate on a server with your own
+domain** for native commands or Docker settings, or follow the [public HTTPS](docs/deployment.md#automatic-public-https) and
+[Docker examples](docs/docker.md#public-domain-automatic-https). Point DNS at
+the server and provide direct TCP 443 or layer-4 passthrough; an ordinary HTTP
+reverse proxy cannot replace the Agent CONNECT path.
 
-Experimental **Transparent capture** routes an Agent and every process it starts
-through ViberMate without proxy variables, TCP and UDP alike. On macOS, enable
-**Settings → Preferences → Transparent capture on this Mac** and approve the
-signed network extension and network configuration; on Linux it needs
-unprivileged user namespaces. Then use
-`vibermate run --transparent --env work -- claude` (or Codex). On macOS a local
-App is required even with `--server`. It is not yet release accepted. See
+## Advanced
+
+### Transparent capture (experimental)
+
+**Transparent capture** routes an Agent and every process it starts through
+ViberMate without proxy variables, TCP and UDP alike. Ordinary `vibermate run`
+doesn't need it. On macOS, enable it under **Settings → Access and launch →
+Transparent capture (experimental)** and approve the signed network extension
+and network configuration; on Linux it needs unprivileged user namespaces. Then
+use `vibermate run --transparent --env work -- claude` (or Codex). On macOS a
+local App is required even with `--server`. It is not yet release accepted. See
 [setup, signing and acceptance](docs/transparent-capture.md).
 
-To use an Environment's model-service account without a native client login,
+### Model-service authentication
+
+To use a routing set's model-service account without a native client login,
 opt in for each launch. The same option supports Codex and Claude:
 
 ```sh
@@ -62,9 +107,9 @@ vibermate run --env work --managed-auth -- codex   # no OpenAI login required
 vibermate run --env work --managed-auth -- claude
 ```
 
-`--managed-auth` requires an explicit Environment with a managed Client Flow
-for the supported client. Original-only capture cannot supply authentication.
-For Claude, the prepared client destination must remain in the Environment's
+`--managed-auth` requires a routing set (`--env`) that manages the supported
+client's destination. A set that only records cannot supply authentication.
+For Claude, the prepared client destination must remain in the routing set's
 managed scope. A custom-base-only destination can be rejected if normal launch
 preparation returns Claude to its default service; use a managed
 `api.anthropic.com` flow in that case.
@@ -89,28 +134,6 @@ migrate stored history or release another application's session lock. Codex may
 update a resumed thread's active settings. Managed model-service authentication
 does not provide Codex Cloud or connector OAuth access.
 
-**Linux server (x86-64 and ARM64)**
-
-Download the archive for your machine from the
-[latest release](https://github.com/vibe-agi/vibermate/releases/latest),
-extract it, and start the server:
-
-```sh
-./vibermated server
-```
-
-Open <http://127.0.0.1:9666> and create the owner account with the key from
-`./vibermated server recovery-key`. To reach the server from other devices,
-follow the [deployment guide](docs/deployment.md).
-
-**Have your own public domain?** ViberMate obtains, renews and hot-loads HTTPS
-certificates without a separate Caddy installation. Open **Settings → Access &
-launch → Deploy with your own domain** for native commands or Docker settings,
-or follow the [public HTTPS](docs/deployment.md#automatic-public-https) and
-[Docker examples](docs/docker.md#public-domain-automatic-https). Point DNS at
-the server and provide direct TCP 443 or layer-4 passthrough; an ordinary HTTP
-reverse proxy cannot replace the Agent CONNECT path.
-
 ## Learn more
 
 - [Website](https://vibe-agi.github.io/products/vibermate/): what ViberMate
@@ -118,11 +141,11 @@ reverse proxy cannot replace the Agent CONNECT path.
 - [Deployment and HTTPS](docs/deployment.md), [Docker](docs/docker.md),
   [backup and restore](docs/backup-and-restore.md)
 - [What is supported today](docs/capability-support.md)
-- [Paseo integration](integrations/paseo/README.md): choose a traffic profile per conversation
+- [Paseo integration](integrations/paseo/README.md): choose a routing set per conversation
 - [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 Run `vibermate doctor` if setup fails. For a remote Runtime, use
-`vibermate doctor --server <same-server> [--env <environment-id>]` after login.
+`vibermate doctor --server <same-server> [--env <routing-set-id>]` after login.
 It verifies control/session/machine and the credential-free CONNECT entry rejection;
 optional `--env` checks the authorized active catalog. It creates no Capture and
 leaves authorized forwarding, native client login/startup and model inference

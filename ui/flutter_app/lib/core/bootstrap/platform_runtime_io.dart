@@ -32,7 +32,9 @@ Future<RuntimeConnection> connectPlatformRuntime({
   }
   return RuntimeConnection(
     api: runtime.api,
-    terminalCommands: PackagedTerminalCommandService(),
+    terminalCommands: PackagedTerminalCommandService(
+      shellProbe: const LoginShellProbe(),
+    ),
     close: runtime.close,
     isClosed: () => runtime.isClosed,
     serverManagement: true,

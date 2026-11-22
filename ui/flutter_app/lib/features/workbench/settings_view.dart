@@ -17,6 +17,8 @@ import '../../core/api/control_api.dart' show ControlProblem;
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
+import 'launch_command.dart';
+import 'setup_guide.dart' show SetupFactsWatcher, setupRootTrusted;
 import 'runtime_connection_guide.dart';
 import 'server_deployment_guide.dart';
 import 'network_exit_usage.dart';
@@ -960,6 +962,8 @@ final class _NetworkExitsPaneState extends State<NetworkExitsPane> {
       context: context,
       copy: copy,
       initial: profile,
+      vlessEngineInstalled:
+          controller.runtimeStatus?.networkAccess?.vlessAvailable,
       loadVlessDescription: profile?.policy.proxy.isVless == true
           ? () async {
               if (!current()) {
@@ -1148,7 +1152,10 @@ final class _GeneralSettingsPane extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 12),
-      if (controller.transparentCapture case final capture?) ...[
+      // Transparent capture is a way to launch agents, so it lives on
+      // Access and launch wherever that page exists.
+      if (controller.transparentCapture case final capture?
+          when !controller.accessSettingsAvailable) ...[
         _TransparentCapturePanel(controller: capture, copy: copy),
         const SizedBox(height: 12),
       ],
@@ -1438,99 +1445,538 @@ final class _UpdateBuildFact extends StatelessWidget {
   );
 }
 
-final class _AccessSettingsPane extends StatelessWidget {
+final class _AccessSettingsPane extends StatefulWidget {
   const _AccessSettingsPane({required this.controller, required this.copy});
 
   final WorkbenchController controller;
   final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) => _SettingsPaneLayout(
-    scrollKey: const Key('settings-access-scroll'),
-    children: [
-      _SettingsPaneHeader(
-        icon: Icons.link,
-        title: copy('settings.access.title'),
-        detail: copy(
-          controller.terminalManagement
-              ? 'settings.access.detail.local'
-              : 'settings.access.detail.server',
+  State<_AccessSettingsPane> createState() => _AccessSettingsPaneState();
+}
+
+final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
+  final _terminalKey = GlobalKey();
+  final _remoteKey = GlobalKey();
+
+  WorkbenchController get controller => widget.controller;
+  AppCopy get copy => widget.copy;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollToFocus();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AccessSettingsPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scrollToFocus();
+  }
+
+  /// A link into this page names what it is for; bring that into view once
+  /// the page has been laid out.
+  void _scrollToFocus() {
+    final focus = controller.takeAccessFocus();
+    if (focus == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = switch (focus) {
+        AccessFocus.terminal => _terminalKey,
+        AccessFocus.remote => _remoteKey,
+      };
+      final context = target.currentContext;
+      if (!mounted || context == null) return;
+      // Scroll only as far as needed: a card already on screen stays put.
+      unawaited(
+        Scrollable.ensureVisible(
+          context,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        ).then(
+          (_) => context.mounted
+              ? Scrollable.ensureVisible(
+                  context,
+                  alignmentPolicy:
+                      ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+                )
+              : null,
         ),
-        dismissHelpLabel: copy('common.dismiss'),
-      ),
-      const SizedBox(height: 6),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          key: const Key('settings-show-setup-guide'),
-          onPressed: controller.showSetupGuide,
-          icon: const Icon(Icons.checklist, size: 15),
-          label: Text(copy('setup.show')),
-        ),
-      ),
-      const SizedBox(height: 8),
-      _NetworkAccessFacts(
-        access: controller.runtimeStatus?.networkAccess,
-        copy: copy,
-      ),
-      if (controller.terminalManagement || controller.serverManagement) ...[
-        const SizedBox(height: 14),
-        ServerDeploymentGuide(copy: copy),
-      ],
-      if (controller.terminalManagement) ...[
-        const SizedBox(height: 14),
-        Text(
-          copy('settings.access.local.title'),
-          style: Theme.of(context).textTheme.titleSmall,
-        ),
+      );
+    });
+  }
+
+  // On this Mac, showing the page or returning to the window rechecks the
+  // Terminal command, whether Terminal finds it, and the certificate.
+  @override
+  Widget build(BuildContext context) => controller.terminalManagement
+      ? SetupFactsWatcher(controller: controller, child: _localPane(context))
+      : _serverPane(context);
+
+  Widget _header() => _SettingsPaneHeader(
+    icon: Icons.link,
+    title: copy('settings.access.title'),
+    detail: copy(
+      controller.terminalManagement
+          ? 'settings.access.detail.local'
+          : 'settings.access.detail.server',
+    ),
+    dismissHelpLabel: copy('common.dismiss'),
+  );
+
+  Widget _showGuide() => Align(
+    alignment: Alignment.centerLeft,
+    child: TextButton.icon(
+      key: const Key('settings-show-setup-guide'),
+      onPressed: controller.showSetupGuide,
+      icon: const Icon(Icons.checklist, size: 15),
+      label: Text(copy('setup.show')),
+    ),
+  );
+
+  Widget _editorGuide() => ACPSetupGuide(
+    copy: copy,
+    program:
+        controller.terminalCommand?.targetPath ?? '/absolute/path/to/vibermate',
+    serverURL: controller.terminalManagement ? '' : controller.runtimeServerURL,
+  );
+
+  /// The Mac app: starting Claude Code or Codex first, then the optional
+  /// ways, each folded away, and the listener details last.
+  Widget _localPane(BuildContext context) {
+    final access = controller.runtimeStatus?.networkAccess;
+    final remote =
+        controller.serverManagement || controller.webPrincipal != null;
+    final rootTrusted = setupRootTrusted(controller);
+    // Shown while this Mac does not trust the certificate, and kept, ticked,
+    // once it came to trust it in this app session, so trusting it here is
+    // confirmed in place instead of the step vanishing.
+    final trustStep =
+        rootTrusted == false ||
+        (rootTrusted == true && controller.rootTrustedHere);
+    // This Mac's Server listens on this Mac only: a browser here can open
+    // it, another computer cannot.
+    final browserOnly =
+        controller.connectionGuide.security ==
+        ServerConnectionSecurity.loopbackHttp;
+    return _SettingsPaneLayout(
+      scrollKey: const Key('settings-access-scroll'),
+      children: [
+        _header(),
+        const SizedBox(height: 6),
+        _showGuide(),
         const SizedBox(height: 8),
-        _TerminalCommandPanel(controller: controller, copy: copy),
-        const SizedBox(height: 9),
-        _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
+        _AccessSectionTitle(
+          key: const Key('access-start'),
+          title: copy('terminal.run.title'),
+          detail: copy('terminal.run.detail'),
+        ),
+        const SizedBox(height: 10),
+        _AccessStep(
+          key: const Key('access-step-install'),
+          title: copy.format('terminal.run.step', {
+            'number': 1,
+            'title': copy('terminal.run.step.install'),
+          }),
+          child: KeyedSubtree(
+            key: _terminalKey,
+            child: _TerminalCommandPanel(controller: controller, copy: copy),
+          ),
+        ),
+        if (trustStep)
+          _AccessStep(
+            key: const Key('access-step-trust'),
+            title: copy.format('terminal.run.step', {
+              'number': 2,
+              'title': copy('terminal.run.step.trust'),
+            }),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                CodexCertificateRow(
+                  controller: controller,
+                  copy: copy,
+                  keyPrefix: 'access',
+                  explain: false,
+                ),
+                // A cancelled macOS prompt or an unconfirmed trust says so
+                // here, where the button was pressed.
+                if (controller.rootCAError case final error?) ...[
+                  const SizedBox(height: 8),
+                  InlineNotice(
+                    key: const Key('access-root-ca-error'),
+                    message: rootCAErrorMessage(copy, error),
+                    error: true,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        _AccessStep(
+          key: const Key('access-step-copy'),
+          title: copy.format('terminal.run.step', {
+            'number': trustStep ? 3 : 2,
+            'title': copy('terminal.run.step.copy'),
+          }),
+          child: Container(
+            key: const Key('managed-run-guide'),
+            padding: const EdgeInsets.fromLTRB(11, 10, 10, 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: context.viberColors.dividerSoft),
+              borderRadius: ViberMetrics.surfaceRadius,
+            ),
+            child: _LaunchRoutingChoice(controller: controller, copy: copy),
+          ),
+        ),
         const SizedBox(height: 8),
         Text(
           copy('settings.access.local.no_account'),
           style: Theme.of(context).textTheme.bodySmall,
         ),
-      ],
-      if (controller.terminalManagement ||
-          controller.runtimeServerURL.isNotEmpty) ...[
         const SizedBox(height: 16),
-        ACPSetupGuide(
-          copy: copy,
-          program:
-              controller.terminalCommand?.targetPath ??
-              '/absolute/path/to/vibermate',
-          serverURL: controller.terminalManagement
-              ? ''
-              : controller.runtimeServerURL,
+        _AccessSection(
+          key: const Key('access-editor-section'),
+          title: copy('settings.access.editor.title'),
+          detail: copy('settings.access.editor.detail'),
+          children: [_editorGuide()],
+        ),
+        if (controller.transparentCapture case final capture?)
+          _transparentSection(capture),
+        _AccessSection(
+          key: ValueKey(
+            'access-other-section-${controller.remoteConnectionGuideRequested}',
+          ),
+          title: copy('settings.access.other.title'),
+          detail: copy('settings.access.other.detail'),
+          initiallyExpanded: controller.remoteConnectionGuideRequested,
+          children: [
+            if (remote)
+              KeyedSubtree(
+                key: _remoteKey,
+                child: ExpansionTile(
+                  key: ValueKey(
+                    'settings-remote-guide-${controller.remoteConnectionGuideRequested}',
+                  ),
+                  initiallyExpanded: controller.remoteConnectionGuideRequested,
+                  // A part of 'Other ways to connect', indented under it in
+                  // a quieter style than the section's own title.
+                  tilePadding: const EdgeInsets.only(left: 12),
+                  childrenPadding: const EdgeInsets.only(left: 12),
+                  shape: const Border(),
+                  collapsedShape: const Border(),
+                  title: Text(
+                    copy(
+                      browserOnly
+                          ? 'settings.access.browser.title'
+                          : 'settings.access.team.title',
+                    ),
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  subtitle: Text(
+                    copy(
+                      browserOnly
+                          ? 'settings.access.browser.detail'
+                          : 'settings.access.team.optional',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
+                  children: [
+                    _RemoteAccessGuide(controller: controller, copy: copy),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+            ServerDeploymentGuide(copy: copy),
+            const SizedBox(height: 8),
+          ],
+        ),
+        if (access != null) ...[
+          const SizedBox(height: 8),
+          CompactDisclosure(
+            key: const Key('access-technical-details'),
+            toggleKey: const Key('access-technical-details-toggle'),
+            label: copy('common.technical_details'),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 18, top: 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // What the listener is for, so 'Not enabled' doesn't read
+                  // as something to fix.
+                  Text(
+                    copy('settings.access.socks.purpose'),
+                    key: const Key('access-socks-purpose'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _NetworkAccessFacts(access: access, copy: copy, vless: false),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// A Server or the Web workbench: today's order, connecting from another
+  /// computer being the point of the page.
+  Widget _serverPane(BuildContext context) => _SettingsPaneLayout(
+    scrollKey: const Key('settings-access-scroll'),
+    children: [
+      _header(),
+      const SizedBox(height: 6),
+      _showGuide(),
+      const SizedBox(height: 8),
+      if (controller.runtimeStatus?.networkAccess case final access?)
+        _NetworkAccessFacts(access: access, copy: copy),
+      if (controller.serverManagement) ...[
+        const SizedBox(height: 14),
+        ServerDeploymentGuide(copy: copy),
+      ],
+      if (controller.runtimeServerURL.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        _AccessSection(
+          key: const Key('access-editor-section'),
+          title: copy('settings.access.editor.title'),
+          detail: copy('settings.access.editor.detail'),
+          children: [_editorGuide()],
         ),
       ],
       if (controller.serverManagement || controller.webPrincipal != null) ...[
         const SizedBox(height: 16),
-        if (controller.terminalManagement)
-          ExpansionTile(
-            key: ValueKey(
-              'settings-remote-guide-${controller.remoteConnectionGuideRequested}',
-            ),
-            initiallyExpanded: controller.remoteConnectionGuideRequested,
-            tilePadding: EdgeInsets.zero,
-            childrenPadding: EdgeInsets.zero,
-            title: Text(copy('settings.access.team.title')),
-            subtitle: Text(copy('settings.access.team.optional')),
-            children: [_RemoteAccessGuide(controller: controller, copy: copy)],
-          )
-        else
-          _RemoteAccessGuide(controller: controller, copy: copy),
+        KeyedSubtree(
+          key: _remoteKey,
+          child: _RemoteAccessGuide(controller: controller, copy: copy),
+        ),
       ],
+      if (controller.transparentCapture case final capture?) ...[
+        const SizedBox(height: 16),
+        _transparentSection(capture),
+      ],
+    ],
+  );
+
+  Widget _transparentSection(TransparentCaptureController capture) =>
+      _AccessSection(
+        key: const Key('access-transparent-section'),
+        title: copy('settings.access.transparent.title'),
+        badge: copy('settings.access.transparent.badge'),
+        detail: copy('settings.access.transparent.detail'),
+        children: [_TransparentCapturePanel(controller: capture, copy: copy)],
+      );
+}
+
+/// One numbered step of starting an agent on this Mac.
+final class _AccessStep extends StatelessWidget {
+  const _AccessStep({required this.title, required this.child, super.key});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        child,
+      ],
+    ),
+  );
+}
+
+/// Step 3 on Access and launch: which routing set requests go through, and
+/// the commands that start an agent on it. The built-in set comes first and
+/// stays the default, so a beginner's command is unchanged; the choice
+/// appears only once another routing set is enabled.
+final class _LaunchRoutingChoice extends StatelessWidget {
+  const _LaunchRoutingChoice({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final sets = [
+      for (final environment
+          in controller.data?.environments ?? const <EnvironmentRecord>[])
+        if (environment.state == 'active' && !isBuiltInRoutingSet(environment))
+          environment,
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final chosen = sets
+        .where((environment) => environment.id == controller.launchRoutingSetId)
+        .firstOrNull;
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (sets.isNotEmpty) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: CompactLabeledControl(
+                label: copy('terminal.run.send_through'),
+                child: CompactSelectField<String>(
+                  key: const Key('access-routing-set'),
+                  initialValue: chosen?.id ?? builtInRoutingSetId,
+                  isExpanded: true,
+                  items: [
+                    DropdownMenuItem(
+                      key: const Key('access-routing-set-built-in'),
+                      value: builtInRoutingSetId,
+                      child: Text(copy('terminal.run.builtin_choice')),
+                    ),
+                    for (final environment in sets)
+                      DropdownMenuItem(
+                        key: Key('access-routing-set-${environment.id}'),
+                        value: environment.id,
+                        child: Text(environmentDisplayName(environment, copy)),
+                      ),
+                  ],
+                  onChanged: (value) => controller.setLaunchRoutingSet(
+                    value == builtInRoutingSetId ? null : value,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        LaunchCommandCard(
+          controller: controller,
+          copy: copy,
+          routingSetId: chosen?.id,
+          // The step's title already says where to run them, and the
+          // Terminal card above says to set the command up first.
+          lead: false,
+          installHint: false,
+          // Without another routing set to choose, the way to one is Routing.
+          onUseRoutingSet: sets.isEmpty
+              ? () => controller.selectSection(WorkbenchSection.environments)
+              : null,
+        ),
+        // What the choice does: the section line already says what happens
+        // without a routing set.
+        if (chosen != null || sets.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            chosen != null
+                ? copy.format('terminal.run.after_set', {
+                    'name': environmentDisplayName(chosen, copy),
+                  })
+                : copy('terminal.run.choose_set'),
+            key: const Key('access-launch-detail'),
+            style: muted,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The title of a section of Access and launch, with one line under it.
+final class _AccessSectionTitle extends StatelessWidget {
+  const _AccessSectionTitle({
+    required this.title,
+    required this.detail,
+    super.key,
+  });
+
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // The page's main path: above its numbered steps and the cards in them.
+      Text(
+        title,
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        detail,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      ),
     ],
   );
 }
 
+/// An optional way to use ViberMate on Access and launch, folded away until
+/// someone opens it.
+final class _AccessSection extends StatelessWidget {
+  const _AccessSection({
+    required this.title,
+    required this.detail,
+    required this.children,
+    this.badge,
+    this.initiallyExpanded = false,
+    super.key,
+  });
+
+  final String title;
+  final String detail;
+  final String? badge;
+  final bool initiallyExpanded;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
+    ),
+    child: ExpansionTile(
+      initiallyExpanded: initiallyExpanded,
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 12),
+      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+      shape: const Border(),
+      collapsedShape: const Border(),
+      title: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          if (badge case final label?)
+            StatusPill(label: label, color: context.viberColors.warning),
+        ],
+      ),
+      subtitle: Text(
+        detail,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      ),
+      children: children,
+    ),
+  );
+}
+
 final class _NetworkAccessFacts extends StatelessWidget {
-  const _NetworkAccessFacts({required this.access, required this.copy});
-  final HostNetworkAccess? access;
+  const _NetworkAccessFacts({
+    required this.access,
+    required this.copy,
+    this.vless = true,
+  });
+  final HostNetworkAccess access;
   final AppCopy copy;
+
+  /// The VLESS engine line; on this Mac it sits with the network exits.
+  final bool vless;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1539,29 +1985,27 @@ final class _NetworkAccessFacts extends StatelessWidget {
     children: [
       Text(
         copy('settings.access.socks'),
-        style: Theme.of(context).textTheme.titleSmall,
+        style: Theme.of(context).textTheme.labelLarge,
       ),
-      const SizedBox(height: 4),
-      SelectableText(
-        access?.socksAddress ??
-            copy(
-              access == null
-                  ? 'settings.access.network.unknown'
-                  : 'settings.access.network.disabled',
-            ),
-        style: monoStyle,
-      ),
-      const SizedBox(height: 4),
-      Text(
-        copy(
-          access == null
-              ? 'settings.access.vless.unknown'
-              : access!.vlessAvailable
-              ? 'settings.access.vless.installed'
-              : 'settings.access.vless.absent',
+      const SizedBox(height: 2),
+      if (access.socksAddress case final address?)
+        SelectableText(address, style: monoStyle)
+      else
+        Text(
+          copy('settings.access.network.disabled'),
+          style: Theme.of(context).textTheme.bodySmall,
         ),
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
+      if (vless) ...[
+        const SizedBox(height: 4),
+        Text(
+          copy(
+            access.vlessAvailable
+                ? 'settings.access.vless.installed'
+                : 'settings.access.vless.absent',
+          ),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
     ],
   );
 }
@@ -1583,7 +2027,7 @@ final class _RemoteAccessGuide extends StatelessWidget {
             key: const Key('settings-access-manage-users'),
             onPressed: controller.openRuntimeUsersSettings,
             icon: const Icon(Icons.group_outlined, size: 15),
-            label: Text(copy('settings.tab.users')),
+            label: Text(copy('server.access.manage_users')),
           ),
         ),
         const SizedBox(height: 8),
@@ -1755,7 +2199,14 @@ final class _ServerIpAllowlistPanelState
                   ? copy.format('server.ip_allowlist.restricted', {
                       'count': allowlist.ranges.length,
                     })
-                  : copy('server.ip_allowlist.open'),
+                  // On this Mac's own address nothing outside reaches it
+                  // directly, so 'Any address' would be a false alarm.
+                  : copy(
+                      widget.controller.connectionGuide.security ==
+                              ServerConnectionSecurity.loopbackHttp
+                          ? 'server.ip_allowlist.none'
+                          : 'server.ip_allowlist.open',
+                    ),
               key: const Key('server-ip-allowlist-state'),
             ),
             const SizedBox(height: 4),
@@ -1900,7 +2351,8 @@ final class _UsersSettingsPane extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: OutlinedButton.icon(
           key: const Key('settings-users-open-access'),
-          onPressed: controller.openAccessSettings,
+          onPressed: () =>
+              controller.openAccessSettings(focus: AccessFocus.remote),
           icon: const Icon(Icons.link, size: 15),
           label: Text(copy('server.users.connection_guide')),
         ),
@@ -2125,8 +2577,6 @@ final class _RootCASettingsPanel extends StatefulWidget {
 }
 
 final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
-  String? _copied;
-
   WorkbenchController get controller => widget.controller;
   AppCopy get copy => widget.copy;
 
@@ -2141,10 +2591,9 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
         border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(
                 Icons.verified_user_outlined,
@@ -2153,70 +2602,96 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: ContextHelpHeading(
-                  title: copy('settings.root_ca.title'),
-                  message: copy('settings.root_ca.detail'),
-                  dismissLabel: copy('common.dismiss'),
+                child: Text(
+                  copy('settings.root_ca.title'),
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
+              if (localDesktop && status != null)
+                IconButton(
+                  key: const Key('root-ca-retry'),
+                  onPressed:
+                      controller.rootCAMutating || controller.rootCALoading
+                      ? null
+                      : () => unawaited(controller.refreshRootCA()),
+                  tooltip: copy('settings.root_ca.retry'),
+                  icon: const Icon(Icons.refresh, size: 16),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (!localDesktop)
-            InlineNotice(
-              message: copy('settings.root_ca.unavailable'),
-              error: false,
-            )
-          else if (controller.rootCALoading && status == null)
-            CompactLoadingMessage(label: copy('common.loading'))
-          else if (status == null)
-            _RootCAUnavailable(
-              message: copy('settings.root_ca.load_failed'),
-              recovery: copy('settings.root_ca.load_recovery'),
-              retryLabel: copy('settings.root_ca.retry'),
-              onRetry: () => unawaited(controller.refreshRootCA()),
-            )
-          else
-            _RootCAStatusBody(
-              status: status,
-              copy: copy,
-              copied: _copied,
-              mutating: controller.rootCAMutating || controller.rootCALoading,
-              error: controller.rootCAError,
-              onCopy: _copyFingerprint,
-              onInstall: () => unawaited(controller.installAndTrustRootCA()),
-              onRemove: () => unawaited(controller.openRootCARemovalGuide()),
-              onReplace: _confirmReplace,
-              onRestart: () => unawaited(controller.restartForRootReset()),
-              restartRequired: controller.rootCARestartRequired,
-              guideIntent: controller.rootCAGuideIntent,
-              canReplace: controller.runningCaptures.isEmpty,
-              onRetry: () => unawaited(controller.refreshRootCA()),
+          // Everything below lines up with the title, beside the icon.
+          Padding(
+            padding: const EdgeInsets.only(left: 26),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _body(context, status, localDesktop),
             ),
-          if (controller.operationNotice == 'root_ca_updated') ...[
-            const SizedBox(height: 8),
-            Text(
-              copy('settings.root_ca.updated'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.verified,
-              ),
-            ),
-          ],
+          ),
         ],
       ),
     );
   }
 
-  Future<void> _copyFingerprint(String value) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: value));
-      if (!mounted) return;
-      setState(() => _copied = value);
-    } on Object {
-      if (!mounted) return;
-      setState(() => _copied = null);
-    }
-  }
+  List<Widget> _body(
+    BuildContext context,
+    RootCAStatus? status,
+    bool localDesktop,
+  ) => [
+    // What the certificate is for, and that Codex needs it, is always
+    // on the page rather than behind a help button.
+    Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text(
+        copy('settings.root_ca.detail'),
+        key: const Key('root-ca-purpose'),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+      ),
+    ),
+    const SizedBox(height: 10),
+    if (!localDesktop)
+      InlineNotice(message: copy('settings.root_ca.unavailable'), error: false)
+    else if (controller.rootCALoading && status == null)
+      CompactLoadingMessage(label: copy('common.loading'))
+    else if (status == null)
+      _RootCAUnavailable(
+        message: copy('settings.root_ca.load_failed'),
+        recovery: copy('settings.root_ca.load_recovery'),
+        retryLabel: copy('settings.root_ca.retry'),
+        onRetry: () => unawaited(controller.refreshRootCA()),
+      )
+    else
+      _RootCAStatusBody(
+        status: status,
+        copy: copy,
+        mutating: controller.rootCAMutating || controller.rootCALoading,
+        error: controller.rootCAError,
+        onInstall: () =>
+            unawaited(confirmRootTrustInstall(context, controller, copy)),
+        onRemove: () => unawaited(controller.openRootCARemovalGuide()),
+        onReplace: _confirmReplace,
+        onRestart: () => unawaited(controller.restartForRootReset()),
+        restartRequired: controller.rootCARestartRequired,
+        guideIntent: controller.rootCAGuideIntent,
+        canReplace: controller.runningCaptures.isEmpty,
+        onRetry: () => unawaited(controller.refreshRootCA()),
+      ),
+    if (controller.operationNotice == 'root_ca_updated') ...[
+      const SizedBox(height: 8),
+      InlineNotice(
+        key: const Key('root-ca-updated'),
+        message: copy('settings.root_ca.updated'),
+        onDismiss: controller.clearNotice,
+        dismissLabel: copy('common.dismiss'),
+      ),
+    ],
+  ];
 
   Future<void> _confirmReplace() async {
     if (controller.rootCAStatus?.certificatePresent != 'absent') {
@@ -2260,6 +2735,68 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
   }
 }
 
+/// Says what trusting ViberMate's certificate allows, before macOS asks for
+/// a password, then trusts it. Every 'Install and trust' button goes
+/// through here: Settings, the setup guide and a stopped Codex launch.
+Future<bool> confirmRootTrustInstall(
+  BuildContext context,
+  WorkbenchController controller,
+  AppCopy copy,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      key: const Key('root-ca-install-confirmation'),
+      title: Text(copy('settings.root_ca.confirm_install.title')),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 430),
+        child: Text(copy('settings.root_ca.confirm_install.detail')),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: Text(copy('common.cancel')),
+        ),
+        FilledButton(
+          key: const Key('root-ca-install-continue'),
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: Text(copy('common.continue')),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return false;
+  return controller.installAndTrustRootCA();
+}
+
+/// The certificate's trust as a pill, in the same idiom as the Terminal
+/// command: neutral while it is a next step, the warning tone only for a
+/// half-finished authorization, green once trusted.
+StatusPill rootCAStatusPill(
+  BuildContext context,
+  AppCopy copy,
+  RootCAStatus status, {
+  Key? key,
+}) {
+  final colors = context.viberColors;
+  final (label, color, icon) = status.installed
+      ? ('settings.root_ca.status.trusted', colors.verified, Icons.check)
+      : !status.available
+      ? ('settings.root_ca.status.unknown', colors.danger, Icons.error_outline)
+      : status.certificatePresent == 'absent'
+      ? (
+          'settings.root_ca.status.not_installed',
+          colors.textMuted,
+          Icons.radio_button_unchecked,
+        )
+      : (
+          'settings.root_ca.status.needs_trust',
+          colors.warning,
+          Icons.gpp_maybe_outlined,
+        );
+  return StatusPill(key: key, label: copy(label), color: color, icon: icon);
+}
+
 final class _RootCAUnavailable extends StatelessWidget {
   const _RootCAUnavailable({
     required this.message,
@@ -2295,10 +2832,8 @@ final class _RootCAStatusBody extends StatelessWidget {
   const _RootCAStatusBody({
     required this.status,
     required this.copy,
-    required this.copied,
     required this.mutating,
     required this.error,
-    required this.onCopy,
     required this.onInstall,
     required this.onRemove,
     required this.onReplace,
@@ -2311,10 +2846,8 @@ final class _RootCAStatusBody extends StatelessWidget {
 
   final RootCAStatus status;
   final AppCopy copy;
-  final String? copied;
   final bool mutating;
   final String? error;
-  final ValueChanged<String> onCopy;
   final VoidCallback onInstall;
   final VoidCallback onRemove;
   final VoidCallback onReplace;
@@ -2326,107 +2859,44 @@ final class _RootCAStatusBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = status.installed
-        ? context.viberColors.verified
-        : status.available
-        ? context.viberColors.warning
-        : context.viberColors.danger;
-    final statusLabel = status.installed
-        ? copy('settings.root_ca.status.trusted')
-        : !status.available
-        ? copy('settings.root_ca.status.unknown')
-        : status.certificatePresent == 'absent'
-        ? copy('settings.root_ca.status.not_installed')
-        : copy('settings.root_ca.status.needs_trust');
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
     final replaceLabel = copy(
       status.certificatePresent == 'absent'
           ? 'settings.root_ca.replace_and_restart'
           : 'settings.root_ca.replace',
     );
+    // The details open by themselves when a guide refers to them or the
+    // trust status cannot be read.
+    final openDetails = guideIntent != null || !status.available;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Icon(Icons.circle, size: 10, color: statusColor),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                statusLabel,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelLarge?.copyWith(color: statusColor),
-              ),
-            ),
-            IconButton(
-              key: const Key('root-ca-retry'),
-              onPressed: mutating ? null : onRetry,
-              tooltip: copy('settings.root_ca.retry'),
-              icon: const Icon(Icons.refresh, size: 16),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        _RootCAFact(
-          label: copy('settings.root_ca.fingerprint'),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  status.fingerprint,
-                  style: monoStyle.copyWith(
-                    fontSize: ViberType.micro,
-                    color: context.viberColors.textMuted,
-                  ),
-                ),
-              ),
-              IconButton(
-                key: const Key('root-ca-copy-fingerprint'),
-                onPressed: mutating ? null : () => onCopy(status.fingerprint),
-                tooltip: copy('settings.root_ca.copy_fingerprint'),
-                icon: const Icon(Icons.copy, size: 15),
-                constraints: const BoxConstraints.tightFor(
-                  width: ViberMetrics.controlHeight,
-                  height: ViberMetrics.controlHeight,
-                ),
-                padding: EdgeInsets.zero,
-              ),
-            ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: rootCAStatusPill(
+            context,
+            copy,
+            status,
+            key: const Key('root-ca-status'),
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          copy.format('settings.root_ca.validity', {
-            'from': _rootCADate(status.notBefore),
-            'to': _rootCADate(status.notAfter),
-          }),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          copy('settings.root_ca.private_key'),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-        ),
-        if (status.available) ...[
-          const SizedBox(height: 9),
+        if (status.available && !restartRequired) ...[
+          const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (!restartRequired && status.installed)
+              if (status.installed)
                 OutlinedButton.icon(
                   key: const Key('root-ca-remove'),
                   onPressed: mutating ? null : onRemove,
                   icon: const Icon(Icons.remove_circle_outline, size: 15),
                   label: Text(copy('settings.root_ca.remove')),
                 )
-              else if (!restartRequired)
-                FilledButton.icon(
+              else
+                OutlinedButton.icon(
                   key: const Key('root-ca-install'),
                   onPressed: mutating ? null : onInstall,
                   icon: mutating
@@ -2443,44 +2913,88 @@ final class _RootCAStatusBody extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (!restartRequired)
-                Tooltip(
-                  message: canReplace
-                      ? replaceLabel
-                      : copy('settings.root_ca.active_captures'),
-                  child: OutlinedButton.icon(
-                    key: const Key('root-ca-replace'),
-                    onPressed: mutating || !canReplace ? null : onReplace,
-                    icon: const Icon(Icons.autorenew, size: 15),
-                    label: Text(replaceLabel),
-                  ),
-                ),
             ],
           ),
-          if (!restartRequired && !canReplace) ...[
-            const SizedBox(height: 6),
-            Text(
-              copy('settings.root_ca.active_captures'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ],
-          if (restartRequired) ...[
-            const SizedBox(height: 8),
-            InlineNotice(
-              message: copy('settings.root_ca.restart_required'),
-              error: false,
-            ),
-            const SizedBox(height: 8),
-            FilledButton.icon(
+        ],
+        if (status.available && restartRequired) ...[
+          const SizedBox(height: 8),
+          InlineNotice(
+            message: copy('settings.root_ca.restart_required'),
+            error: false,
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
               key: const Key('root-ca-restart'),
               onPressed: mutating ? null : onRestart,
               icon: const Icon(Icons.restart_alt, size: 15),
               label: Text(copy('settings.root_ca.restart')),
             ),
-          ],
+          ),
         ],
+        const SizedBox(height: 6),
+        CompactDisclosure(
+          key: ValueKey('root-ca-details-$openDetails'),
+          toggleKey: const Key('root-ca-details-toggle'),
+          label: copy('settings.root_ca.details'),
+          initiallyExpanded: openDetails,
+          child: Padding(
+            key: const Key('root-ca-details'),
+            padding: const EdgeInsets.only(left: 18, top: 4, bottom: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                CommandBlock(
+                  label: copy('settings.root_ca.fingerprint'),
+                  text: status.fingerprint,
+                  fontSize: ViberType.utility,
+                  enabled: !mutating,
+                  copyKey: const Key('root-ca-copy-fingerprint'),
+                  copyTooltip: copy('settings.root_ca.copy_fingerprint'),
+                  copiedLabel: copy('common.copied'),
+                  copyFailedLabel: copy('common.copy_failed'),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  copy.format('settings.root_ca.validity', {
+                    'from': _rootCADate(status.notBefore),
+                    'to': _rootCADate(status.notAfter),
+                  }),
+                  style: muted,
+                ),
+                const SizedBox(height: 3),
+                Text(copy('settings.root_ca.private_key'), style: muted),
+                const SizedBox(height: 3),
+                Text(copy('settings.root_ca.proxy_ca'), style: muted),
+                if (status.available && !restartRequired) ...[
+                  const SizedBox(height: 9),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Tooltip(
+                      message: canReplace
+                          ? replaceLabel
+                          : copy('settings.root_ca.active_captures'),
+                      child: OutlinedButton.icon(
+                        key: const Key('root-ca-replace'),
+                        onPressed: mutating || !canReplace ? null : onReplace,
+                        icon: const Icon(Icons.autorenew, size: 15),
+                        label: Text(replaceLabel),
+                      ),
+                    ),
+                  ),
+                  if (!canReplace) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      copy('settings.root_ca.active_captures'),
+                      style: muted,
+                    ),
+                  ],
+                ],
+              ],
+            ),
+          ),
+        ),
         if (!restartRequired && guideIntent != null) ...[
           const SizedBox(height: 8),
           InlineNotice(
@@ -2488,30 +3002,19 @@ final class _RootCAStatusBody extends StatelessWidget {
             error: false,
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const Key('root-ca-guide-check'),
-            onPressed: mutating ? null : onRetry,
-            icon: const Icon(Icons.refresh, size: 15),
-            label: Text(copy('settings.root_ca.guide.check')),
-          ),
-        ],
-        if (copied == status.fingerprint) ...[
-          const SizedBox(height: 6),
-          Text(
-            copy('settings.root_ca.copied'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.verified,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('root-ca-guide-check'),
+              onPressed: mutating ? null : onRetry,
+              icon: const Icon(Icons.refresh, size: 15),
+              label: Text(copy('settings.root_ca.guide.check')),
             ),
           ),
         ],
         if (!status.available) ...[
           const SizedBox(height: 6),
-          Text(
-            copy('settings.root_ca.recovery'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
+          Text(copy('settings.root_ca.recovery'), style: muted),
         ],
         if (error != null) ...[
           const SizedBox(height: 8),
@@ -2561,41 +3064,14 @@ String _rootCAGuideMessage(AppCopy copy, RootCAGuideIntent intent) =>
       RootCAGuideIntent.replace => copy('settings.root_ca.guide.replace'),
     };
 
-final class _RootCAFact extends StatelessWidget {
-  const _RootCAFact({required this.label, required this.child});
-
-  final String label;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label, style: Theme.of(context).textTheme.labelMedium),
-      const SizedBox(height: 3),
-      child,
-    ],
-  );
-}
-
-final class _ServerAccessPanel extends StatefulWidget {
+final class _ServerAccessPanel extends StatelessWidget {
   const _ServerAccessPanel({required this.controller, required this.copy});
 
   final WorkbenchController controller;
   final AppCopy copy;
 
   @override
-  State<_ServerAccessPanel> createState() => _ServerAccessPanelState();
-}
-
-final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
-  String? _copiedClient;
-  bool _copyFailed = false;
-
-  @override
   Widget build(BuildContext context) {
-    final controller = widget.controller;
-    final copy = widget.copy;
     final access = controller.serverAccess;
     final guide = controller.connectionGuide;
     if (!guide.available) {
@@ -2626,6 +3102,60 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
       );
     }
     final encrypted = guide.security == ServerConnectionSecurity.https;
+    // The Mac app's Server listens on this Mac only, so its address means
+    // nothing on another computer.
+    final loopback = guide.security == ServerConnectionSecurity.loopbackHttp;
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
+    final login = 'vibermate login --server ${controller.runtimeServerURL}';
+    String numbered(int number, String key) => copy.format(
+      'terminal.run.step',
+      {'number': number, 'title': copy(key)},
+    );
+    Widget step(String title, String detail) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 3),
+        Text(detail, style: muted),
+        const SizedBox(height: 7),
+      ],
+    );
+    final loginCommand = _RunCommand(
+      client: copy('server.login.command.client'),
+      command: login,
+      copyLabel: copy('server.login.command.copy'),
+      enabled: guide.available,
+      copy: copy,
+    );
+    final runCommands = Column(
+      children: [
+        for (final (index, client) in const ['claude', 'codex'].indexed) ...[
+          _RunCommand(
+            client: client == 'claude' ? 'Claude' : 'Codex',
+            command:
+                'vibermate run --server ${controller.runtimeServerURL} -- $client',
+            copyLabel: copy.format('terminal.run.copy', {
+              'client': client == 'claude' ? 'Claude' : 'Codex',
+            }),
+            enabled: guide.available,
+            copy: copy,
+          ),
+          if (index == 0) const SizedBox(height: 7),
+        ],
+      ],
+    );
+    final session = _ServerAccessFact(
+      icon: Icons.login,
+      title: copy('server.access.session.title'),
+      detail: copy('server.access.session.detail'),
+    );
+    final divider = [
+      const SizedBox(height: 10),
+      Divider(height: 1, color: context.viberColors.dividerSoft),
+      const SizedBox(height: 9),
+    ];
     return Column(
       key: const Key('server-runtime-access'),
       children: [
@@ -2645,7 +3175,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2682,17 +3212,15 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                               message: copy('server.access.description'),
                               dismissLabel: copy('common.dismiss'),
                             ),
-                            if (guide.available) ...[
-                              const SizedBox(width: 8),
-                              _AccessTransportBadge(
-                                label: copy(
-                                  encrypted
-                                      ? 'server.access.transport.https'
-                                      : 'server.access.transport.http',
-                                ),
-                                encrypted: encrypted,
+                            const SizedBox(width: 8),
+                            _AccessTransportBadge(
+                              label: copy(
+                                encrypted
+                                    ? 'server.access.transport.https'
+                                    : 'server.access.transport.http',
                               ),
-                            ],
+                              encrypted: encrypted,
+                            ),
                           ],
                         ),
                         const SizedBox(height: 9),
@@ -2701,32 +3229,14 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                           CompactLoadingMessage(
                             label: copy('server.access.loading'),
                           )
-                        else if (guide.available) ...[
-                          if (!encrypted) ...[
-                            InlineNotice(
-                              message: copy(
-                                guide.security ==
-                                        ServerConnectionSecurity.loopbackHttp
-                                    ? 'settings.server_connection.local_http'
-                                    : 'server.access.http_warning',
-                              ),
-                              error:
-                                  guide.security ==
-                                  ServerConnectionSecurity.remoteHttp,
+                        else if (!encrypted)
+                          InlineNotice(
+                            message: copy(
+                              loopback
+                                  ? 'settings.server_connection.local_http'
+                                  : 'server.access.http_warning',
                             ),
-                            const SizedBox(height: 8),
-                          ],
-                          _ServerAccessFact(
-                            icon: Icons.login,
-                            title: copy('server.access.session.title'),
-                            detail: copy('server.access.session.detail'),
-                          ),
-                        ] else
-                          OutlinedButton.icon(
-                            onPressed: () =>
-                                unawaited(controller.refreshServerManagement()),
-                            icon: const Icon(Icons.refresh, size: 15),
-                            label: Text(copy('common.retry')),
+                            error: !loopback,
                           ),
                         if (controller.serverManagementError
                             case final error?) ...[
@@ -2738,116 +3248,101 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                             error: true,
                           ),
                         ],
-                        if (guide.available) ...[
-                          const SizedBox(height: 10),
-                          Divider(
-                            height: 1,
-                            color: context.viberColors.dividerSoft,
-                          ),
-                          const SizedBox(height: 9),
-                          Text(
-                            copy('server.web.title'),
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            copy('server.web.detail'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: context.viberColors.textMuted,
-                                ),
-                          ),
-                          const SizedBox(height: 7),
-                          _RunCommand(
-                            client: 'Web',
-                            command: controller.runtimeWebURL,
-                            copyLabel: copy('server.web.copy'),
-                            enabled: true,
-                            onCopy: () =>
-                                _copyCommand('Web', controller.runtimeWebURL),
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        Divider(
-                          height: 1,
-                          color: context.viberColors.dividerSoft,
-                        ),
                         const SizedBox(height: 9),
-                        Text(
-                          copy('server.login.command.title'),
-                          style: Theme.of(context).textTheme.labelLarge,
+                        step(
+                          copy('server.web.title'),
+                          copy('server.web.detail'),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          copy('server.login.command.detail'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: context.viberColors.textMuted),
-                        ),
-                        const SizedBox(height: 7),
                         _RunCommand(
-                          client: copy('server.login.command.client'),
-                          command:
-                              'vibermate login --server ${controller.runtimeServerURL}',
-                          copyLabel: copy('server.login.command.copy'),
-                          enabled: guide.available,
-                          onCopy: () => _copyCommand(
-                            copy('server.login.command.client'),
-                            'vibermate login --server ${controller.runtimeServerURL}',
+                          client: 'Web',
+                          command: controller.runtimeWebURL,
+                          copyLabel: copy('server.web.copy'),
+                          enabled: true,
+                          copy: copy,
+                        ),
+                        ...divider,
+                        if (loopback) ...[
+                          // Another computer would reach itself at this
+                          // address; say what works instead.
+                          InlineNotice(
+                            key: const Key('server-access-loopback'),
+                            message: copy('server.access.loopback'),
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          copy('server.run.title'),
-                          style: Theme.of(context).textTheme.labelLarge,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          copy('server.run.detail'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: context.viberColors.textMuted),
-                        ),
-                        const SizedBox(height: 7),
-                        Column(
-                          children: [
-                            for (final (index, client) in const [
-                              'claude',
-                              'codex',
-                            ].indexed) ...[
-                              _RunCommand(
-                                client: client == 'claude' ? 'Claude' : 'Codex',
-                                command:
-                                    'vibermate run --server ${controller.runtimeServerURL} -- $client',
-                                copyLabel: copy.format('terminal.run.copy', {
-                                  'client': client == 'claude'
-                                      ? 'Claude'
-                                      : 'Codex',
-                                }),
-                                enabled: guide.available,
-                                onCopy: () => _copyCommand(
-                                  client == 'claude' ? 'Claude' : 'Codex',
-                                  'vibermate run --server ${controller.runtimeServerURL} -- $client',
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const Key('server-access-deployment-guide'),
+                              onPressed: () => unawaited(
+                                launchUrl(
+                                  Uri.parse(copy('deployment.docs_url')),
+                                  mode: LaunchMode.externalApplication,
                                 ),
                               ),
-                              if (index == 0) const SizedBox(height: 7),
-                            ],
-                          ],
-                        ),
-                        if (_copiedClient case final client?) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            copy.format('terminal.run.copied', {
-                              'client': client,
-                            }),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: context.viberColors.verified),
+                              icon: const Icon(Icons.open_in_new, size: 14),
+                              label: Text(copy('server.access.run_server')),
+                            ),
                           ),
-                        ] else if (_copyFailed) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            copy('terminal.run.copy_failed'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: context.viberColors.danger),
+                          // Kept for people who reach this Mac through an
+                          // SSH tunnel.
+                          CompactDisclosure(
+                            key: const Key('server-access-technical-details'),
+                            toggleKey: const Key(
+                              'server-access-technical-details-toggle',
+                            ),
+                            label: copy('common.technical_details'),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                session,
+                                const SizedBox(height: 9),
+                                step(
+                                  copy('server.login.command.title'),
+                                  copy('server.login.command.detail'),
+                                ),
+                                loginCommand,
+                                const SizedBox(height: 10),
+                                step(
+                                  copy('server.run.title'),
+                                  copy('server.run.detail'),
+                                ),
+                                runCommands,
+                              ],
+                            ),
                           ),
+                        ] else ...[
+                          step(
+                            numbered(1, 'server.install.title'),
+                            copy('server.install.detail'),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const Key('server-access-install-guide'),
+                              onPressed: () => unawaited(
+                                launchUrl(
+                                  Uri.parse(copy('server.install.url')),
+                                  mode: LaunchMode.externalApplication,
+                                ),
+                              ),
+                              icon: const Icon(Icons.open_in_new, size: 14),
+                              label: Text(copy('server.install.guide')),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          step(
+                            numbered(2, 'server.login.command.title'),
+                            copy('server.login.command.detail'),
+                          ),
+                          loginCommand,
+                          const SizedBox(height: 8),
+                          session,
+                          const SizedBox(height: 10),
+                          step(
+                            numbered(3, 'server.run.title'),
+                            copy('server.run.detail'),
+                          ),
+                          runCommands,
                         ],
                       ],
                     ),
@@ -2859,23 +3354,6 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
         ),
       ],
     );
-  }
-
-  Future<void> _copyCommand(String client, String command) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: command));
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = client;
-        _copyFailed = false;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = null;
-        _copyFailed = true;
-      });
-    }
   }
 }
 
@@ -3833,195 +4311,31 @@ final class _RuntimeUserRow extends StatelessWidget {
   }
 }
 
-final class _ManagedRunGuide extends StatefulWidget {
-  const _ManagedRunGuide({required this.copy, required this.status});
-
-  final AppCopy copy;
-  final TerminalCommandStatus? status;
-
-  @override
-  State<_ManagedRunGuide> createState() => _ManagedRunGuideState();
-}
-
-final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
-  String? _copied;
-  bool _copyFailed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final copy = widget.copy;
-    final state = widget.status?.state;
-    final enabled =
-        state == TerminalCommandState.current ||
-        state == TerminalCommandState.sourceUpdated;
-    return Container(
-      key: const Key('managed-run-guide'),
-      padding: const EdgeInsets.fromLTRB(11, 9, 10, 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.play_arrow_outlined,
-                size: 15,
-                color: context.viberColors.verified,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: ContextHelpHeading(
-                  title: copy('terminal.run.title'),
-                  message: copy('terminal.run.detail'),
-                  dismissLabel: copy('common.dismiss'),
-                ),
-              ),
-              if (_copied case final value?)
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    copy.format('terminal.run.copied', {'client': value}),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.verified,
-                    ),
-                  ),
-                )
-              else if (_copyFailed)
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    copy('terminal.run.copy_failed'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.danger,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          if (!enabled) ...[
-            const SizedBox(height: 4),
-            Text(
-              copy('terminal.run.install_first'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-          const SizedBox(height: 7),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              _RunCommand(
-                client: 'Claude',
-                command: 'vibermate run -- claude',
-                copyLabel: copy.format('terminal.run.copy', {
-                  'client': 'Claude',
-                }),
-                enabled: enabled,
-                onCopy: () => _copy('Claude', 'vibermate run -- claude'),
-              ),
-              _RunCommand(
-                client: 'Codex',
-                command: 'vibermate run -- codex',
-                copyLabel: copy.format('terminal.run.copy', {
-                  'client': 'Codex',
-                }),
-                enabled: enabled,
-                onCopy: () => _copy('Codex', 'vibermate run -- codex'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            copy('terminal.run.environment'),
-            style: monoStyle.copyWith(
-              fontSize: ViberType.micro,
-              color: context.viberColors.textFaint,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _copy(String client, String command) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: command));
-      if (!mounted) return;
-      setState(() {
-        _copied = client;
-        _copyFailed = false;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _copied = null;
-        _copyFailed = true;
-      });
-    }
-  }
-}
-
+/// One copyable command, keyed by the client it starts.
 final class _RunCommand extends StatelessWidget {
   const _RunCommand({
     required this.client,
     required this.command,
     required this.copyLabel,
     required this.enabled,
-    required this.onCopy,
+    required this.copy,
   });
 
   final String client;
   final String command;
   final String copyLabel;
   final bool enabled;
-  final VoidCallback onCopy;
+  final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: ViberMetrics.controlHeight),
-      decoration: BoxDecoration(
-        color: context.viberColors.rail,
-        border: Border.all(color: context.viberColors.divider),
-        borderRadius: ViberMetrics.controlRadius,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(left: 8, right: 5),
-              child: Text(
-                command,
-                softWrap: true,
-                style: monoStyle.copyWith(
-                  fontSize: ViberType.utility,
-                  color: enabled
-                      ? context.viberColors.text
-                      : context.viberColors.textFaint,
-                ),
-              ),
-            ),
-          ),
-          IconButton(
-            key: Key('managed-run-copy-${client.toLowerCase()}'),
-            onPressed: enabled ? onCopy : null,
-            tooltip: copyLabel,
-            icon: const Icon(Icons.copy, size: 12),
-            constraints: const BoxConstraints.tightFor(
-              width: ViberMetrics.controlHeight,
-              height: ViberMetrics.controlHeight,
-            ),
-            padding: EdgeInsets.zero,
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => CommandBlock(
+    text: command,
+    copyTooltip: copyLabel,
+    copiedLabel: copy('common.copied'),
+    copyFailedLabel: copy('common.copy_failed'),
+    enabled: enabled,
+    copyKey: Key('managed-run-copy-${client.toLowerCase()}'),
+  );
 }
 
 /// _StorageDisclosure satisfies INV-STORE-DISCLOSED. It states where evidence
@@ -4077,23 +4391,12 @@ final class _StorageDisclosure extends StatelessWidget {
               (copy('settings.storage.directory'), location.dataDirectory),
               (copy('settings.storage.database'), location.databasePath),
             ]) ...[
-              Text(entry.$1, style: Theme.of(context).textTheme.bodySmall),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: SelectableText(
-                      entry.$2,
-                      style: monoStyle.copyWith(fontSize: ViberType.supporting),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: copy.format('common.copy', {'field': entry.$1}),
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: entry.$2)),
-                    icon: const Icon(Icons.copy_outlined, size: 14),
-                  ),
-                ],
+              CommandBlock(
+                label: entry.$1,
+                text: entry.$2,
+                copyTooltip: copy.format('common.copy', {'field': entry.$1}),
+                copiedLabel: copy('common.copied'),
+                copyFailedLabel: copy('common.copy_failed'),
               ),
               const SizedBox(height: 8),
             ],
@@ -4384,19 +4687,15 @@ final class _ServerBackupGuide extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 6),
-        for (final command in [backup, restore])
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: SelectableText(command, style: monoStyle)),
-              IconButton(
-                tooltip: copy('settings.storage.copy_command'),
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: command)),
-                icon: const Icon(Icons.copy_outlined, size: 14),
-              ),
-            ],
+        for (final (index, command) in [backup, restore].indexed) ...[
+          if (index > 0) const SizedBox(height: 6),
+          CommandBlock(
+            text: command,
+            copyTooltip: copy('settings.storage.copy_command'),
+            copiedLabel: copy('common.copied'),
+            copyFailedLabel: copy('common.copy_failed'),
           ),
+        ],
       ],
     );
   }
@@ -4688,10 +4987,15 @@ final class _TerminalCommandPanel extends StatelessWidget {
                   tooltip: copy('terminal.refresh_status'),
                   onPressed:
                       controller.terminalCommandLoading ||
-                          controller.terminalCommandMutating
+                          controller.terminalCommandMutating ||
+                          controller.terminalShellCheckPending
                       ? null
-                      : () => unawaited(controller.refreshTerminalCommand()),
-                  icon: controller.terminalCommandLoading
+                      : () => unawaited(
+                          controller.refreshTerminalCommand(checkShell: true),
+                        ),
+                  icon:
+                      controller.terminalCommandLoading ||
+                          controller.terminalShellCheckPending
                       ? const SizedBox.square(
                           dimension: 13,
                           child: CircularProgressIndicator(strokeWidth: 1.4),
@@ -4763,6 +5067,19 @@ final class _TerminalCommandStatusView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lookup = status.ready ? status.shellFindsCommand : null;
+    // The guide reads the same rule, so the card and step 1 always agree.
+    final reach = controller.terminalReach;
+    final current = status.state == TerminalCommandState.current;
+    // Set up, but a new Terminal window does not find it: a warning, not
+    // 'Ready', until the person's shell looks in ~/.local/bin, or until
+    // an agent started with the full path proves the command works.
+    final notOnPath = current && reach == TerminalReach.notFound;
+    final checking = current && reach == TerminalReach.checking;
+    final fullPathOnly = current && reach == TerminalReach.fullPathWorks;
+    // The fix for PATH sits right under the sentence that mentions it.
+    final hint =
+        reach == TerminalReach.notFound || reach == TerminalReach.fullPathWorks;
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
       child: Column(
@@ -4771,26 +5088,58 @@ final class _TerminalCommandStatusView extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final narrow = constraints.maxWidth < 560;
-              final summary = Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  StatusPill(
-                    label: copy('terminal.state.${status.state.wireName}'),
-                    color: _stateColor(context, status.state),
-                    icon: _stateIcon(status.state),
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 1),
-                      child: Text(
-                        copy('terminal.state_detail.${status.state.wireName}'),
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ),
-                ],
+              const pillKey = Key('terminal-command-state');
+              final pill = notOnPath
+                  ? terminalNotOnPathPill(context, copy, key: pillKey)
+                  : checking
+                  ? terminalCheckingPill(context, copy, key: pillKey)
+                  : StatusPill(
+                      key: pillKey,
+                      label: copy('terminal.state.${status.state.wireName}'),
+                      color: _stateColor(context, status.state),
+                      icon: _stateIcon(status.state),
+                    );
+              final detail = Text(
+                notOnPath
+                    ? copy('terminal.state_detail.not_on_path')
+                    : checking
+                    ? copy('terminal.state_detail.checking')
+                    : fullPathOnly
+                    ? copy.format('terminal.state_detail.full_path_works', {
+                        'path': vibermateFullPath(status),
+                      })
+                    : copy('terminal.state_detail.${status.state.wireName}'),
+                key: const Key('terminal-command-detail'),
+                style: Theme.of(context).textTheme.bodyMedium,
               );
+              // The longer warning sits above its explanation, and the PATH
+              // line follows it directly.
+              final summary = hint
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(alignment: Alignment.centerLeft, child: pill),
+                        const SizedBox(height: 6),
+                        detail,
+                        if (hint) ...[
+                          const SizedBox(height: 9),
+                          TerminalPathHint(status: status, copy: copy),
+                        ],
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        pill,
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: detail,
+                          ),
+                        ),
+                      ],
+                    );
               final actions = _TerminalCommandActions(
                 controller: controller,
                 copy: copy,
@@ -4803,7 +5152,10 @@ final class _TerminalCommandStatusView extends StatelessWidget {
                 );
               }
               return Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                // Beside a long summary the button lines up with the pill.
+                crossAxisAlignment: hint
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   Expanded(child: summary),
                   const SizedBox(width: 16),
@@ -4812,6 +5164,10 @@ final class _TerminalCommandStatusView extends StatelessWidget {
               );
             },
           ),
+          if (lookup == ShellCommandLookup.unknown) ...[
+            const SizedBox(height: 9),
+            TerminalPathFallback(status: status, copy: copy),
+          ],
           const SizedBox(height: 3),
           _TerminalCommandDetails(
             key: ValueKey('terminal-command-details-${status.state.wireName}'),
@@ -4841,105 +5197,73 @@ final class _TerminalCommandDetails extends StatefulWidget {
 
 final class _TerminalCommandDetailsState
     extends State<_TerminalCommandDetails> {
-  bool _expanded = false;
-
   @override
   Widget build(BuildContext context) {
     final copy = widget.copy;
     final status = widget.status;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Semantics(
-          button: true,
-          expanded: _expanded,
-          child: InkWell(
-            key: const Key('terminal-command-details-toggle'),
-            borderRadius: ViberMetrics.controlRadius,
-            onTap: () => setState(() => _expanded = !_expanded),
-            child: SizedBox(
-              height: ViberMetrics.controlHeight,
-              child: Row(
-                children: [
-                  Icon(
-                    _expanded ? Icons.expand_more : Icons.chevron_right,
-                    size: 15,
-                    color: context.viberColors.textFaint,
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    copy('terminal.details'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.textMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+    return CompactDisclosure(
+      toggleKey: const Key('terminal-command-details-toggle'),
+      label: copy('terminal.details'),
+      child: Container(
+        key: const Key('terminal-command-technical-details'),
+        padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+        decoration: BoxDecoration(
+          color: context.viberColors.rail,
+          border: Border.all(color: context.viberColors.dividerSoft),
+          borderRadius: ViberMetrics.surfaceRadius,
         ),
-        if (_expanded)
-          Container(
-            key: const Key('terminal-command-technical-details'),
-            padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
-            decoration: BoxDecoration(
-              color: context.viberColors.rail,
-              border: Border.all(color: context.viberColors.dividerSoft),
-              borderRadius: ViberMetrics.surfaceRadius,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CommandPath(
+              label: copy('terminal.source_build'),
+              value: status.sourceBuild,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _CommandPath(
-                  label: copy('terminal.source_build'),
-                  value: status.sourceBuild,
-                ),
-                if (status.installedBuild case final installed?) ...[
-                  const SizedBox(height: 4),
-                  _CommandPath(
-                    label: copy('terminal.installed_build'),
-                    value: installed,
-                    muted: installed != status.sourceBuild,
-                  ),
-                ],
-                const SizedBox(height: 4),
-                _CommandPath(
-                  label: copy('terminal.target'),
-                  value: status.targetPath,
-                ),
-                const SizedBox(height: 4),
-                _CommandPath(
-                  label: copy('terminal.source'),
-                  value: status.sourcePath,
-                  muted: true,
-                ),
-                if (status.detail case final detail?) ...[
-                  const SizedBox(height: 4),
-                  _CommandPath(
-                    label: copy('terminal.diagnosis'),
-                    value: detail,
-                    muted: true,
-                  ),
-                ],
-                const SizedBox(height: 7),
-                Text(
-                  copy('terminal.boundary'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (status.state == TerminalCommandState.unownedTarget ||
-                    status.state == TerminalCommandState.conflict) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    copy('terminal.manual_resolution'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.warning,
-                    ),
-                  ),
-                ],
-              ],
+            if (status.installedBuild case final installed?) ...[
+              const SizedBox(height: 4),
+              _CommandPath(
+                label: copy('terminal.installed_build'),
+                value: installed,
+                muted: installed != status.sourceBuild,
+              ),
+            ],
+            const SizedBox(height: 4),
+            _CommandPath(
+              label: copy('terminal.target'),
+              value: status.targetPath,
             ),
-          ),
-      ],
+            const SizedBox(height: 4),
+            _CommandPath(
+              label: copy('terminal.source'),
+              value: status.sourcePath,
+              muted: true,
+            ),
+            if (status.detail case final detail?) ...[
+              const SizedBox(height: 4),
+              _CommandPath(
+                label: copy('terminal.diagnosis'),
+                value: detail,
+                muted: true,
+              ),
+            ],
+            const SizedBox(height: 7),
+            Text(
+              copy('terminal.boundary'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (status.state == TerminalCommandState.unownedTarget ||
+                status.state == TerminalCommandState.conflict) ...[
+              const SizedBox(height: 5),
+              Text(
+                copy('terminal.manual_resolution'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.warning,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -5098,7 +5422,11 @@ Future<void> confirmTerminalCommandChange(
             ),
             const SizedBox(height: 10),
             Text(
-              copy('terminal.confirm.boundary'),
+              copy(
+                operation == TerminalCommandOperation.remove
+                    ? 'terminal.confirm.remove.boundary'
+                    : 'terminal.confirm.boundary',
+              ),
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -5133,7 +5461,8 @@ Color _stateColor(BuildContext context, TerminalCommandState state) =>
 
 IconData _stateIcon(TerminalCommandState state) => switch (state) {
   TerminalCommandState.current => Icons.check_circle_outline,
-  TerminalCommandState.notInstalled => Icons.remove_circle_outline,
+  // A state, not a second 'Set up' button: a hollow circle.
+  TerminalCommandState.notInstalled => Icons.radio_button_unchecked,
   TerminalCommandState.sourceUpdated => Icons.update,
   TerminalCommandState.targetMissing => Icons.link_off,
   _ => Icons.error_outline,

@@ -464,6 +464,23 @@ void main() {
             );
             await tester.pumpAndSettle();
             expect(api.calls, ['a-far', 'b-soon', 'c-unknown', 'd-expired']);
+            // The set's launch commands and running sessions come first;
+            // bring the accounts to the top of the pane.
+            final firstCard = find.byKey(
+              const Key('environment-account-option-b-soon'),
+            );
+            await tester.scrollUntilVisible(
+              firstCard,
+              120,
+              scrollable: find
+                  .descendant(
+                    of: find.byKey(const Key('environment-detail-scroll')),
+                    matching: find.byType(Scrollable),
+                  )
+                  .first,
+            );
+            await tester.ensureVisible(firstCard);
+            await tester.pumpAndSettle();
             expect(find.text('123.46', skipOffstage: false), findsNWidgets(8));
             expect(
               find.byTooltip(

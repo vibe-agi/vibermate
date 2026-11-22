@@ -14,3 +14,11 @@ func (launcher *Launcher) writeHeartbeatDiagnostic(message string) {
 	}
 	_, _ = fmt.Fprintln(launcher.config.Stderr, message)
 }
+
+// writeLocalizedHeartbeatDiagnostic is writeHeartbeatDiagnostic for a
+// message from the locale catalog.
+func (launcher *Launcher) writeLocalizedHeartbeatDiagnostic(key string, parameters map[string]string) {
+	if message, ok := launcher.localized(key, parameters); ok {
+		launcher.writeHeartbeatDiagnostic(message)
+	}
+}

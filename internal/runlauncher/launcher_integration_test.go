@@ -826,9 +826,11 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 		if !errors.Is(runErr, runlauncher.ErrCapturePreparationTimedOut) {
 			t.Fatalf("unresponsive CaptureRun creation error = %v", runErr)
 		}
+		// The launch is announced, pointing at the app, before the create
+		// request can block.
 		if !strings.Contains(
 			stderr.String(),
-			"Network and tool approvals still follow your traffic policy",
+			"starting echo through ViberMate. Its requests appear in the ViberMate app",
 		) {
 			t.Fatalf("stalled create had no actionable progress: %q", stderr.String())
 		}

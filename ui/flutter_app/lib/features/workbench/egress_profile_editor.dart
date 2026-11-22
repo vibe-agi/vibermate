@@ -404,6 +404,7 @@ Future<EgressProfileEditIntent?> showEgressProfileEditor({
   required AppCopy copy,
   EgressProfileRevision? initial,
   Future<VlessProfileDescription> Function()? loadVlessDescription,
+  bool? vlessEngineInstalled,
 }) => showDialog<EgressProfileEditIntent>(
   context: context,
   barrierDismissible: true,
@@ -411,6 +412,7 @@ Future<EgressProfileEditIntent?> showEgressProfileEditor({
     copy: copy,
     initial: initial,
     loadVlessDescription: loadVlessDescription,
+    vlessEngineInstalled: vlessEngineInstalled,
   ),
 );
 
@@ -446,11 +448,15 @@ final class _EgressProfileEditorDialog extends StatefulWidget {
     required this.copy,
     this.initial,
     this.loadVlessDescription,
+    this.vlessEngineInstalled,
   });
 
   final AppCopy copy;
   final EgressProfileRevision? initial;
   final Future<VlessProfileDescription> Function()? loadVlessDescription;
+
+  /// Whether this Runtime has the VLESS engine; null when it does not say.
+  final bool? vlessEngineInstalled;
 
   @override
   State<_EgressProfileEditorDialog> createState() =>
@@ -640,6 +646,18 @@ final class _EgressProfileEditorDialogState
                     ),
                   ],
                   if (_proxyKind == 'vless') ...[
+                    if (widget.vlessEngineInstalled case final installed?) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        copy(
+                          installed
+                              ? 'settings.access.vless.installed'
+                              : 'settings.access.vless.absent',
+                        ),
+                        key: const Key('egress-profile-vless-engine'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                     const SizedBox(height: 9),
                     CompactLabeledControl(
                       label: copy('environment.egress.vless.link'),

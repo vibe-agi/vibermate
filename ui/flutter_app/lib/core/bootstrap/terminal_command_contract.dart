@@ -50,6 +50,31 @@ final class TerminalCommandException implements Exception {
   String toString() => failure.copyKey;
 }
 
+/// Whether a new Terminal window finds the `vibermate` command: what the
+/// person's login shell answers to `command -v vibermate`.
+enum ShellCommandLookup {
+  /// The shell finds this App's command.
+  found,
+
+  /// The shell finds no `vibermate` at all.
+  notFound,
+
+  /// The check could not run, timed out, or found another `vibermate`.
+  unknown,
+}
+
+/// What the login shell answered, and which shell it was.
+final class ShellCommandCheck {
+  const ShellCommandCheck(this.lookup, {this.shell});
+
+  static const unknown = ShellCommandCheck(ShellCommandLookup.unknown);
+
+  final ShellCommandLookup lookup;
+
+  /// The shell's name, such as 'zsh', 'bash' or 'fish', when known.
+  final String? shell;
+}
+
 final class TerminalCommandStatus {
   const TerminalCommandStatus({
     required this.state,
@@ -58,6 +83,8 @@ final class TerminalCommandStatus {
     this.sourceBuild = 'development',
     this.installedBuild,
     this.detail,
+    this.shellFindsCommand,
+    this.loginShell,
   });
 
   factory TerminalCommandStatus.fromJson(
@@ -126,6 +153,32 @@ final class TerminalCommandStatus {
   final String? installedBuild;
   final String? detail;
 
+  /// Whether a new Terminal window finds the command; null until the App has
+  /// asked. The App asks the login shell itself: the packaged command's
+  /// status never carries this, so its wire contract is unchanged.
+  final ShellCommandLookup? shellFindsCommand;
+
+  /// The login shell that answered [shellFindsCommand], when known.
+  final String? loginShell;
+
+  /// Installed and usable, whether or not the shell finds it yet.
+  bool get ready =>
+      state == TerminalCommandState.current ||
+      state == TerminalCommandState.sourceUpdated;
+
+  /// This status with what the login shell answered.
+  TerminalCommandStatus withShellCheck(ShellCommandCheck check) =>
+      TerminalCommandStatus(
+        state: state,
+        sourcePath: sourcePath,
+        targetPath: targetPath,
+        sourceBuild: sourceBuild,
+        installedBuild: installedBuild,
+        detail: detail,
+        shellFindsCommand: check.lookup,
+        loginShell: check.shell,
+      );
+
   bool get canInstall => state == TerminalCommandState.notInstalled;
   bool get canRefresh => state == TerminalCommandState.sourceUpdated;
   bool get canRepair => state == TerminalCommandState.targetMissing;
@@ -143,6 +196,11 @@ abstract interface class TerminalCommandService {
   Future<TerminalCommandStatus> inspect();
 
   Future<TerminalCommandStatus> execute(TerminalCommandOperation operation);
+
+  /// Asks the login shell whether a new Terminal window finds the command
+  /// that [status] installed. Never throws; a check that cannot run is
+  /// [ShellCommandCheck.unknown].
+  Future<ShellCommandCheck> checkShell(TerminalCommandStatus status);
 }
 
 bool _validAbsolutePath(String value) {

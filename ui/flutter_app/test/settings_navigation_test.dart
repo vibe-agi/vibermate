@@ -138,6 +138,14 @@ void main() {
           server || terminal ? 1 : keys.length - 1,
         );
         expect(find.byKey(const Key('runtime-users-panel')), findsNothing);
+        // On this Mac the remote guide is folded away under other ways to
+        // connect, unless a link asks for it.
+        expect(
+          find.byKey(const Key('server-runtime-access')),
+          server && !terminal ? findsOneWidget : findsNothing,
+        );
+        controller.openAccessSettings(focus: AccessFocus.remote);
+        await tester.pumpAndSettle();
         expect(
           find.byKey(const Key('server-runtime-access')),
           server ? findsOneWidget : findsNothing,
@@ -169,6 +177,11 @@ void main() {
         );
         await openSettingsTab(tester, 'access');
         expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+        // Browser or another device is one of the other ways to connect.
+        await tapVisible(
+          tester,
+          find.byKey(const ValueKey('access-other-section-false')),
+        );
         await tapVisible(
           tester,
           find.byKey(const ValueKey('settings-remote-guide-false')),
@@ -347,11 +360,54 @@ void main() {
       final notices = tester.widgetList<InlineNotice>(
         find.descendant(
           of: find.byKey(const Key('server-runtime-access')),
-          matching: find.byType(InlineNotice),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is InlineNotice &&
+                widget.key != const Key('server-access-loopback'),
+          ),
         ),
       );
       expect(notices, hasLength(1));
       expect(notices.single.error, !local);
+      // A loopback address cannot reach another computer: the steps for
+      // one fold under Technical details behind a plain explanation.
+      expect(
+        find.byKey(const Key('server-access-loopback')),
+        local ? findsOneWidget : findsNothing,
+      );
+      Finder loginCommand() => find.descendant(
+        of: find.byKey(const Key('server-runtime-access')),
+        matching: find.textContaining('vibermate login --server'),
+      );
+      expect(loginCommand(), local ? findsNothing : findsOneWidget);
+      expect(
+        find.text('1. Install ViberMate on the other computer'),
+        local ? findsNothing : findsOneWidget,
+      );
+      expect(
+        find.text('2. Sign in once'),
+        local ? findsNothing : findsOneWidget,
+      );
+      expect(
+        find.text('3. Start Claude Code or Codex'),
+        local ? findsNothing : findsOneWidget,
+      );
+      if (local) {
+        await tapVisible(
+          tester,
+          find.byKey(const Key('server-access-technical-details-toggle')),
+        );
+        expect(loginCommand(), findsOneWidget);
+        expect(
+          find.text(
+            "No allowlist set: the Server doesn't filter connections "
+            'by address.',
+          ),
+          findsOneWidget,
+        );
+      } else {
+        expect(find.text('Any address can connect.'), findsOneWidget);
+      }
       expect(tester.takeException(), isNull);
       controller.dispose();
       await tester.pumpWidget(const SizedBox.shrink());

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/design/viber_theme.dart';
@@ -136,7 +135,6 @@ final class _PublicDeploymentDialogState
   final _domain = TextEditingController();
   final _email = TextEditingController();
   bool _docker = true, _terms = false;
-  String? _notice;
 
   @override
   void dispose() {
@@ -145,39 +143,16 @@ final class _PublicDeploymentDialogState
     super.dispose();
   }
 
-  Future<void> _copy(String value) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: value));
-      if (mounted) setState(() => _notice = 'deployment.copied');
-    } catch (_) {
-      if (mounted) setState(() => _notice = 'deployment.copy_failed');
-    }
-  }
-
   Widget _code(String label, String value, String key) => Padding(
     padding: const EdgeInsets.only(top: 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(label, style: Theme.of(context).textTheme.labelLarge),
-            ),
-            IconButton(
-              key: Key('deployment-copy-$key'),
-              tooltip: widget.copy('deployment.copy'),
-              icon: const Icon(Icons.copy, size: 15),
-              onPressed: () => unawaited(_copy(value)),
-            ),
-          ],
-        ),
-        SelectableText(
-          value,
-          key: Key('deployment-code-$key'),
-          style: monoStyle,
-        ),
-      ],
+    child: CommandBlock(
+      label: label,
+      text: value,
+      copyKey: Key('deployment-copy-$key'),
+      textKey: Key('deployment-code-$key'),
+      copyTooltip: widget.copy('deployment.copy'),
+      copiedLabel: widget.copy('deployment.copied'),
+      copyFailedLabel: widget.copy('deployment.copy_failed'),
     ),
   );
 
@@ -239,7 +214,7 @@ final class _PublicDeploymentDialogState
                       ? copy('deployment.domain_invalid')
                       : null,
                 ),
-                onChanged: (_) => setState(() => _notice = null),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -254,7 +229,7 @@ final class _PublicDeploymentDialogState
                       ? copy('deployment.email_invalid')
                       : null,
                 ),
-                onChanged: (_) => setState(() => _notice = null),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 14),
               Text(
@@ -300,10 +275,14 @@ final class _PublicDeploymentDialogState
                   _code(copy('deployment.env_file'), value, 'env'),
                 _code(copy('deployment.start'), recipe.start, 'start'),
                 const SizedBox(height: 12),
-                SelectableText(
-                  'https://${_domain.text.trim().toLowerCase()}',
-                  style: monoStyle,
+                CommandBlock(
+                  text: 'https://${_domain.text.trim().toLowerCase()}',
+                  copyKey: const Key('deployment-copy-url'),
+                  copyTooltip: copy('deployment.copy'),
+                  copiedLabel: copy('deployment.copied'),
+                  copyFailedLabel: copy('deployment.copy_failed'),
                 ),
+                const SizedBox(height: 4),
                 Text(
                   copy('deployment.first_certificate'),
                   style: Theme.of(context).textTheme.bodySmall,
@@ -330,11 +309,6 @@ final class _PublicDeploymentDialogState
                   ],
                 ),
               ],
-              if (_notice case final notice?)
-                Text(
-                  copy(notice),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
             ],
           ),
         ),

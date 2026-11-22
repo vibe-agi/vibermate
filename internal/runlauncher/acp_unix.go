@@ -151,7 +151,7 @@ func (launcher *Launcher) RunACP(ctx context.Context, request ACPLaunchRequest) 
 		select {
 		case <-attached:
 			attached = nil
-			heartbeat = launcher.heartbeat(childContext, control, grant)
+			heartbeat = launcher.heartbeat(childContext, control, grant, request.Command[0])
 		case done := <-finished:
 			observer.Finish(done.result.ExitCode, done.err != nil)
 			if err := save(context.Background(), observer.Snapshot()); err != nil {

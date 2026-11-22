@@ -20,13 +20,14 @@ const _channel = MethodChannel('io.vibermate.desktop/transparent-capture');
 Future<WorkbenchController> _mountSettings(
   WidgetTester tester, {
   AppLanguage language = AppLanguage.english,
+  bool terminalManagement = false,
 }) async {
   final api = PreviewControlApi();
   final controller = WorkbenchController(
     api: api,
     terminalCommands: PreviewTerminalCommandService(),
     previewMode: false,
-    terminalManagement: false,
+    terminalManagement: terminalManagement,
     runtimeTarget: 'https://remote.example.test',
     closeRuntime: api.close,
     initialPreferences: WorkbenchPreferences(
@@ -146,6 +147,54 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
   }
+
+  testWidgets(
+    'on the Mac app it moves to Access and launch, folded and experimental',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        _channel,
+        (_) async => {'state': 'not_installed', 'enabled': false},
+      );
+      final controller = await _mountSettings(tester, terminalManagement: true);
+      // Preferences keeps appearance, language and updates only.
+      expect(find.byKey(const Key('transparent-capture-panel')), findsNothing);
+      controller.openAccessSettings();
+      await tester.pumpAndSettle();
+      final section = find.byKey(const Key('access-transparent-section'));
+      await tester.scrollUntilVisible(
+        section,
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('settings-access-scroll')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Transparent capture (experimental)'), findsOneWidget);
+      expect(find.text('Experimental'), findsOneWidget);
+      expect(
+        find.text(
+          'Experimental. Only needed for agents you start with vibermate run '
+          '--transparent; ordinary vibermate run works without it.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('transparent-capture-toggle')), findsNothing);
+      await tester.tap(find.text('Transparent capture (experimental)'));
+      await tester.pumpAndSettle();
+      final toggle = find.byKey(const Key('transparent-capture-toggle'));
+      expect(toggle, findsOneWidget);
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
 
   testWidgets(
     'Host capture failure remains visible through native status refresh',

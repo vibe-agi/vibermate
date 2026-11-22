@@ -936,11 +936,11 @@ void main() {
       final panel = find.byKey(const Key('terminal-command-panel'));
       expect(panel, findsOneWidget);
       await tester.ensureVisible(panel);
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
       expect(find.byKey(const Key('terminal-command-install')), findsOneWidget);
       expect(
         tester
-            .widget<IconButton>(
+            .widget<TextButton>(
               find.byKey(const Key('managed-run-copy-claude')),
             )
             .onPressed,
@@ -953,14 +953,14 @@ void main() {
         find.byKey(const Key('terminal-command-confirmation')),
         findsOneWidget,
       );
-      expect(find.text('Install vibermate for Terminal?'), findsOneWidget);
+      expect(find.text('Set up the vibermate command?'), findsOneWidget);
       expect(
-        find.textContaining('No existing object will be replaced.'),
+        find.textContaining("It won't replace any existing file"),
         findsOneWidget,
       );
       await tester.tap(find.text('Cancel').last);
       await tester.pumpAndSettle();
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('terminal-command-install')));
       await tester.pumpAndSettle();
@@ -991,7 +991,13 @@ void main() {
       await tester.tap(copyClaude);
       await tester.pumpAndSettle();
       expect(copiedCommand, 'vibermate run -- claude');
-      expect(find.text('Claude command copied'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('managed-run-guide')),
+          matching: find.text('Copied'),
+        ),
+        findsOneWidget,
+      );
 
       final remove = find.byKey(const Key('terminal-command-remove'));
       await _openSettingsTab(tester, const Key('settings-tab-access'));
@@ -1015,7 +1021,7 @@ void main() {
         find.byKey(const Key('terminal-command-confirm-action')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
       expect(find.text('Owned Terminal command removed.'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
@@ -1046,7 +1052,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(install);
     await tester.pumpAndSettle();
-    expect(find.text('为终端安装 vibermate？'), findsOneWidget);
+    expect(find.text('设置 vibermate 命令？'), findsOneWidget);
     expect(
       find.byKey(const Key('terminal-command-confirm-action')),
       findsOneWidget,
@@ -1254,11 +1260,21 @@ void main() {
       find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
       findsOneWidget,
     );
-    final command = tester.widget<Text>(
-      find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
+    // The whole command stays on one line and scrolls sideways; it is
+    // neither wrapped mid-command nor cut short.
+    expect(
+      find.ancestor(
+        of: find.text(
+          'vibermate run --server http://192.168.1.44:9666 -- codex',
+        ),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SingleChildScrollView &&
+              widget.scrollDirection == Axis.horizontal,
+        ),
+      ),
+      findsOneWidget,
     );
-    expect(command.maxLines, isNot(1));
-    expect(command.overflow, isNot(TextOverflow.ellipsis));
     expect(controller.serverAccess?.requiresRuntimeUserLogin, isTrue);
     expect(controller.runtimeUsers?.single.username, 'alice');
     expect(controller.runtimeUsage, isNull);
@@ -4284,11 +4300,28 @@ void main() {
         ),
         findsOneWidget,
       );
+      // The paths follow the set's launch commands and running sessions.
+      final detail = find
+          .descendant(
+            of: find.byKey(const Key('environment-detail-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.text('Anthropic · Lab'),
+        200,
+        scrollable: detail,
+      );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
 
       await tester.binding.setSurfaceSize(const Size(390, 844));
       await tester.pumpAndSettle();
       expect(find.textContaining('Client protocol & origin  →'), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Anthropic · Lab'),
+        200,
+        scrollable: detail,
+      );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -4393,9 +4426,12 @@ void main() {
         find.descendant(of: group, matching: find.text('Anthropic · Lab')),
         findsOneWidget,
       );
-      await tester.tap(
-        find.byKey(const Key('environment-account-activate-anthropic-lab')),
+      final activate = find.byKey(
+        const Key('environment-account-activate-anthropic-lab'),
       );
+      await tester.ensureVisible(activate);
+      await tester.pumpAndSettle();
+      await tester.tap(activate);
       await tester.pumpAndSettle();
 
       final selected = controller.selectedEnvironment!.routes
@@ -4409,9 +4445,12 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(
-        find.byKey(const Key('environment-account-manage-anthropic-direct')),
+      final manage = find.byKey(
+        const Key('environment-account-manage-anthropic-direct'),
       );
+      await tester.ensureVisible(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(manage);
       await tester.pumpAndSettle();
       expect(controller.section, WorkbenchSection.routes);
       expect(controller.selectedEndpointId, 'target.anthropic.official');

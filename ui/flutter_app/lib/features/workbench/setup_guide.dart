@@ -9,9 +9,12 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'agent_connection.dart';
-import 'routing_set_name.dart';
+import 'launch_command.dart';
 import 'settings_view.dart'
-    show confirmTerminalCommandChange, rootCAErrorMessage;
+    show
+        confirmRootTrustInstall,
+        confirmTerminalCommandChange,
+        rootCAErrorMessage;
 import 'workbench_controller.dart';
 
 /// Where one step of the setup guide stands.
@@ -39,6 +42,7 @@ final class SetupGuideProgress {
     required this.startedRun,
     required this.failedLaunch,
     required this.observed,
+    this.reach = TerminalReach.notReady,
     this.blocked = false,
   });
 
@@ -69,6 +73,7 @@ final class SetupGuideProgress {
       startedRun: started,
       failedLaunch: latest != null && latest.stoppedBeforeStart ? latest : null,
       observed: captures.any((capture) => capture.observation == 'observed'),
+      reach: controller.terminalReach,
       blocked:
           started != null &&
           agentCannotConnect(
@@ -94,24 +99,34 @@ final class SetupGuideProgress {
   final CaptureRecord? failedLaunch;
   final bool observed;
 
+  /// How far typing the Terminal command gets someone: the same rule the
+  /// Terminal command card and the launch commands follow.
+  final TerminalReach reach;
+
   /// The started agent cannot connect through ViberMate, so its first
   /// request will never arrive.
   final bool blocked;
 
-  bool get commandReady =>
-      !local ||
-      command?.state == TerminalCommandState.current ||
-      command?.state == TerminalCommandState.sourceUpdated;
+  /// The command is set up, so its launch commands can be copied.
+  bool get commandInstalled => !local || command?.ready == true;
+
+  /// Set up, and a new Terminal window finds it: the shell said so, could
+  /// not be asked, or a launch already came through it.
+  bool get commandFound =>
+      commandInstalled &&
+      (!local ||
+          reach == TerminalReach.works ||
+          reach == TerminalReach.fullPathWorks);
 
   SetupStepState get commandStep => !local
       ? SetupStepState.hint
-      : commandReady
+      : commandFound
       ? SetupStepState.done
       : SetupStepState.current;
 
   SetupStepState get startStep => startedRun != null
       ? SetupStepState.done
-      : commandReady
+      : commandInstalled
       ? SetupStepState.current
       : SetupStepState.upcoming;
 
@@ -125,17 +140,6 @@ final class SetupGuideProgress {
   /// ViberMate's certificate (the launcher's own check).
   bool get codexNeedsRoot => rootTrusted == false;
 }
-
-/// The launch command for [client] ('claude' or 'codex'), as this App or a
-/// Server's own computer would run it.
-String setupLaunchCommand(WorkbenchController controller, String client) =>
-    '${_runCommandPrefix(controller)}-- $client';
-
-/// `vibermate run `, with the Server to sign in to when this is not the App.
-String _runCommandPrefix(WorkbenchController controller) =>
-    controller.terminalManagement || controller.runtimeServerURL.isEmpty
-    ? 'vibermate run '
-    : 'vibermate run --server ${controller.runtimeServerURL} ';
 
 /// The routing set a launch ran on: the selected session's assignment once
 /// read, otherwise the one the session list names. Null when none is known.
@@ -158,22 +162,11 @@ String? launchRoutingSetId(
 ) {
   final program = capture.managedRun?.executableLabel ?? setupClientOf(capture);
   final routingSet = launchRoutingSetId(controller, capture);
-  final environment = routingSet == null || routingSet == builtInRoutingSetId
-      ? ''
-      : '--env ${_shellWord(routingSet)} ';
   return (
-    command:
-        '${_runCommandPrefix(controller)}$environment-- ${_shellWord(program)}',
+    command: launchCommand(controller, program, routingSetId: routingSet),
     sameRoutingSet: routingSet != null,
   );
 }
-
-/// [value] as one word for Terminal: unchanged when it has no characters a
-/// shell treats specially, otherwise in single quotes.
-String _shellWord(String value) =>
-    RegExp(r'^[A-Za-z0-9._+@%=:,/-]+$').hasMatch(value)
-    ? value
-    : "'${value.replaceAll("'", r"'\''")}'";
 
 /// The agent a run launched: 'codex' or 'claude'.
 String setupClientOf(CaptureRecord capture) =>
@@ -231,13 +224,16 @@ Widget? launchStoppedAction({
 }) {
   if (launchNeedsRoot(controller, capture)) {
     final busy = controller.rootCAMutating || controller.rootCALoading;
-    return FilledButton.icon(
-      key: Key('$keyPrefix-install-trust'),
-      onPressed: busy
-          ? null
-          : () => unawaited(controller.installAndTrustRootCA()),
-      icon: const Icon(Icons.verified_user_outlined, size: 14),
-      label: Text(copy('setup.start.install_trust')),
+    return Builder(
+      builder: (context) => FilledButton.icon(
+        key: Key('$keyPrefix-install-trust'),
+        onPressed: busy
+            ? null
+            : () =>
+                  unawaited(confirmRootTrustInstall(context, controller, copy)),
+        icon: const Icon(Icons.verified_user_outlined, size: 14),
+        label: Text(copy('setup.start.install_trust')),
+      ),
     );
   }
   if (capture.kind != 'managed_run') return null;
@@ -294,15 +290,10 @@ final class SetupGuide extends StatefulWidget {
 
 final class _SetupGuideState extends State<SetupGuide> {
   String? _copied;
-  bool _copyFailed = false;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(widget.controller.refreshSetupFacts());
-    });
-  }
+  /// The clipboard refused the footer's command, which then stays on screen
+  /// to select by hand.
+  bool _copyFailed = false;
 
   Future<void> _copy(String key, String text) async {
     try {
@@ -325,9 +316,11 @@ final class _SetupGuideState extends State<SetupGuide> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final copy = widget.copy;
-    final progress = SetupGuideProgress.of(controller);
-    return LayoutBuilder(
+    final guide = LayoutBuilder(
       builder: (context, constraints) {
+        // Read at layout, after SetupFactsWatcher has marked the shell check
+        // as expected, so the first frame already says 'Checking'.
+        final progress = SetupGuideProgress.of(controller);
         // Each step's button goes under its text when the guide is narrow,
         // which also happens beside an open directory on a small window.
         final narrow = constraints.maxWidth < 520;
@@ -369,6 +362,7 @@ final class _SetupGuideState extends State<SetupGuide> {
         );
       },
     );
+    return SetupFactsWatcher(controller: controller, child: guide);
   }
 
   Widget _commandStep(
@@ -387,8 +381,50 @@ final class _SetupGuideState extends State<SetupGuide> {
         state: state,
         title: copy('setup.command.title'),
         copy: copy,
-        summary: copy('terminal.state_detail.current'),
+        // A finished step is one line, and the PATH line it would point at is
+        // on Access and launch: only what works is said here.
+        summary: status != null && progress.reach == TerminalReach.fullPathWorks
+            ? copy.format('terminal.state_detail.full_path_only', {
+                'path': vibermateFullPath(status),
+              })
+            : copy('terminal.state_detail.current'),
         narrow: narrow,
+      );
+    }
+    if (status != null && progress.commandInstalled) {
+      // Set up, but a new Terminal window does not find it yet, or the shell
+      // has not answered.
+      final checking = progress.reach == TerminalReach.checking;
+      final pending = controller.terminalShellCheckPending;
+      return _SetupStep(
+        key: const Key('setup-step-command'),
+        number: 1,
+        state: state,
+        title: copy('setup.command.title'),
+        copy: copy,
+        status: checking
+            ? terminalCheckingPill(context, copy)
+            : terminalNotOnPathPill(context, copy),
+        detail: copy(
+          checking
+              ? 'terminal.state_detail.checking'
+              : 'terminal.state_detail.not_on_path',
+        ),
+        action: OutlinedButton.icon(
+          key: const Key('setup-command-check'),
+          onPressed: controller.terminalCommandLoading || pending
+              ? null
+              : () => unawaited(controller.checkTerminalShell()),
+          icon: pending
+              ? const SizedBox.square(
+                  dimension: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                )
+              : const Icon(Icons.refresh, size: 14),
+          label: Text(copy('setup.command.check')),
+        ),
+        narrow: narrow,
+        children: [if (!checking) TerminalPathHint(status: status, copy: copy)],
       );
     }
     final busy =
@@ -476,22 +512,23 @@ final class _SetupGuideState extends State<SetupGuide> {
       detail: copy('setup.server.install.detail'),
       action: OutlinedButton.icon(
         key: const Key('setup-open-access'),
-        onPressed: controller.openAccessSettings,
+        onPressed: () =>
+            controller.openAccessSettings(focus: AccessFocus.remote),
         icon: const Icon(Icons.menu_book_outlined, size: 14),
         label: Text(copy('capture.empty.web.action')),
       ),
       narrow: narrow,
       children: [
-        _SetupCommandRow(
+        CommandBlock(
           key: const Key('setup-command-login'),
           label: copy('server.login.command.client'),
-          command: login,
-          copy: copy,
-          enabled: controller.runtimeServerURL.isNotEmpty,
-          copied: _copied == 'login',
+          text: login,
+          copyLabel: copy('setup.start.copy'),
+          copiedLabel: copy('setup.start.copied'),
+          copyFailedLabel: copy('common.copy_failed'),
           copyTooltip: copy('server.login.command.copy'),
-          onCopy: () => _copy('login', login),
-          narrow: narrow,
+          fontSize: ViberType.body,
+          enabled: controller.runtimeServerURL.isNotEmpty,
         ),
       ],
     );
@@ -537,22 +574,6 @@ final class _SetupGuideState extends State<SetupGuide> {
         failed == null &&
         progress.rootTrusted == true &&
         controller.rootTrustedHere;
-    final enabled = progress.commandReady;
-    Widget commandRow(String client, String label) {
-      final command = setupLaunchCommand(controller, client);
-      return _SetupCommandRow(
-        key: Key('setup-command-$client'),
-        label: label,
-        command: command,
-        copy: copy,
-        enabled: enabled,
-        copied: _copied == client,
-        copyTooltip: copy.format('terminal.run.copy', {'client': label}),
-        onCopy: () => _copy(client, command),
-        narrow: narrow,
-      );
-    }
-
     return _SetupStep(
       key: const Key('setup-step-start'),
       number: 2,
@@ -570,22 +591,30 @@ final class _SetupGuideState extends State<SetupGuide> {
       ),
       narrow: narrow,
       children: [
-        commandRow('claude', 'Claude Code'),
-        const SizedBox(height: ViberSpacing.sm),
-        commandRow('codex', 'Codex'),
-        if (progress.codexNeedsRoot && !installFromFailure) ...[
-          const SizedBox(height: ViberSpacing.sm),
-          _CodexRequirement(controller: controller, copy: copy, narrow: narrow),
-        ] else if (codexReady) ...[
-          const SizedBox(height: ViberSpacing.sm),
-          _StepNote(
-            key: const Key('setup-codex-ready'),
-            icon: Icons.check,
-            iconColor: context.viberColors.verified,
-            text: copy('setup.start.codex_ready'),
-            narrow: narrow,
-          ),
-        ],
+        // The same commands as Access and launch; the step's line above
+        // already says where to run them.
+        LaunchCommandCard(
+          controller: controller,
+          copy: copy,
+          keyPrefix: 'setup',
+          lead: false,
+          codexFooter: progress.codexNeedsRoot && !installFromFailure
+              ? CodexCertificateRow(
+                  controller: controller,
+                  copy: copy,
+                  narrow: narrow,
+                )
+              : codexReady
+              ? _StepNote(
+                  key: const Key('setup-codex-ready'),
+                  icon: Icons.check,
+                  iconColor: context.viberColors.verified,
+                  text: copy('setup.start.codex_ready'),
+                  narrow: narrow,
+                  indent: false,
+                )
+              : null,
+        ),
         if (controller.rootCAError case final error?) ...[
           const SizedBox(height: ViberSpacing.sm),
           InlineNotice(message: rootCAErrorMessage(copy, error), error: true),
@@ -623,13 +652,6 @@ final class _SetupGuideState extends State<SetupGuide> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
-        if (_copyFailed)
-          Text(
-            copy('terminal.run.copy_failed'),
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: context.viberColors.danger),
-          ),
       ],
     );
   }
@@ -710,7 +732,7 @@ final class _SetupGuideState extends State<SetupGuide> {
       padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.sm),
       alignment: Alignment.centerLeft,
     );
-    return Wrap(
+    final links = Wrap(
       spacing: ViberSpacing.lg,
       runSpacing: ViberSpacing.xs,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -729,7 +751,9 @@ final class _SetupGuideState extends State<SetupGuide> {
             Flexible(
               child: Padding(
                 padding: const EdgeInsets.only(left: ViberSpacing.sm),
-                child: Text(
+                // Selectable, so the command can be copied by hand when the
+                // clipboard refuses it.
+                child: SelectableText(
                   copy('setup.footer.doctor'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -759,7 +783,77 @@ final class _SetupGuideState extends State<SetupGuide> {
         ),
       ],
     );
+    if (!_copyFailed) return links;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        links,
+        Padding(
+          padding: const EdgeInsets.only(left: ViberSpacing.sm),
+          child: Semantics(
+            liveRegion: true,
+            child: Text(
+              copy('common.copy_failed'),
+              key: const Key('setup-copy-failed'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
+}
+
+/// Rereads what setting up depends on when [child] first shows, and again
+/// whenever the window regains focus while it is on screen: meanwhile the
+/// person may have set up the command, fixed their PATH in Terminal or
+/// trusted the certificate.
+final class SetupFactsWatcher extends StatefulWidget {
+  const SetupFactsWatcher({
+    required this.controller,
+    required this.child,
+    super.key,
+  });
+
+  final WorkbenchController controller;
+  final Widget child;
+
+  @override
+  State<SetupFactsWatcher> createState() => _SetupFactsWatcherState();
+}
+
+final class _SetupFactsWatcherState extends State<SetupFactsWatcher>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // The page below builds after this, so it opens on 'Checking' instead
+    // of showing Ready and then changing.
+    widget.controller.expectShellCheck();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Asked even if gone by now, so the expected check is not left open.
+      unawaited(widget.controller.refreshSetupFacts(checkShell: true));
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(widget.controller.refreshSetupFacts(checkShell: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// One numbered step: a marker, the title with its status, the action, one
@@ -835,14 +929,12 @@ final class _SetupStep extends StatelessWidget {
         ),
       );
     }
-    final heading = Row(
-      children: [
-        Flexible(child: titleText),
-        if (status case final pill?) ...[
-          const SizedBox(width: ViberSpacing.md),
-          pill,
-        ],
-      ],
+    // A long status goes under the title rather than squeezing it.
+    final heading = Wrap(
+      spacing: ViberSpacing.md,
+      runSpacing: ViberSpacing.xs,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [titleText, ?status],
     );
     // A button beside the title makes the heading row taller than the
     // title; the marker is centred on that row so it stays level with it.
@@ -946,127 +1038,6 @@ final class _StepMarker extends StatelessWidget {
                   height: 1,
                 ),
               ),
-      ),
-    );
-  }
-}
-
-/// A launch command in Terminal's font with a labelled Copy button.
-final class _SetupCommandRow extends StatelessWidget {
-  const _SetupCommandRow({
-    required this.label,
-    required this.command,
-    required this.copy,
-    required this.enabled,
-    required this.copied,
-    required this.copyTooltip,
-    required this.onCopy,
-    required this.narrow,
-    super.key,
-  });
-
-  final String label;
-  final String command;
-  final AppCopy copy;
-  final bool enabled;
-  final bool copied;
-  final String copyTooltip;
-  final VoidCallback onCopy;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.viberColors;
-    final box = Container(
-      constraints: const BoxConstraints(minHeight: ViberMetrics.controlHeight),
-      decoration: BoxDecoration(
-        color: colors.rail,
-        border: Border.all(color: colors.divider),
-        borderRadius: ViberMetrics.controlRadius,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: ViberSpacing.md,
-                vertical: ViberSpacing.sm,
-              ),
-              child: SelectableText(
-                command,
-                style: monoStyle.copyWith(
-                  fontSize: ViberType.body,
-                  color: enabled ? colors.text : colors.textFaint,
-                ),
-              ),
-            ),
-          ),
-          Tooltip(
-            message: copyTooltip,
-            child: TextButton.icon(
-              onPressed: enabled ? onCopy : null,
-              icon: Icon(copied ? Icons.check : Icons.copy, size: 13),
-              label: Text(
-                copy(copied ? 'setup.start.copied' : 'setup.start.copy'),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    final caption = Text(label, style: Theme.of(context).textTheme.labelLarge);
-    if (narrow) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          caption,
-          const SizedBox(height: ViberSpacing.xs),
-          box,
-        ],
-      );
-    }
-    return Row(
-      children: [
-        SizedBox(width: 92, child: caption),
-        Expanded(child: box),
-      ],
-    );
-  }
-}
-
-/// Under the Codex command: this Mac must trust ViberMate's certificate.
-final class _CodexRequirement extends StatelessWidget {
-  const _CodexRequirement({
-    required this.controller,
-    required this.copy,
-    required this.narrow,
-  });
-
-  final WorkbenchController controller;
-  final AppCopy copy;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final busy = controller.rootCAMutating || controller.rootCALoading;
-    return _StepNote(
-      key: const Key('setup-codex-requirement'),
-      icon: Icons.info_outline,
-      iconColor: context.viberColors.textMuted,
-      text: copy('setup.start.codex_requirement'),
-      narrow: narrow,
-      action: OutlinedButton.icon(
-        key: const Key('setup-install-trust'),
-        onPressed: busy
-            ? null
-            : () => unawaited(controller.installAndTrustRootCA()),
-        icon: busy
-            ? const SizedBox.square(
-                dimension: 12,
-                child: CircularProgressIndicator(strokeWidth: 1.5),
-              )
-            : const Icon(Icons.verified_user_outlined, size: 14),
-        label: Text(copy('setup.start.install_trust')),
       ),
     );
   }
