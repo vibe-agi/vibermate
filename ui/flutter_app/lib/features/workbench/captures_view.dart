@@ -3595,7 +3595,7 @@ final class _ManualValueRow extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 82,
+            width: 112,
             child: Text(label, style: Theme.of(context).textTheme.labelMedium),
           ),
           Expanded(

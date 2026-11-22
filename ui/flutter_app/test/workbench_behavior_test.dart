@@ -3411,7 +3411,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Browser Lab'), findsWidgets);
       expect(
-        find.text('Manual session created with a dedicated proxy login.'),
+        find.text(
+          'App connected with its own proxy login. Its requests appear here once it uses the proxy.',
+        ),
         findsOneWidget,
       );
       expect(find.text('preview-password-1'), findsNothing);

@@ -3410,7 +3410,7 @@ final class AppCopy {
     'notice.manual_capture.revoked':
         'Proxy login revoked. Conversation and Activity evidence were retained.',
     'notice.manual_capture.created':
-        'Manual session created with a dedicated proxy login.',
+        'App connected with its own proxy login. Its requests appear here once it uses the proxy.',
     'notice.manual_capture.rotated':
         'Proxy credential rotated. Conversation and Activity evidence were retained.',
     'notice.network.approval_allowed':
@@ -6250,7 +6250,7 @@ final class AppCopy {
     'terminal.error.failed': '终端命令状态已变化或操作被拒绝，请检查当前状态。',
     'terminal.error.contract': 'App 内命令返回了无效状态，ViberMate 未采信。',
     'notice.manual_capture.revoked': '代理登录已撤销；已有对话与请求记录已保留。',
-    'notice.manual_capture.created': '专属代理登录已创建。',
+    'notice.manual_capture.created': '已为该应用创建专属代理登录；应用开始使用代理后，它的请求会显示在这里。',
     'notice.manual_capture.rotated': '代理凭据已轮换；已有对话与请求记录已保留。',
     'notice.network.approval_allowed': '决定已生效；等待中的工作获准继续。',
     'notice.network.approval_denied': '决定已生效；等待中的工作已被拒绝。',
