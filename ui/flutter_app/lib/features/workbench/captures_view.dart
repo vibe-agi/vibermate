@@ -13,6 +13,7 @@ import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
 import 'capture_overview.dart';
 import 'acp_view.dart';
+import 'agent_connection.dart';
 import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
@@ -270,6 +271,8 @@ final class _CaptureMaster extends StatelessWidget {
         .where(matches)
         .toList(growable: false);
     final canCreateManual = _canCreateManual(controller);
+    final environments =
+        controller.data?.environments ?? const <EnvironmentRecord>[];
     final noMatch = query.isNotEmpty && running.isEmpty && history.isEmpty;
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
     final accessGuide = TextButton.icon(
@@ -416,6 +419,10 @@ final class _CaptureMaster extends StatelessWidget {
                         _CaptureRow(
                           capture: capture,
                           copy: copy,
+                          cannotConnect: agentCannotConnect(
+                            capture,
+                            captureEnvironment(capture, environments),
+                          ),
                           activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
@@ -430,6 +437,10 @@ final class _CaptureMaster extends StatelessWidget {
                         _CaptureRow(
                           capture: capture,
                           copy: copy,
+                          cannotConnect: agentCannotConnect(
+                            capture,
+                            captureEnvironment(capture, environments),
+                          ),
                           activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
@@ -524,9 +535,13 @@ final class _CaptureRow extends StatelessWidget {
     required this.activityAt,
     required this.selected,
     required this.onPressed,
+    this.cannotConnect = false,
   });
 
   final CaptureRecord capture;
+
+  /// The agent cannot connect through ViberMate (see agentCannotConnect).
+  final bool cannotConnect;
   final AppCopy copy;
   final DateTime activityAt;
   final bool selected;
@@ -546,6 +561,8 @@ final class _CaptureRow extends StatelessWidget {
     // stopped before its agent started is the one outcome shown here.
     final outcome = capture.stoppedBeforeStart
         ? copy('capture.launch_incomplete.badge')
+        : cannotConnect
+        ? copy('capture.cannot_connect.badge')
         : null;
     return Semantics(
       key: Key('capture-row-${capture.key}'),
@@ -872,6 +889,14 @@ final class _CaptureDetail extends StatelessWidget {
                     controller: controller,
                     copy: copy,
                   )
+                : controller.selectedACP == null &&
+                      controller.captureConversations.isEmpty &&
+                      agentCannotConnect(capture, environment)
+                ? _CannotConnectMessage(
+                    capture: capture,
+                    controller: controller,
+                    copy: copy,
+                  )
                 : controller.selectedACP != null
                 ? ACPObservationView(
                     record: controller.selectedACP!,
@@ -913,6 +938,41 @@ final class _CaptureDetail extends StatelessWidget {
       }
     }
     return environment.routes.firstOrNull;
+  }
+}
+
+/// In place of the empty request list of an agent that cannot connect.
+final class _CannotConnectMessage extends StatelessWidget {
+  const _CannotConnectMessage({
+    required this.capture,
+    required this.controller,
+    required this.copy,
+  });
+
+  final CaptureRecord capture;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final client = agentClientId(capture);
+    final versions = client == null
+        ? null
+        : controller.supportedClientVersions(client);
+    return CenteredMessage(
+      key: const Key('capture-cannot-connect'),
+      icon: Icons.error_outline,
+      title: copy('capture.client.compatibility.blocked'),
+      detail: [
+        copy.format('capture.cannot_connect.detail', {
+          'agent': capture.displayName,
+        }),
+        if (versions != null && versions.isNotEmpty)
+          copy.format('capture.cannot_connect.versions', {
+            'versions': versions.join(', '),
+          }),
+      ].join(' '),
+    );
   }
 }
 
@@ -2181,9 +2241,18 @@ final class _CaptureContext extends StatelessWidget {
                             key: Key(
                               'capture-client-compatibility-${capture.key}',
                             ),
+                            capture: capture,
                             managed: capture.managedRun!,
                             conversations: conversations,
                             copy: copy,
+                            blocked: agentCannotConnect(
+                              capture,
+                              captureEnvironment(
+                                capture,
+                                environments,
+                                assignedId: assignment?.environmentId,
+                              ),
+                            ),
                           ),
                         ],
                       ],
@@ -2385,17 +2454,26 @@ final class _CaptureSummaryLine extends StatelessWidget {
   }
 }
 
+/// The agent build under the session title: its version and what ViberMate
+/// knows about that build, in words that say whether anything needs doing.
 final class _CaptureClientCompatibility extends StatelessWidget {
   const _CaptureClientCompatibility({
+    required this.capture,
     required this.managed,
     required this.conversations,
     required this.copy,
+    required this.blocked,
     super.key,
   });
 
+  final CaptureRecord capture;
   final ManagedRunSummary managed;
   final List<ConversationSummary> conversations;
   final AppCopy copy;
+
+  /// The agent cannot connect: unchecked, under a routing set that decrypts
+  /// its service.
+  final bool blocked;
 
   @override
   Widget build(BuildContext context) {
@@ -2416,41 +2494,57 @@ final class _CaptureClientCompatibility extends StatelessWidget {
     final reported = reportedVersions.length == 1
         ? reportedVersions.single
         : null;
-    final version =
-        adapter?.version ??
-        (reported == null
-            ? copy('capture.client.version_unreported')
-            : '$reported · ${copy('capture.client.version_reported')}');
-    final status = copy('capture.client.compatibility.${managed.recognition}');
-    final verified = managed.recognition == 'verified';
-    final color = verified
-        ? context.viberColors.verified
-        : managed.recognition == 'unknown'
-        ? context.viberColors.textMuted
-        : context.viberColors.warning;
-    return Tooltip(
-      message: '$status. ${copy('capture.client.version_help')}',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            verified ? Icons.verified_outlined : Icons.info_outline,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Flexible(
+    final version = adapter?.version != null
+        ? copy.format('capture.client.version', {'version': adapter!.version})
+        : reported != null
+        ? '${copy.format('capture.client.version', {'version': reported})} · '
+              '${copy('capture.client.version_reported')}'
+        : copy('capture.client.version_unknown');
+    final state = blocked ? 'blocked' : managed.recognition;
+    final status = copy('capture.client.compatibility.$state');
+    final colors = context.viberColors;
+    // Only a build that cannot work is a warning or worse. An official build
+    // that is not listed yet is common after an update and needs nothing.
+    final color = switch (state) {
+      'verified' => colors.verified,
+      'blocked' => colors.danger,
+      'unverified' => colors.warning,
+      _ => colors.textMuted,
+    };
+    final icon = switch (state) {
+      'verified' => Icons.verified_outlined,
+      'blocked' => Icons.error_outline,
+      'unverified' => Icons.warning_amber_rounded,
+      _ => Icons.info_outline,
+    };
+    final publisher = agentPublisher(capture);
+    final help = [
+      copy.format('capture.client.version_help', {
+        'agent': capture.displayName,
+      }),
+      if (state == 'recognized' && publisher != null)
+        copy.format('capture.client.recognized_help', {'publisher': publisher}),
+      if (blocked)
+        copy.format('capture.cannot_connect.detail', {
+          'agent': capture.displayName,
+        }),
+    ].join('\n\n');
+    final line = '$version · $status';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Tooltip(
+            message: state == 'recognized' && publisher != null
+                ? copy.format('capture.client.recognized_help', {
+                    'publisher': publisher,
+                  })
+                : status,
             child: Text(
-              version,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: monoStyle.copyWith(color: context.viberColors.textMuted),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              status,
+              line,
+              key: const Key('capture-client-line'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(
@@ -2458,8 +2552,31 @@ final class _CaptureClientCompatibility extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: color),
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 2),
+        // The explanation opens on click as well as on hover.
+        IconButton(
+          key: const Key('capture-client-help'),
+          tooltip: copy('capture.client.version_title'),
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              constraints: const BoxConstraints(maxWidth: 560),
+              title: Text(copy('capture.client.version_title')),
+              content: SelectionArea(child: Text(help)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(copy('common.dismiss')),
+                ),
+              ],
+            ),
+          ),
+          icon: Icon(Icons.help_outline, size: 12, color: colors.textFaint),
+          constraints: const BoxConstraints.tightFor(width: 18, height: 18),
+          padding: EdgeInsets.zero,
+        ),
+      ],
     );
   }
 }

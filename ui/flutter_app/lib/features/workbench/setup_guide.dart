@@ -8,6 +8,7 @@ import '../../core/bootstrap/terminal_command.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'agent_connection.dart';
 import 'settings_view.dart'
     show confirmTerminalCommandChange, rootCAErrorMessage;
 import 'workbench_controller.dart';
@@ -37,6 +38,7 @@ final class SetupGuideProgress {
     required this.startedRun,
     required this.failedLaunch,
     required this.observed,
+    this.blocked = false,
   });
 
   factory SetupGuideProgress.of(WorkbenchController controller) {
@@ -71,6 +73,15 @@ final class SetupGuideProgress {
       startedRun: started,
       failedLaunch: latest != null && latest.stoppedBeforeStart ? latest : null,
       observed: captures.any((capture) => capture.observation == 'observed'),
+      blocked:
+          started != null &&
+          agentCannotConnect(
+            started,
+            captureEnvironment(
+              started,
+              controller.data?.environments ?? const <EnvironmentRecord>[],
+            ),
+          ),
     );
   }
 
@@ -86,6 +97,10 @@ final class SetupGuideProgress {
   /// The newest launch, when it stopped before its agent started.
   final CaptureRecord? failedLaunch;
   final bool observed;
+
+  /// The started agent cannot connect through ViberMate, so its first
+  /// request will never arrive.
+  final bool blocked;
 
   bool get commandReady =>
       !local ||
@@ -485,7 +500,13 @@ final class _SetupGuideState extends State<SetupGuide> {
       detail: copy('setup.prompt.detail'),
       narrow: narrow,
       children: [
-        if (state == SetupStepState.current)
+        if (state == SetupStepState.current && progress.blocked)
+          _CannotConnectNotice(
+            capture: progress.startedRun!,
+            controller: widget.controller,
+            copy: copy,
+          )
+        else if (state == SetupStepState.current)
           Semantics(
             liveRegion: true,
             child: Row(
@@ -880,6 +901,68 @@ final class _CodexRequirement extends StatelessWidget {
                 button,
               ],
             ),
+    );
+  }
+}
+
+/// The started agent cannot connect, so the guide stops waiting for it.
+final class _CannotConnectNotice extends StatelessWidget {
+  const _CannotConnectNotice({
+    required this.capture,
+    required this.controller,
+    required this.copy,
+  });
+
+  final CaptureRecord capture;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final client = agentClientId(capture);
+    final versions = client == null
+        ? null
+        : controller.supportedClientVersions(client);
+    return Container(
+      key: const Key('setup-cannot-connect'),
+      padding: const EdgeInsets.all(ViberSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.danger.withValues(alpha: 0.06),
+        border: Border.all(color: colors.danger.withValues(alpha: 0.28)),
+        borderRadius: ViberMetrics.surfaceRadius,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, size: 16, color: colors.danger),
+          const SizedBox(width: ViberSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy('capture.client.compatibility.blocked'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: ViberSpacing.xs),
+                Text(
+                  [
+                    copy.format('capture.cannot_connect.detail', {
+                      'agent': capture.displayName,
+                    }),
+                    if (versions != null && versions.isNotEmpty)
+                      copy.format('capture.cannot_connect.versions', {
+                        'versions': versions.join(', '),
+                      }),
+                  ].join(' '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -12,7 +12,21 @@ import '../core/api/provider_origin.dart';
 import '../core/api/runtime_storage.dart';
 
 final class PreviewControlApi
-    implements ControlApi, RuntimeStatusReader, ScriptActivityReader {
+    implements
+        ControlApi,
+        RuntimeStatusReader,
+        ScriptActivityReader,
+        SupportedClientVersionsSource {
+  /// The releases the preview catalogue holds; the Runtime does not report
+  /// this list yet.
+  @override
+  List<String>? supportedClientVersions(String clientAdapterId) =>
+      switch (clientAdapterId) {
+        'claude-code' => const ['2.1.220'],
+        'codex-cli' => const ['0.145.0'],
+        _ => null,
+      };
+
   @override
   Future<ProductUpdateMetadata> checkProductUpdate() async =>
       throw const ControlContractException(
@@ -303,6 +317,7 @@ final class PreviewControlApi
   factory PreviewControlApi.freshInstall({
     PreviewFreshStage stage = PreviewFreshStage.start,
     PreviewFreshArrival? arrive,
+    PreviewFreshClient client = PreviewFreshClient.known,
     String productBuild = 'preview',
   }) {
     final api = PreviewControlApi(
@@ -311,6 +326,7 @@ final class PreviewControlApi
       seedConfiguration: false,
       productBuild: productBuild,
     );
+    api._freshClient = client;
     api._stageFreshInstall(stage);
     if (arrive != null) api._playFreshArrival(arrive);
     return api;
@@ -495,6 +511,7 @@ final class PreviewControlApi
     }
   }
 
+  PreviewFreshClient _freshClient = PreviewFreshClient.known;
   final List<Timer> _arrivalTimers = [];
   int _dashboardReads = 0;
   ({String id, int read})? _observeOnDashboardRead;
@@ -512,10 +529,24 @@ final class PreviewControlApi
   String addFreshRun({
     required bool codex,
     required PreviewFreshRunPhase phase,
-    String recognition = 'verified',
+    String? recognition,
     String? version,
   }) {
     _requireOpen();
+    // A launch that started picks up the dataset's client build: a known
+    // release, an official build not yet listed, or one that was not checked.
+    if (recognition == null) {
+      final started = phase != PreviewFreshRunPhase.neverStarted;
+      switch (started ? _freshClient : PreviewFreshClient.known) {
+        case PreviewFreshClient.known:
+          recognition = 'verified';
+        case PreviewFreshClient.recognized:
+          recognition = 'recognized';
+          version ??= codex ? '0.171.0' : '2.1.329';
+        case PreviewFreshClient.unverified:
+          recognition = 'unverified';
+      }
+    }
     _freshRuns += 1;
     final id = 'run-fresh-$_freshRuns';
     final started = phase != PreviewFreshRunPhase.neverStarted;
@@ -5660,3 +5691,18 @@ enum PreviewFreshArrival {
 
 /// How far one fresh `vibermate run` launch got.
 enum PreviewFreshRunPhase { waiting, observed, neverStarted }
+
+/// Which build of the agent the fresh-install preview's launches run.
+enum PreviewFreshClient {
+  /// A release in the catalogue.
+  known,
+
+  /// Signed by its publisher, but not in the catalogue yet.
+  recognized,
+
+  /// A known agent this build could not check; it gets no certificate.
+  unverified;
+
+  static PreviewFreshClient parse(String? value) =>
+      values.where((client) => client.name == value).firstOrNull ?? known;
+}

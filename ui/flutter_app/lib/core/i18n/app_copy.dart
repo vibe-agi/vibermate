@@ -904,14 +904,22 @@ final class AppCopy {
     'capture.client.version_unknown': 'Version unknown',
     'capture.client.version_unreported': 'Client version not reported',
     'capture.client.version_reported': 'client-reported',
+    'capture.client.version': 'Version {version}',
+    'capture.client.version_title': 'Agent version',
     'capture.client.version_help':
-        'This is the Agent client version, not the ViberMate Terminal command. A reported version does not verify a release.',
-    'capture.client.compatibility.verified': 'Exact release verified',
-    'capture.client.compatibility.recognized':
-        'Publisher verified · release not cataloged',
-    'capture.client.compatibility.unverified':
-        'Known client · release not verified',
+        'This is the {agent} version. ViberMate compares it with the releases it knows; after an update, a release that is not listed yet is common.',
+    'capture.client.recognized_help':
+        'ViberMate checked that {publisher} signed this program. This exact version hasn\'t been tested with ViberMate yet.',
+    'capture.client.compatibility.verified': 'Known release',
+    'capture.client.compatibility.recognized': 'Official build, not yet listed',
+    'capture.client.compatibility.unverified': 'Build not checked',
     'capture.client.compatibility.unknown': 'Client release unknown',
+    'capture.client.compatibility.blocked': 'Can\'t connect through ViberMate',
+    'capture.cannot_connect.badge': 'Can\'t connect',
+    'capture.cannot_connect.detail':
+        'ViberMate can\'t verify this copy of {agent}, so it can\'t give it ViberMate\'s certificate, and its requests will fail. Start a supported version, or update ViberMate.',
+    'capture.cannot_connect.versions':
+        'Versions ViberMate can connect on this Mac: {versions}.',
     'capture.manual.create': 'Create manual session',
     'capture.manual.create.title': 'Create a dedicated proxy login',
     'capture.manual.name': 'Session name',
@@ -4121,12 +4129,21 @@ final class AppCopy {
     'capture.client.version_unknown': '版本未知',
     'capture.client.version_unreported': '客户端未报告版本',
     'capture.client.version_reported': '客户端自报',
+    'capture.client.version': '版本 {version}',
+    'capture.client.version_title': 'Agent 版本',
     'capture.client.version_help':
-        '这是 Agent 客户端版本，不是 ViberMate 终端命令版本。客户端自报版本不代表发行版本已验证。',
-    'capture.client.compatibility.verified': '精确版本已验证',
-    'capture.client.compatibility.recognized': '发布者已验证 · 版本未收录',
-    'capture.client.compatibility.unverified': '已知客户端 · 版本未验证',
+        '这是 {agent} 的版本。ViberMate 会将其与已知版本比对；更新后出现尚未收录的版本很常见。',
+    'capture.client.recognized_help':
+        'ViberMate 已确认此程序由 {publisher} 签名，但这个具体版本尚未与 ViberMate 一起测试。',
+    'capture.client.compatibility.verified': '已知版本',
+    'capture.client.compatibility.recognized': '官方构建，尚未收录',
+    'capture.client.compatibility.unverified': '未核验的构建',
     'capture.client.compatibility.unknown': '客户端版本未知',
+    'capture.client.compatibility.blocked': '无法通过 ViberMate 连接',
+    'capture.cannot_connect.badge': '无法连接',
+    'capture.cannot_connect.detail':
+        'ViberMate 无法验证这份 {agent}，因此不能为它提供 ViberMate 证书，它的请求会失败。请改用受支持的版本，或更新 ViberMate。',
+    'capture.cannot_connect.versions': '这台 Mac 上 ViberMate 可以连接的版本：{versions}。',
     'capture.manual.create': '创建专属代理登录',
     'capture.manual.create.title': '创建专属代理登录',
     'capture.manual.name': '记录名称',

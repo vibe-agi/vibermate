@@ -1798,13 +1798,9 @@ void main() {
       );
       expect(evidence, findsOneWidget);
       expect(
-        find.descendant(of: evidence, matching: find.text('2.1.220')),
-        findsOneWidget,
-      );
-      expect(
         find.descendant(
           of: evidence,
-          matching: find.text('Exact release verified'),
+          matching: find.text('Version 2.1.220 · Known release'),
         ),
         findsOneWidget,
       );

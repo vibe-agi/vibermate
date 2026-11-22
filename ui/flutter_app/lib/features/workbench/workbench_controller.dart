@@ -2663,6 +2663,17 @@ final class WorkbenchController extends ChangeNotifier
     ]);
   }
 
+  /// The releases of an agent this build can connect through ViberMate on
+  /// this machine; null when the Runtime does not say.
+  List<String>? supportedClientVersions(String clientAdapterId) {
+    final api = _api;
+    return api is SupportedClientVersionsSource
+        ? (api as SupportedClientVersionsSource).supportedClientVersions(
+            clientAdapterId,
+          )
+        : null;
+  }
+
   /// Settings > Safety and data, where saved requests are kept and deleted.
   void openSafetySettings() {
     selectSection(WorkbenchSection.settings);

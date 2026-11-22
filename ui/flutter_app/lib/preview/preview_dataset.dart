@@ -6,12 +6,18 @@ import 'preview_terminal_command.dart';
 ///
 ///  * no query: the seeded workbench (sessions, accounts, routing sets);
 ///  * `/?dataset=fresh#/`: a fresh install, with `stage=` (start, command,
-///    trusted, waiting, failed, observed) fixing one point of the first run
-///    and `arrive=` (1, failed) playing a short timeline from the start.
+///    trusted, waiting, failed, observed) fixing one point of the first run,
+///    `arrive=` (1, failed) playing a short timeline from the start, and
+///    `client=` (recognized, unverified) choosing the agent build launched.
 ///
 /// The macOS preview has no query, so it always shows the seeded workbench.
 final class PreviewDataset {
-  const PreviewDataset({this.fresh = false, this.stage, this.arrive});
+  const PreviewDataset({
+    this.fresh = false,
+    this.stage,
+    this.arrive,
+    this.client = PreviewFreshClient.known,
+  });
 
   factory PreviewDataset.fromQuery(Map<String, String> query) {
     if (query['dataset'] != 'fresh') return const PreviewDataset();
@@ -19,12 +25,14 @@ final class PreviewDataset {
       fresh: true,
       stage: PreviewFreshStage.parse(query['stage']),
       arrive: PreviewFreshArrival.parse(query['arrive']),
+      client: PreviewFreshClient.parse(query['client']),
     );
   }
 
   final bool fresh;
   final PreviewFreshStage? stage;
   final PreviewFreshArrival? arrive;
+  final PreviewFreshClient client;
 
   /// Without a stage, a timeline starts with the Terminal command ready,
   /// because nothing can launch before it is.
@@ -39,7 +47,11 @@ final class PreviewDataset {
         terminalCommands: PreviewTerminalCommandService(),
       );
     }
-    return PreviewFixture.freshInstall(stage: effectiveStage, arrive: arrive);
+    return PreviewFixture.freshInstall(
+      stage: effectiveStage,
+      arrive: arrive,
+      client: client,
+    );
   }
 }
 
@@ -50,8 +62,13 @@ final class PreviewFixture {
   factory PreviewFixture.freshInstall({
     PreviewFreshStage stage = PreviewFreshStage.start,
     PreviewFreshArrival? arrive,
+    PreviewFreshClient client = PreviewFreshClient.known,
   }) => PreviewFixture(
-    api: PreviewControlApi.freshInstall(stage: stage, arrive: arrive),
+    api: PreviewControlApi.freshInstall(
+      stage: stage,
+      arrive: arrive,
+      client: client,
+    ),
     terminalCommands: PreviewTerminalCommandService(
       initial: previewFreshTerminalCommand(stage),
     ),

@@ -29,6 +29,14 @@ abstract interface class ScriptActivityReader {
   Future<ScriptActivity> scriptActivity({int days = 7});
 }
 
+/// The agent releases this build can connect through ViberMate on this
+/// machine, by client adapter id ('claude-code', 'codex-cli'). Optional and
+/// not part of the Runtime API yet: only the preview answers, and a Runtime
+/// that cannot leaves the list out of what the App says.
+abstract interface class SupportedClientVersionsSource {
+  List<String>? supportedClientVersions(String clientAdapterId);
+}
+
 abstract interface class ControlApi {
   Future<ProductUpdateMetadata> checkProductUpdate();
   Future<NativeToolOperationPage> nativeToolOperations(
