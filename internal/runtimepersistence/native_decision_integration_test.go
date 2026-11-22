@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
@@ -99,6 +100,20 @@ func TestNativeDecisionUnionNoWorkspace(t *testing.T) {
 	workspace, _ := exchange.NewToolDecisionContext(binding.Plan().PolicySet(), t.TempDir(), true, nil, nil)
 	if _, err := exchange.NewClientToolDecisionRequest(id, binding, workspace, intents, nil); err == nil {
 		t.Fatal("workspace accepted")
+	}
+	// Native decisions refuse every structured-tools basis, with or without a
+	// workspace root (ADR 0026).
+	for _, basis := range []clientadapter.ProtectionBasis{
+		clientadapter.ProtectionExactRelease,
+		clientadapter.ProtectionRecognizedClient,
+	} {
+		structured, err := exchange.NewToolDecisionContextForBasis(binding.Plan().PolicySet(), "", basis, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := exchange.NewClientToolDecisionRequest(id, binding, structured, intents, nil); err == nil {
+			t.Fatalf("native request accepted the %s basis", basis)
+		}
 	}
 	if _, err := exchange.NewClientToolDecisionRequest(id, binding, policy, nil, nil); err == nil {
 		t.Fatal("unregistered zero-intent accepted")
