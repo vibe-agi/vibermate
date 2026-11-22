@@ -57,27 +57,50 @@ void main() {
                 ),
         );
         final controller = await _mount(tester, api, copy, settings: true);
-        expect(find.text(copy('settings.access.socks')), findsOneWidget);
-        expect(
-          find.text(
-            mode == 'enabled'
-                ? api.access!.socksAddress!
-                : copy('settings.access.network.$mode'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.text(
-            copy(
-              mode == 'unknown'
-                  ? 'settings.access.vless.unknown'
-                  : mode == 'enabled'
-                  ? 'settings.access.vless.installed'
-                  : 'settings.access.vless.absent',
+        final socks = find.text(copy('settings.access.socks'));
+        // On this Mac the listener is a technical detail at the end of the
+        // page, shown only once the Runtime has said what it is.
+        final toggle = find.byKey(const Key('access-technical-details-toggle'));
+        if (mode == 'unknown') {
+          expect(toggle, findsNothing);
+          expect(socks, findsNothing);
+          expect(
+            find.text(copy('settings.access.network.unknown')),
+            findsNothing,
+          );
+        } else {
+          await tester.scrollUntilVisible(
+            toggle,
+            200,
+            scrollable: find
+                .descendant(
+                  of: find.byKey(const Key('settings-access-scroll')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          );
+          await tester.pumpAndSettle();
+          expect(socks, findsNothing);
+          await tester.tap(toggle);
+          await tester.pumpAndSettle();
+          expect(socks, findsOneWidget);
+          expect(
+            find.text(
+              mode == 'enabled'
+                  ? api.access!.socksAddress!
+                  : copy('settings.access.network.disabled'),
             ),
-          ),
-          findsOneWidget,
-        );
+            findsOneWidget,
+          );
+        }
+        // The VLESS engine line sits with the network exits now.
+        for (final key in const [
+          'settings.access.vless.unknown',
+          'settings.access.vless.installed',
+          'settings.access.vless.absent',
+        ]) {
+          expect(find.text(copy(key)), findsNothing);
+        }
         expect(tester.takeException(), isNull);
         if (mode == 'enabled') {
           await _render(tester, reviewDirectory, 'settings-${language.name}');
