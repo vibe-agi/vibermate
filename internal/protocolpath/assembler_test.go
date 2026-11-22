@@ -407,6 +407,53 @@ func TestAssemblerChecksToolCallsBothWays(t *testing.T) {
 	}
 }
 
+// A tool call the provider side built wrongly is refused when it arrives,
+// before it can reach the client or the approval.
+func TestAssemblerRefusesAnInvalidToolCall(t *testing.T) {
+	t.Parallel()
+	valid := testCall(t, "call_1", "Bash", `{}`)
+	unnamed := valid
+	unnamed.Name = ""
+	empty := valid
+	empty.Arguments = protocolcore.JSONDocument{}
+	for name, call := range map[string]protocolcore.ToolCall{
+		"no key":       {Name: "Bash", Arguments: valid.Arguments},
+		"no name":      unnamed,
+		"no arguments": empty,
+	} {
+		assembler := newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{})
+		output, err := assembler.ToolCall("1", call)
+		if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidProviderResponse || len(output) != 0 {
+			t.Fatalf("%s: ToolCall() = %q, %v", name, output, err)
+		}
+		if _, err := assembler.Text("2", "x"); err == nil {
+			t.Fatalf("%s: a failed assembler accepted more content", name)
+		}
+	}
+}
+
+// Tool calls that wait behind an open block are charged to the held bound,
+// so a stream cannot buffer calls without limit while a block stays open.
+func TestAssemblerBufferedToolCallsAreBounded(t *testing.T) {
+	t.Parallel()
+	assembler := newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{MaxHeldBytes: 200})
+	if _, err := assembler.Text("text", "open"); err != nil {
+		t.Fatal(err)
+	}
+	arguments := `{"command":"` + strings.Repeat("x", 60) + `"}`
+	var err error
+	accepted := 0
+	for index := 0; index < 50 && err == nil; index++ {
+		_, err = assembler.ToolCall(fmt.Sprintf("call-%d", index), testCall(t, fmt.Sprintf("call_%d", index), "Bash", arguments))
+		if err == nil {
+			accepted++
+		}
+	}
+	if protocolcore.ReasonOf(err) != protocolcore.ReasonStreamLimitExceeded || accepted != 2 {
+		t.Fatalf("accepted %d buffered calls, then %v", accepted, err)
+	}
+}
+
 func TestAssemblerEmptyResponseGivesOneEmptyTextBlock(t *testing.T) {
 	t.Parallel()
 	assembler := newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{})
@@ -494,6 +541,44 @@ func TestAssemblerOmittedDisplayNeverShowsReasoningText(t *testing.T) {
 	}
 }
 
+// The terminal is compared with the whole ReasoningDone value: text, text
+// source, redaction and seal. A summary and raw reasoning content with the
+// same text are different values.
+func TestAssemblerTerminalReasoningMustMatchItsValue(t *testing.T) {
+	t.Parallel()
+	value := protocolcore.Reasoning{Text: "Plan.", TextSource: protocolcore.ReasoningTextContent, Seal: protocolcore.ReasoningSeal{Format: protocolcore.SealResponsesEncrypted, ItemID: "rs_1", Opaque: "ENC"}}
+	summary := value
+	summary.TextSource = protocolcore.ReasoningTextSummary
+	defaulted := value
+	defaulted.TextSource = ""
+	text := value
+	text.Text = "Plan!"
+	for _, encoder := range []ClientStreamEncoder{reasoningEncoder{}, recordingEncoder{}} {
+		for name, test := range map[string]struct {
+			streamed, terminal protocolcore.Reasoning
+			accepted           bool
+		}{
+			"same value":           {value, value, true},
+			"summary is a default": {summary, defaulted, true},
+			"other text source":    {value, summary, false},
+			"other text":           {value, text, false},
+		} {
+			assembler := newTestAssembler(t, encoder, protocolcore.ThinkingDisplaySummarized, AssemblerOptions{})
+			if _, err := assembler.ReasoningDone("0", test.streamed); err != nil {
+				t.Fatal(err)
+			}
+			terminal := test.terminal
+			err := assembler.Terminal(terminalResponse(protocolcore.StopReasonEndTurn, protocolcore.ContentBlock{Kind: protocolcore.BlockReasoning, Reasoning: &terminal}))
+			if (err == nil) != test.accepted {
+				t.Fatalf("%T %s: Terminal() error = %v", encoder, name, err)
+			}
+			if err != nil && protocolcore.ReasonOf(err) != protocolcore.ReasonStreamStateViolation {
+				t.Fatalf("%T %s: reason = %s", encoder, name, protocolcore.ReasonOf(err))
+			}
+		}
+	}
+}
+
 func TestAssemblerWithoutReasoningCapabilityKeepsReasoningInTheTerminal(t *testing.T) {
 	t.Parallel()
 	value := protocolcore.Reasoning{Text: "Thinking.", Seal: protocolcore.ReasoningSeal{Format: protocolcore.SealResponsesEncrypted, ItemID: "rs_1", Opaque: "ENC"}}
@@ -520,6 +605,11 @@ func TestAssemblerWithoutReasoningCapabilityKeepsReasoningInTheTerminal(t *testi
 	terminal = finish(t, alone, terminalResponse(protocolcore.StopReasonEndTurn, protocolcore.ContentBlock{Kind: protocolcore.BlockReasoning, Reasoning: &value}))
 	if release := approve(t, terminal); release != "T0[ ]0 E:end_turn" {
 		t.Fatalf("release = %q", release)
+	}
+	// The client's empty block is not added to the decoded response, which
+	// stays reasoning-only.
+	if blocks := terminal.DecodedResponse().Blocks; len(blocks) != 1 || blocks[0].Kind != protocolcore.BlockReasoning {
+		t.Fatalf("decoded response = %+v", blocks)
 	}
 }
 
