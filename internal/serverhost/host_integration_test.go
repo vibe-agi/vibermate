@@ -1396,6 +1396,12 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if err := json.NewDecoder(create.Body).Decode(&grant); err != nil {
 		t.Fatal(err)
 	}
+	// The Server's Runtime names the client the companion's claim was
+	// validated for (ADR 0026).
+	if view, err := host.Runtime().CaptureRunReader().GetRun(context.Background(), grant.Run.ID); err != nil ||
+		view.RecognizedClient.ID != "claude-code" {
+		t.Fatalf("the recognized companion run named %+v, %v", view.RecognizedClient, err)
+	}
 
 	waitServerRecording(t, host.Runtime())
 	proxyURL, err := url.Parse("http://" + host.Status().ListenAddress)
@@ -1534,8 +1540,10 @@ func loginRemoteTestUser(
 }
 
 // The Server's Runtime names a recognized run's client from the catalog the
-// Server validates companion claims against (ADR 0026). Companion runs stored
-// under another catalog revision name none.
+// Server validates companion claims against (ADR 0026). A companion claim is
+// created only at that catalog's revision, and its run names the client; a
+// claim at another revision is refused at create, and a run stored under
+// another revision names none.
 func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -1554,24 +1562,19 @@ func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 	}
 	for _, testCase := range []struct {
 		name    string
-		catalog *clientadapter.Catalog
-		want    map[clientadapter.CatalogRevision]string
+		catalog clientadapter.Catalog
+		custom  bool
 	}{
-		{"production catalog", nil, map[clientadapter.CatalogRevision]string{
-			builtIn.Revision():     "codex-cli",
-			builtIn.Revision() - 1: "",
-		}},
-		{"unrelated catalog revision", &custom, map[clientadapter.CatalogRevision]string{
-			builtIn.Revision():     "",
-			builtIn.Revision() - 1: "codex-cli",
-		}},
+		{"production catalog", builtIn, false},
+		{"unrelated catalog revision", custom, true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
 			options := serverOptions(t, t.TempDir())
-			if testCase.catalog != nil {
-				options.ClientCatalog = *testCase.catalog
+			options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
+			if testCase.custom {
+				options.ClientCatalog = testCase.catalog
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			host, err := serverhost.Start(ctx, options)
@@ -1581,7 +1584,16 @@ func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 			}
 			defer shutdownServer(t, host)
 			runtime := host.Runtime()
-			for revision, want := range testCase.want {
+			want := func(revision clientadapter.CatalogRevision) string {
+				if revision == testCase.catalog.Revision() {
+					return "codex-cli"
+				}
+				return ""
+			}
+			revisions := []clientadapter.CatalogRevision{builtIn.Revision(), builtIn.Revision() - 1}
+
+			// A run stored under either revision, as restart recovery reads it.
+			for _, revision := range revisions {
 				directory := t.TempDir()
 				grant, err := runtime.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{
 					CWD:                     directory,
@@ -1601,12 +1613,113 @@ func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 				if err := runtime.CaptureRuns().Finish(context.Background(), grant.Run.ID, grant.ControlCapability); err != nil {
 					t.Fatal(err)
 				}
-				if view.RecognizedClient.ID != want {
-					t.Fatalf("revision %d named %+v, want client %q", revision, view.RecognizedClient, want)
+				if view.RecognizedClient.ID != want(revision) {
+					t.Fatalf("stored revision %d named %+v, want client %q",
+						revision, view.RecognizedClient, want(revision))
+				}
+			}
+
+			// A companion's claim, as a Server creates a recognized run. The two
+			// claims differ only in their catalog revision.
+			token := loginRuntimeUserSession(t, host, "companion-user")
+			signer := clientadapter.CodexCLINativeSignerDarwin()
+			for _, revision := range revisions {
+				response := postJSON(
+					t,
+					&http.Client{Timeout: 10 * time.Second},
+					"http://"+host.Status().ListenAddress+"/api/v1/capture-runs",
+					token,
+					capturecontrol.CreateRequest{
+						EnvironmentID:  environment.SystemTransparentID.String(),
+						CWD:            "/workspace/project",
+						Command:        []string{"codex"},
+						ExecutablePath: "/opt/tools/codex",
+						Companion: &capturecontrol.CompanionAttestationInput{
+							Detection: clientadapter.Detection{
+								Status: clientadapter.StatusGeneric, Recognition: clientadapter.RecognitionRecognized,
+								CatalogRevision: revision, CanonicalPath: "/opt/tools/codex",
+								ExecutableLabel: "codex",
+								Signer: &clientadapter.SignerEvidence{
+									ID: signer.ID, Revision: signer.Revision, CatalogRevision: revision,
+									InstallShape: signer.InstallShape, LaunchRecipe: signer.LaunchRecipe,
+									SignedPath: "/opt/tools/codex",
+								},
+							},
+							Workspace: capturecontrol.CompanionWorkspaceInput{
+								MachineID:      "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+								WorkspaceID:    "QfEkuRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6w",
+								WorkspaceLabel: "project", RegistrationRevision: 1, DerivationRevision: 1,
+							},
+						},
+					},
+				)
+				payload, readErr := io.ReadAll(response.Body)
+				response.Body.Close()
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if want(revision) == "" {
+					var problem struct {
+						Code capturecontrol.ReasonCode `json:"code"`
+					}
+					if response.StatusCode != http.StatusUnprocessableEntity ||
+						json.Unmarshal(payload, &problem) != nil ||
+						problem.Code != capturecontrol.ReasonAdapterVerification {
+						t.Fatalf("a claim at revision %d: status=%d body=%s", revision, response.StatusCode, payload)
+					}
+					continue
+				}
+				if response.StatusCode != http.StatusCreated {
+					t.Fatalf("a claim at revision %d: status=%d body=%s", revision, response.StatusCode, payload)
+				}
+				var grant capturecontrol.LaunchGrant
+				if err := json.Unmarshal(payload, &grant); err != nil {
+					t.Fatal(err)
+				}
+				view, err := runtime.CaptureRunReader().GetRun(t.Context(), grant.Run.ID)
+				if err != nil || view.RecognizedClient.ID != want(revision) {
+					t.Fatalf("the companion run at revision %d named %+v, %v, want client %q",
+						revision, view.RecognizedClient, err, want(revision))
 				}
 			}
 		})
 	}
+}
+
+// loginRuntimeUserSession creates a Runtime User with every Environment and
+// returns the bearer token of its new Login Session.
+func loginRuntimeUserSession(t *testing.T, host *serverhost.Host, username string) string {
+	t.Helper()
+	created, err := host.Runtime().RuntimeUsers().Create(
+		context.Background(),
+		runtimeuser.CreateCommand{Username: username, Password: []byte("test-server-password")},
+	)
+	if err != nil {
+		t.Fatalf("create Runtime User: %v", err)
+	}
+	grantAllEnvironments(t, host.Runtime().RuntimeUsers(), created.ID)
+	response := postJSON(
+		t,
+		&http.Client{Timeout: 10 * time.Second},
+		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserSessionPath,
+		"",
+		servercontrol.RuntimeUserLogin{
+			Schema: servercontrol.RuntimeUserLoginSchema, Username: username,
+			Password:   "test-server-password",
+			MachineID:  "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+			DeviceName: "Linux workstation",
+		},
+	)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("login status=%d body=%s", response.StatusCode, payload)
+	}
+	var session servercontrol.RuntimeUserSession
+	if err := json.NewDecoder(response.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+	return session.SessionToken
 }
 
 func startServer(t *testing.T, root string) *serverhost.Host {
