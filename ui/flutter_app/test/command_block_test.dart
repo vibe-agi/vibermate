@@ -14,6 +14,7 @@ void main() {
     String? copyLabel,
     bool clipboardFails = false,
     double width = 390,
+    Widget? caption,
   }) async {
     await tester.binding.setSurfaceSize(Size(width, 400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -45,7 +46,8 @@ void main() {
               children: [
                 CommandBlock(
                   key: const Key('block'),
-                  label: 'Login',
+                  label: caption == null ? 'Login' : null,
+                  caption: caption,
                   text: text,
                   copyLabel: copyLabel,
                   copyTooltip: 'Copy login command',
@@ -84,6 +86,56 @@ void main() {
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a cut-off end fades out until it is scrolled into view', (
+    tester,
+  ) async {
+    await mountBlock(tester);
+    await tester.pump();
+    final fade = find.byKey(const Key('command-block-fade'));
+    expect(fade, findsOneWidget);
+    // At the end of the command nothing is cut off any more.
+    final scroll = tester.widget<SingleChildScrollView>(
+      find.descendant(
+        of: find.byKey(const Key('block')),
+        matching: find.byType(SingleChildScrollView),
+      ),
+    );
+    scroll.controller!.jumpTo(scroll.controller!.position.maxScrollExtent);
+    await tester.pump();
+    expect(fade, findsNothing);
+  });
+
+  testWidgets('a command that fits does not fade', (tester) async {
+    await mountBlock(tester, text: 'vibermate doctor');
+    await tester.pump();
+    expect(find.byKey(const Key('command-block-fade')), findsNothing);
+  });
+
+  testWidgets('with a caption, Copy moves above and the command gets the '
+      'whole width', (tester) async {
+    await mountBlock(
+      tester,
+      text: 'vibermate doctor',
+      copyLabel: 'Copy',
+      caption: const Text('Claude Code'),
+    );
+    final caption = tester.getRect(find.text('Claude Code'));
+    final button = tester.getRect(find.byKey(const Key('block-copy')));
+    final text = tester.getRect(find.byKey(const Key('block-text')));
+    final block = tester.getRect(find.byKey(const Key('block')));
+    expect(button.bottom, lessThanOrEqualTo(text.top));
+    expect(button.right, closeTo(block.right, 1));
+    expect(caption.left, closeTo(block.left, 1));
+    // Nothing sits beside the command inside the block.
+    expect(
+      find.descendant(
+        of: find.byType(DecoratedBox),
+        matching: find.byKey(const Key('block-copy')),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('multi-line text keeps its own line breaks', (tester) async {

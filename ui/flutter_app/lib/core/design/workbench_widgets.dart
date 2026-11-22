@@ -1386,9 +1386,10 @@ final class CenteredMessage extends StatelessWidget {
 /// Text someone copies into Terminal or a configuration file. It is one
 /// bordered block in Terminal's font: a command stays on one line and scrolls
 /// sideways instead of wrapping, because a wrapped command reads as two and
-/// invites retyping; multi-line text keeps its own line breaks. The copy
-/// button sits at the block's top-right, and copying announces [copiedLabel]
-/// once, in the verified colour.
+/// invites retyping; multi-line text keeps its own line breaks, and a cut-off
+/// end fades out so it reads as scrollable. The copy button sits at the
+/// block's top-right, or beside [caption] above it, and copying announces
+/// [copiedLabel] once, in the verified colour.
 final class CommandBlock extends StatefulWidget {
   const CommandBlock({
     required this.text,
@@ -1402,6 +1403,7 @@ final class CommandBlock extends StatefulWidget {
     this.copyKey,
     this.textKey,
     this.onCopied,
+    this.caption,
     super.key,
   });
 
@@ -1426,6 +1428,10 @@ final class CommandBlock extends StatefulWidget {
   final Key? textKey;
   final VoidCallback? onCopied;
 
+  /// What the command is, on a row above the block with the copy button at
+  /// its right, so the command gets the block's whole width.
+  final Widget? caption;
+
   @override
   State<CommandBlock> createState() => _CommandBlockState();
 }
@@ -1436,6 +1442,17 @@ final class _CommandBlockState extends State<CommandBlock> {
   bool _copied = false;
   bool _failed = false;
   Timer? _reset;
+  final _scroll = ScrollController();
+
+  /// More of the text lies past the block's right edge.
+  bool _cutOff = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_measure);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
 
   @override
   void didUpdateWidget(covariant CommandBlock oldWidget) {
@@ -1444,13 +1461,21 @@ final class _CommandBlockState extends State<CommandBlock> {
       _reset?.cancel();
       _copied = false;
       _failed = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
     }
   }
 
   @override
   void dispose() {
     _reset?.cancel();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  void _measure() {
+    if (!mounted || !_scroll.hasClients) return;
+    final cutOff = _scroll.position.extentAfter > 0.5;
+    if (cutOff != _cutOff) setState(() => _cutOff = cutOff);
   }
 
   Future<void> _copy() async {
@@ -1508,6 +1533,43 @@ final class _CommandBlockState extends State<CommandBlock> {
             ),
             padding: EdgeInsets.zero,
           );
+    final caption = widget.caption;
+    Widget text = SingleChildScrollView(
+      controller: _scroll,
+      scrollDirection: Axis.horizontal,
+      child: Container(
+        constraints: const BoxConstraints(
+          minHeight: ViberMetrics.controlHeight,
+        ),
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(
+          horizontal: ViberSpacing.md,
+          vertical: ViberSpacing.sm,
+        ),
+        child: SelectableText(
+          widget.text,
+          key: widget.textKey,
+          style: monoStyle.copyWith(
+            fontSize: widget.fontSize,
+            color: widget.enabled ? colors.text : colors.textFaint,
+          ),
+        ),
+      ),
+    );
+    if (_cutOff) {
+      text = ShaderMask(
+        key: const Key('command-block-fade'),
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) {
+          final fade = bounds.width <= 0 ? 0.0 : 28 / bounds.width;
+          return LinearGradient(
+            colors: const [Colors.black, Colors.black, Colors.transparent],
+            stops: [0, (1 - fade).clamp(0, 1), 1],
+          ).createShader(bounds);
+        },
+        child: text,
+      );
+    }
     final block = DecoratedBox(
       decoration: BoxDecoration(
         color: colors.rail,
@@ -1518,26 +1580,12 @@ final class _CommandBlockState extends State<CommandBlock> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Container(
-                constraints: const BoxConstraints(
-                  minHeight: ViberMetrics.controlHeight,
-                ),
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: ViberSpacing.md,
-                  vertical: ViberSpacing.sm,
-                ),
-                child: SelectableText(
-                  widget.text,
-                  key: widget.textKey,
-                  style: monoStyle.copyWith(
-                    fontSize: widget.fontSize,
-                    color: widget.enabled ? colors.text : colors.textFaint,
-                  ),
-                ),
-              ),
+            child: NotificationListener<ScrollMetricsNotification>(
+              onNotification: (_) {
+                _measure();
+                return false;
+              },
+              child: text,
             ),
           ),
           // The icon form says 'Copied' beside the icon; a labelled button
@@ -1559,10 +1607,11 @@ final class _CommandBlockState extends State<CommandBlock> {
                 ),
               ),
             ),
-          if (copyLabel != null)
-            Semantics(liveRegion: _copied, child: button)
-          else
-            button,
+          if (caption == null)
+            if (copyLabel != null)
+              Semantics(liveRegion: _copied, child: button)
+            else
+              button,
         ],
       ),
     );
@@ -1578,6 +1627,19 @@ final class _CommandBlockState extends State<CommandBlock> {
               style: Theme.of(
                 context,
               ).textTheme.labelMedium?.copyWith(color: colors.textMuted),
+            ),
+            const SizedBox(height: ViberSpacing.xs),
+          ],
+          if (caption != null) ...[
+            Row(
+              children: [
+                Expanded(child: caption),
+                const SizedBox(width: ViberSpacing.md),
+                if (copyLabel != null)
+                  Semantics(liveRegion: _copied, child: button)
+                else
+                  button,
+              ],
             ),
             const SizedBox(height: ViberSpacing.xs),
           ],

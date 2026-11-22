@@ -346,6 +346,10 @@ final class LaunchCommandCard extends StatelessWidget {
           child: child,
         );
         Widget row(String client, String label) {
+          final caption = Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge,
+          );
           final block = CommandBlock(
             text: launchCommand(controller, client, routingSetId: routingSetId),
             copyLabel: copy('setup.start.copy'),
@@ -355,22 +359,14 @@ final class LaunchCommandCard extends StatelessWidget {
             fontSize: ViberType.body,
             enabled: enabled,
             copyKey: Key('$keyPrefix-copy-$client'),
-          );
-          final caption = Text(
-            label,
-            style: Theme.of(context).textTheme.labelLarge,
+            // Narrow: the name and Copy share a row above the command, which
+            // keeps the whole width for the command itself.
+            caption: narrow ? caption : null,
           );
           return KeyedSubtree(
             key: Key('$keyPrefix-command-$client'),
             child: narrow
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      caption,
-                      const SizedBox(height: ViberSpacing.xs),
-                      block,
-                    ],
-                  )
+                ? block
                 : Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
