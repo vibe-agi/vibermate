@@ -198,7 +198,7 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		if command == "doctor" && !strings.Contains(stdout.String(), "vibermate run -- codex") {
 			t.Fatalf("doctor output lacks next action: %s", stdout.String())
 		}
-		if command == "doctor" && runtime.GOOS == "darwin" && !strings.Contains(stdout.String(), "PASS Local root trust") {
+		if command == "doctor" && runtime.GOOS == "darwin" && !strings.Contains(stdout.String(), "PASS ViberMate certificate") {
 			t.Fatalf("root trust outcome absent: %s", stdout.String())
 		}
 	}
@@ -211,7 +211,7 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		}
 		// Only Codex needs the certificate: doctor says so and still tells
 		// a Claude Code user how to start.
-		for _, expected := range []string{"FAIL Local root trust", "Codex", "Claude Code works without it", "vibermate run -- claude"} {
+		for _, expected := range []string{"FAIL ViberMate certificate", "Codex", "Claude Code works without it", "vibermate run -- claude"} {
 			if !strings.Contains(stdout.String(), expected) {
 				t.Fatalf("untrusted Root output lacks %q: %s", expected, &stdout)
 			}
@@ -961,6 +961,10 @@ func TestRootTrustMessagesNameCodexAndTheAppPlace(t *testing.T) {
 		{locales.SimplifiedChinese, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code \u4e0d\u53d7\u5f71\u54cd"}},
 		{locales.EnglishUS, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
 		{locales.SimplifiedChinese, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
+		// Doctor names the certificate as the App and the error do.
+		{locales.EnglishUS, "cli.doctor.root.pass", []string{"PASS ViberMate certificate"}},
+		{locales.SimplifiedChinese, "cli.doctor.root.pass", []string{"PASS ViberMate \u8bc1\u4e66"}},
+		{locales.SimplifiedChinese, "cli.doctor.root.fail", []string{"FAIL ViberMate \u8bc1\u4e66"}},
 	} {
 		message, err := catalogs.Render(check.locale, check.key, nil)
 		if err != nil {
@@ -969,6 +973,45 @@ func TestRootTrustMessagesNameCodexAndTheAppPlace(t *testing.T) {
 		for _, expected := range check.expected {
 			if !strings.Contains(message, expected) {
 				t.Fatalf("%s %s lacks %q: %s", check.locale, check.key, expected, message)
+			}
+		}
+	}
+}
+
+func TestServerLaunchLinesUseThePersonsLanguage(t *testing.T) {
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		locale   locales.Locale
+		key      string
+		expected []string
+	}{
+		{locales.EnglishUS, "cli.run.startingRemote", []string{"starting codex through the ViberMate Server at https://vibermate.example.com", "Sessions"}},
+		{locales.SimplifiedChinese, "cli.run.startingRemote", []string{"https://vibermate.example.com", "codex", "\u300c\u8fd0\u884c\u8bb0\u5f55\u300d"}},
+		{locales.EnglishUS, "cli.run.serverLost", []string{"lost the connection to the ViberMate Server", "codex keeps running"}},
+		{locales.SimplifiedChinese, "cli.run.serverLost", []string{"ViberMate Server", "codex"}},
+		{locales.EnglishUS, "cli.run.serverRestored", []string{"reconnected to the ViberMate Server", "codex can continue"}},
+		{locales.SimplifiedChinese, "cli.run.serverRestored", []string{"ViberMate Server", "codex"}},
+	} {
+		parameters := map[string]string{"agent": "codex"}
+		if check.key == "cli.run.startingRemote" {
+			parameters["server"] = "https://vibermate.example.com"
+		}
+		message, err := catalogs.Render(check.locale, check.key, parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, expected := range check.expected {
+			if !strings.Contains(message, expected) {
+				t.Fatalf("%s %s lacks %q: %s", check.locale, check.key, expected, message)
+			}
+		}
+		// The old internal words stay out of the Terminal.
+		for _, word := range []string{"Capture", "lease", "Runtime"} {
+			if strings.Contains(message, word) {
+				t.Fatalf("%s %s says %q: %s", check.locale, check.key, word, message)
 			}
 		}
 	}
@@ -1005,21 +1048,27 @@ func TestMissingProgramNamesTheCommandAndExplainsAliases(t *testing.T) {
 }
 
 func TestCLIMessagesUseTheAppsWordForRoutingSets(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "locales", "en-US.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var english map[string]string
-	if err := json.Unmarshal(raw, &english); err != nil {
-		t.Fatal(err)
-	}
-	for key, value := range english {
-		if !strings.HasPrefix(key, "cli.") || strings.HasPrefix(key, "cli.error.transparent.") {
-			continue
+	for file, words := range map[string][]string{
+		"en-US.json": {"Environment", "Traffic polic", "traffic polic", "transparent capture"},
+		// Chinese says routing set the app's way, never "work environment".
+		"zh-CN.json": {"Environment", "\u5de5\u4f5c\u73af\u5883"},
+	} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "locales", file))
+		if err != nil {
+			t.Fatal(err)
 		}
-		for _, word := range []string{"Environment", "Traffic polic", "traffic polic", "transparent capture"} {
-			if strings.Contains(value, word) {
-				t.Errorf("%s says %q: %s", key, word, value)
+		var messages map[string]string
+		if err := json.Unmarshal(raw, &messages); err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range messages {
+			if !strings.HasPrefix(key, "cli.") || strings.HasPrefix(key, "cli.error.transparent.") {
+				continue
+			}
+			for _, word := range words {
+				if strings.Contains(value, word) {
+					t.Errorf("%s %s says %q: %s", file, key, word, value)
+				}
 			}
 		}
 	}

@@ -475,8 +475,8 @@ func TestLauncherKeepsChildThroughTemporaryControlFailure(t *testing.T) {
 			if control.createCalls != 1 || control.attachCalls != 1 || control.finishCalls != 1 {
 				t.Fatalf("reconnection recreated the run or child: create=%d attach=%d finish=%d", control.createCalls, control.attachCalls, control.finishCalls)
 			}
-			if strings.Count(diagnostic.String(), "Runtime connection interrupted") != 1 ||
-				strings.Count(diagnostic.String(), "Runtime connection restored") != 1 {
+			if strings.Count(diagnostic.String(), "lost the connection to the ViberMate app") != 1 ||
+				strings.Count(diagnostic.String(), "reconnected to ViberMate.") != 1 {
 				t.Fatalf("reconnection diagnostics=%q", diagnostic.String())
 			}
 		})

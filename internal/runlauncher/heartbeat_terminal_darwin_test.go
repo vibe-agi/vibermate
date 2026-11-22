@@ -63,7 +63,7 @@ func TestLauncherHeartbeatTerminal(t *testing.T) {
 			if !strings.Contains(transcript, "heartbeat-fixture-ok") {
 				t.Fatalf("heartbeat fixture did not finish: %q", transcript)
 			}
-			if strings.Contains(transcript, "Runtime connection interrupted") || strings.Contains(transcript, "Runtime connection restored") {
+			if strings.Contains(transcript, "lost the connection to the ViberMate app") || strings.Contains(transcript, "reconnected to ViberMate.") {
 				t.Fatalf("heartbeat diagnostics overwrote the child's terminal: %q", transcript)
 			}
 			if scenario == "terminal" || scenario == "revoke" {
@@ -247,7 +247,7 @@ func TestLauncherHeartbeatTerminalFixture(t *testing.T) {
 		redirected = diagnostic.String()
 	}
 	if scenario == "file" || scenario == "pipe" || scenario == "buffer" {
-		if strings.Count(redirected, "Runtime connection interrupted") != 1 || strings.Count(redirected, "Runtime connection restored") != 1 || strings.Count(redirected, "child-input-prompt>") != 1 {
+		if strings.Count(redirected, "lost the connection to the ViberMate app") != 1 || strings.Count(redirected, "reconnected to ViberMate.") != 1 || strings.Count(redirected, "child-input-prompt>") != 1 {
 			t.Fatalf("redirected diagnostics or child stderr changed: %q", redirected)
 		}
 	}

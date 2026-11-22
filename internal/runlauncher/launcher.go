@@ -479,7 +479,7 @@ func (launcher *Launcher) Run(
 	if recovery != nil {
 		heartbeatFailure = recovery.heartbeat(heartbeatContext, child.Process.Pid)
 	} else {
-		heartbeatFailure = launcher.heartbeat(heartbeatContext, control, grant)
+		heartbeatFailure = launcher.heartbeat(heartbeatContext, control, grant, command[0])
 	}
 	stopSupervision := func(cause error) {
 		stopHeartbeat(cause)
@@ -578,18 +578,25 @@ func (launcher *Launcher) announceCapturePreparation(program string) {
 	if launcher == nil || launcher.config.Stderr == nil {
 		return
 	}
-	if launcher.config.Remote != nil {
-		_, _ = fmt.Fprintln(
-			launcher.config.Stderr,
-			"vibermate: preparing Capture on Runtime Server "+
-				launcher.config.Remote.Target.Origin()+".",
-		)
-		return
-	}
 	// Only the name the person typed, never a path resolved from PATH.
-	if message, ok := launcher.localized("cli.run.starting", map[string]string{"agent": filepath.Base(program)}); ok {
+	key, parameters := "cli.run.starting", map[string]string{"agent": filepath.Base(program)}
+	if launcher.config.Remote != nil {
+		key = "cli.run.startingRemote"
+		parameters["server"] = launcher.config.Remote.Target.Origin()
+	}
+	if message, ok := launcher.localized(key, parameters); ok {
 		_, _ = fmt.Fprintln(launcher.config.Stderr, message)
 	}
+}
+
+// launchAgent names the agent in a launcher message: the run's label, or
+// the name the person typed, never a path resolved from PATH.
+func launchAgent(grant capturecontrol.LaunchGrant, program string) map[string]string {
+	name := grant.Run.ExecutableLabel
+	if name == "" && program != "" {
+		name = filepath.Base(program)
+	}
+	return map[string]string{"agent": name}
 }
 
 // localized renders a launcher message in the person's language, the way
@@ -832,8 +839,16 @@ func (launcher *Launcher) heartbeat(
 	ctx context.Context,
 	control *controlClient,
 	grant capturecontrol.LaunchGrant,
+	program string,
 ) <-chan error {
 	failure := make(chan error, 1)
+	// The same moments as a local recovery's, told about the Server when
+	// the run signed in to one.
+	lost, restored := "cli.run.appClosed", "cli.run.reconnected"
+	if launcher.config.Remote != nil {
+		lost, restored = "cli.run.serverLost", "cli.run.serverRestored"
+	}
+	agent := launchAgent(grant, program)
 	go func() {
 		timer := time.NewTimer(launcher.config.HeartbeatInterval)
 		defer timer.Stop()
@@ -854,7 +869,7 @@ func (launcher *Launcher) heartbeat(
 				}
 				if retryableControlFailure(err) {
 					if !reconnecting {
-						launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection interrupted; keeping the command running and retrying. Proxy access still requires a valid Runtime lease.")
+						launcher.writeLocalizedHeartbeatDiagnostic(lost, agent)
 						reconnecting = true
 					}
 					// Do not measure an outage from the last successful heartbeat:
@@ -871,7 +886,7 @@ func (launcher *Launcher) heartbeat(
 					return
 				}
 				if reconnecting {
-					launcher.writeHeartbeatDiagnostic("vibermate: Runtime connection restored.")
+					launcher.writeLocalizedHeartbeatDiagnostic(restored, agent)
 					reconnecting = false
 				}
 				timer.Reset(launcher.config.HeartbeatInterval)
