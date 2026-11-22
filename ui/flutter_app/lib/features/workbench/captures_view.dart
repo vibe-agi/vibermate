@@ -375,7 +375,9 @@ final class _CaptureMaster extends StatelessWidget {
                       history.isEmpty &&
                       controller.data?.captureNextCursor == null
                 ? CenteredMessage(
-                    icon: Icons.filter_alt_off,
+                    // The filter icon belongs to a filter that matched
+                    // nothing; an empty list is just empty.
+                    icon: Icons.adjust,
                     title: copy('capture.empty'),
                     detail: copy(
                       webOwner
