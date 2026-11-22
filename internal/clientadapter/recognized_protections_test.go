@@ -8,9 +8,9 @@ import (
 )
 
 // designedRecognizedClientPolicies is the table ADR 0026 arrives at once every
-// grant has its installed-client proof. The live table grants nothing yet, so
-// the index, the fallback projection and the canary list are exercised against
-// this fixture through the unexported delegates.
+// grant has its installed-client proof. The live table grants Claude Code
+// nothing yet, so the index, the fallback projection and the canary list are
+// exercised against this fixture through the unexported delegates.
 func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 	return []RecognizedClientPolicy{
 		{
@@ -41,29 +41,62 @@ func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	t.Parallel()
 
-	// Both clients are named and nothing is granted: every reader of a
-	// recognized basis stays inactive until a grant arrives with its proof.
+	// Codex has its keepalive grant, proven by C4, and its unconditional
+	// WebSocket fallback, proven by C3. Claude Code is named and granted
+	// nothing: its readers of a recognized basis stay inactive until a grant
+	// arrives with its proof.
+	codexKeepalive := Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
+	codexFallback := Canary{"internal/loopbackproxy", "TestInstalledCodexFallsBackToHTTPAfterProxy426"}
+	codexIdentity := Canary{"internal/clientadapter", "TestInstalledCodexIsRecognizedByItsSigner"}
 	want := []RecognizedClientPolicy{
 		{ClientID: "claude-code"},
-		{ClientID: "codex-cli"},
+		{
+			ClientID:       "codex-cli",
+			IdentityCanary: codexIdentity,
+			Grants: []ProtectionGrant{
+				{FeatureResponsesDataKeepalive, ProofStreamFrame, codexKeepalive},
+			},
+			Unconditional: []ProtectionGrant{
+				{FeatureResponsesWebSocketHTTPFallback, ProofOperationCatalog, codexFallback},
+			},
+		},
 	}
 	got := RecognizedClientPolicies()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("RecognizedClientPolicies() = %+v, want %+v", got, want)
 	}
-	for _, clientID := range []string{"claude-code", "codex-cli", "other", ""} {
-		if features := RecognizedPolicyFeatures(clientID); features != 0 {
-			t.Fatalf("RecognizedPolicyFeatures(%q) = %b, want 0", clientID, features)
+	for clientID, features := range map[string]Feature{
+		"claude-code": 0,
+		"codex-cli":   FeatureResponsesDataKeepalive,
+		"other":       0,
+		"":            0,
+	} {
+		if got := RecognizedPolicyFeatures(clientID); got != features {
+			t.Fatalf("RecognizedPolicyFeatures(%q) = %b, want %b", clientID, got, features)
 		}
-		for _, goos := range []string{"linux", "darwin"} {
-			if canaries := ProtectionCanaries(clientID, goos); len(canaries) != 0 {
-				t.Fatalf("ProtectionCanaries(%q, %q) = %+v, want none", clientID, goos, canaries)
-			}
+	}
+	for _, testCase := range []struct {
+		clientID string
+		goos     string
+		want     []Canary
+	}{
+		{"codex-cli", "linux", []Canary{codexKeepalive, codexFallback}},
+		{"codex-cli", "darwin", []Canary{codexKeepalive, codexFallback, codexIdentity}},
+		{"claude-code", "linux", nil},
+		{"claude-code", "darwin", nil},
+		{"other", "darwin", nil},
+		{"", "darwin", nil},
+	} {
+		if canaries := ProtectionCanaries(testCase.clientID, testCase.goos); !reflect.DeepEqual(canaries, testCase.want) {
+			t.Fatalf("ProtectionCanaries(%q, %q) = %+v, want %+v",
+				testCase.clientID, testCase.goos, canaries, testCase.want)
 		}
 	}
 
 	got[0].ClientID = "changed"
-	got[1].Grants = append(got[1].Grants, ProtectionGrant{Feature: FeatureResponsesDataKeepalive})
+	got[1].Grants[0].Feature = FeatureStructuredWorkspaceTools
+	got[1].Grants = append(got[1].Grants, ProtectionGrant{Feature: FeatureCoreOwnedStreamingFallback})
+	got[1].Unconditional[0].Canary.Test = "changed"
 	if again := RecognizedClientPolicies(); !reflect.DeepEqual(again, want) {
 		t.Fatalf("a caller changed the policy table through its copy: %+v", again)
 	}
@@ -377,15 +410,26 @@ func TestRecognizedClientsNameOnlyTheCurrentRevision(t *testing.T) {
 		}
 	}
 
-	// The live table names both clients and grants neither anything.
+	// The live table names both clients and grants only Codex its keepalive;
+	// a stored run at another revision names neither.
 	live, err := NewRecognizedClients(catalog, ProtectionsOn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for label, id := range map[string]string{"claude": "claude-code", "codex": "codex-cli"} {
+	for label, want := range map[string]RecognizedClient{
+		"claude": {ID: "claude-code"},
+		"codex": {
+			ID:          "codex-cli",
+			Policy:      FeatureResponsesDataKeepalive,
+			Protections: FeatureResponsesDataKeepalive,
+		},
+	} {
 		got, found := live.Client(catalog.Revision(), label)
-		if !found || got != (RecognizedClient{ID: id}) {
-			t.Fatalf("live Client(%q) = %+v, %v", label, got, found)
+		if !found || got != want || got.SwitchedOff() {
+			t.Fatalf("live Client(%q) = %+v, %v, want %+v", label, got, found, want)
+		}
+		if got, found := live.Client(catalog.Revision()-1, label); found || got != (RecognizedClient{}) {
+			t.Fatalf("live Client(%d, %q) = %+v, %v", catalog.Revision()-1, label, got, found)
 		}
 	}
 }
@@ -564,11 +608,17 @@ func TestRecognizedClientsHonourTheSwitch(t *testing.T) {
 			t.Fatalf("Client(%q) = %+v, %v, want %+v switched off", label, got, found, want)
 		}
 	}
-	// A client the policy grants nothing is not switched off: there was
-	// nothing to withdraw.
+	// The live table: the switch withdraws Codex's keepalive and keeps its
+	// policy, and a client the policy grants nothing is not switched off,
+	// because there was nothing to withdraw.
 	live, err := NewRecognizedClients(catalog, ProtectionsOff)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, found := live.Client(catalog.Revision(), "codex"); !found ||
+		got != (RecognizedClient{ID: "codex-cli", Policy: FeatureResponsesDataKeepalive}) ||
+		!got.SwitchedOff() {
+		t.Fatalf("live Client(codex) with the switch off = %+v, %v", got, found)
 	}
 	if got, _ := live.Client(catalog.Revision(), "claude"); got.SwitchedOff() {
 		t.Fatalf("an empty policy reads as switched off: %+v", got)

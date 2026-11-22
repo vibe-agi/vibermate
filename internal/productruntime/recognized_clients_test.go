@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
@@ -25,19 +26,22 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 		catalog clientadapter.Catalog
 		state   clientadapter.ProtectionSwitch
 		want    map[string]string
+		// keepalive is the basis a recognized Codex run's connections get
+		// for the data keepalive, the one protection the policy grants it.
+		keepalive clientadapter.ProtectionBasis
 	}{
 		{"with the host catalog", catalog, clientadapter.ProtectionsOn, map[string]string{
 			"claude": "claude-code",
 			"codex":  "codex-cli",
-		}},
+		}, clientadapter.ProtectionRecognizedClient},
 		{"with the host catalog and the switch off", catalog, clientadapter.ProtectionsOff, map[string]string{
 			"claude": "claude-code",
 			"codex":  "codex-cli",
-		}},
+		}, clientadapter.ProtectionNone},
 		{"without a catalog", clientadapter.Catalog{}, clientadapter.ProtectionsOn, map[string]string{
 			"claude": "",
 			"codex":  "",
-		}},
+		}, clientadapter.ProtectionNone},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -56,7 +60,7 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 			runtime := startTestRuntime(t, options)
 			defer shutdownRuntime(t, runtime)
 			for label, want := range testCase.want {
-				evidence, view := recognizedRunEvidence(t, runtime, label, catalog.Revision())
+				evidence, view, admission := recognizedRunEvidence(t, runtime, label, catalog.Revision())
 				// The Runtime decides which client a run is and carries the
 				// index's value for it, switch included; what the policy
 				// grants that client is pinned in clientadapter.
@@ -67,11 +71,28 @@ func TestProductRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 					t.Fatalf("%s: evidence %+v, view %+v, want %+v naming %q",
 						label, evidence.RecognizedClient, view.RecognizedClient, expected, want)
 				}
+				// The switch withdraws the keepalive from a recognized Codex
+				// on the Runtime's own admission, and Claude has no grant.
+				keepalive := clientadapter.ProtectionNone
+				if label == "codex" {
+					keepalive = testCase.keepalive
+				}
+				if got := admission.ProtectionBasis(clientadapter.FeatureResponsesDataKeepalive); got != keepalive {
+					t.Fatalf("%s: keepalive basis %s, want %s", label, got, keepalive)
+				}
+				switchedOff := label == "codex" && testCase.catalog.Valid() &&
+					testCase.state == clientadapter.ProtectionsOff
+				if evidence.RecognizedClient.SwitchedOff() != switchedOff {
+					t.Fatalf("%s: SwitchedOff() = %v, want %v", label, evidence.RecognizedClient.SwitchedOff(), switchedOff)
+				}
 			}
-			evidence, view := recognizedRunEvidence(t, runtime, "claude", catalog.Revision()-1)
+			evidence, view, admission := recognizedRunEvidence(t, runtime, "codex", catalog.Revision()-1)
 			if evidence.RecognizedClient != (clientadapter.RecognizedClient{}) ||
 				view.RecognizedClient != (clientadapter.RecognizedClient{}) {
 				t.Fatalf("a run at another catalog revision named %+v", evidence.RecognizedClient)
+			}
+			if got := admission.ProtectionBasis(clientadapter.FeatureResponsesDataKeepalive); got != clientadapter.ProtectionNone {
+				t.Fatalf("a run at another catalog revision has keepalive basis %s", got)
 			}
 		})
 	}
@@ -89,12 +110,14 @@ func TestProductRuntimeRefusesAnUnknownProtectionSwitch(t *testing.T) {
 	}
 }
 
+// recognizedRunEvidence stores a recognized run and reads it back as proxy
+// authorization, the run reader and the Runtime's capture admission see it.
 func recognizedRunEvidence(
 	t *testing.T,
 	runtime *Runtime,
 	label string,
 	revision clientadapter.CatalogRevision,
-) (capturerun.Evidence, capturerun.View) {
+) (capturerun.Evidence, capturerun.View, captureadmission.Admission) {
 	t.Helper()
 	dir := t.TempDir()
 	grant, err := runtime.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{
@@ -121,5 +144,17 @@ func recognizedRunEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return evidence, view
+	authorizer, err := captureadmission.NewAuthorizer(runtime.captureRuns, runtime.manualCaptures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := captureadmission.NewProxyCredential(grant.ProxyCapability.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := authorizer.Authorize(t.Context(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence, view, admission
 }

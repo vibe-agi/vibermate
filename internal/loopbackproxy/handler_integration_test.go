@@ -1274,6 +1274,14 @@ type proxyFixtureComposition struct {
 	configure         func(*environment.Environment)
 	configureProxy    func(*loopbackproxy.Options)
 	ingressContext    context.Context
+	// recognition and executableLabel describe the run as the issuer stored
+	// it. A run given a recognition is stored at the built-in catalog's
+	// revision unless catalogRevision names another, and recognizedClients
+	// is the host catalog's index its manager reads.
+	recognition       clientadapter.Recognition
+	executableLabel   string
+	catalogRevision   clientadapter.CatalogRevision
+	recognizedClients clientadapter.RecognizedClients
 }
 
 func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect, adapter *clientadapter.Evidence, policy connectionpolicy.Snapshot, raw rawevidence.RequestRecorder, assignmentEnvironmentID environment.EnvironmentID, composition *proxyFixtureComposition, clientOrigins ...string) *proxyFixture {
@@ -1293,6 +1301,7 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	runOptions := capturerun.DefaultOptions(store.CaptureRunRepository())
 	if composition != nil {
 		runOptions.NativeRevocation = composition.captureRevocation
+		runOptions.RecognizedClients = composition.recognizedClients
 	}
 	runs, err := capturerun.NewManager(context.Background(), runOptions)
 	if err != nil {
@@ -1307,14 +1316,29 @@ func newProxyFixtureConfigured(t *testing.T, clientDialect protocolspec.Dialect,
 	if adapter != nil {
 		catalogRevision = adapter.CatalogRevision
 	}
+	label := "claude"
+	recognition := fixtureRecognition(adapter)
+	if composition != nil && composition.recognition != "" {
+		if adapter != nil {
+			t.Fatal("a fixture run carries either release evidence or a recognition")
+		}
+		recognition = composition.recognition
+		catalogRevision = clientadapter.BuiltInCatalog().Revision()
+		if composition.catalogRevision != 0 {
+			catalogRevision = composition.catalogRevision
+		}
+	}
+	if composition != nil && composition.executableLabel != "" {
+		label = composition.executableLabel
+	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
 		CWD:                     filepath.Join(directory, "workspace"),
-		CanonicalExecutablePath: filepath.Join(directory, "bin", "claude"),
-		ExecutableLabel:         "claude",
+		CanonicalExecutablePath: filepath.Join(directory, "bin", label),
+		ExecutableLabel:         label,
 		Lifetime:                5 * time.Minute,
 		CatalogRevision:         catalogRevision,
 		Adapter:                 adapter,
-		Recognition:             fixtureRecognition(adapter),
+		Recognition:             recognition,
 		Workspace:               proxyWorkspaceScope(t),
 	})
 	if err != nil {

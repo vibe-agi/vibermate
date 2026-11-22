@@ -57,13 +57,24 @@ type RecognizedClientPolicy struct {
 	Unconditional []ProtectionGrant
 }
 
-// recognizedClientPolicies names both publisher-recognized clients and, for
-// now, grants neither anything. Each grant is added together with the
-// installed-client proof that re-proves it, so until then every reader of a
-// recognized basis stays inactive.
+// recognizedClientPolicies names both publisher-recognized clients. Each
+// grant is added only after the installed-client proof that re-proves it has
+// passed against a real release; Claude Code is granted nothing yet, so every
+// Claude reader of a recognized basis stays inactive.
 var recognizedClientPolicies = [...]RecognizedClientPolicy{
 	{ClientID: "claude-code"},
-	{ClientID: "codex-cli"},
+	{
+		ClientID:       "codex-cli",
+		IdentityCanary: Canary{"internal/clientadapter", "TestInstalledCodexIsRecognizedByItsSigner"},
+		Grants: []ProtectionGrant{
+			{FeatureResponsesDataKeepalive, ProofStreamFrame,
+				Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}},
+		},
+		Unconditional: []ProtectionGrant{
+			{FeatureResponsesWebSocketHTTPFallback, ProofOperationCatalog,
+				Canary{"internal/loopbackproxy", "TestInstalledCodexFallsBackToHTTPAfterProxy426"}},
+		},
+	},
 }
 
 // authorityBearingFeatures change what a client may do without a question or

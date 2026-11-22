@@ -23,13 +23,24 @@ import (
 )
 
 // The executor double requests one liveness write; admission, frozen catalog
-// routing, private TLS handler and downstream accounting are all real.
+// routing, private TLS handler and downstream accounting are all real. A
+// recognized run is named by the built-in catalog's index, as the host builds
+// it, so a run the Runtime recognized as Codex by its publisher's signature at
+// the current revision gets the data frame on /v1/responses (ADR 0026), while
+// every client-reported header stays spoofed.
 func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
+	const dataFrame = "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n"
 	for _, test := range []struct {
 		name, host, path, want string
 		verified, manual       bool
 		dialect                protocolspec.Dialect
 		provider               string
+		// recognition and label describe a run stored without release
+		// evidence; stale stores it at the previous catalog revision.
+		recognition        clientadapter.Recognition
+		label              string
+		stale, switchedOff bool
+		basis              clientadapter.ProtectionBasis
 	}{
 		{name: "configured_native", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n"},
 		{name: "manual_unknown_native", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n", manual: true},
@@ -46,6 +57,12 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 		{name: "other_dialect", host: "api.anthropic.com", path: "/v1/messages", want: ": keepalive\n\n", dialect: protocolspec.DialectAnthropicMessages, verified: true},
 		{name: "generic_client_chatgpt_provider", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", provider: "https://chatgpt.com"},
 		{name: "native_client_private_provider", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n", provider: "https://private.example"},
+		{name: "recognized_codex_generic", host: "api.openai.com", path: "/v1/responses", want: dataFrame, recognition: clientadapter.RecognitionRecognized, label: "codex", basis: clientadapter.ProtectionRecognizedClient},
+		{name: "recognized_claude_generic", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "claude"},
+		{name: "unverified_codex_generic", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionUnverified, label: "codex"},
+		{name: "recognized_codex_stale_revision", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "codex", stale: true},
+		{name: "recognized_codex_switched_off", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "codex", switchedOff: true},
+		{name: "recognized_codex_native", host: "chatgpt.com", path: "/backend-api/codex/responses", want: dataFrame, recognition: clientadapter.RecognitionRecognized, label: "codex", basis: clientadapter.ProtectionRecognizedClient},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			observer := &rawObserver{}
@@ -70,7 +87,27 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 			if test.provider != "" {
 				origins = append(origins, test.provider)
 			}
-			fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(t, dialect, adapter, allowEverythingTestPolicy(t), observer, "", origins...)
+			state := clientadapter.ProtectionsOn
+			if test.switchedOff {
+				state = clientadapter.ProtectionsOff
+			}
+			index, err := clientadapter.NewRecognizedClients(clientadapter.BuiltInCatalog(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A composition names its compiler: the same one the fixture
+			// would choose for these origins.
+			compiler := testEnvironmentCompiler(t, dialect)
+			if test.provider != "" {
+				compiler = testEnvironmentCompiler(t, dialect, livenessAccountCatalog{})
+			}
+			composition := &proxyFixtureComposition{
+				compiler: compiler, recognition: test.recognition, executableLabel: test.label, recognizedClients: index,
+			}
+			if test.stale {
+				composition.catalogRevision = clientadapter.BuiltInCatalog().Revision() - 1
+			}
+			fixture := newProxyFixtureConfigured(t, dialect, adapter, allowEverythingTestPolicy(t), observer, "", composition, origins...)
 			defer fixture.Close(t)
 			credential := fixture.grant.ProxyCapability.Value()
 			if test.manual {
@@ -98,6 +135,18 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 			}
 			if !test.verified && admission.Supports(clientadapter.FeatureResponsesDataKeepalive) {
 				t.Fatal("format selection fabricated adapter compatibility")
+			}
+			basis := test.basis
+			if test.verified {
+				basis = clientadapter.ProtectionExactRelease
+			}
+			if got := admission.ProtectionBasis(clientadapter.FeatureResponsesDataKeepalive); got != basis {
+				t.Fatalf("keepalive basis = %s, want %s", got, basis)
+			}
+			for _, other := range []clientadapter.Feature{clientadapter.FeatureCoreOwnedStreamingFallback, clientadapter.FeatureStructuredWorkspaceTools} {
+				if !test.verified && admission.ProtectionBasis(other) != clientadapter.ProtectionNone {
+					t.Fatalf("%s basis = %s for a run without release evidence", other.Name(), admission.ProtectionBasis(other))
+				}
 			}
 			fixture.exchanges.keepalive = true
 			origin, err := originidentity.ParseClientOrigin("https://" + test.host)

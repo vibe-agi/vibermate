@@ -1681,6 +1681,16 @@ func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 					t.Fatalf("the companion run at revision %d named %+v, %v, want client %q",
 						revision, view.RecognizedClient, err, want(revision))
 				}
+				// The policy grants a recognized Codex the keepalive and
+				// nothing that bears authority, so the companion run carries
+				// the keepalive and no workspace tools.
+				keepalive := clientadapter.FeatureResponsesDataKeepalive
+				if view.RecognizedClient != (clientadapter.RecognizedClient{
+					ID: "codex-cli", Policy: keepalive, Protections: keepalive,
+				}) {
+					t.Fatalf("the companion run at revision %d carries %+v, want only the keepalive",
+						revision, view.RecognizedClient)
+				}
 			}
 		})
 	}
