@@ -371,12 +371,15 @@ func (transformer *streamMessageTransformer) Finish() error {
 	return transformer.finishErr
 }
 
-func (transformer *streamMessageTransformer) Envelope() (ResponseEnvelope, error) {
+// Envelope is the managed downstream envelope with the script's header
+// changes, in mode: event-stream for a streaming client, JSON for a
+// Stream=false client whose upstream stream was aggregated.
+func (transformer *streamMessageTransformer) Envelope(mode ResponseMode) (ResponseEnvelope, error) {
 	if transformer == nil || !transformer.headerReady {
 		return ResponseEnvelope{}, errors.New("streaming response transform has no complete event")
 	}
 	return managedEnvelopeWithTransform(
-		ResponseModeEventStream,
+		mode,
 		transformer.beforeHeaders,
 		transformer.afterHeaders,
 	)

@@ -1694,12 +1694,35 @@ func (pipeline *Pipeline) executeComplete(
 			classifyProviderRejectionResponse(response, selection, protocolPath, decoded, request.exchangeID),
 		)
 	}
+	// A path that always streams upstream answers a Stream=false client by
+	// aggregating the stream (design 9). Its upstream may still answer with
+	// JSON, which is decoded below like any unary response.
+	if protocolPath.AggregatesUpstreamStream() && responseIsEventStream(response.Header, false) {
+		return pipeline.completeFromStream(
+			ctx,
+			request,
+			selection,
+			protocolPath,
+			decoded,
+			frozenRequest,
+			response,
+			downstream,
+			ledger,
+			result,
+			captured,
+			transformTurn,
+		)
+	}
 	if !contentTypeMatches(response.Header.Get("Content-Type"), "application/json") {
+		expected := "application/json"
+		if protocolPath.AggregatesUpstreamStream() {
+			expected = "text/event-stream"
+		}
 		return newProviderContentTypeFailure(
 			request.exchangeID,
 			response.StatusCode,
 			response.Body,
-			"application/json",
+			expected,
 		)
 	}
 	body, err := readBounded(response.Body, maxCompleteResponseBytes)
@@ -1763,8 +1786,12 @@ func (pipeline *Pipeline) executeComplete(
 		}
 		body = transformed.Body
 	}
+	// The attempt's frozen target facts decode the response, as they decode a
+	// stream: a composed path binds the reasoning seals it mints to the
+	// route. A path built with New ignores them.
 	providerResponse, backendResponseReport, err :=
-		protocolPath.Backend().DecodeResponse(
+		protocolPath.DecodeProviderResponseFor(
+			pipeline.providerContextOf(frozenRequest),
 			decoded,
 			body,
 		)
@@ -1782,18 +1809,163 @@ func (pipeline *Pipeline) executeComplete(
 		result.Outcome = AttemptAborted
 		return err
 	}
+	return pipeline.writeCompleteResponse(
+		ctx,
+		request,
+		protocolPath,
+		decoded,
+		providerResponse,
+		body,
+		intents,
+		responseEnvelope,
+		response.StatusCode,
+		downstream,
+		ledger,
+		result,
+		captured,
+	)
+}
+
+// completeFromStream answers a Stream=false client from the event stream a
+// composed path always asks its upstream for (design 9). The stream is read
+// by the loop a streaming client's is read by, under the same semantic-idle
+// timer, but nothing goes downstream until the terminal: no envelope, so no
+// keepalive either. A response script sees the provider's events, as it
+// does on a stream, and its header changes apply to the JSON envelope. The
+// aggregating decoder's terminal takes the unary tool decision and the
+// client side's unary encoder writes one body. Like any unary failure, a
+// failure, in band included, reaches the client as an HTTP error, rendered
+// in the client's dialect when the provider side classified it. A unary
+// attempt is not resent, here as on a JSON upstream.
+func (pipeline *Pipeline) completeFromStream(
+	ctx context.Context,
+	request ClientRequest,
+	selection frozenSelection,
+	protocolPath *protocolpath.Path,
+	decoded protocolcore.Request,
+	frozenRequest providertransport.Request,
+	response *http.Response,
+	downstream Downstream,
+	ledger *CommitLedger,
+	result *Result,
+	captured *contentCapture,
+	transformTurn *messagetransform.PipelineTurn,
+) error {
+	statusCode := response.StatusCode
+	responseHeaders := response.Header.Clone()
+	replaceCodexTurnToken(responseHeaders, "")
+	metadata := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
+	if state := metadata.Get("X-Codex-Turn-State"); state != "" {
+		responseHeaders.Set("X-Codex-Turn-State", state)
+	}
+	transformer, err := newStreamMessageTransformer(transformTurn, statusCode, responseHeaders)
+	if err != nil {
+		return newFailure(ReasonMessageTransformFailed, request.exchangeID, statusCode, err)
+	}
+	rawCapture := pipeline.captureMessageTransformStream(frozenRequest, transformer)
+	defer rawCapture.Discard()
+	streamBody, err := newLogicalResponseStream(
+		response.Body,
+		strings.Join(response.Header.Values("Content-Encoding"), ","),
+	)
+	if err != nil {
+		return newFailure(ReasonProviderResponseInvalid, request.exchangeID, statusCode,
+			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err))
+	}
+	stream, err := protocolPath.NewAggregatingStream(pipeline.providerContextOf(frozenRequest), decoded)
+	if err != nil {
+		_ = streamBody.Close()
+		return newFailure(ReasonProviderResponseInvalid, request.exchangeID, statusCode, err)
+	}
+	if err := pipeline.readProviderStream(
+		ctx,
+		request,
+		stream,
+		streamBody,
+		downstream,
+		ledger,
+		transformer,
+		frozenRequest,
+		nil,
+	); err != nil {
+		return pipeline.classifyStreamError(ctx, request.exchangeID, statusCode, err)
+	}
+	terminal, err := stream.FinishDecoded(ctx)
+	if err != nil {
+		return pipeline.classifyStreamError(ctx, request.exchangeID, statusCode, err)
+	}
+	result.Translation = result.Translation.Merge(terminal.TranslationReport())
+	intents := terminal.ToolIntents()
+	if err := pipeline.decideTools(ctx, request, selection, decoded, intents); err != nil {
+		_ = terminal.Reject()
+		result.Outcome = AttemptAborted
+		return err
+	}
+	release, err := terminal.Approve()
+	if err == nil && len(release) > 0 {
+		err = aggregatedBytesFailure()
+	}
+	if err != nil {
+		return pipeline.classifyStreamError(ctx, request.exchangeID, statusCode, err)
+	}
+	envelope := managedResponseEnvelope(ResponseModeJSON, metadata)
+	if transformer != nil {
+		envelope, err = transformer.Envelope(ResponseModeJSON)
+		if err == nil {
+			envelope, err = normalizeNativeTransformedEnvelope(
+				envelope, request, selection, frozenRequest, decoded, transformer.beforeHeaders, metadata,
+			)
+		}
+		if err != nil {
+			return newFailure(ReasonMessageTransformFailed, request.exchangeID, statusCode, err)
+		}
+	}
+	return pipeline.writeCompleteResponse(
+		ctx,
+		request,
+		protocolPath,
+		decoded,
+		terminal.BorrowDecodedResponse(),
+		nil,
+		intents,
+		envelope,
+		statusCode,
+		downstream,
+		ledger,
+		result,
+		captured,
+	)
+}
+
+// writeCompleteResponse encodes a decided provider response for a
+// Stream=false client and writes it as one body.
+func (pipeline *Pipeline) writeCompleteResponse(
+	ctx context.Context,
+	request ClientRequest,
+	protocolPath *protocolpath.Path,
+	decoded protocolcore.Request,
+	providerResponse protocolcore.Response,
+	sourceBody []byte,
+	intents []protocolcore.ToolIntent,
+	responseEnvelope ResponseEnvelope,
+	providerStatus int,
+	downstream Downstream,
+	ledger *CommitLedger,
+	result *Result,
+	captured *contentCapture,
+) error {
 	clientBody, clientResponseReport, err :=
 		protocolPath.EncodeClientResponse(
 			decoded,
 			providerResponse,
-			body,
+			sourceBody,
 		)
 	result.Translation = result.Translation.Merge(clientResponseReport)
 	if err != nil {
 		return newFailure(
 			ReasonProviderResponseInvalid,
 			request.exchangeID,
-			response.StatusCode,
+			providerStatus,
 			err,
 		)
 	}
@@ -2842,7 +3014,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	responseMetadata http.Header,
 ) error {
 	relay := &providerStreamRelay{beginTransformed: func() error {
-		envelope, err := transformer.Envelope()
+		envelope, err := transformer.Envelope(ResponseModeEventStream)
 		if err == nil {
 			envelope, err = normalizeNativeTransformedEnvelope(
 				envelope, request, selection, frozenRequest, decoded, transformer.beforeHeaders, responseMetadata,
@@ -2951,16 +3123,31 @@ func (pipeline *Pipeline) consumeProviderStream(
 // providerStreamRelay is what reading a provider stream does downstream for
 // a streaming client: it writes the client bytes the decoder releases as soon
 // as they are safe, and beginTransformed commits the envelope a response
-// script produced once its first event was transformed.
+// script produced once its first event was transformed. A read that
+// aggregates the stream for a Stream=false client has no relay (design 9).
 type providerStreamRelay struct {
 	beginTransformed func() error
 }
 
+// aggregatedBytesFailure fails a read without a relay whose decoder released
+// client bytes: no envelope exists to carry them, and a unary client must get
+// only the one body written after the terminal.
+func aggregatedBytesFailure() error {
+	return protocolcore.NewFailure(
+		protocolcore.ReasonStreamStateViolation,
+		"$",
+		errors.New("an aggregating provider stream released client bytes"),
+	)
+}
+
 // readProviderStream feeds a provider event stream, through any response
 // script, to its decoder until the decoder's terminal or the end of the body.
-// Only the decoder's semantic progress resets the idle timer, so the timer
-// measures upstream silence, not quiet output, and keepalives go out only
-// while a downstream envelope is held.
+// It is the one read loop of a streaming client and of a Stream=false client
+// whose upstream stream is aggregated. Only the decoder's semantic progress
+// resets the idle timer, so the timer measures upstream silence, not quiet
+// output, and keepalives go out only while a downstream envelope is held,
+// which an aggregating read never begins. Without a relay nothing reaches the
+// client here.
 func (pipeline *Pipeline) readProviderStream(
 	ctx context.Context,
 	request ClientRequest,
@@ -3028,7 +3215,7 @@ func (pipeline *Pipeline) readProviderStream(
 					)
 				}
 				fragment = transformed
-				if headerReady {
+				if headerReady && relay != nil {
 					if err := relay.beginTransformed(); err != nil {
 						return err
 					}
@@ -3042,6 +3229,9 @@ func (pipeline *Pipeline) readProviderStream(
 						providerIdle,
 						pipeline.streamBudgets.ProviderProgressTimeout,
 					)
+				}
+				if len(safe) > 0 && relay == nil {
+					return aggregatedBytesFailure()
 				}
 				if len(safe) > 0 {
 					committed, writeErr := writeDownstream(ctx, downstream, safe)
