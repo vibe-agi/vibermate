@@ -22,6 +22,23 @@ A file name gives its source: `claude-tools.008.json` is request 008 of the
 `claude-tools` dump directory, and `replies/codex-models.reply-0.sse` is that
 directory's scripted reply 0.
 
+Three inputs are variants of a committed request, named
+`<source>-<variant>.json`, so that the Chat paths, which refuse the
+originals, also have their handling of tool history pinned. Each is the
+source file with a few exact byte edits; every other byte is unchanged.
+
+- `claude-tools.008-text-results.json`: the ToolSearch result's
+  `tool_reference` list as one text block naming the same tools, the image
+  result as one text block, and the PDF result without its `document` part.
+  The assistant turn keeps its `thinking` and `redacted_thinking` blocks.
+- `claude-tools.008-chat-history.json`: the same edits, and the assistant
+  turn without its thinking blocks, which is what Claude Code sends back
+  after a Chat upstream answered (it returns none).
+- `codex-models.005-chat-history.json`: without the `reasoning` item (a Chat
+  upstream returns none to Codex), the `status` members of the assistant
+  message and the function call, the message's `phase`, the `tool_search`
+  tool and the web search tool's `search_content_types`.
+
 Regenerate the inputs from a dump directory `W` with
 
 ```
@@ -36,4 +53,6 @@ and the goldens with
 go test ./internal/productruntime -run TestProtocolGolden -update
 ```
 
-A golden may change only for a reviewed reason; the review reads the diff.
+The goldens were recorded with the `thinking.display` fix (#128) in place
+and before any shared protocol code changed. A golden may change only for a
+reviewed reason; the review reads the diff.

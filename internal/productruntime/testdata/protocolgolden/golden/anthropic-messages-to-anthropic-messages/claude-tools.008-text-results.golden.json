@@ -1,0 +1,253 @@
+{
+  "path": "anthropic-messages-to-anthropic-messages",
+  "fixture": "claude-tools.008-text-results",
+  "decode": {
+    "notices": []
+  },
+  "providerRequest": {
+    "method": "POST",
+    "relativePath": "v1/messages",
+    "headers": {
+      "Accept": [
+        "text/event-stream"
+      ],
+      "Anthropic-Beta": [
+        "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24"
+      ],
+      "Anthropic-Version": [
+        "2023-06-01"
+      ]
+    },
+    "bodyBytes": 90892,
+    "notices": [],
+    "readmission": "accepted"
+  },
+  "streams": {
+    "stream-claude-interactive-tools.reply-1": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"content\":[],\"id\":\"msg_wire_1\",\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":7,\"input_tokens\":11,\"output_tokens\":1}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\",\"type\":\"thinking_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\",\"type\":\"signature_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"},\"index\":1,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":2,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"WIRE-ASSISTANT-PREAMBLE\",\"type\":\"text_delta\"},\"index\":2,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":2,\"type\":\"content_block_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "msg_wire_1",
+        "reportedModel": "claude-opus-5-5",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "WIRE-ASSISTANT-PREAMBLE"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "ToolSearch",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_search"
+          }
+        ],
+        "extensions": [
+          "anthropic-messages/thinking at $.content[0]: {\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"} | {\"type\":\"thinking_delta\",\"text\":\"\",\"partial_json\":\"\",\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\"} | {\"type\":\"signature_delta\",\"text\":\"\",\"partial_json\":\"\",\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\"}",
+          "anthropic-messages/redacted_thinking at $.content[1]: {\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"}"
+        ],
+        "usage": [
+          "inputUncached=11 (anthropic-messages)",
+          "cacheWrite=3 (anthropic-messages)",
+          "cacheRead=7 (anthropic-messages)",
+          "output=40 (anthropic-messages)",
+          "reasoning=unknown"
+        ]
+      },
+      "intents": [
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 0,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_search",
+          "name": "ToolSearch",
+          "arguments": "{\"max_results\":30,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterPlanMode,EnterWorktree,ExitPlanMode,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}"
+        }
+      ],
+      "notices": [],
+      "release": "event: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_search\",\"input\":{},\"name\":\"ToolSearch\",\"type\":\"tool_use\"},\"index\":3,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"max_results\\\":30,\\\"query\\\":\\\"select:CronCreate,CronDelete,CronList,DesignSync,EnterPlanMode,EnterWorktree,ExitPlanMode,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\\\"}\",\"type\":\"input_json_delta\"},\"index\":3,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":3,\"type\":\"content_block_stop\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"type\":\"message_delta\",\"usage\":{\"output_tokens\":40}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    },
+    "stream-claude-tools.reply-0": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"content\":[],\"id\":\"msg_wire_1\",\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":7,\"input_tokens\":11,\"output_tokens\":1}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\",\"type\":\"thinking_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\",\"type\":\"signature_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"},\"index\":1,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":2,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"WIRE-ASSISTANT-PREAMBLE\",\"type\":\"text_delta\"},\"index\":2,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":2,\"type\":\"content_block_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "msg_wire_1",
+        "reportedModel": "claude-opus-5-5",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "WIRE-ASSISTANT-PREAMBLE"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "ToolSearch",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_search"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Read",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_png"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Read",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_txt"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Read",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_pdf"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Bash",
+            "toolKey": "anthropic-messages-openai-chat/toolu_wire_bash"
+          }
+        ],
+        "extensions": [
+          "anthropic-messages/thinking at $.content[0]: {\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"} | {\"type\":\"thinking_delta\",\"text\":\"\",\"partial_json\":\"\",\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\"} | {\"type\":\"signature_delta\",\"text\":\"\",\"partial_json\":\"\",\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\"}",
+          "anthropic-messages/redacted_thinking at $.content[1]: {\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"}"
+        ],
+        "usage": [
+          "inputUncached=11 (anthropic-messages)",
+          "cacheWrite=3 (anthropic-messages)",
+          "cacheRead=7 (anthropic-messages)",
+          "output=40 (anthropic-messages)",
+          "reasoning=unknown"
+        ]
+      },
+      "intents": [
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 0,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_search",
+          "name": "ToolSearch",
+          "arguments": "{\"max_results\":20,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}"
+        },
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 1,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_png",
+          "name": "Read",
+          "arguments": "{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.png\"}"
+        },
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 2,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_txt",
+          "name": "Read",
+          "arguments": "{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.txt\"}"
+        },
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 3,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_pdf",
+          "name": "Read",
+          "arguments": "{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.pdf\"}"
+        },
+        {
+          "responseId": "msg_wire_1",
+          "ordinal": 4,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/toolu_wire_bash",
+          "name": "Bash",
+          "arguments": "{\"command\":\"echo wire-fixture\",\"description\":\"Print a marker\"}"
+        }
+      ],
+      "notices": [],
+      "release": "event: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_search\",\"input\":{},\"name\":\"ToolSearch\",\"type\":\"tool_use\"},\"index\":3,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"max_results\\\":20,\\\"query\\\":\\\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\\\"}\",\"type\":\"input_json_delta\"},\"index\":3,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":3,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_png\",\"input\":{},\"name\":\"Read\",\"type\":\"tool_use\"},\"index\":4,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"file_path\\\":\\\"/tmp/wire-skeleton/002/wire-fixture.png\\\"}\",\"type\":\"input_json_delta\"},\"index\":4,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":4,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_txt\",\"input\":{},\"name\":\"Read\",\"type\":\"tool_use\"},\"index\":5,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"file_path\\\":\\\"/tmp/wire-skeleton/002/wire-fixture.txt\\\"}\",\"type\":\"input_json_delta\"},\"index\":5,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":5,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_pdf\",\"input\":{},\"name\":\"Read\",\"type\":\"tool_use\"},\"index\":6,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"file_path\\\":\\\"/tmp/wire-skeleton/002/wire-fixture.pdf\\\"}\",\"type\":\"input_json_delta\"},\"index\":6,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":6,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"content_block\":{\"id\":\"toolu_wire_bash\",\"input\":{},\"name\":\"Bash\",\"type\":\"tool_use\"},\"index\":7,\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"delta\":{\"partial_json\":\"{\\\"command\\\":\\\"echo wire-fixture\\\",\\\"description\\\":\\\"Print a marker\\\"}\",\"type\":\"input_json_delta\"},\"index\":7,\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":7,\"type\":\"content_block_stop\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"type\":\"message_delta\",\"usage\":{\"output_tokens\":40}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    },
+    "stream-claude-usage.reply-0": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"container\":null,\"content\":[],\"id\":\"msg_wire_usage\",\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"stop_details\":null,\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":0,\"output_tokens\":0}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"synthetic reply through ViberMate\",\"type\":\"text_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: message_delta\ndata: {\"delta\":{\"container\":null,\"stop_details\":null,\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"type\":\"message_delta\",\"usage\":{\"cache_creation_input_tokens\":78,\"cache_read_input_tokens\":910,\"input_tokens\":1234,\"output_tokens\":56}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "msg_wire_usage",
+        "reportedModel": "claude-opus-5-5",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "synthetic reply through ViberMate"
+          }
+        ],
+        "usage": [
+          "inputUncached=1234 (anthropic-messages)",
+          "cacheWrite=78 (anthropic-messages)",
+          "cacheRead=910 (anthropic-messages)",
+          "output=56 (anthropic-messages)",
+          "reasoning=unknown"
+        ]
+      },
+      "notices": [],
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    }
+  },
+  "unary": {
+    "unary-text-tool": {
+      "decodeNotices": [],
+      "response": {
+        "id": "msg_golden_1",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Golden reply."
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Bash",
+            "toolKey": "anthropic-messages-openai-chat/toolu_golden_1"
+          }
+        ],
+        "extensions": [
+          "anthropic-messages/thinking at $.content[0]: {\"type\":\"thinking\",\"thinking\":\"Golden thinking.\",\"signature\":\"golden-signature\"}"
+        ],
+        "usage": [
+          "inputUncached=11 (anthropic-messages)",
+          "cacheWrite=2 (anthropic-messages)",
+          "cacheRead=3 (anthropic-messages)",
+          "output=7 (anthropic-messages)",
+          "reasoning=unknown"
+        ]
+      },
+      "encodeNotices": [],
+      "clientResponse": "{\"content\":[{\"type\":\"thinking\",\"thinking\":\"Golden thinking.\",\"signature\":\"golden-signature\"},{\"type\":\"text\",\"text\":\"Golden reply.\"},{\"type\":\"tool_use\",\"id\":\"toolu_golden_1\",\"name\":\"Bash\",\"input\":{\"command\":\"echo golden\"}}],\"id\":\"msg_golden_1\",\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"input_tokens\":11,\"cache_creation_input_tokens\":2,\"cache_read_input_tokens\":3,\"output_tokens\":7}}"
+    }
+  }
+}
