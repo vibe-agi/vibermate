@@ -2,7 +2,15 @@ package clientadapter
 
 import (
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/build/constraint"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -130,6 +138,13 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	}
 }
 
+// installedTestPrefixes is the name prefix of each client's installed-client
+// tests. The canary and pull-request CI select those tests by it.
+var installedTestPrefixes = map[string]string{
+	"claude-code": "TestInstalledClaude",
+	"codex-cli":   "TestInstalledCodex",
+}
+
 // recognizedPolicyViolations applies the rules a compiled-in table cannot
 // check at start-up (ADR 0026).
 func recognizedPolicyViolations(policies []RecognizedClientPolicy) []string {
@@ -137,10 +152,7 @@ func recognizedPolicyViolations(policies []RecognizedClientPolicy) []string {
 	for _, signer := range BuiltInCatalog().signers {
 		signerIDs[signer.ID] = true
 	}
-	prefixes := map[string]string{
-		"claude-code": "TestInstalledClaude",
-		"codex-cli":   "TestInstalledCodex",
-	}
+	prefixes := installedTestPrefixes
 	var violations []string
 	seen := map[string]bool{}
 	for _, policy := range policies {
@@ -709,4 +721,414 @@ func TestProtectionCanariesPerOperatingSystem(t *testing.T) {
 				testCase.clientID, testCase.goos, got, testCase.want)
 		}
 	}
+}
+
+// canaryWorkflowPath is the daily canary that re-proves every policy entry.
+var canaryWorkflowPath = filepath.Join(".github", "workflows", "client-canary.yml")
+
+// TestEveryProtectionNamesItsDailyCanary is the static guard of ADR 0026: a
+// policy entry must name a test that exists, that the daily canary selects
+// and judges on both operating systems, and that both compile. A -run pattern
+// that matches nothing still passes, and a darwin-only test file never
+// compiles on the ubuntu canary.
+func TestEveryProtectionNamesItsDailyCanary(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("..", "..")
+	encoded, err := os.ReadFile(filepath.Join(root, canaryWorkflowPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(encoded)
+	if problems := dailyCanaryProblems(RecognizedClientPolicies(), root, workflow); len(problems) != 0 {
+		t.Fatalf("the policy and the daily canary disagree:\n%s", strings.Join(problems, "\n"))
+	}
+	if problems := dailyCanaryProblems(designedRecognizedClientPolicies(), root, workflow); len(problems) != 0 {
+		t.Fatalf("the designed policy and the daily canary disagree:\n%s", strings.Join(problems, "\n"))
+	}
+
+	// Each rule must be able to fail.
+	fixtureRoot := t.TempDir()
+	fixtureDirectory := filepath.Join(fixtureRoot, "internal", "fixture")
+	if err := os.MkdirAll(fixtureDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string]string{
+		"plain_test.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"type suite struct{}\n\n" +
+			"func (suite) TestInstalledClaudeMethod(t *testing.T) {}\n\n" +
+			"func TestInstalledClaudePlain(t *testing.T) {}\n",
+		"tagged_test.go": "// A comment before the constraint.\n\n//go:build linux || darwin\n\n" +
+			"package fixture\n\nimport \"testing\"\n\nfunc TestInstalledClaudeTagged(t *testing.T) {}\n",
+		"platform_darwin_test.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"func TestInstalledClaudeDarwinOnly(t *testing.T) {}\n",
+		"helper.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"func TestInstalledClaudeOutsideATestFile(t *testing.T) {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(fixtureDirectory, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(fixtureRoot, canaryWorkflowPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's canary names its package in the Claude jobs, so a fixture
+	// case fails only on the rule it is about.
+	fixtureWorkflow := strings.ReplaceAll(workflow, "./internal/runlauncher", "./internal/runlauncher ./internal/fixture")
+	if fixtureWorkflow == workflow {
+		t.Fatal("the canary workflow names no ./internal/runlauncher")
+	}
+	fixtureCanary := func(test string) func([]RecognizedClientPolicy) []RecognizedClientPolicy {
+		return func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+			policies[0].Grants[0].Canary = Canary{"internal/fixture", test}
+			return policies
+		}
+	}
+	// The fixture root holds no other package, so only problems about the
+	// fixture count.
+	for _, problem := range dailyCanaryProblems(
+		fixtureCanary("TestInstalledClaudePlain")(RecognizedClientPolicies()), fixtureRoot, fixtureWorkflow,
+	) {
+		if strings.Contains(problem, "internal/fixture") || strings.Contains(problem, "TestInstalledClaudePlain") {
+			t.Fatalf("the fixture's plain test was refused: %s", problem)
+		}
+	}
+	replace := func(old, replacement string) func(string) string {
+		return func(text string) string {
+			if !strings.Contains(text, old) {
+				t.Fatalf("the canary workflow no longer holds %q", old)
+			}
+			return strings.ReplaceAll(text, old, replacement)
+		}
+	}
+	unchanged := func(policies []RecognizedClientPolicy) []RecognizedClientPolicy { return policies }
+	for _, testCase := range []struct {
+		name     string
+		policies func([]RecognizedClientPolicy) []RecognizedClientPolicy
+		workflow func(string) string
+		fixture  bool
+		want     string
+	}{
+		{
+			name: "a canary that names no function",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[0].Grants[1].Canary.Test = "TestInstalledClaudeDoesNotExist"
+				return policies
+			},
+			want: "no test function TestInstalledClaudeDoesNotExist",
+		},
+		{
+			name: "a canary in the wrong package",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[1].Grants[0].Canary.Package = "internal/runlauncher"
+				return policies
+			},
+			want: "no test function TestInstalledCodexAcceptsTheDataKeepalive in internal/runlauncher",
+		},
+		{
+			name: "a canary in a package that does not exist",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[1].IdentityCanary.Package = "internal/absent"
+				return policies
+			},
+			want: "no test function TestInstalledCodexIsRecognizedByItsSigner in internal/absent",
+		},
+		{
+			name: "a canary with another client's prefix",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[0].Grants[0].Canary = Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
+				return policies
+			},
+			want: "lacks the prefix TestInstalledClaude",
+		},
+		{
+			name:     "a canary that is a method",
+			policies: fixtureCanary("TestInstalledClaudeMethod"),
+			fixture:  true,
+			want:     "no test function TestInstalledClaudeMethod",
+		},
+		{
+			name:     "a canary outside a test file",
+			policies: fixtureCanary("TestInstalledClaudeOutsideATestFile"),
+			fixture:  true,
+			want:     "no test function TestInstalledClaudeOutsideATestFile",
+		},
+		{
+			name:     "a canary in a file with a build constraint",
+			policies: fixtureCanary("TestInstalledClaudeTagged"),
+			fixture:  true,
+			want:     "tagged_test.go has a build constraint",
+		},
+		{
+			name:     "a canary in a file named for one system",
+			policies: fixtureCanary("TestInstalledClaudeDarwinOnly"),
+			fixture:  true,
+			want:     "platform_darwin_test.go does not build on linux/amd64",
+		},
+		{
+			name:     "no job verifies a client on an operating system",
+			workflow: replace("verify --client claude-code --os linux", "verify --client claude-code --os linux-latest"),
+			want:     "no job of the daily canary runs vibermate-canary-proof verify --client claude-code --os linux",
+		},
+		{
+			name: "swapped operating systems",
+			workflow: func(text string) string {
+				text = replace("verify --client codex-cli --os linux", "verify --client codex-cli --os SWAP")(text)
+				text = replace("verify --client codex-cli --os darwin", "verify --client codex-cli --os linux")(text)
+				return replace("verify --client codex-cli --os SWAP", "verify --client codex-cli --os darwin")(text)
+			},
+			want: "verifies codex-cli on darwin but runs on ubuntu-latest",
+		},
+		{
+			name: "two jobs verify one client on one system",
+			workflow: replace("verify --client claude-code --os darwin",
+				"verify --client claude-code --os linux"),
+			want: "2 jobs of the daily canary run vibermate-canary-proof verify --client claude-code --os linux",
+		},
+		{
+			name:     "a job that does not name a canary's package",
+			workflow: replace("./internal/runlauncher ./internal/clientadapter", "./internal/runlauncher"),
+			want:     "does not name ./internal/clientadapter",
+		},
+		{
+			name:     "a job that names a package only as a prefix",
+			workflow: replace("./internal/loopbackproxy ./internal/clientadapter", "./internal/loopbackproxyx ./internal/clientadapter"),
+			want:     "does not name ./internal/loopbackproxy",
+		},
+		{
+			name:     "a job that does not select a canary",
+			workflow: replace("-run '^TestInstalledClaude'", "-run '^TestInstalledClaudeCompletes'"),
+			want:     "does not select TestInstalledClaudeLeavesStreamFallbackToCore",
+		},
+		{
+			name:     "a job that selects without the proof checker's pattern",
+			workflow: replace("tests --client codex-cli --os darwin", "tests --client claude-code --os darwin"),
+			want:     "does not select TestInstalledCodexAcceptsTheDataKeepalive",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, text, policies := root, workflow, RecognizedClientPolicies()
+			if testCase.fixture {
+				root, text = fixtureRoot, fixtureWorkflow
+			}
+			if testCase.policies == nil {
+				testCase.policies = unchanged
+			}
+			if testCase.workflow != nil {
+				text = testCase.workflow(text)
+			}
+			problems := dailyCanaryProblems(testCase.policies(policies), root, text)
+			for _, problem := range problems {
+				if strings.Contains(problem, testCase.want) {
+					return
+				}
+			}
+			t.Fatalf("%s: no problem says %q; got %v", testCase.name, testCase.want, problems)
+		})
+	}
+}
+
+// dailyCanaryProblems checks every policy entry against the test sources
+// under root and the text of the canary workflow.
+func dailyCanaryProblems(policies []RecognizedClientPolicy, root, workflow string) []string {
+	var problems []string
+	jobs := canaryWorkflowJobs(workflow)
+	checked := map[Canary]bool{}
+	for _, policy := range policies {
+		prefix := installedTestPrefixes[policy.ClientID]
+		entries := []Canary{policy.IdentityCanary}
+		for _, grant := range append(append([]ProtectionGrant(nil), policy.Grants...), policy.Unconditional...) {
+			entries = append(entries, grant.Canary)
+		}
+		for _, canary := range entries {
+			if canary == (Canary{}) {
+				continue
+			}
+			if prefix == "" || !strings.HasPrefix(canary.Test, prefix) {
+				problems = append(problems, fmt.Sprintf(
+					"%s: canary %s lacks the prefix %s the canary selects",
+					policy.ClientID, canary.Test, prefix,
+				))
+			}
+			if !checked[canary] {
+				checked[canary] = true
+				problems = append(problems, canaryTestProblems(root, canary)...)
+			}
+		}
+		for _, goos := range []string{"linux", "darwin"} {
+			problems = append(problems, canaryJobProblems(
+				jobs, policy.ClientID, goos, prefix,
+				protectionCanaries(policies, policy.ClientID, goos),
+			)...)
+		}
+	}
+	return problems
+}
+
+// canaryTestProblems requires the canary's function in a _test.go file of its
+// package, in a file that builds on both systems the canary runs.
+func canaryTestProblems(root string, canary Canary) []string {
+	directory := filepath.Join(root, filepath.FromSlash(canary.Package))
+	paths, err := filepath.Glob(filepath.Join(directory, "*_test.go"))
+	if err != nil {
+		return []string{err.Error()}
+	}
+	for _, path := range paths {
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return []string{fmt.Sprintf("%s: %v", path, err)}
+		}
+		declared := false
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil && function.Name.Name == canary.Test {
+				declared = true
+			}
+		}
+		if !declared {
+			continue
+		}
+		var problems []string
+		name := filepath.Base(path)
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				if comment.Pos() < file.Package &&
+					(constraint.IsGoBuild(comment.Text) || constraint.IsPlusBuild(comment.Text)) {
+					problems = append(problems, fmt.Sprintf(
+						"%s: %s has a build constraint, so one canary may never compile %s",
+						canary.Package, name, canary.Test,
+					))
+				}
+			}
+		}
+		for _, target := range [][2]string{{"linux", "amd64"}, {"darwin", "arm64"}} {
+			context := build.Default
+			context.GOOS, context.GOARCH = target[0], target[1]
+			if matched, err := context.MatchFile(directory, name); err != nil || !matched {
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s does not build on %s/%s, so that canary never compiles %s",
+					canary.Package, name, target[0], target[1], canary.Test,
+				))
+			}
+		}
+		return problems
+	}
+	return []string{fmt.Sprintf("no test function %s in %s", canary.Test, canary.Package)}
+}
+
+// canaryWorkflowJob is one job of the canary workflow, its text with line
+// continuations joined and white space collapsed.
+type canaryWorkflowJob struct {
+	name   string
+	runsOn string
+	text   string
+}
+
+var (
+	canaryJobKey    = regexp.MustCompile(`^  ([A-Za-z_][A-Za-z0-9_-]*):\s*$`)
+	canaryJobRunsOn = regexp.MustCompile(`^    runs-on:\s*(\S+)\s*$`)
+	canaryRunPrefix = regexp.MustCompile(`-run ["']\^([A-Za-z0-9_]+)["']`)
+)
+
+func canaryWorkflowJobs(workflow string) []canaryWorkflowJob {
+	var jobs []canaryWorkflowJob
+	var current *canaryWorkflowJob
+	var body []string
+	flush := func() {
+		if current != nil {
+			joined := strings.ReplaceAll(strings.Join(body, "\n"), "\\\n", " ")
+			current.text = " " + strings.Join(strings.Fields(joined), " ") + " "
+			jobs = append(jobs, *current)
+		}
+		current, body = nil, nil
+	}
+	inJobs := false
+	for _, line := range strings.Split(workflow, "\n") {
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#") {
+			flush()
+			inJobs = strings.TrimSpace(line) == "jobs:"
+			continue
+		}
+		if !inJobs {
+			continue
+		}
+		if match := canaryJobKey.FindStringSubmatch(line); match != nil {
+			flush()
+			current = &canaryWorkflowJob{name: match[1]}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		body = append(body, line)
+		if match := canaryJobRunsOn.FindStringSubmatch(line); match != nil && current.runsOn == "" {
+			current.runsOn = match[1]
+		}
+	}
+	flush()
+	return jobs
+}
+
+// canaryJobProblems requires exactly one job that judges clientID on goos, on
+// a runner of that system, that selects every required canary and names its
+// package.
+func canaryJobProblems(
+	jobs []canaryWorkflowJob,
+	clientID, goos, prefix string,
+	canaries []Canary,
+) []string {
+	if len(canaries) == 0 {
+		return nil
+	}
+	verify := "vibermate-canary-proof verify --client " + clientID + " --os " + goos
+	var matching []canaryWorkflowJob
+	for _, job := range jobs {
+		if strings.Contains(job.text, "/"+verify+" ") {
+			matching = append(matching, job)
+		}
+	}
+	switch len(matching) {
+	case 0:
+		return []string{fmt.Sprintf("no job of the daily canary runs %s", verify)}
+	case 1:
+	default:
+		return []string{fmt.Sprintf("%d jobs of the daily canary run %s", len(matching), verify)}
+	}
+	job := matching[0]
+	var problems []string
+	runner := map[string]string{"linux": "ubuntu-", "darwin": "macos-"}[goos]
+	if !strings.HasPrefix(job.runsOn, runner) {
+		problems = append(problems, fmt.Sprintf(
+			"job %s verifies %s on %s but runs on %s", job.name, clientID, goos, job.runsOn,
+		))
+	}
+	byChecker := strings.Contains(job.text,
+		"/vibermate-canary-proof tests --client "+clientID+" --os "+goos+")")
+	var prefixes []string
+	for _, match := range canaryRunPrefix.FindAllStringSubmatch(job.text, -1) {
+		prefixes = append(prefixes, match[1])
+	}
+	for _, canary := range canaries {
+		selected := byChecker
+		for _, runPrefix := range prefixes {
+			if strings.HasPrefix(canary.Test, runPrefix) && strings.HasPrefix(runPrefix, prefix) {
+				selected = true
+			}
+		}
+		if !selected {
+			problems = append(problems, fmt.Sprintf(
+				"job %s does not select %s", job.name, canary.Test,
+			))
+		}
+		named := regexp.MustCompile(`[\s"'(]` + regexp.QuoteMeta("./"+canary.Package) + `[\s"')]`)
+		if !named.MatchString(job.text) {
+			problems = append(problems, fmt.Sprintf(
+				"job %s does not name ./%s, where %s lives", job.name, canary.Package, canary.Test,
+			))
+		}
+	}
+	return problems
 }
