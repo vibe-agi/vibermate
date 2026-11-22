@@ -279,6 +279,8 @@ void main() {
       await tester.enterText(find.byKey(const Key('capture-filter')), 'zzz');
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('setup-guide')), findsNothing);
+      expect(find.byKey(const Key('capture-filter-no-match')), findsOneWidget);
+      expect(find.text('Open Terminal setup'), findsNothing);
       await tester.enterText(find.byKey(const Key('capture-filter')), '');
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('setup-guide-pane')), findsOneWidget);

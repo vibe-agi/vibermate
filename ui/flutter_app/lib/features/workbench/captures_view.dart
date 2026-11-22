@@ -67,6 +67,7 @@ final class _CapturesViewState extends State<CapturesView> {
             _filter = '';
           }),
           onSearch: () => _openEvidenceSearch(context),
+          onSearchFor: (text) => _openEvidenceSearch(context, query: text),
           onCreateManual: () => _openCreateManualCapture(context),
           onSelect: (key) {
             unawaited(widget.controller.selectCapture(key));
@@ -156,12 +157,13 @@ final class _CapturesViewState extends State<CapturesView> {
     );
   }
 
-  void _openEvidenceSearch(BuildContext context) {
+  void _openEvidenceSearch(BuildContext context, {String query = ''}) {
     unawaited(
       showEvidenceSearchDialog(
         context,
         controller: widget.controller,
         copy: widget.copy,
+        initialQuery: query,
       ),
     );
   }
@@ -221,6 +223,7 @@ final class _CaptureMaster extends StatelessWidget {
     required this.onFilter,
     required this.onClearFilter,
     required this.onSearch,
+    required this.onSearchFor,
     required this.onCreateManual,
     required this.onSelect,
   });
@@ -239,6 +242,9 @@ final class _CaptureMaster extends StatelessWidget {
   final ValueChanged<String> onFilter;
   final VoidCallback onClearFilter;
   final VoidCallback onSearch;
+
+  /// Opens Search with this text filled in and searched.
+  final ValueChanged<String> onSearchFor;
   final VoidCallback onCreateManual;
   final ValueChanged<String> onSelect;
 
@@ -264,6 +270,7 @@ final class _CaptureMaster extends StatelessWidget {
         .where(matches)
         .toList(growable: false);
     final canCreateManual = _canCreateManual(controller);
+    final noMatch = query.isNotEmpty && running.isEmpty && history.isEmpty;
     final webOwner = controller.webPrincipal?.owner == true && canCreateManual;
     final accessGuide = TextButton.icon(
       key: const Key('capture-empty-open-terminal-settings'),
@@ -350,6 +357,7 @@ final class _CaptureMaster extends StatelessWidget {
                     ),
                   )
                 : !guide &&
+                      query.isEmpty &&
                       running.isEmpty &&
                       history.isEmpty &&
                       controller.data?.captureNextCursor == null
@@ -399,7 +407,7 @@ final class _CaptureMaster extends StatelessWidget {
                           ),
                         ),
                       ],
-                      if (!guide || running.isNotEmpty)
+                      if ((!guide && !noMatch) || running.isNotEmpty)
                         SectionLabel(
                           label: copy('capture.running'),
                           count: running.length,
@@ -413,7 +421,7 @@ final class _CaptureMaster extends StatelessWidget {
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      if (!guide || history.isNotEmpty)
+                      if ((!guide && !noMatch) || history.isNotEmpty)
                         SectionLabel(
                           label: copy('capture.history'),
                           count: history.length,
@@ -427,13 +435,49 @@ final class _CaptureMaster extends StatelessWidget {
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
                         ),
-                      if (!guide && running.isEmpty && history.isEmpty)
-                        SizedBox(
-                          height: 176,
-                          child: CenteredMessage(
-                            icon: Icons.filter_alt_off,
-                            title: copy('capture.search.no_match'),
-                            detail: copy('capture.search.load_hint'),
+                      if (noMatch)
+                        // A filter that matches nothing is a search result,
+                        // never the first-run state.
+                        CenteredMessage(
+                          key: const Key('capture-filter-no-match'),
+                          icon: Icons.filter_alt_off,
+                          title: copy.format('capture.search.no_match', {
+                            'filter': filter.trim(),
+                          }),
+                          detail: [
+                            copy('capture.search.hint'),
+                            if (controller.data?.captureNextCursor != null)
+                              copy('capture.search.load_hint'),
+                          ].join(' '),
+                          action: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              OutlinedButton.icon(
+                                key: const Key('capture-filter-clear'),
+                                onPressed: onClearFilter,
+                                icon: const Icon(
+                                  Icons.filter_alt_off,
+                                  size: 15,
+                                ),
+                                label: Text(
+                                  copy('capture.search.clear_action'),
+                                ),
+                              ),
+                              const SizedBox(height: ViberSpacing.xs),
+                              TextButton.icon(
+                                key: const Key(
+                                  'capture-filter-search-requests',
+                                ),
+                                onPressed: () => onSearchFor(filter.trim()),
+                                icon: const Icon(Icons.manage_search, size: 15),
+                                label: Text(
+                                  copy.format('capture.search.requests', {
+                                    'filter': filter.trim(),
+                                  }),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       if (controller.captureDirectoryError case final error?)

@@ -554,14 +554,19 @@ void main() {
     await tester.enterText(search, 'not-loaded-yet');
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'filtered Capture layout');
-    expect(find.text('No loaded sessions match this filter.'), findsOneWidget);
+    expect(find.text('No sessions match “not-loaded-yet”.'), findsOneWidget);
+    expect(
+      find.textContaining('Load older sessions to continue searching'),
+      findsOneWidget,
+      reason: 'older pages may still match',
+    );
     expect(find.byKey(const Key('captures-load-more')), findsOneWidget);
 
     await tester.tap(find.byTooltip('Clear session filter'));
     await tester.pump();
     expect(tester.takeException(), isNull, reason: 'cleared Capture layout');
     expect(tester.widget<TextField>(search).controller!.text, isEmpty);
-    expect(find.text('No loaded sessions match this filter.'), findsNothing);
+    expect(find.byKey(const Key('capture-filter-no-match')), findsNothing);
 
     await tester.tap(find.byKey(const Key('captures-load-more')));
     await tester.pumpAndSettle();

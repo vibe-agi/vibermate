@@ -13,20 +13,32 @@ import 'conversation_timeline.dart';
 import 'workbench_controller.dart';
 import 'routing_set_name.dart';
 
+/// Opens Search. With [initialQuery] the text is filled in and searched at
+/// once, as when a session filter found nothing.
 Future<void> showEvidenceSearchDialog(
   BuildContext context, {
   required WorkbenchController controller,
   required AppCopy copy,
+  String initialQuery = '',
 }) => showDialog<void>(
   context: context,
-  builder: (_) => _EvidenceSearchDialog(controller: controller, copy: copy),
+  builder: (_) => _EvidenceSearchDialog(
+    controller: controller,
+    copy: copy,
+    initialQuery: initialQuery,
+  ),
 );
 
 final class _EvidenceSearchDialog extends StatefulWidget {
-  const _EvidenceSearchDialog({required this.controller, required this.copy});
+  const _EvidenceSearchDialog({
+    required this.controller,
+    required this.copy,
+    this.initialQuery = '',
+  });
 
   final WorkbenchController controller;
   final AppCopy copy;
+  final String initialQuery;
 
   @override
   State<_EvidenceSearchDialog> createState() => _EvidenceSearchDialogState();
@@ -48,6 +60,18 @@ final class _EvidenceSearchDialogState extends State<_EvidenceSearchDialog> {
   EvidenceSearchRequest? _request;
   EvidenceSearchPage? _page;
   ControlFailure? _failure;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialQuery.trim();
+    if (initial.isNotEmpty) {
+      _query.text = initial;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_search());
+      });
+    }
+  }
 
   @override
   void dispose() {
