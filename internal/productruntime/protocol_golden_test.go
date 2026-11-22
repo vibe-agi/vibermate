@@ -94,11 +94,19 @@ func TestProtocolGolden(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					record, providerBody := runProtocolGolden(t, golden, fixture, body)
+					record, providerBody := runProtocolGolden(t, golden, legacyGoldenCalls(golden.path), fixture, body)
 					directory := filepath.Join(protocolGoldenRoot, "golden", golden.name)
 					compareProtocolGolden(t, filepath.Join(directory, fixture+".golden.json"), record)
 					if providerBody != nil {
 						compareProtocolGolden(t, filepath.Join(directory, fixture+".provider.json"), providerBody)
+					}
+					// The attempt-scoped methods the exchange moves to must give
+					// the same bytes on every path built with New.
+					scoped, scopedBody := runProtocolGolden(t, golden, attemptGoldenCalls(golden.path), fixture, body)
+					if !bytes.Equal(scoped, record) || !bytes.Equal(scopedBody, providerBody) {
+						at := goldenFirstDifference(scoped, record)
+						t.Errorf("the attempt-scoped Path methods differ from today's at byte %d\n got: %s\nwant: %s",
+							at, goldenExcerpt(scoped, at), goldenExcerpt(record, at))
 					}
 				})
 			}
@@ -188,7 +196,44 @@ type goldenRecord struct {
 	Unary           map[string]goldenUnary  `json:"unary,omitempty"`
 }
 
-func runProtocolGolden(t *testing.T, golden protocolGoldenPath, fixture string, body []byte) ([]byte, []byte) {
+// goldenCalls are the Path entry points one golden run goes through.
+type goldenCalls struct {
+	encode    func(protocolcore.Request, []byte, http.Header) (protocolpath.ProviderRequest, protocolcore.TranslationReport, error)
+	newStream func(protocolcore.Request) (protocolpath.Stream, error)
+	decode    func(protocolcore.Request, []byte) (protocolcore.Response, protocolcore.TranslationReport, error)
+}
+
+// legacyGoldenCalls are the methods the exchange calls today.
+func legacyGoldenCalls(path *protocolpath.Path) goldenCalls {
+	return goldenCalls{
+		encode:    path.EncodeProviderRequest,
+		newStream: path.Streaming().NewStream,
+		decode:    path.Backend().DecodeResponse,
+	}
+}
+
+// attemptGoldenCalls are the attempt-scoped forms, given a context that sets
+// every field, which a path built with New must ignore.
+func attemptGoldenCalls(path *protocolpath.Path) goldenCalls {
+	attempt := protocolpath.ProviderContext{
+		Target:           protocolpath.TargetOpenAIPlatform,
+		ReasoningBinding: protocolpath.NewReasoningBinding("golden-endpoint", "golden-account"),
+		RejectedSeal:     func([32]byte) bool { return true },
+	}
+	return goldenCalls{
+		encode: func(request protocolcore.Request, body []byte, headers http.Header) (protocolpath.ProviderRequest, protocolcore.TranslationReport, error) {
+			return path.EncodeProviderRequestFor(attempt, request, body, headers)
+		},
+		newStream: func(request protocolcore.Request) (protocolpath.Stream, error) {
+			return path.NewStreamFor(attempt, request)
+		},
+		decode: func(request protocolcore.Request, body []byte) (protocolcore.Response, protocolcore.TranslationReport, error) {
+			return path.DecodeProviderResponseFor(attempt, request, body)
+		},
+	}
+}
+
+func runProtocolGolden(t *testing.T, golden protocolGoldenPath, calls goldenCalls, fixture string, body []byte) ([]byte, []byte) {
 	t.Helper()
 	record := goldenRecord{Path: golden.name, Fixture: fixture}
 	request, report, err := golden.path.Client().DecodeRequest(body)
@@ -204,7 +249,7 @@ func runProtocolGolden(t *testing.T, golden protocolGoldenPath, fixture string, 
 	if golden.requests == "claude" {
 		headers.Set("Anthropic-Beta", protocolGoldenAnthropicBeta)
 	}
-	provider, providerReport, err := golden.path.EncodeProviderRequest(mapped, body, headers)
+	provider, providerReport, err := calls.encode(mapped, body, headers)
 	encoded := &goldenProviderRequest{Error: goldenErrorText(err), Notices: goldenNoticeList(providerReport)}
 	record.ProviderRequest = encoded
 	if err != nil {
@@ -221,18 +266,18 @@ func runProtocolGolden(t *testing.T, golden protocolGoldenPath, fixture string, 
 	record.Unary = make(map[string]goldenUnary)
 	for _, reply := range protocolGoldenReplies(t, golden.path.Backend().Dialect(), providerBody) {
 		if reply.stream {
-			record.Streams[reply.name] = runGoldenStream(t, golden.path, mapped, reply.body)
+			record.Streams[reply.name] = runGoldenStream(t, calls, mapped, reply.body)
 		} else {
-			record.Unary[reply.name] = runGoldenUnary(golden.path, mapped, reply.body)
+			record.Unary[reply.name] = runGoldenUnary(golden.path, calls, mapped, reply.body)
 		}
 	}
 	return encodeGoldenRecord(t, record), providerBody
 }
 
-func runGoldenStream(t *testing.T, path *protocolpath.Path, request protocolcore.Request, wire []byte) goldenStream {
+func runGoldenStream(t *testing.T, calls goldenCalls, request protocolcore.Request, wire []byte) goldenStream {
 	t.Helper()
 	result := goldenStream{Live: []string{}}
-	stream, err := path.Streaming().NewStream(request.Clone())
+	stream, err := calls.newStream(request.Clone())
 	if err != nil {
 		result.Error = "NewStream: " + err.Error()
 		return result
@@ -268,9 +313,9 @@ func runGoldenStream(t *testing.T, path *protocolpath.Path, request protocolcore
 	return result
 }
 
-func runGoldenUnary(path *protocolpath.Path, request protocolcore.Request, body []byte) goldenUnary {
+func runGoldenUnary(path *protocolpath.Path, calls goldenCalls, request protocolcore.Request, body []byte) goldenUnary {
 	result := goldenUnary{}
-	response, report, err := path.Backend().DecodeResponse(request.Clone(), body)
+	response, report, err := calls.decode(request.Clone(), body)
 	result.DecodeError, result.DecodeNotices = goldenErrorText(err), goldenNoticeList(report)
 	if err != nil {
 		return result

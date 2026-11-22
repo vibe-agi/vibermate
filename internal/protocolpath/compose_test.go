@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -430,28 +431,95 @@ func TestComposedPathOptionalCapabilities(t *testing.T) {
 	}
 }
 
-// Every new Path method keeps today's behaviour on a path built with New.
+// echoBackend answers with values derived from what it was given, so a
+// fallback that drops an argument changes the result. As a SourceRequestEncoder
+// it forwards the source body and headers, as the passthrough paths do.
+type echoBackend struct{ source bool }
+
+func (echoBackend) Dialect() protocolspec.Dialect { return protocolspec.DialectOpenAIChat }
+
+func (echoBackend) EncodeRequest(request protocolcore.Request) (ProviderRequest, protocolcore.TranslationReport, error) {
+	provider, err := NewProviderRequest(http.MethodPost, "v1/chat/completions", http.Header{"Accept": {"application/json"}}, []byte("neutral:"+request.EffectiveModel))
+	return provider, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{Code: protocolcore.NoticeStopReasonApproximated, Path: "$.neutral"}), err
+}
+
+func (echoBackend) DecodeResponse(request protocolcore.Request, body []byte) (protocolcore.Response, protocolcore.TranslationReport, error) {
+	response := terminalResponse(protocolcore.StopReasonEndTurn, textBlock(request.EffectiveModel+":"+string(body)))
+	return response, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{Code: protocolcore.NoticeStopReasonApproximated, Path: "$.decoded"}), nil
+}
+
+type sourceEchoBackend struct{ echoBackend }
+
+func (sourceEchoBackend) EncodeSourceRequest(request protocolcore.Request, body []byte, headers http.Header) (ProviderRequest, protocolcore.TranslationReport, error) {
+	provider, err := NewProviderRequest(http.MethodPost, "v1/messages", http.Header{"X-Source": headers.Values("X-Source")}, append([]byte("source:"+request.EffectiveModel+":"), body...))
+	return provider, protocolcore.NewTranslationReport(protocolcore.TranslationNotice{Code: protocolcore.NoticeStopReasonApproximated, Path: "$.source"}), err
+}
+
+// echoStreaming starts streams that echo the request's model.
+type echoStreaming struct{}
+
+func (echoStreaming) NewStream(request protocolcore.Request) (Stream, error) {
+	return echoStream{model: request.EffectiveModel}, nil
+}
+
+type echoStream struct {
+	streamFixture
+	model string
+}
+
+func (stream echoStream) Feed(_ context.Context, fragment []byte) ([]byte, error) {
+	return append([]byte(stream.model+":"), fragment...), nil
+}
+
+// Every new Path method keeps today's behaviour on a path built with New: the
+// attempt-scoped forms give exactly what the legacy methods give, whatever
+// the context, so moving the exchange onto them moves no byte.
 func TestPathBuiltWithNewFallsBack(t *testing.T) {
 	t.Parallel()
 	identifier, _ := protocolspec.NewCodecPairID("client-to-provider")
 	operation, _ := protocolspec.NewClientOperationID("client-create")
+	request := streamingRequest()
+	attempt := ProviderContext{Target: TargetOpenAIPlatform, ReasoningBinding: NewReasoningBinding("endpoint", "account"), RejectedSeal: func([32]byte) bool { return true }}
+	sourceBody, sourceHeaders := []byte(`{"source":true}`), http.Header{"X-Source": {"client"}}
+	for name, backend := range map[string]BackendCodec{"translating": echoBackend{}, "source forwarding": sourceEchoBackend{}} {
+		path, err := New(Options{ID: identifier, Revision: 1, ClientOperationIDs: []protocolspec.ClientOperationID{operation},
+			Client: clientCodecFixture{}, Backend: backend, Streaming: echoStreaming{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, providerContext := range []ProviderContext{{}, attempt} {
+			legacy, legacyReport, legacyErr := path.EncodeProviderRequest(request, sourceBody, sourceHeaders)
+			scoped, scopedReport, scopedErr := path.EncodeProviderRequestFor(providerContext, request, sourceBody, sourceHeaders)
+			if legacyErr != nil || scopedErr != nil || scoped.Method() != legacy.Method() || scoped.RelativePath() != legacy.RelativePath() ||
+				string(scoped.Body()) != string(legacy.Body()) || !slices.Equal(scoped.Headers().Values("X-Source"), legacy.Headers().Values("X-Source")) ||
+				!slices.Equal(scopedReport.Notices(), legacyReport.Notices()) {
+				t.Fatalf("%s: EncodeProviderRequestFor() = %q %v %v, legacy %q %v %v", name, scoped.Body(), scoped.Headers(), scopedErr, legacy.Body(), legacy.Headers(), legacyErr)
+			}
+			legacyResponse, legacyDecodeReport, legacyErr := path.Backend().DecodeResponse(request, []byte("body"))
+			scopedResponse, scopedDecodeReport, scopedErr := path.DecodeProviderResponseFor(providerContext, request, []byte("body"))
+			if legacyErr != nil || scopedErr != nil || scopedResponse.ID != legacyResponse.ID || len(scopedResponse.Blocks) != 1 ||
+				scopedResponse.Blocks[0].Text != legacyResponse.Blocks[0].Text || !slices.Equal(scopedDecodeReport.Notices(), legacyDecodeReport.Notices()) {
+				t.Fatalf("%s: DecodeProviderResponseFor() = %+v, %v, legacy %+v", name, scopedResponse, scopedErr, legacyResponse)
+			}
+			legacyStream, legacyErr := path.Streaming().NewStream(request)
+			scopedStream, scopedErr := path.NewStreamFor(providerContext, request)
+			if legacyErr != nil || scopedErr != nil {
+				t.Fatalf("%s: NewStreamFor() = %v, legacy %v", name, scopedErr, legacyErr)
+			}
+			legacyLive, _ := legacyStream.Feed(context.Background(), []byte("x"))
+			scopedLive, _ := scopedStream.Feed(context.Background(), []byte("x"))
+			if string(scopedLive) != string(legacyLive) || string(scopedLive) != "gpt-test:x" {
+				t.Fatalf("%s: NewStreamFor() stream fed %q, legacy %q", name, scopedLive, legacyLive)
+			}
+		}
+	}
 	path, err := New(Options{ID: identifier, Revision: 1, ClientOperationIDs: []protocolspec.ClientOperationID{operation},
 		Client: clientCodecFixture{}, Backend: backendCodecFixture{}, Streaming: streamingFixture{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := streamingRequest()
 	if path.IsComposed() || path.AggregatesUpstreamStream() {
 		t.Fatal("a New path reports composition")
-	}
-	if _, _, err := path.EncodeProviderRequestFor(ProviderContext{ReasoningBinding: "b"}, request, nil, nil); err != nil {
-		t.Fatalf("EncodeProviderRequestFor() = %v", err)
-	}
-	if stream, err := path.NewStreamFor(ProviderContext{}, request); err != nil || stream == nil {
-		t.Fatalf("NewStreamFor() = %v, %v", stream, err)
-	}
-	if _, _, err := path.DecodeProviderResponseFor(ProviderContext{}, request, nil); err != nil {
-		t.Fatalf("DecodeProviderResponseFor() = %v", err)
 	}
 	if _, err := path.NewAggregatingStream(ProviderContext{}, request); !errors.Is(err, ErrCapabilityUnsupported) {
 		t.Fatalf("NewAggregatingStream() = %v", err)
