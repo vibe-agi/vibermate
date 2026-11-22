@@ -192,6 +192,51 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets('a new proxy login does not show the last session\'s requests', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewFixture.freshInstall().terminalCommands,
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    // Another session's requests are open first.
+    await controller.selectCapture('managed_run:run-1');
+    controller.selectCaptureDetailMode(CaptureDetailMode.requests);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('No requests yet'), findsNothing);
+
+    final context = await controller.loadManualCaptureContext(
+      'system_transparent',
+    );
+    await controller.createManualCapture(
+      context: context!,
+      displayName: 'Browser Lab',
+      clientClass: 'desktop_app',
+      lifetime: 'until_revoked',
+    );
+    controller.selectCaptureDetailMode(CaptureDetailMode.requests);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.selectedCapture!.displayName, 'Browser Lab');
+    expect(find.text('No requests yet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
   Future<String?> copyAgain(
     WidgetTester tester,
     WorkbenchController controller,

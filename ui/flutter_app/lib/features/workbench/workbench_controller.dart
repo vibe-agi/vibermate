@@ -5430,7 +5430,13 @@ final class WorkbenchController extends ChangeNotifier
       final updated = await _api.loadDashboard();
       if (_disposed) return null;
       data = updated;
-      selectedCaptureKey = 'manual_capture:${created.grant.capture.id}';
+      final key = 'manual_capture:${created.grant.capture.id}';
+      if (selectedCaptureKey != key) {
+        selectedCaptureKey = key;
+        // What was read for the session open before belongs to it, not to
+        // the new login: its requests would show under the new name.
+        _resetCaptureDetail();
+      }
       operationNotice = 'manual_capture.created';
       mutating = false;
       notifyListeners();
