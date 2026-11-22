@@ -956,9 +956,9 @@ func TestRootTrustMessagesNameCodexAndTheAppPlace(t *testing.T) {
 		expected []string
 	}{
 		{locales.EnglishUS, "cli.error.localRootUntrusted", []string{"Codex", "Settings → Safety and data → ViberMate certificate", "Install and trust"}},
-		{locales.SimplifiedChinese, "cli.error.localRootUntrusted", []string{"Codex", "设置 → 安全与数据 → ViberMate 证书", "安装并信任"}},
+		{locales.SimplifiedChinese, "cli.error.localRootUntrusted", []string{"Codex", "\u8bbe\u7f6e → \u5b89\u5168\u4e0e\u6570\u636e → ViberMate \u8bc1\u4e66", "\u5b89\u88c5\u5e76\u4fe1\u4efb"}},
 		{locales.EnglishUS, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code works without it"}},
-		{locales.SimplifiedChinese, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code 不受影响"}},
+		{locales.SimplifiedChinese, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code \u4e0d\u53d7\u5f71\u54cd"}},
 		{locales.EnglishUS, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
 		{locales.SimplifiedChinese, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
 	} {
@@ -982,7 +982,7 @@ func TestMissingProgramNamesTheCommandAndExplainsAliases(t *testing.T) {
 		expected []string
 	}{
 		{"LANG=en_US.UTF-8", []string{"Couldn't find “" + program + "”", "Shell aliases and functions don't work here"}},
-		{"LANG=zh_CN.UTF-8", []string{"找不到“" + program + "”", "shell alias 或函数"}},
+		{"LANG=zh_CN.UTF-8", []string{"\u627e\u4e0d\u5230“" + program + "”", "shell alias \u6216\u51fd\u6570"}},
 	} {
 		var stdout, stderr strings.Builder
 		code, key := execute([]string{"run", "--", program}, []string{check.lang}, strings.NewReader(""), &stdout, &stderr)
