@@ -4252,13 +4252,19 @@ final class WorkbenchController extends ChangeNotifier
           )
         : null;
     // A launch that stopped before its agent started gives way to the next
-    // run, so the moment it connects shows the session that did.
-    final successor = selected != null && selected.stoppedBeforeStart
+    // run, so the moment it connects shows the session that did. Only a run
+    // that appeared since the last read counts: a stopped launch opened
+    // beside a run that was already listed stays open.
+    final listedBefore = _listedCaptureKeys;
+    _listedCaptureKeys = {for (final capture in updated.captures) capture.key};
+    final successor =
+        selected != null && selected.stoppedBeforeStart && listedBefore != null
         ? updated.captures
               .where(
                 (capture) =>
                     capture.kind == 'managed_run' &&
                     capture.running &&
+                    !listedBefore.contains(capture.key) &&
                     capture.createdAt.isAfter(selected.createdAt),
               )
               .fold<CaptureRecord?>(
@@ -4325,6 +4331,10 @@ final class WorkbenchController extends ChangeNotifier
       selectedEndpointId = updated.endpoints.firstOrNull?.id;
     }
   }
+
+  /// The sessions listed when selections were last repaired; null before
+  /// the first read.
+  Set<String>? _listedCaptureKeys;
 
   static CaptureRecord? _newestObservedCapture(DashboardData value) {
     CaptureRecord? newest;
@@ -4529,6 +4539,13 @@ final class WorkbenchController extends ChangeNotifier
       return;
     }
     selectedCaptureKey = captureKey;
+    // Sessions listed when the person chose this one, including older pages
+    // loaded since the last read, never replace it.
+    _listedCaptureKeys = {
+      ...?_listedCaptureKeys,
+      for (final capture in data?.captures ?? const <CaptureRecord>[])
+        capture.key,
+    };
     _resetCaptureDetail();
     operationNotice = null;
     notifyListeners();

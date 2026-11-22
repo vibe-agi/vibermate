@@ -168,6 +168,31 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets('a stopped launch the person opened stays open', (tester) async {
+    final (controller, api) = await open(
+      tester,
+      stage: PreviewFreshStage.failed,
+    );
+    // A newer run that was already listed when the stopped one was opened.
+    api.addFreshRun(codex: true, phase: PreviewFreshRunPhase.waiting);
+    await controller.refresh();
+    await tester.pump(const Duration(milliseconds: 300));
+    final failed = controller.data!.captures.singleWhere(
+      (capture) => capture.stoppedBeforeStart,
+    );
+    await tester.tap(find.byKey(Key('capture-row-${failed.key}')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.selectedCaptureKey, failed.key);
+
+    // Polls keep it open: only a run that appears afterwards replaces it.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.selectedCaptureKey, failed.key);
+    expect(find.byKey(const Key('capture-launch-stopped')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
   Future<String?> copyAgain(
     WidgetTester tester,
     WorkbenchController controller,
