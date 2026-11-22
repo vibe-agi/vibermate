@@ -2834,23 +2834,11 @@ final class _ManualCaptureCreateDialogState
     final copy = widget.copy;
     final created = _created;
     if (created != null) {
-      return AlertDialog(
-        title: Text(copy('capture.manual.delivery.title')),
-        content: SizedBox(
-          width: 470,
-          child: _ManualGrantDelivery(
-            grant: created.grant,
-            controller: widget.controller,
-            copy: copy,
-          ),
-        ),
-        actions: [
-          FilledButton(
-            key: const Key('manual-capture-delivery-done'),
-            onPressed: () => Navigator.pop(context),
-            child: Text(copy('capture.manual.delivery.done')),
-          ),
-        ],
+      return _ManualDeliveryDialog(
+        title: copy('capture.manual.delivery.title'),
+        grant: created.grant,
+        controller: widget.controller,
+        copy: copy,
       );
     }
     final environments = widget.controller.data!.environments
@@ -3116,23 +3104,11 @@ final class _ManualCaptureRotateDialogState
     final copy = widget.copy;
     final rotated = _rotated;
     if (rotated != null) {
-      return AlertDialog(
-        title: Text(copy('capture.manual.delivery.rotated.title')),
-        content: SizedBox(
-          width: 470,
-          child: _ManualGrantDelivery(
-            grant: rotated.grant,
-            controller: widget.controller,
-            copy: copy,
-          ),
-        ),
-        actions: [
-          FilledButton(
-            key: const Key('manual-capture-delivery-done'),
-            onPressed: () => Navigator.pop(context),
-            child: Text(copy('capture.manual.delivery.done')),
-          ),
-        ],
+      return _ManualDeliveryDialog(
+        title: copy('capture.manual.delivery.rotated.title'),
+        grant: rotated.grant,
+        controller: widget.controller,
+        copy: copy,
       );
     }
     return AlertDialog(
@@ -3184,6 +3160,55 @@ final class _ManualCaptureRotateDialogState
     if (!mounted) return;
     setState(() => _rotated = rotated);
   }
+}
+
+/// The one place a proxy login's password is shown. It closes only from its
+/// own buttons, once the person says the values are saved: a click beside
+/// it or Escape would lose the password for good.
+final class _ManualDeliveryDialog extends StatelessWidget {
+  const _ManualDeliveryDialog({
+    required this.title,
+    required this.grant,
+    required this.controller,
+    required this.copy,
+  });
+
+  final String title;
+  final ManualCaptureGrant grant;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    child: AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 470,
+        child: _ManualGrantDelivery(
+          grant: grant,
+          controller: controller,
+          copy: copy,
+        ),
+      ),
+      actions: [
+        if (controller.accessSettingsAvailable)
+          OutlinedButton(
+            key: const Key('manual-capture-delivery-done-guide'),
+            onPressed: () {
+              Navigator.pop(context);
+              controller.openAccessSettings();
+            },
+            child: Text(copy('capture.manual.delivery.done_open_guide')),
+          ),
+        FilledButton(
+          key: const Key('manual-capture-delivery-done'),
+          onPressed: () => Navigator.pop(context),
+          child: Text(copy('capture.manual.delivery.done')),
+        ),
+      ],
+    ),
+  );
 }
 
 /// What the proxy login lets ViberMate see, as a neutral panel: the routing
@@ -3342,19 +3367,6 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
                       ),
                     ),
                   ],
-                ),
-              ),
-            if (widget.controller.accessSettingsAvailable)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: const Key('manual-capture-open-guide'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    widget.controller.openAccessSettings();
-                  },
-                  icon: const Icon(Icons.menu_book_outlined, size: 14),
-                  label: Text(copy('capture.manual.delivery.open_guide')),
                 ),
               ),
             const SizedBox(height: 6),

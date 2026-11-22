@@ -3386,10 +3386,9 @@ void main() {
       expect(find.text('Proxy login created'), findsOneWidget);
       expect(find.text('preview-password-1'), findsOneWidget);
       expect(find.text('Root certificate file'), findsOneWidget);
-      expect(
-        find.byKey(const Key('manual-capture-open-guide')),
-        findsOneWidget,
-      );
+      // The guide is offered only with the values saved, never above them.
+      expect(find.text('I saved these values, open guide'), findsOneWidget);
+      expect(find.text('Open guide'), findsNothing);
       expect(
         find.text(
           "In the app's network settings, set its HTTP/HTTPS proxy to the address below.",
@@ -3423,6 +3422,48 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('the proxy login password stays until its values are saved', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('manual-capture-create')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('manual-capture-name')),
+      'Figma',
+    );
+    await tester.tap(find.byKey(const Key('manual-capture-create-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+
+    // Neither a click beside the dialog nor Escape drops the password.
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsOneWidget);
+
+    // Saying the values are saved closes it and opens the guide.
+    await tester.tap(
+      find.byKey(const Key('manual-capture-delivery-done-guide')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('preview-password-1'), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Access and launch'), findsWidgets);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets(
     'manual capture credential rotation requires confirmation and retains evidence',

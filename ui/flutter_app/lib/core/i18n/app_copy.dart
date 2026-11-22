@@ -979,7 +979,6 @@ final class AppCopy {
         'When the app asks for proxy credentials, use this username and password.',
     'capture.manual.delivery.steps.root':
         'Trust the root certificate file on this device, so the app accepts ViberMate\'s certificate.',
-    'capture.manual.delivery.open_guide': 'Open guide',
     'capture.manual.delivery.root_server':
         'Trust this Proxy CA on the client device for intercepted AI hosts. Verify its SHA-256 fingerprint before installing.',
     'capture.manual.delivery.download_root': 'Download Proxy CA',
@@ -998,6 +997,8 @@ final class AppCopy {
         'Revoking or rotating this login never deletes captured Conversation or Activity evidence.',
     'capture.manual.delivery.copied': '{field} copied',
     'capture.manual.delivery.done': 'I saved these values',
+    'capture.manual.delivery.done_open_guide':
+        'I saved these values, open guide',
     'capture.source.managed':
         'Started by vibermate run; its conversation stays with this run.',
     'capture.source.manual':
@@ -4210,7 +4211,6 @@ final class AppCopy {
     'capture.manual.delivery.steps.proxy': '在应用的网络设置中，把 HTTP/HTTPS 代理设为下面的地址。',
     'capture.manual.delivery.steps.login': '应用要求代理凭据时，填写下面的用户名和密码。',
     'capture.manual.delivery.steps.root': '在这台设备上信任根证书文件，让应用接受 ViberMate 的证书。',
-    'capture.manual.delivery.open_guide': '打开指南',
     'capture.manual.delivery.root_server':
         '在客户端设备上信任此 Proxy CA，才能验证被检查的 AI 域名。安装前请核对 SHA-256 指纹。',
     'capture.manual.delivery.download_root': '下载 Proxy CA',
@@ -4225,6 +4225,7 @@ final class AppCopy {
     'capture.manual.delivery.evidence': '撤销或轮换登录都不会删除已有的对话与请求记录。',
     'capture.manual.delivery.copied': '已复制{field}',
     'capture.manual.delivery.done': '我已保存这些内容',
+    'capture.manual.delivery.done_open_guide': '我已保存这些内容，打开指南',
     'capture.source.managed': '由 vibermate run 启动；对话归入本次运行。',
     'capture.source.manual': '专属代理登录；没有客户端会话标识时，每次 Agent 调用单独记录。',
     'capture.environment': '流量策略',
