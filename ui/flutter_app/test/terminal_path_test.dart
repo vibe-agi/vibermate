@@ -6,6 +6,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
+// The browser build of terminal_command.dart does not export the probe, and
+// the web test job compiles every file, so name the desktop file directly.
+// ignore: unnecessary_import
+import 'package:vibermate_app/core/bootstrap/terminal_command_io.dart'
+    show LoginShellProbe;
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
