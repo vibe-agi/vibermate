@@ -132,6 +132,9 @@ func newSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.Conte
 			return nil, fmt.Errorf("%w: response: %w", ErrInvalidEvidence, err)
 		}
 	}
+	if err := boundProjectedBlocks(r, v); err != nil {
+		return nil, err
+	}
 	meta := RecordMetadata{ExchangeID: id, Parent: parent, Frozen: f, Mode: p.Mode, RecordedAt: t.UTC(), ExpiresAt: t.UTC().AddDate(0, 0, int(p.RetentionDays)), Request: RequestMetadata{RequestedModel: r.RequestedModel, EffectiveModel: r.EffectiveModel, MaxOutputTokens: r.MaxOutputTokens, Stream: r.Stream, ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue{}, r.ProtocolEvidence...)}}
 	for _, tool := range r.Tools {
 		meta.Request.Tools = append(meta.Request.Tools, ToolDefinition{Name: tool.Name})
@@ -428,6 +431,37 @@ func projectedBlockCount(b protocolcore.ContentBlock) uint64 {
 	default:
 		return 1
 	}
+}
+
+// boundProjectedBlocks refuses evidence in which one message would project to
+// more stored blocks than a stored message manifest can be read back with
+// (protocolcore.MaxContentBlocks). Each neutral block counts as
+// projectedBlockCount; a block that exists today counts as one, so only
+// reasoning and media in tool results can reach the bound. The exchange does
+// not depend on recording, so refusing loses only this evidence.
+func boundProjectedBlocks(r protocolcore.Request, v *protocolcore.Response) error {
+	within := func(blocks []protocolcore.ContentBlock) error {
+		var stored uint64
+		for _, b := range blocks {
+			stored += projectedBlockCount(b)
+		}
+		if stored > protocolcore.MaxContentBlocks {
+			return fmt.Errorf("%w: a message projects to more stored blocks than can be read back", ErrInvalidEvidence)
+		}
+		return nil
+	}
+	if err := within(r.System); err != nil {
+		return err
+	}
+	for _, message := range r.Messages {
+		if err := within(message.Blocks); err != nil {
+			return err
+		}
+	}
+	if v != nil {
+		return within(v.Blocks)
+	}
+	return nil
 }
 
 func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {

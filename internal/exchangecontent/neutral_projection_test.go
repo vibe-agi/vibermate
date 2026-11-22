@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -278,5 +279,94 @@ func assertStoredKinds(t *testing.T, record Record) {
 	}
 	if record.Response != nil {
 		check(record.Response.Blocks)
+	}
+}
+
+// mediaToolResults returns tool results whose media parts project to one
+// stored evidence block each, after the tool_result block itself.
+func mediaToolResults(t *testing.T, parts ...int) []protocolcore.ContentBlock {
+	t.Helper()
+	blocks := make([]protocolcore.ContentBlock, 0, len(parts))
+	for index, count := range parts {
+		items := make([]protocolcore.ToolResultPart, count)
+		for part := range items {
+			items[part] = protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartMedia, Media: &protocolcore.Media{Kind: protocolcore.MediaImage, MediaType: "image/png", Data: "iVBORw0KGgo"}}
+		}
+		key, err := protocolcore.NewCallKey("anthropic-messages", fmt.Sprintf("toolu_%d", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := protocolcore.NewToolResultBlock(protocolcore.ToolResult{Key: key, Parts: &protocolcore.ToolResultParts{Items: items}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+func reasoningBlocks(t *testing.T, count int) []protocolcore.ContentBlock {
+	t.Helper()
+	block, err := protocolcore.NewReasoningBlock(protocolcore.Reasoning{Text: "r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := make([]protocolcore.ContentBlock, count)
+	for index := range blocks {
+		blocks[index] = block
+	}
+	return blocks
+}
+
+// A message's stored projection may hold at most MaxContentBlocks blocks,
+// the most a stored manifest can be read back with. Reasoning and media in
+// tool results project to more than one stored block each, so a request that
+// validates could otherwise be persisted and then not be read.
+func TestNeutralProjectionStaysWithinTheStoredManifest(t *testing.T) {
+	t.Parallel()
+	base, _ := evidenceFixture(t)
+	frozen := FrozenRef{EnvironmentID: "env", EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "ep", ClientEndpointRevision: 1, ProtocolPlanID: "plan", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1}
+	policy := environment.ContentRecordingPolicy{Mode: environment.ContentRecordingFull, RetentionDays: 1}
+	limits := DefaultSourceLimits
+	full := make([]int, 15)
+	for index := range full {
+		full[index] = protocolcore.MaxToolResultParts
+	}
+	text := protocolcore.ContentBlock{Kind: protocolcore.BlockText, Text: "after"}
+	for name, test := range map[string]struct {
+		messages []protocolcore.Message
+		response []protocolcore.ContentBlock
+		accepted bool
+	}{
+		// 15 * 257 + 241 = 4096 stored blocks.
+		"tool-result media at the bound": {messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: mediaToolResults(t, append(full, 240)...)}}, accepted: true},
+		"tool-result media above it":     {messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: mediaToolResults(t, append(full, 241)...)}}},
+		"reasoning at the bound":         {messages: []protocolcore.Message{{Role: protocolcore.RoleAssistant, Blocks: reasoningBlocks(t, 2048)}}, accepted: true},
+		"reasoning above it":             {messages: []protocolcore.Message{{Role: protocolcore.RoleAssistant, Blocks: append(reasoningBlocks(t, 2048), text)}}},
+		"response reasoning above it":    {response: append(reasoningBlocks(t, 2048), text)},
+	} {
+		request := base.Clone()
+		request.Messages = append(request.Messages, test.messages...)
+		var response *protocolcore.Response
+		if test.response != nil {
+			response = &protocolcore.Response{ID: "resp", RequestedModel: request.RequestedModel, EffectiveModel: request.EffectiveModel, ReportedModel: "model", StopReason: protocolcore.StopReasonEndTurn, Blocks: test.response}
+			if err := response.Validate(); err != nil {
+				t.Fatalf("%s: response.Validate() = %v", name, err)
+			}
+		}
+		if err := request.Validate(); err != nil {
+			t.Fatalf("%s: request.Validate() = %v", name, err)
+		}
+		l, err := limits()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = NewSourceWithin(l, "projection-bound", frozen, policy, time.Now(), request, response)
+		if test.accepted && err != nil {
+			t.Fatalf("%s: NewSourceWithin() = %v", name, err)
+		}
+		if !test.accepted && !errors.Is(err, ErrInvalidEvidence) {
+			t.Fatalf("%s: NewSourceWithin() = %v, want ErrInvalidEvidence", name, err)
+		}
 	}
 }
