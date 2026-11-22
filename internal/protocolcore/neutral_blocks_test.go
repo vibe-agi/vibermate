@@ -229,6 +229,20 @@ func TestToolResultPartsKeepContentAsTheirText(t *testing.T) {
 	if (ToolResult{Key: key, Content: "plain"}).HasNonTextParts() {
 		t.Fatal("a result without parts reported non-text parts")
 	}
+	// The part count is bounded on its own: every part below is valid.
+	textParts := func(count int) ToolResult {
+		items := make([]ToolResultPart, count)
+		for index := range items {
+			items[index] = ToolResultPart{Kind: ToolResultPartText, Text: "x"}
+		}
+		return ToolResult{Key: key, Content: strings.Repeat("x", count), Parts: &ToolResultParts{Items: items}}
+	}
+	if err := textParts(MaxToolResultParts).Validate(); err != nil {
+		t.Fatalf("%d parts refused: %v", MaxToolResultParts, err)
+	}
+	if err := textParts(MaxToolResultParts + 1).Validate(); err == nil {
+		t.Fatalf("%d valid parts accepted", MaxToolResultParts+1)
+	}
 	for name, invalid := range map[string]ToolResult{
 		"content differs":       {Key: key, Content: "first  second", Parts: parts},
 		"content longer":        {Key: key, Content: "first secondX", Parts: parts},

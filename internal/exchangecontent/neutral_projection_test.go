@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -367,6 +368,43 @@ func TestNeutralProjectionStaysWithinTheStoredManifest(t *testing.T) {
 		}
 		if !test.accepted && !errors.Is(err, ErrInvalidEvidence) {
 			t.Fatalf("%s: NewSourceWithin() = %v, want ErrInvalidEvidence", name, err)
+		}
+	}
+}
+
+// Projection reserves scratch for every stored block a neutral block becomes,
+// not only for the first.
+func TestProjectionReservesScratchForEveryStoredBlock(t *testing.T) {
+	t.Parallel()
+	reasoning := reasoningBlocks(t, 1)[0]
+	media := mediaToolResults(t, 3)[0]
+	text := protocolcore.ContentBlock{Kind: protocolcore.BlockText, Text: "plain"}
+	for name, test := range map[string]struct {
+		block  protocolcore.ContentBlock
+		stored uint64
+	}{
+		"text":                   {text, 1},
+		"reasoning":              {reasoning, 2},
+		"tool result with media": {media, 4},
+	} {
+		// Metadata only: payload is 4096 plus 256 for each extra stored block.
+		payload := 4096 + (test.stored-1)*256
+		for _, limit := range []uint64{payload - 1, payload} {
+			source := &Source{limits: SourceLimits{Scratch: protocolcore.ResourceCost{PayloadBytes: limit, StructureBytes: 1 << 30}}, metadata: RecordMetadata{Mode: environment.ContentRecordingMetadataOnly}}
+			err := source.reserveBlockScratch(test.block)
+			if (err == nil) != (limit == payload) {
+				t.Fatalf("%s: metadata-only payload limit %d: %v", name, limit, err)
+			}
+		}
+		// Full: structure is one Block per stored block, an agent copy per
+		// extra one, and 4096.
+		structure := uint64(unsafe.Sizeof(Block{}))*test.stored + uint64(unsafe.Sizeof(AgentContext{}))*(test.stored-1) + 4096
+		for _, limit := range []uint64{structure - 1, structure} {
+			source := &Source{limits: SourceLimits{Scratch: protocolcore.ResourceCost{PayloadBytes: 1 << 30, StructureBytes: limit}}, metadata: RecordMetadata{Mode: environment.ContentRecordingFull}}
+			err := source.reserveBlockScratch(test.block)
+			if (err == nil) != (limit == structure) {
+				t.Fatalf("%s: full structure limit %d: %v", name, limit, err)
+			}
 		}
 	}
 }
