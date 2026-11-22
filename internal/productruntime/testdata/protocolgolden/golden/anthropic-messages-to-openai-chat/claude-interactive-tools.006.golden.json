@@ -1,0 +1,13 @@
+{
+  "path": "anthropic-messages-to-openai-chat",
+  "fixture": "claude-interactive-tools.006",
+  "decode": {
+    "error": "unsupported_client_input at $.messages[3].content[0].content[0]: tool result contains a non-text block",
+    "notices": [
+      "unknown_request_field_not_forwarded $.safeguards",
+      "cache_control_not_forwarded $.system[2].cache_control",
+      "cache_control_not_forwarded $.system[3].cache_control",
+      "unknown_request_field_not_forwarded $.messages[1].output_config"
+    ]
+  }
+}

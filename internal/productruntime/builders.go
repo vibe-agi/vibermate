@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
-	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -32,16 +31,12 @@ import (
 	"github.com/vibe-agi/vibermate/internal/nativemcp"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
-	"github.com/vibe-agi/vibermate/internal/openairesponses"
-	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
-	"github.com/vibe-agi/vibermate/internal/protocolpath"
-	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/recording"
-	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimedata"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
@@ -223,89 +218,7 @@ func productionEnvironmentCompiler(
 	accounts environment.AccountCatalog,
 	endpoints upstreamendpoint.Catalog,
 ) (environment.Compiler, error) {
-	operations, err := operationcatalog.BuiltIn()
-	if err != nil {
-		return environment.Compiler{}, fmt.Errorf("build client operation catalog: %w", err)
-	}
-	anthropicCodecPairID, err := protocolspec.NewCodecPairID(anthropicchat.CodecPairID)
-	if err != nil {
-		return environment.Compiler{}, err
-	}
-	responsesCodecPairID, err := protocolspec.NewCodecPairID(responseschat.CodecPairID)
-	if err != nil {
-		return environment.Compiler{}, err
-	}
-	messagesCodecPairID, err := protocolspec.NewCodecPairID(anthropicchat.MessagesCodecPairID)
-	if err != nil {
-		return environment.Compiler{}, err
-	}
-	responsesPassthroughCodecPairID, err := protocolspec.NewCodecPairID(
-		responseschat.ResponsesPassthroughCodecPairID,
-	)
-	if err != nil {
-		return environment.Compiler{}, err
-	}
-	protocols, err := protocolspec.NewCatalog(
-		operations.Definitions(),
-		[]protocolspec.CodecPairDefinition{
-			{
-				ID:              anthropicCodecPairID,
-				Revision:        anthropicchat.CodecRevision,
-				ClientDialect:   protocolspec.DialectAnthropicMessages,
-				ProviderDialect: protocolspec.DialectOpenAIChat,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					protocolspec.DialectAnthropicMessages,
-				),
-				RequiredCapabilities: []protocolspec.ProviderCapability{
-					protocolspec.ProviderCapabilityMessages,
-					protocolspec.ProviderCapabilityStreaming,
-					protocolspec.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              messagesCodecPairID,
-				Revision:        anthropicchat.MessagesCodecRevision,
-				ClientDialect:   protocolspec.DialectAnthropicMessages,
-				ProviderDialect: protocolspec.DialectAnthropicMessages,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					protocolspec.DialectAnthropicMessages,
-				),
-				RequiredCapabilities: []protocolspec.ProviderCapability{
-					protocolspec.ProviderCapabilityMessages,
-					protocolspec.ProviderCapabilityStreaming,
-					protocolspec.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              responsesCodecPairID,
-				Revision:        responseschat.CodecRevision,
-				ClientDialect:   protocolspec.DialectOpenAIResponses,
-				ProviderDialect: protocolspec.DialectOpenAIChat,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					protocolspec.DialectOpenAIResponses,
-				),
-				RequiredCapabilities: []protocolspec.ProviderCapability{
-					protocolspec.ProviderCapabilityMessages,
-					protocolspec.ProviderCapabilityStreaming,
-					protocolspec.ProviderCapabilityToolCalls,
-				},
-			},
-			{
-				ID:              responsesPassthroughCodecPairID,
-				Revision:        responseschat.ResponsesPassthroughCodecRevision,
-				ClientDialect:   protocolspec.DialectOpenAIResponses,
-				ProviderDialect: protocolspec.DialectOpenAIResponses,
-				ClientOperationIDs: operations.SemanticOperationIDs(
-					protocolspec.DialectOpenAIResponses,
-				),
-				RequiredCapabilities: []protocolspec.ProviderCapability{
-					protocolspec.ProviderCapabilityMessages,
-					protocolspec.ProviderCapabilityStreaming,
-					protocolspec.ProviderCapabilityToolCalls,
-				},
-			},
-		},
-	)
+	protocols, err := productionProtocolCatalog()
 	if err != nil {
 		return environment.Compiler{}, err
 	}
@@ -799,45 +712,16 @@ func buildExchangeOptions(request exchangeBuildRequest) (exchange.Options, error
 		request.contents == nil || request.clock == nil || request.annotations == nil {
 		return exchange.Options{}, errors.New("Exchange evidence dependencies are incomplete")
 	}
-	anthropicOptions, responsesOptions, passthroughOptions := anthropicchat.DefaultOptions(), responseschat.DefaultOptions(), openairesponses.DefaultOptions()
 	var contentLimits *exchangecontent.SourceLimits
+	var semanticLimits *protocolcore.ResourceLimits
 	if request.bodyAdmission != nil {
 		policy := request.bodyAdmission.Policy()
 		contentLimits = &policy.Content
-		anthropicOptions.Resources, responsesOptions.Resources, passthroughOptions.Resources = &policy.Content.Semantic, &policy.Content.Semantic, &policy.Content.Semantic
+		semanticLimits = &policy.Content.Semantic
 	}
-	anthropicPath, err := anthropicchat.NewProtocolPath(
-		anthropicOptions,
-	)
+	protocolPaths, err := productionProtocolSelector(semanticLimits)
 	if err != nil {
-		return exchange.Options{}, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
-	}
-	responsesPath, err := responseschat.NewProtocolPath(
-		responsesOptions,
-	)
-	if err != nil {
-		return exchange.Options{}, fmt.Errorf("build Responses Chat protocol path: %w", err)
-	}
-	messagesPath, err := anthropicchat.NewMessagesProtocolPath(
-		anthropicOptions,
-	)
-	if err != nil {
-		return exchange.Options{}, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
-	}
-	responsesPassthroughPath, err := responseschat.NewResponsesPassthroughProtocolPath(
-		passthroughOptions,
-	)
-	if err != nil {
-		return exchange.Options{}, fmt.Errorf("build Responses passthrough protocol path: %w", err)
-	}
-	protocolPaths, err := protocolpath.NewSelector(
-		anthropicPath,
-		responsesPath,
-		messagesPath,
-		responsesPassthroughPath,
-	)
-	if err != nil {
-		return exchange.Options{}, fmt.Errorf("build protocol path selector: %w", err)
+		return exchange.Options{}, err
 	}
 	return exchange.Options{
 		BodyAdmission: request.bodyAdmission,

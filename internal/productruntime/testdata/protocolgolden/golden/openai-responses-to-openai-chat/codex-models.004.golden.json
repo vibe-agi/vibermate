@@ -1,0 +1,13 @@
+{
+  "path": "openai-responses-to-openai-chat",
+  "fixture": "codex-models.004",
+  "decode": {
+    "error": "invalid_client_request at $.tools[8].type: Responses tool search requires a same-dialect path",
+    "notices": [
+      "message_item_identity_not_forwarded $.input[0].id",
+      "message_item_identity_not_forwarded $.input[1].id",
+      "message_item_identity_not_forwarded $.input[2].id",
+      "message_item_identity_not_forwarded $.input[3].id"
+    ]
+  }
+}

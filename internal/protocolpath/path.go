@@ -169,6 +169,9 @@ type Path struct {
 	client     ClientCodec
 	backend    BackendCodec
 	streaming  StreamingBridge
+	// composition is set only by Compose; every method that reads it falls
+	// back to the behaviour of a path built with New.
+	composition *composition
 }
 
 func New(options Options) (*Path, error) {

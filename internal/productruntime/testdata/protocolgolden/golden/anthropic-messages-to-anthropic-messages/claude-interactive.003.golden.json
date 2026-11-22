@@ -1,0 +1,99 @@
+{
+  "path": "anthropic-messages-to-anthropic-messages",
+  "fixture": "claude-interactive.003",
+  "decode": {
+    "notices": []
+  },
+  "providerRequest": {
+    "method": "POST",
+    "relativePath": "v1/messages",
+    "headers": {
+      "Accept": [
+        "text/event-stream"
+      ],
+      "Anthropic-Beta": [
+        "interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24"
+      ],
+      "Anthropic-Version": [
+        "2023-06-01"
+      ]
+    },
+    "bodyBytes": 4049,
+    "notices": [],
+    "readmission": "accepted"
+  },
+  "streams": {
+    "stream-claude-interactive-tools.reply-1": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"content\":[],\"id\":\"msg_wire_1\",\"model\":\"claude-haiku-5-5\",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":7,\"input_tokens\":11,\"output_tokens\":1}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\",\"type\":\"thinking_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\",\"type\":\"signature_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"},\"index\":1,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":2,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"WIRE-ASSISTANT-PREAMBLE\",\"type\":\"text_delta\"},\"index\":2,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":2,\"type\":\"content_block_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "finishError": "unsupported_provider_data at $.content[1].name: provider invoked a tool that the client did not define",
+      "notices": null
+    },
+    "stream-claude-tools.reply-0": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"content\":[],\"id\":\"msg_wire_1\",\"model\":\"claude-haiku-5-5\",\"role\":\"assistant\",\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":7,\"input_tokens\":11,\"output_tokens\":1}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"signature\":\"\",\"thinking\":\"\",\"type\":\"thinking\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"thinking\":\"WIRE-THINKING-TEXT plan the tool calls\",\"type\":\"thinking_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"signature\":\"WIRE-SYNTHETIC-SIGNATURE-0001\",\"type\":\"signature_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"data\":\"WIRE-REDACTED-THINKING-DATA-0001\",\"type\":\"redacted_thinking\"},\"index\":1,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":2,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"WIRE-ASSISTANT-PREAMBLE\",\"type\":\"text_delta\"},\"index\":2,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":2,\"type\":\"content_block_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "finishError": "unsupported_provider_data at $.content[1].name: provider invoked a tool that the client did not define",
+      "notices": null
+    },
+    "stream-claude-usage.reply-0": {
+      "live": [
+        "event: message_start\ndata: {\"message\":{\"container\":null,\"content\":[],\"id\":\"msg_wire_usage\",\"model\":\"claude-haiku-5-5\",\"role\":\"assistant\",\"stop_details\":null,\"stop_reason\":null,\"stop_sequence\":null,\"type\":\"message\",\"usage\":{\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"input_tokens\":0,\"output_tokens\":0}},\"type\":\"message_start\"}\n\n",
+        "event: content_block_start\ndata: {\"content_block\":{\"text\":\"\",\"type\":\"text\"},\"index\":0,\"type\":\"content_block_start\"}\n\n",
+        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"synthetic reply through ViberMate\",\"type\":\"text_delta\"},\"index\":0,\"type\":\"content_block_delta\"}\n\n",
+        "event: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\n",
+        "event: message_delta\ndata: {\"delta\":{\"container\":null,\"stop_details\":null,\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"type\":\"message_delta\",\"usage\":{\"cache_creation_input_tokens\":78,\"cache_read_input_tokens\":910,\"input_tokens\":1234,\"output_tokens\":56}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "msg_wire_usage",
+        "reportedModel": "claude-opus-5-5",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "synthetic reply through ViberMate"
+          }
+        ],
+        "usage": [
+          "inputUncached=1234 (anthropic-messages)",
+          "cacheWrite=78 (anthropic-messages)",
+          "cacheRead=910 (anthropic-messages)",
+          "output=56 (anthropic-messages)",
+          "reasoning=unknown"
+        ]
+      },
+      "notices": [],
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    }
+  },
+  "unary": {
+    "unary-text-tool": {
+      "decodeError": "unsupported_provider_data at $.content[2].name: provider invoked a tool that the client did not define",
+      "decodeNotices": [],
+      "encodeNotices": null
+    }
+  }
+}

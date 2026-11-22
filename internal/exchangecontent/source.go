@@ -132,6 +132,9 @@ func newSourceWithin(l SourceLimits, id string, f FrozenRef, p environment.Conte
 			return nil, fmt.Errorf("%w: response: %w", ErrInvalidEvidence, err)
 		}
 	}
+	if err := boundProjectedBlocks(r, v); err != nil {
+		return nil, err
+	}
 	meta := RecordMetadata{ExchangeID: id, Parent: parent, Frozen: f, Mode: p.Mode, RecordedAt: t.UTC(), ExpiresAt: t.UTC().AddDate(0, 0, int(p.RetentionDays)), Request: RequestMetadata{RequestedModel: r.RequestedModel, EffectiveModel: r.EffectiveModel, MaxOutputTokens: r.MaxOutputTokens, Stream: r.Stream, ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue{}, r.ProtocolEvidence...)}}
 	for _, tool := range r.Tools {
 		meta.Request.Tools = append(meta.Request.Tools, ToolDefinition{Name: tool.Name})
@@ -409,13 +412,68 @@ func (s *Source) reserveScratch(payload, structure uint64) error {
 	}
 	return nil
 }
-func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
-	if s.metadata.Mode != environment.ContentRecordingFull {
-		structure := uint64(unsafe.Sizeof(Block{}))
-		if b.Agent != nil {
-			structure += uint64(unsafe.Sizeof(AgentContext{}))
+
+// projectedBlockCount is how many stored blocks one neutral block becomes:
+// reasoning can become its text and its seal evidence, and a tool result is
+// followed by one evidence block per media part.
+func projectedBlockCount(b protocolcore.ContentBlock) uint64 {
+	switch {
+	case b.Kind == protocolcore.BlockReasoning:
+		return 2
+	case b.Kind == protocolcore.BlockToolResult && b.ToolResult.Parts != nil:
+		count := uint64(1)
+		for _, part := range b.ToolResult.Parts.Items {
+			if part.Media != nil {
+				count++
+			}
 		}
-		return s.reserveScratch(4096, structure)
+		return count
+	default:
+		return 1
+	}
+}
+
+// boundProjectedBlocks refuses evidence in which one message would project to
+// more stored blocks than a stored message manifest can be read back with
+// (protocolcore.MaxContentBlocks). Each neutral block counts as
+// projectedBlockCount; a block that exists today counts as one, so only
+// reasoning and media in tool results can reach the bound. The exchange does
+// not depend on recording, so refusing loses only this evidence.
+func boundProjectedBlocks(r protocolcore.Request, v *protocolcore.Response) error {
+	within := func(blocks []protocolcore.ContentBlock) error {
+		var stored uint64
+		for _, b := range blocks {
+			stored += projectedBlockCount(b)
+		}
+		if stored > protocolcore.MaxContentBlocks {
+			return fmt.Errorf("%w: a message projects to more stored blocks than can be read back", ErrInvalidEvidence)
+		}
+		return nil
+	}
+	if err := within(r.System); err != nil {
+		return err
+	}
+	for _, message := range r.Messages {
+		if err := within(message.Blocks); err != nil {
+			return err
+		}
+	}
+	if v != nil {
+		return within(v.Blocks)
+	}
+	return nil
+}
+
+func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
+	blocks := projectedBlockCount(b)
+	// Each extra stored block holds a fingerprint string and agent copy.
+	extraPayload := (blocks - 1) * 256
+	if s.metadata.Mode != environment.ContentRecordingFull {
+		structure := uint64(unsafe.Sizeof(Block{})) * blocks
+		if b.Agent != nil {
+			structure += uint64(unsafe.Sizeof(AgentContext{})) * blocks
+		}
+		return s.reserveScratch(4096+extraPayload, structure)
 	}
 	text := b.Text
 	if b.Kind == protocolcore.BlockRefusal {
@@ -427,12 +485,15 @@ func (s *Source) reserveBlockScratch(b protocolcore.ContentBlock) error {
 	if b.Kind == protocolcore.BlockToolCall && b.ToolCall.EffectiveKind() != protocolcore.ToolKindFunction {
 		text = b.ToolCall.Input
 	}
+	if b.Kind == protocolcore.BlockReasoning && b.Reasoning != nil {
+		text = b.Reasoning.Text
+	}
 	out, err := sanitizerBound(uint64(len(text)))
 	if err != nil {
 		return err
 	}
-	payload := uint64(len(text)) + 4*out + 4096
-	structure := uint64(unsafe.Sizeof(Block{})) + 4096
+	payload := uint64(len(text)) + 4*out + 4096 + extraPayload
+	structure := uint64(unsafe.Sizeof(Block{}))*blocks + uint64(unsafe.Sizeof(AgentContext{}))*(blocks-1) + 4096
 	if b.Kind == protocolcore.BlockToolCall && b.ToolCall.EffectiveKind() == protocolcore.ToolKindFunction {
 		size := uint64(b.ToolCall.Arguments.ByteLen())
 		if err := s.reserveScratch(2*size+4096, 8192); err != nil {

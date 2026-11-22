@@ -1,0 +1,8 @@
+data: {"item":{"encrypted_content":"WIRE-ENCRYPTED-REASONING-0001","id":"rs_wire_1","summary":[{"text":"WIRE-REASONING-SUMMARY","type":"summary_text"}],"type":"reasoning"},"output_index":0,"type":"response.output_item.done"}
+
+data: {"item":{"content":[{"text":"WIRE-ASSISTANT-PREAMBLE","type":"output_text"}],"id":"msg_wire_1","phase":"commentary","role":"assistant","status":"completed","type":"message"},"output_index":1,"type":"response.output_item.done"}
+
+data: {"item":{"arguments":"{\"cmd\":\"echo wire-fixture\"}","call_id":"call_wire_1","id":"fc_wire_1","name":"exec_command","status":"completed","type":"function_call"},"output_index":2,"type":"response.output_item.done"}
+
+data: {"response":{"created_at":1,"id":"resp_wire_1","model":"fixture","output":[],"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":7},"output_tokens":40,"output_tokens_details":{"reasoning_tokens":9},"total_tokens":51}},"type":"response.completed"}
+

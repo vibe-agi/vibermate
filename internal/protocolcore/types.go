@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -31,6 +34,16 @@ const (
 	MaxProtocolEvidenceValues     = 8192
 	MaxProtocolEvidenceNameBytes  = 128
 	MaxProtocolEvidenceValueBytes = 512
+	// MaxMediaBytes bounds the media payload (base64 data and document text)
+	// of one request, across messages and tool-result parts.
+	MaxMediaBytes             = 16 << 20
+	MaxMediaURLBytes          = 8 << 10
+	MaxMediaTitleBytes        = 1 << 10
+	MaxProviderFileIDBytes    = 512
+	MaxToolResultParts        = 256
+	MaxReasoningItemIDBytes   = 512
+	MaxReasoningBindingBytes  = 128
+	MaxUnservedSafeguardKinds = 8
 )
 
 type Role string
@@ -51,6 +64,13 @@ const (
 	BlockToolCall          BlockKind = "tool_call"
 	BlockToolResult        BlockKind = "tool_result"
 	BlockProviderExtension BlockKind = "provider_extension"
+	// BlockReasoning is positioned provider reasoning: Responses needs each
+	// reasoning item replayed immediately before the item it produced, which
+	// a position-free provider extension cannot express. It shares its name
+	// with the stored reasoning kind it projects onto.
+	BlockReasoning BlockKind = "reasoning"
+	// BlockMedia is an image or document a client attached to a user message.
+	BlockMedia BlockKind = "media"
 )
 
 type StopReason string
@@ -236,6 +256,376 @@ type ToolResult struct {
 	Name      string
 	Content   string
 	IsError   bool
+	// Parts, when set, is the ordered result content the source dialect sent.
+	// Content then equals the concatenation of its text parts with no
+	// separator, so every reader of Content keeps its meaning.
+	Parts *ToolResultParts
+}
+
+type ToolResultPartKind string
+
+const (
+	ToolResultPartText ToolResultPartKind = "text"
+	// ToolResultPartMedia carries an image or document in a tool result.
+	ToolResultPartMedia ToolResultPartKind = "media"
+	// ToolResultPartToolReference names a client tool definition the result
+	// loads (Anthropic's tool_reference, the output of tool search).
+	ToolResultPartToolReference ToolResultPartKind = "tool_reference"
+)
+
+type ToolResultPart struct {
+	Kind     ToolResultPartKind
+	Text     string
+	Media    *Media
+	ToolName string
+}
+
+// ToolResultParts is held by pointer, so a ToolResult without parts costs
+// one word of every ContentBlock instead of a slice header.
+type ToolResultParts struct {
+	Items []ToolResultPart
+}
+
+func (part ToolResultPart) Validate() error {
+	switch part.Kind {
+	case ToolResultPartText:
+		if part.Media != nil || part.ToolName != "" {
+			return errors.New("text tool-result part contains other content")
+		}
+		return validateText("tool-result text part", part.Text, MaxTextBytes, true)
+	case ToolResultPartMedia:
+		if part.Media == nil || part.Text != "" || part.ToolName != "" {
+			return errors.New("media tool-result part is invalid")
+		}
+		return part.Media.Validate()
+	case ToolResultPartToolReference:
+		if part.Media != nil || part.Text != "" {
+			return errors.New("tool-reference part contains other content")
+		}
+		return validateIdentifier("tool-reference name", part.ToolName, MaxToolNameBytes)
+	default:
+		return errors.New("tool-result part kind is unsupported")
+	}
+}
+
+func (part ToolResultPart) Clone() ToolResultPart {
+	cloned := part
+	if part.Media != nil {
+		media := *part.Media
+		cloned.Media = &media
+	}
+	return cloned
+}
+
+func (parts *ToolResultParts) clone() *ToolResultParts {
+	if parts == nil {
+		return nil
+	}
+	cloned := &ToolResultParts{Items: make([]ToolResultPart, len(parts.Items))}
+	for index, part := range parts.Items {
+		cloned.Items[index] = part.Clone()
+	}
+	return cloned
+}
+
+// HasNonTextParts reports a result that a text-only encoder cannot carry.
+func (result ToolResult) HasNonTextParts() bool {
+	if result.Parts == nil {
+		return false
+	}
+	for _, part := range result.Parts.Items {
+		if part.Kind != ToolResultPartText {
+			return true
+		}
+	}
+	return false
+}
+
+func (result ToolResult) mediaBytes() int {
+	if result.Parts == nil {
+		return 0
+	}
+	total := 0
+	for _, part := range result.Parts.Items {
+		if part.Media != nil {
+			total += part.Media.payloadBytes()
+		}
+	}
+	return total
+}
+
+func (result ToolResult) validateParts() error {
+	if result.Parts == nil {
+		return nil
+	}
+	if len(result.Parts.Items) == 0 || len(result.Parts.Items) > MaxToolResultParts {
+		return errors.New("tool-result part count is invalid")
+	}
+	var text strings.Builder
+	for index, part := range result.Parts.Items {
+		if err := part.Validate(); err != nil {
+			return fmt.Errorf("tool-result part %d: %w", index, err)
+		}
+		if part.Kind == ToolResultPartText {
+			text.WriteString(part.Text)
+		}
+		if text.Len() > len(result.Content) {
+			return errors.New("tool-result content differs from its text parts")
+		}
+	}
+	if text.String() != result.Content {
+		return errors.New("tool-result content differs from its text parts")
+	}
+	return nil
+}
+
+type ReasoningTextSource string
+
+const (
+	// ReasoningTextSummary (the default) is a provider's reasoning summary.
+	ReasoningTextSummary ReasoningTextSource = "summary"
+	// ReasoningTextContent is raw reasoning text, as some compatible services
+	// and Anthropic thinking blocks provide it.
+	ReasoningTextContent ReasoningTextSource = "content"
+)
+
+// Reasoning is one positioned reasoning block of an assistant turn.
+type Reasoning struct {
+	// Text is the visible reasoning; empty when display is omitted or the
+	// block is redacted.
+	Text string
+	// TextSource records where Text came from, for faithful replay.
+	TextSource ReasoningTextSource
+	// Redacted is Anthropic redacted_thinking; Text must then be empty.
+	Redacted bool
+	// Seal is the provider's replay state; zero when the provider sent none.
+	Seal ReasoningSeal
+}
+
+type ReasoningSealFormat string
+
+const (
+	SealResponsesEncrypted ReasoningSealFormat = "openai-responses.encrypted"
+	SealAnthropicSignature ReasoningSealFormat = "anthropic.signature"
+	SealAnthropicRedacted  ReasoningSealFormat = "anthropic.redacted"
+)
+
+// ReasoningSeal is opaque replay state that only the provider dialect that
+// minted it may replay, and only to the same model on the same binding.
+type ReasoningSeal struct {
+	Format ReasoningSealFormat
+	// ItemID is the Responses reasoning item id; required for
+	// SealResponsesEncrypted.
+	ItemID string
+	// Model is the effective model that produced the reasoning.
+	Model string
+	// Binding is the provider context's reasoning binding when minted.
+	Binding string
+	// Opaque is encrypted_content, a signature or redacted data, verbatim.
+	// It may be empty when the provider sent no payload; such a seal is never
+	// replayed.
+	Opaque string
+}
+
+func (seal ReasoningSeal) IsZero() bool {
+	return seal == ReasoningSeal{}
+}
+
+// Dialect is the provider dialect that minted the seal, or "" for a zero
+// seal.
+func (seal ReasoningSeal) Dialect() protocolspec.Dialect {
+	switch seal.Format {
+	case SealResponsesEncrypted:
+		return protocolspec.DialectOpenAIResponses
+	case SealAnthropicSignature, SealAnthropicRedacted:
+		return protocolspec.DialectAnthropicMessages
+	default:
+		return ""
+	}
+}
+
+func (seal ReasoningSeal) Validate() error {
+	if seal.IsZero() {
+		return nil
+	}
+	switch seal.Format {
+	case SealResponsesEncrypted:
+		if err := validateIdentifier("reasoning item ID", seal.ItemID, MaxReasoningItemIDBytes); err != nil {
+			return err
+		}
+	case SealAnthropicSignature, SealAnthropicRedacted:
+		if seal.ItemID != "" {
+			return errors.New("Anthropic reasoning seal has an item ID")
+		}
+	default:
+		return errors.New("reasoning seal format is unsupported")
+	}
+	if seal.Model != "" {
+		if err := validateIdentifier("reasoning seal model", seal.Model, MaxModelBytes); err != nil {
+			return err
+		}
+	}
+	if seal.Binding != "" {
+		if err := validateIdentifier("reasoning seal binding", seal.Binding, MaxReasoningBindingBytes); err != nil {
+			return err
+		}
+	}
+	return validateText("reasoning seal payload", seal.Opaque, MaxProviderExtensionBytes, true)
+}
+
+func (reasoning Reasoning) Validate() error {
+	switch reasoning.TextSource {
+	case "", ReasoningTextSummary, ReasoningTextContent:
+	default:
+		return errors.New("reasoning text source is unsupported")
+	}
+	if err := validateText("reasoning text", reasoning.Text, MaxTextBytes, true); err != nil {
+		return err
+	}
+	if reasoning.Redacted != (reasoning.Seal.Format == SealAnthropicRedacted) {
+		return errors.New("redacted reasoning and its seal disagree")
+	}
+	if reasoning.Redacted && reasoning.Text != "" {
+		return errors.New("redacted reasoning contains text")
+	}
+	return reasoning.Seal.Validate()
+}
+
+type MediaKind string
+
+const (
+	MediaImage    MediaKind = "image"
+	MediaDocument MediaKind = "document"
+)
+
+// Media is an attachment in its source form. Data stays the base64 text the
+// client sent; codecs never decode it.
+type Media struct {
+	Kind MediaKind
+	// MediaType comes from a closed set per kind; it may be empty only for a
+	// URL or file reference.
+	MediaType string
+	// Exactly one of Data, URL, FileID and Text is set.
+	Data   string
+	URL    string // https only
+	FileID string // a provider file reference ...
+	// FileSource is the dialect that minted FileID.
+	FileSource protocolspec.Dialect
+	// Text is the body of a plain-text document.
+	Text  string
+	Title string // optional document title
+}
+
+func (media Media) Validate() error {
+	// A URL or file reference names its content elsewhere, and Anthropic
+	// sends such sources without a media type; inline data always has one.
+	referenced := media.URL != "" || media.FileID != ""
+	switch media.Kind {
+	case MediaImage:
+		switch media.MediaType {
+		case "image/png", "image/jpeg", "image/gif", "image/webp":
+		case "":
+			if !referenced {
+				return errors.New("inline image has no media type")
+			}
+		default:
+			return errors.New("image media type is unsupported")
+		}
+		if media.Text != "" || media.Title != "" {
+			return errors.New("image carries document fields")
+		}
+	case MediaDocument:
+		switch media.MediaType {
+		case "application/pdf":
+			if media.Text != "" {
+				return errors.New("PDF document carries text")
+			}
+		case "text/plain":
+		case "":
+			if !referenced {
+				return errors.New("inline document has no media type")
+			}
+		default:
+			return errors.New("document media type is unsupported")
+		}
+		if err := validateText("document title", media.Title, MaxMediaTitleBytes, true); err != nil {
+			return err
+		}
+	default:
+		return errors.New("media kind is unsupported")
+	}
+	sources := 0
+	for _, value := range []string{media.Data, media.URL, media.FileID, media.Text} {
+		if value != "" {
+			sources++
+		}
+	}
+	if sources != 1 {
+		return errors.New("media must have exactly one source")
+	}
+	if media.Text != "" && media.MediaType != "text/plain" {
+		return errors.New("only a plain-text document carries text")
+	}
+	if (media.FileID == "") != (media.FileSource == "") {
+		return errors.New("media file reference and its source disagree")
+	}
+	if media.FileSource != "" && !media.FileSource.Valid() {
+		return errors.New("media file source is unsupported")
+	}
+	switch {
+	case media.Data != "":
+		if err := validateText("media data", media.Data, MaxMediaBytes, false); err != nil {
+			return err
+		}
+	case media.URL != "":
+		if len(media.URL) > MaxMediaURLBytes || !validHTTPSURL(media.URL) {
+			return errors.New("media URL is invalid")
+		}
+	case media.FileID != "":
+		if err := validateIdentifier("media file ID", media.FileID, MaxProviderFileIDBytes); err != nil {
+			return err
+		}
+	default:
+		if err := validateText("document text", media.Text, MaxTextBytes, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// payloadBytes is what the request-wide media budget charges.
+func (media Media) payloadBytes() int {
+	return len(media.Data) + len(media.Text)
+}
+
+func validHTTPSURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
+		parsed.User == nil && strings.TrimSpace(value) == value &&
+		!strings.ContainsAny(value, "\r\n\t ")
+}
+
+type SafeguardKind string
+
+const (
+	// SafeguardDangerousToolUse is Claude Code auto mode's request for a
+	// server-side classifier of dangerous tool use.
+	SafeguardDangerousToolUse SafeguardKind = "dangerous_tool_use"
+)
+
+func validateUnservedSafeguards(kinds []SafeguardKind) error {
+	if len(kinds) > MaxUnservedSafeguardKinds {
+		return errors.New("unserved safeguard count is invalid")
+	}
+	for index, kind := range kinds {
+		if kind != SafeguardDangerousToolUse {
+			return errors.New("unserved safeguard kind is unsupported")
+		}
+		if slices.Contains(kinds[:index], kind) {
+			return errors.New("unserved safeguard kind is duplicated")
+		}
+	}
+	return nil
 }
 
 // ToolIntent is created only after a complete provider tool call has been
@@ -281,7 +671,10 @@ func (result ToolResult) Validate() error {
 			return err
 		}
 	}
-	return validateText("tool result content", result.Content, MaxTextBytes, true)
+	if err := validateText("tool result content", result.Content, MaxTextBytes, true); err != nil {
+		return err
+	}
+	return result.validateParts()
 }
 
 type ContentBlock struct {
@@ -291,6 +684,10 @@ type ContentBlock struct {
 	ToolCall          ToolCall
 	ToolResult        ToolResult
 	ProviderExtension ProviderExtension
+	// Reasoning and Media are pointers so each new arm costs one word of every
+	// block; they are set only for their own kind.
+	Reasoning *Reasoning
+	Media     *Media
 	// Agent is block-scoped for provider output, where a single response may
 	// contain items produced by different agents. Request-side agent evidence
 	// remains message-scoped on Message.Agent.
@@ -335,13 +732,40 @@ func NewProviderExtensionBlock(extension ProviderExtension) (ContentBlock, error
 	}, nil
 }
 
+func NewReasoningBlock(reasoning Reasoning) (ContentBlock, error) {
+	if err := reasoning.Validate(); err != nil {
+		return ContentBlock{}, err
+	}
+	return ContentBlock{Kind: BlockReasoning, Reasoning: &reasoning}, nil
+}
+
+func NewMediaBlock(media Media) (ContentBlock, error) {
+	if err := media.Validate(); err != nil {
+		return ContentBlock{}, err
+	}
+	return ContentBlock{Kind: BlockMedia, Media: &media}, nil
+}
+
 func (block ContentBlock) Validate() error {
 	if block.Agent != nil {
 		if err := block.Agent.Validate(); err != nil {
 			return err
 		}
 	}
+	if (block.Reasoning != nil) != (block.Kind == BlockReasoning) {
+		return errors.New("reasoning arm does not match the block kind")
+	}
+	if (block.Media != nil) != (block.Kind == BlockMedia) {
+		return errors.New("media arm does not match the block kind")
+	}
+	if block.Kind != BlockToolResult && block.ToolResult.Parts != nil {
+		return errors.New("tool-result parts outside a tool result")
+	}
 	switch block.Kind {
+	case BlockReasoning:
+		return block.Reasoning.Validate()
+	case BlockMedia:
+		return block.Media.Validate()
 	case BlockText:
 		return validateText("text block", block.Text, MaxTextBytes, true)
 	case BlockRefusal:
@@ -360,7 +784,16 @@ func (block ContentBlock) Validate() error {
 func (block ContentBlock) Clone() ContentBlock {
 	cloned := block
 	cloned.ToolCall = block.ToolCall.Clone()
+	cloned.ToolResult.Parts = block.ToolResult.Parts.clone()
 	cloned.ProviderExtension = block.ProviderExtension.Clone()
+	if block.Reasoning != nil {
+		reasoning := *block.Reasoning
+		cloned.Reasoning = &reasoning
+	}
+	if block.Media != nil {
+		media := *block.Media
+		cloned.Media = &media
+	}
 	if block.Agent != nil {
 		context := *block.Agent
 		cloned.Agent = &context
@@ -431,6 +864,7 @@ func (message Message) Validate() error {
 			}
 		case RoleUser:
 			if block.Kind != BlockText && block.Kind != BlockToolResult &&
+				block.Kind != BlockMedia &&
 				!(block.Kind == BlockProviderExtension &&
 					block.ProviderExtension.source == ProviderExtensionSourceAnthropicMessages &&
 					block.ProviderExtension.kind == ProviderExtensionOpaqueItem) &&
@@ -449,7 +883,8 @@ func (message Message) Validate() error {
 			if block.Kind != BlockText &&
 				block.Kind != BlockRefusal &&
 				block.Kind != BlockToolCall &&
-				block.Kind != BlockProviderExtension {
+				block.Kind != BlockProviderExtension &&
+				block.Kind != BlockReasoning {
 				return errors.New("assistant message contains an unsupported block")
 			}
 		case RoleTool:
@@ -543,6 +978,9 @@ type ToolDefinition struct {
 	StrictKnown         bool
 	Strict              bool
 	EagerInputStreaming bool
+	// DeferLoading is Anthropic's defer_loading: the tool is offered to the
+	// model only once a tool_reference result in the history loads it.
+	DeferLoading bool
 }
 
 func (definition ToolDefinition) Validate() error {
@@ -1008,6 +1446,10 @@ type Request struct {
 	// used for exact Conversation association. Names are explicitly namespaced
 	// (for example openai_responses.turn_id); raw wire remains authoritative.
 	ProtocolEvidence []ProtocolEvidenceValue
+	// UnservedSafeguards lists server-side safeguards the client asked for
+	// that this route does not run, so client encoders can report them
+	// honestly as unsupported.
+	UnservedSafeguards []SafeguardKind
 }
 
 // ProtocolEvidenceValue preserves one client-protocol identifier without
@@ -1094,6 +1536,7 @@ func (request Request) validate() error {
 		return errors.New("message count is invalid")
 	}
 	providerExtensionBytes := 0
+	mediaBytes := 0
 	for index, message := range request.Messages {
 		if err := message.Validate(); err != nil {
 			return fmt.Errorf("message %d: %w", index, err)
@@ -1103,6 +1546,22 @@ func (request Request) validate() error {
 		// The byte budget remains aggregate, and message/block counts are bounded.
 		providerExtensionCount := 0
 		for _, block := range message.Blocks {
+			switch block.Kind {
+			case BlockMedia:
+				mediaBytes += block.Media.payloadBytes()
+			case BlockToolResult:
+				mediaBytes += block.ToolResult.mediaBytes()
+			case BlockReasoning:
+				// A reasoning seal is provider-locked opaque state, charged to
+				// the same aggregate budget as provider extensions.
+				providerExtensionBytes += len(block.Reasoning.Seal.Opaque)
+			}
+			if mediaBytes > MaxMediaBytes {
+				return errors.New("media exceed the request limit")
+			}
+			if providerExtensionBytes > MaxProviderExtensionBytes {
+				return errors.New("provider extensions exceed the request limit")
+			}
 			if block.Kind != BlockProviderExtension {
 				continue
 			}
@@ -1185,11 +1644,39 @@ func (request Request) validate() error {
 	if err := ValidateProtocolEvidence(request.ProtocolEvidence); err != nil {
 		return err
 	}
-	return nil
+	return validateUnservedSafeguards(request.UnservedSafeguards)
+}
+
+// LoadedTools is Anthropic's defer_loading behaviour as a pure function:
+// every tool that is not deferred, plus each deferred tool that a
+// tool_reference result anywhere in the history names, in request order.
+// Tool namespaces are unaffected.
+func (request Request) LoadedTools() []ToolDefinition {
+	referenced := make(map[string]struct{})
+	for _, message := range request.Messages {
+		for _, block := range message.Blocks {
+			if block.Kind != BlockToolResult || block.ToolResult.Parts == nil {
+				continue
+			}
+			for _, part := range block.ToolResult.Parts.Items {
+				if part.Kind == ToolResultPartToolReference {
+					referenced[part.ToolName] = struct{}{}
+				}
+			}
+		}
+	}
+	loaded := make([]ToolDefinition, 0, len(request.Tools))
+	for _, tool := range request.Tools {
+		if _, named := referenced[tool.Name]; !tool.DeferLoading || named {
+			loaded = append(loaded, tool.Clone())
+		}
+	}
+	return loaded
 }
 
 func (request Request) Clone() Request {
 	cloned := request
+	cloned.UnservedSafeguards = slices.Clone(request.UnservedSafeguards)
 	cloned.System = cloneBlocks(request.System)
 	cloned.Messages = make([]Message, len(request.Messages))
 	for index, message := range request.Messages {
@@ -1491,13 +1978,18 @@ func (response Response) Validate() error {
 	hasToolCall := false
 	providerExtensionCount := len(response.ProviderExtensions)
 	providerExtensionBytes := 0
+	reasoningSealBytes := 0
 	for index, block := range response.Blocks {
 		if block.Kind != BlockText &&
 			block.Kind != BlockRefusal &&
 			block.Kind != BlockToolCall &&
 			block.Kind != BlockToolResult &&
-			block.Kind != BlockProviderExtension {
+			block.Kind != BlockProviderExtension &&
+			block.Kind != BlockReasoning {
 			return fmt.Errorf("response content block %d has an unsupported kind", index)
+		}
+		if block.Kind == BlockReasoning && block.Reasoning != nil {
+			reasoningSealBytes += len(block.Reasoning.Seal.Opaque)
 		}
 		if err := block.Validate(); err != nil {
 			return fmt.Errorf("response content block %d: %w", index, err)
@@ -1523,8 +2015,12 @@ func (response Response) Validate() error {
 	if providerExtensionCount > MaxProviderExtensions {
 		return errors.New("provider extension count is invalid")
 	}
+	// Reasoning seals share the provider extensions' aggregate byte budget.
+	if reasoningSealBytes > 0 && providerExtensionBytes+reasoningSealBytes > MaxProviderExtensionBytes {
+		return errors.New("provider extensions exceed the response byte limit")
+	}
 	extensionKeys := make(map[string]struct{}, len(response.ProviderExtensions))
-	extensionBytes := providerExtensionBytes
+	extensionBytes := providerExtensionBytes + reasoningSealBytes
 	for index, extension := range response.ProviderExtensions {
 		if err := extension.Validate(); err != nil {
 			return fmt.Errorf("provider extension %d: %w", index, err)
@@ -1618,6 +2114,30 @@ const (
 	// unusable, and dropping it silently would be a translation nobody can
 	// audit. Design 07 §3.2 allows the loss only because it is declared here.
 	NoticeUnknownRequestFieldNotForwarded NoticeCode = "unknown_request_field_not_forwarded"
+
+	// Codes of the translated Anthropic client side.
+	NoticeClientAttributionNotForwarded NoticeCode = "client_attribution_not_forwarded"
+	NoticeSafeguardsNotServed           NoticeCode = "safeguards_not_served"
+	NoticeServerToolHistoryNotForwarded NoticeCode = "server_tool_history_not_forwarded"
+	// Codes of the Responses provider side.
+	NoticeStopSequencesNotForwarded       NoticeCode = "stop_sequences_not_forwarded"
+	NoticeSamplingNotForwarded            NoticeCode = "sampling_not_forwarded"
+	NoticeMaxOutputTokensNotForwarded     NoticeCode = "max_output_tokens_not_forwarded"
+	NoticeToolErrorFlagEncoded            NoticeCode = "tool_error_flag_encoded"
+	NoticeToolSchemaNormalized            NoticeCode = "tool_schema_normalized"
+	NoticeToolReferenceEncoded            NoticeCode = "tool_reference_encoded"
+	NoticeDeferredToolNotForwarded        NoticeCode = "deferred_tool_not_forwarded"
+	NoticeReasoningNotReplayed            NoticeCode = "reasoning_not_replayed"
+	NoticeMediaNotForwarded               NoticeCode = "media_not_forwarded"
+	NoticeDocumentConverted               NoticeCode = "document_converted"
+	NoticeStructuredOutputNameSynthesized NoticeCode = "structured_output_name_synthesized"
+	NoticeMessagePhaseInferred            NoticeCode = "message_phase_inferred"
+	NoticePromptCacheKeyDerived           NoticeCode = "prompt_cache_key_derived"
+	NoticeSystemRoleNormalized            NoticeCode = "system_role_normalized"
+	NoticeHostedOutputNotForwarded        NoticeCode = "hosted_output_not_forwarded"
+	// Codes of the stream Assembler and the Anthropic client encoders.
+	NoticeRefusalRenderedAsText  NoticeCode = "refusal_rendered_as_text"
+	NoticeStopReasonApproximated NoticeCode = "stop_reason_approximated"
 )
 
 type TranslationNotice struct {

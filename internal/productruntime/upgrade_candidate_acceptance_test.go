@@ -22,6 +22,9 @@ const task7ProducerSource = "candidate"
 func task7BindAdmission(r *Runtime, e *exchangeBuildRequest, p *proxyBuildRequest) {
 	e.bodyAdmission = r.bodyAdmission
 	p.bodyAdmission = r.bodyAdmission
+	// Blind tunnels resolve their exit from the frozen egress defaults; the
+	// archived old source predates that dependency.
+	p.egressDefaults = r.egressDefaults
 }
 func task7Upgrade(t *testing.T, ctx context.Context, root string) {
 	live := filepath.Join(root, "live")

@@ -1,0 +1,31 @@
+{
+  "path": "anthropic-messages-to-openai-chat",
+  "fixture": "claude-tools.008-text-results",
+  "decode": {
+    "notices": [
+      "cache_control_not_forwarded $.system[2].cache_control",
+      "cache_control_not_forwarded $.system[3].cache_control",
+      "unknown_request_field_not_forwarded $.messages[1].output_config",
+      "cache_control_not_forwarded $.messages[3].content[5].cache_control",
+      "unknown_request_field_not_forwarded $.tools[2].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[3].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[4].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[5].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[7].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[8].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[10].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[11].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[15].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[17].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[19].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[20].defer_loading",
+      "unknown_request_field_not_forwarded $.tools[22].defer_loading",
+      "metadata_not_forwarded $.metadata"
+    ]
+  },
+  "providerRequest": {
+    "error": "unsupported_client_input at $.messages: assistant message contains an unsupported block",
+    "bodyBytes": 0,
+    "notices": []
+  }
+}

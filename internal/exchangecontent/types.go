@@ -964,6 +964,99 @@ func providerOpaqueBlock(extension protocolcore.ProviderExtension, opaque []byte
 	}
 }
 
+// neutralProviderSource names evidence whose minting dialect the neutral
+// value does not record: media a client attached, and reasoning without a
+// seal.
+const neutralProviderSource = "neutral"
+
+// reasoningProvenance maps a positioned reasoning block onto the provider
+// source and kinds the stored reasoning and provider_extension shapes use,
+// the same names a provider extension of that dialect would carry.
+func reasoningProvenance(reasoning protocolcore.Reasoning) (source, textKind, sealKind string) {
+	textKind = string(protocolcore.ProviderExtensionReasoningSummary)
+	if reasoning.TextSource == protocolcore.ReasoningTextContent {
+		textKind = string(protocolcore.ProviderExtensionReasoningContent)
+	}
+	switch reasoning.Seal.Format {
+	case protocolcore.SealResponsesEncrypted:
+		return string(protocolcore.ProviderExtensionSourceOpenAIResponses), textKind,
+			string(protocolcore.ProviderExtensionReasoningEncryptedContent)
+	case protocolcore.SealAnthropicSignature:
+		return string(protocolcore.ProviderExtensionSourceAnthropicMessages),
+			string(protocolcore.ProviderExtensionThinking), string(protocolcore.ProviderExtensionThinking)
+	case protocolcore.SealAnthropicRedacted:
+		return string(protocolcore.ProviderExtensionSourceAnthropicMessages),
+			string(protocolcore.ProviderExtensionRedactedThinking), string(protocolcore.ProviderExtensionRedactedThinking)
+	default:
+		return neutralProviderSource, textKind, textKind
+	}
+}
+
+// reasoningViews records the readable text as a stored reasoning block (full
+// recording only) and the seal as omitted provider_extension evidence with
+// its size and fingerprint. A stored reasoning block may not carry a
+// fingerprint, hence the two blocks. When there is no seal payload and no
+// recorded text, the text's fingerprint still records that reasoning existed.
+func reasoningViews(reasoning protocolcore.Reasoning, full bool, agent *protocolcore.AgentMessageContext) []Block {
+	source, textKind, sealKind := reasoningProvenance(reasoning)
+	views := make([]Block, 0, 2)
+	if full && reasoning.Text != "" {
+		views = append(views, Block{
+			Kind: BlockKindReasoning, Availability: AvailabilityRecorded,
+			Text: sanitizeText(reasoning.Text), OriginalSize: len(reasoning.Text),
+			ProviderSource: source, ProviderKind: textKind, Agent: agentContextView(agent),
+		})
+	}
+	switch {
+	case reasoning.Seal.Opaque != "":
+		views = append(views, omittedEvidenceBlock(source, sealKind, reasoning.Seal.Opaque, agentContextView(agent)))
+	case !full || reasoning.Text == "":
+		views = append(views, omittedEvidenceBlock(source, textKind, reasoning.Text, agentContextView(agent)))
+	}
+	return views
+}
+
+// mediaView records an attachment as omitted, fingerprinted evidence; media
+// content never enters stored text.
+func mediaView(media protocolcore.Media, agent *AgentContext) Block {
+	source := neutralProviderSource
+	if media.FileSource != "" {
+		source = string(media.FileSource)
+	}
+	return omittedEvidenceBlock(source, string(media.Kind), mediaEvidence(media), agent)
+}
+
+// mediaEvidence is the one source value an attachment carries.
+func mediaEvidence(media protocolcore.Media) string {
+	switch {
+	case media.Data != "":
+		return media.Data
+	case media.URL != "":
+		return media.URL
+	case media.FileID != "":
+		return media.FileID
+	default:
+		return media.Text
+	}
+}
+
+func omittedEvidenceBlock(source, kind, evidence string, agent *AgentContext) Block {
+	// Evidence can be a 16 MiB payload. SHA-256 has no WriteString, so it is
+	// hashed through a small buffer rather than converted to bytes whole.
+	hash := sha256.New()
+	var chunk [4096]byte
+	for rest := evidence; rest != ""; {
+		count := copy(chunk[:], rest)
+		_, _ = hash.Write(chunk[:count])
+		rest = rest[count:]
+	}
+	return Block{
+		Kind: string(protocolcore.BlockProviderExtension), Availability: AvailabilityOmitted,
+		OriginalSize: len(evidence), ProviderSource: source, ProviderKind: kind,
+		Fingerprint: fmt.Sprintf("sha256:%x", hash.Sum(nil)), Agent: agent,
+	}
+}
+
 func validFingerprint(value string) bool {
 	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
 		return false
@@ -1034,6 +1127,26 @@ func blockViewsWithProviderReasoning(
 			if full {
 				view.Availability = AvailabilityRecorded
 				view.Text = sanitizeText(block.ToolResult.Content)
+			}
+			// The result's text parts are its Content; each media part is
+			// recorded after it as omitted, fingerprinted evidence.
+			result = append(result, view)
+			if block.ToolResult.Parts != nil {
+				for _, part := range block.ToolResult.Parts.Items {
+					if part.Media != nil {
+						result = append(result, mediaView(*part.Media, agentContextView(block.Agent)))
+					}
+				}
+			}
+			continue
+		case protocolcore.BlockReasoning:
+			if block.Reasoning != nil {
+				result = append(result, reasoningViews(*block.Reasoning, full, block.Agent)...)
+			}
+			continue
+		case protocolcore.BlockMedia:
+			if block.Media != nil {
+				view = mediaView(*block.Media, agentContextView(block.Agent))
 			}
 		case protocolcore.BlockProviderExtension:
 			if readableProviderReasoning {
