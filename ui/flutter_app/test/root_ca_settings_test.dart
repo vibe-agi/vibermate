@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/root_trust_installer.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
@@ -33,30 +34,26 @@ void main() {
           (
             theme: ViberTheme.light(),
             language: AppLanguage.english,
-            title: 'Local Root Certificate',
-            delivery:
-                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
+            title: 'ViberMate certificate',
+            delivery: _purposeEnglish,
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.english,
-            title: 'Local Root Certificate',
-            delivery:
-                'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
+            title: 'ViberMate certificate',
+            delivery: _purposeEnglish,
           ),
           (
             theme: ViberTheme.light(),
             language: AppLanguage.simplifiedChinese,
-            title: '本机根证书',
-            delivery:
-                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
+            title: 'ViberMate 证书',
+            delivery: _purposeChinese,
           ),
           (
             theme: ViberTheme.dark(),
             language: AppLanguage.simplifiedChinese,
-            title: '本机根证书',
-            delivery:
-                '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
+            title: 'ViberMate 证书',
+            delivery: _purposeChinese,
           ),
         ]) {
       final api = PreviewControlApi(seedCaptures: false);
@@ -85,10 +82,11 @@ void main() {
         find.byKey(const Key('root-ca-settings-panel')),
       );
       expect(find.text(fixture.title), findsOneWidget);
-      expect(find.text(fixture.delivery), findsNothing);
-      await tester.tap(find.byTooltip(fixture.title));
-      await tester.pumpAndSettle();
+      // The purpose, including that Codex needs it, needs no help button.
       expect(find.text(fixture.delivery), findsOneWidget);
+      expect(find.byTooltip(fixture.title), findsNothing);
+      // Details most people never need start folded away.
+      expect(find.byKey(const Key('root-ca-details')), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
@@ -132,16 +130,35 @@ void main() {
     final panel = find.byKey(const Key('root-ca-settings-panel'));
     await _revealInSettings(tester, panel);
     expect(panel, findsOneWidget);
-    expect(find.text('本机根证书'), findsOneWidget);
-    expect(find.text('已生成，尚未安装'), findsOneWidget);
+    expect(find.text('ViberMate 证书'), findsOneWidget);
+    expect(find.text('尚未信任 · Codex 需要'), findsOneWidget);
+    expect(
+      tester.widget<StatusPill>(find.byKey(const Key('root-ca-status'))).color,
+      ViberColors.light.textMuted,
+      reason: 'a next step, not a fault',
+    );
     final install = find.byKey(const Key('root-ca-install'));
     await _revealInSettings(tester, install);
+    expect(tester.widget(install), isA<OutlinedButton>());
     await tester.tap(install);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('root-ca-confirmation')), findsNothing);
+    // Before macOS asks for a password, the app says what trusting allows.
+    final confirmation = find.byKey(const Key('root-ca-install-confirmation'));
+    expect(confirmation, findsOneWidget);
+    expect(find.text('要在这台 Mac 上信任 ViberMate 的证书吗？'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(find.text('尚未信任 · Codex 需要'), findsOneWidget);
+    await tester.tap(install);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+    await tester.pumpAndSettle();
     expect(find.text('已安装并信任'), findsOneWidget);
+    expect(find.byKey(const Key('root-ca-updated')), findsOneWidget);
+    expect(find.textContaining('永不导出'), findsNothing);
 
     final guidedReplace = find.byKey(const Key('root-ca-replace'));
+    await _openDetails(tester);
     await _revealInSettings(tester, guidedReplace);
     await tester.tap(guidedReplace);
     await tester.pumpAndSettle();
@@ -159,9 +176,10 @@ void main() {
     api.setRootTrustForPreview(installed: false);
     await controller.refreshRootCA();
     await tester.pumpAndSettle();
-    expect(find.text('已生成，尚未安装'), findsOneWidget);
+    expect(find.text('尚未信任 · Codex 需要'), findsOneWidget);
 
     final replace = find.byKey(const Key('root-ca-replace'));
+    await _openDetails(tester);
     await _revealInSettings(tester, replace);
     await tester.tap(replace);
     await tester.pumpAndSettle();
@@ -263,6 +281,8 @@ void main() {
         await _revealInSettings(tester, install);
         await tester.tap(install);
         await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+        await tester.pumpAndSettle();
         expect(find.text(fixture.expected), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
@@ -300,6 +320,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     final replace = find.byKey(const Key('root-ca-replace'));
+    await _openDetails(tester);
     await _revealInSettings(tester, replace);
 
     expect(tester.widget<OutlinedButton>(replace).onPressed, isNull);
@@ -354,6 +375,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final replace = find.byKey(const Key('root-ca-replace'));
+    await _openDetails(tester);
     await _revealInSettings(tester, replace);
     await tester.tap(replace);
     await tester.pumpAndSettle();
@@ -373,11 +395,35 @@ void main() {
     final panel = find.byKey(const Key('root-ca-settings-panel'));
     await _revealInSettings(tester, panel);
     expect(panel, findsOneWidget);
-    expect(find.text('已生成，尚未安装'), findsOneWidget);
+    expect(find.text('尚未信任 · Codex 需要'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+}
+
+const _purposeEnglish =
+    "ViberMate uses this certificate to read your agents' encrypted requests. "
+    'Claude Code is set up automatically on every run. Codex only accepts '
+    'certificates this Mac trusts, so choose Install and trust once before '
+    'you run vibermate run -- codex. macOS then trusts this certificate for '
+    'HTTPS in the apps you use under your macOS account; ViberMate uses it '
+    'only for connections that go through ViberMate. You can undo this with '
+    'Removal steps.';
+
+const _purposeChinese =
+    'ViberMate 用这张证书读取 Agent 的加密请求。Claude Code 每次运行都会自动配置；'
+    'Codex 只接受这台 Mac 信任的证书，所以首次运行 vibermate run -- codex 前，'
+    '请先点一次「安装并信任」。之后，你的 macOS 账户中的应用都会在 HTTPS 连接中信任'
+    '这张证书，但 ViberMate 只把它用于经过 ViberMate 的连接。可以通过「查看移除步骤」撤销。';
+
+/// Opens "Certificate details", where replacing the certificate lives.
+Future<void> _openDetails(WidgetTester tester) async {
+  if (find.byKey(const Key('root-ca-details')).evaluate().isNotEmpty) return;
+  final toggle = find.byKey(const Key('root-ca-details-toggle'));
+  await _revealInSettings(tester, toggle);
+  await tester.tap(toggle);
+  await tester.pumpAndSettle();
 }
 
 final class _FailingRootTrustInstaller implements RootTrustInstaller {

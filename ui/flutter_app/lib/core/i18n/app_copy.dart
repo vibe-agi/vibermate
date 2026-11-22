@@ -853,7 +853,7 @@ final class AppCopy {
     'setup.start.copy': 'Copy',
     'setup.start.copied': 'Copied',
     'setup.start.codex_requirement':
-        'Codex only: needs ViberMate\'s certificate trusted on this Mac. macOS asks for your password once.',
+        'Codex only: this Mac must trust ViberMate\'s certificate. macOS asks for your password once.',
     'setup.start.install_trust': 'Install and trust',
     'setup.start.codex_ready':
         'Codex: this Mac trusts ViberMate\'s certificate.',
@@ -2558,7 +2558,7 @@ final class AppCopy {
         'Set up the Terminal entry used to start managed Claude and Codex runs.',
     'settings.access.local.title': 'On this Mac',
     'settings.access.local.no_account':
-        'Local App runs do not need a Web account, domain or browser certificate.',
+        'Using ViberMate on this Mac needs no sign-in or domain. For Codex, also trust the certificate under Safety and data.',
     'settings.access.team.title': 'Browser or another device',
     'settings.access.team.optional':
         'Optional for local App use. Expand for the Web address and remote login steps.',
@@ -2681,9 +2681,9 @@ final class AppCopy {
     'settings.server_connection.tls.expires': 'Expires',
     'settings.server_connection.tls.fingerprint': 'Leaf SHA-256 fingerprint',
     'settings.server_connection.tls.error': 'Last certificate error',
-    'settings.runtime_ca.title': 'AI traffic inspection certificate (Proxy CA)',
+    'settings.runtime_ca.title': 'ViberMate certificate',
     'settings.runtime_ca.detail':
-        'Used for AI destinations captured by this Runtime. Supported managed runs receive scoped trust automatically. Browser-only users do not need to install it.',
+        'ViberMate uses this certificate to read your agents\' encrypted requests on this Server. Agents you start with vibermate run --server trust it automatically, so Claude Code and Codex need no installation, and neither does using the browser. In Keychain Access and other tools it is the Proxy CA.',
     'settings.runtime_ca.fingerprint': 'SHA-256 fingerprint',
     'settings.runtime_ca.expires': 'Expires (UTC)',
     'settings.runtime_ca.guide':
@@ -2769,7 +2769,7 @@ final class AppCopy {
     'settings.storage.backup_target': 'New backup directory',
     'settings.storage.backup_confirm': 'Create backup',
     'settings.storage.backup_confirmation':
-        'ViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
+        'This backup includes the private key of ViberMate\'s certificate. Anyone who has it could read HTTPS traffic on a Mac that trusts this certificate. Keep the backup private.\n\nViberMate stops and restarts the local Runtime, then writes a verified directory with a manifest, SQLite data, configuration and the local Proxy CA. Provider/OAuth credentials, macOS Keychain items and external Server TLS files are not exported. The backup contains unencrypted evidence and the Proxy CA private key; protect it accordingly.',
     'settings.storage.backup_created':
         'Verified backup created. Provider credentials and external TLS files were not included.',
     'settings.storage.restore_title': 'Restore this backup?',
@@ -2851,19 +2851,28 @@ final class AppCopy {
         'before anything is written. Request and response bodies, tool '
         'arguments and query strings are stored as sent, so a secret written '
         'into a prompt is retained.',
-    'settings.root_ca.title': 'Local Root Certificate',
+    'settings.root_ca.title': 'ViberMate certificate',
     'settings.root_ca.detail':
-        'This Proxy CA is for captured AI connections. Supported managed runs receive scoped trust automatically; using the browser needs no installation. The controls below manage optional trust for other clients on this Mac, not an externally issued server certificate.',
+        'ViberMate uses this certificate to read your agents\' encrypted requests. Claude Code is set up automatically on every run. Codex only accepts certificates this Mac trusts, so choose Install and trust once before you run vibermate run -- codex. macOS then trusts this certificate for HTTPS in the apps you use under your macOS account; ViberMate uses it only for connections that go through ViberMate. You can undo this with Removal steps.',
     'settings.root_ca.scope':
-        'Managed launches configure process-level trust for supported clients.',
+        'ViberMate uses this certificate to read your agents\' encrypted requests. Agents you start with vibermate run, Claude Code and Codex included, trust it automatically. Install it only for other apps that send traffic through ViberMate.',
     'settings.root_ca.status.trusted': 'Installed and trusted',
-    'settings.root_ca.status.needs_trust': 'Installed, not trusted',
-    'settings.root_ca.status.not_installed': 'Generated, not installed',
+    'settings.root_ca.status.needs_trust':
+        'Installed, not trusted · needed for Codex',
+    'settings.root_ca.status.not_installed':
+        'Not trusted yet · needed for Codex',
     'settings.root_ca.status.unknown': 'Trust status unavailable',
     'settings.root_ca.fingerprint': 'SHA-256 fingerprint',
     'settings.root_ca.validity': 'Valid {from} → {to}',
     'settings.root_ca.private_key':
-        'The private key stays in ViberMate local storage and is never exported.',
+        'The private key stays on this Mac. Backups you create include it, so keep them private.',
+    'settings.root_ca.details': 'Certificate details',
+    'settings.root_ca.proxy_ca':
+        'Also called the Proxy CA. In Keychain Access it is named “ViberMate Local Root”.',
+    'settings.root_ca.confirm_install.title':
+        'Trust ViberMate\'s certificate on this Mac?',
+    'settings.root_ca.confirm_install.detail':
+        'Codex needs this to send requests through ViberMate. Apps on this Mac will then accept connections that ViberMate reads. ViberMate backups contain the certificate\'s private key, so keep them private. macOS will ask for your password; you can undo this later with Removal steps.',
     'settings.root_ca.install': 'Install and trust',
     'settings.root_ca.trust': 'Trust certificate',
     'settings.root_ca.remove': 'Removal steps',
@@ -2888,7 +2897,8 @@ final class AppCopy {
         'The current certificate could not be installed and trusted. No different certificate was used; check again, then retry.',
     'settings.root_ca.install.not_confirmed':
         'macOS returned without a trusted result for this exact certificate. Check again, then retry.',
-    'settings.root_ca.updated': 'Root certificate trust updated.',
+    'settings.root_ca.updated':
+        'This Mac\'s trust in ViberMate\'s certificate was updated.',
     'settings.root_ca.restart_required':
         'The old certificate is no longer trusted. Restart ViberMate to create a new one.',
     'settings.root_ca.load_failed':
@@ -5551,7 +5561,8 @@ final class AppCopy {
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
     'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
     'settings.access.local.title': '这台电脑',
-    'settings.access.local.no_account': '本机 App 启动不需要网页账号、域名或浏览器证书。',
+    'settings.access.local.no_account':
+        '在这台 Mac 上使用 ViberMate 无需登录或域名。使用 Codex 时，还需在「安全与数据」中信任证书。',
     'settings.access.team.title': '从浏览器或其他设备接入',
     'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
@@ -5658,9 +5669,9 @@ final class AppCopy {
     'settings.server_connection.tls.expires': '有效期至',
     'settings.server_connection.tls.fingerprint': '叶证书 SHA-256 指纹',
     'settings.server_connection.tls.error': '最近一次证书错误',
-    'settings.runtime_ca.title': 'AI 流量检查证书（代理 CA）',
+    'settings.runtime_ca.title': 'ViberMate 证书',
     'settings.runtime_ca.detail':
-        '用于检查经过当前 Runtime 的 AI 流量。受支持的托管启动会自动获得进程级信任；只用网页无需安装。',
+        'ViberMate 用这张证书读取经过此 Server 的 Agent 加密请求。通过 vibermate run --server 启动的 Agent 会自动信任它，因此 Claude Code 和 Codex 无需安装，只用网页也无需安装。在钥匙串访问等工具中，它显示为代理 CA。',
     'settings.runtime_ca.fingerprint': 'SHA-256 指纹',
     'settings.runtime_ca.expires': '有效期至（UTC）',
     'settings.runtime_ca.guide':
@@ -5735,7 +5746,7 @@ final class AppCopy {
     'settings.storage.backup_target': '新备份目录',
     'settings.storage.backup_confirm': '创建备份',
     'settings.storage.backup_confirmation':
-        'ViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
+        '此备份包含 ViberMate 证书的私钥。拿到它的人可以读取信任该证书的 Mac 上的 HTTPS 流量，请妥善保管备份。\n\nViberMate 会停止并重启本机 Runtime，然后写入带 manifest 的可验证目录，包含 SQLite 数据、配置和本地代理 CA。不会导出服务商/OAuth 凭据、macOS 钥匙串项目或外部 Server TLS 文件。备份内含未加密证据和代理 CA 私钥，请妥善保护。',
     'settings.storage.backup_created': '可验证备份已创建；未包含服务商凭据和外部 TLS 文件。',
     'settings.storage.restore_title': '恢复这个备份？',
     'settings.storage.restore_source': '已验证备份',
@@ -5803,17 +5814,23 @@ final class AppCopy {
     'settings.storage.credentials':
         '凭证头的值（Authorization、API key、Cookie）在写入之前就已移除。'
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
-    'settings.root_ca.title': '本机根证书',
+    'settings.root_ca.title': 'ViberMate 证书',
     'settings.root_ca.detail':
-        '这张代理 CA 用于捕获 AI 连接。受支持的托管启动会自动获得进程级信任，使用网页无需安装。下方操作仅为这台 Mac 上的其他客户端管理可选的系统信任，不会改变外部机构签发的服务器证书。',
-    'settings.root_ca.scope': '托管启动会自动配置受支持客户端的进程级信任。',
+        'ViberMate 用这张证书读取 Agent 的加密请求。Claude Code 每次运行都会自动配置；Codex 只接受这台 Mac 信任的证书，所以首次运行 vibermate run -- codex 前，请先点一次「安装并信任」。之后，你的 macOS 账户中的应用都会在 HTTPS 连接中信任这张证书，但 ViberMate 只把它用于经过 ViberMate 的连接。可以通过「查看移除步骤」撤销。',
+    'settings.root_ca.scope':
+        'ViberMate 用这张证书读取 Agent 的加密请求。通过 vibermate run 启动的 Agent（包括 Claude Code 和 Codex）会自动信任它。只有其他要经过 ViberMate 的应用才需要安装它。',
     'settings.root_ca.status.trusted': '已安装并信任',
-    'settings.root_ca.status.needs_trust': '已安装，尚未信任',
-    'settings.root_ca.status.not_installed': '已生成，尚未安装',
+    'settings.root_ca.status.needs_trust': '已安装但未信任 · Codex 需要',
+    'settings.root_ca.status.not_installed': '尚未信任 · Codex 需要',
     'settings.root_ca.status.unknown': '无法读取信任状态',
     'settings.root_ca.fingerprint': 'SHA-256 指纹',
     'settings.root_ca.validity': '有效期 {from} → {to}',
-    'settings.root_ca.private_key': '私钥仅保存在本机 ViberMate 存储中，永不导出。',
+    'settings.root_ca.private_key': '私钥只保存在这台 Mac 上；你创建的备份会包含它，请妥善保管。',
+    'settings.root_ca.details': '证书详情',
+    'settings.root_ca.proxy_ca': '也称为代理 CA。它在“钥匙串访问”中名为“ViberMate Local Root”。',
+    'settings.root_ca.confirm_install.title': '要在这台 Mac 上信任 ViberMate 的证书吗？',
+    'settings.root_ca.confirm_install.detail':
+        'Codex 需要它才能通过 ViberMate 发送请求。信任后，这台 Mac 上的应用会接受由 ViberMate 读取的连接。ViberMate 备份包含该证书的私钥，请妥善保管。macOS 会要求输入密码；之后可通过「查看移除步骤」撤销。',
     'settings.root_ca.install': '安装并信任',
     'settings.root_ca.trust': '信任证书',
     'settings.root_ca.remove': '查看移除步骤',
@@ -5837,7 +5854,7 @@ final class AppCopy {
         '未能安装并信任当前证书；ViberMate 没有改用其他证书。请重新检查后再试。',
     'settings.root_ca.install.not_confirmed':
         'macOS 返回后，仍未确认这张精确证书已受信任。请重新检查后再试。',
-    'settings.root_ca.updated': '本机根证书信任状态已更新。',
+    'settings.root_ca.updated': '这台 Mac 对 ViberMate 证书的信任状态已更新。',
     'settings.root_ca.restart_required': '旧证书已不再受信。请重新启动 ViberMate 以生成新证书。',
     'settings.root_ca.load_failed': '无法读取 macOS 信任状态。请重试；本次未修改系统信任设置。',
     'settings.root_ca.load_recovery': '若重试仍失败，请先重新打开 ViberMate，不要直接修改钥匙串。',

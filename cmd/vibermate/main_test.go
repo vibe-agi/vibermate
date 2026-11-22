@@ -207,6 +207,16 @@ func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
 		if code != 1 || key != "cli.error.localRootUntrusted" || strings.Contains(stdout.String(), "PASS") {
 			t.Fatalf("untrusted Root: code=%d key=%q stdout=%s", code, key, &stdout)
 		}
+		// Only Codex needs the certificate: doctor says so and still tells
+		// a Claude Code user how to start.
+		for _, expected := range []string{"FAIL Local root trust", "Codex", "Claude Code works without it", "vibermate run -- claude"} {
+			if !strings.Contains(stdout.String(), expected) {
+				t.Fatalf("untrusted Root output lacks %q: %s", expected, &stdout)
+			}
+		}
+		if strings.Contains(stdout.String(), "vibermate run -- codex") {
+			t.Fatalf("untrusted Root suggests Codex: %s", &stdout)
+		}
 		rootTrusted.Store(true)
 	}
 	for _, stopped := range []bool{false, true} {
@@ -929,6 +939,35 @@ func TestTransparentFailuresHaveTheirOwnMessages(t *testing.T) {
 	} {
 		if got := launchFailureKey(err); got != want {
 			t.Errorf("launchFailureKey(%v) = %q, want %q", err, got, want)
+		}
+	}
+}
+
+func TestRootTrustMessagesNameCodexAndTheAppPlace(t *testing.T) {
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		locale   locales.Locale
+		key      string
+		expected []string
+	}{
+		{locales.EnglishUS, "cli.error.localRootUntrusted", []string{"Codex", "Settings → Safety and data → ViberMate certificate", "Install and trust"}},
+		{locales.SimplifiedChinese, "cli.error.localRootUntrusted", []string{"Codex", "设置 → 安全与数据 → ViberMate 证书", "安装并信任"}},
+		{locales.EnglishUS, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code works without it"}},
+		{locales.SimplifiedChinese, "cli.doctor.root.fail", []string{"FAIL", "Codex", "Claude Code 不受影响"}},
+		{locales.EnglishUS, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
+		{locales.SimplifiedChinese, "cli.doctor.root.next", []string{"vibermate run -- claude"}},
+	} {
+		message, err := catalogs.Render(check.locale, check.key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, expected := range check.expected {
+			if !strings.Contains(message, expected) {
+				t.Fatalf("%s %s lacks %q: %s", check.locale, check.key, expected, message)
+			}
 		}
 	}
 }

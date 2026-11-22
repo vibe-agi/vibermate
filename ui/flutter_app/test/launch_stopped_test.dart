@@ -86,6 +86,8 @@ void main() {
     // that is left.
     await tester.tap(install);
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+    await tester.pump(const Duration(milliseconds: 300));
     expect(install, findsNothing);
     expect(find.byKey(const Key('capture-launch-copy-again')), findsOneWidget);
     expect(find.text('Copy command again'), findsOneWidget);

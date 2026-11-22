@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/bootstrap/terminal_command.dart';
@@ -5,6 +7,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'routing_set_name.dart';
+import 'settings_view.dart' show confirmRootTrustInstall, rootCAStatusPill;
 import 'workbench_controller.dart';
 
 /// The one builder behind every command that starts an agent through
@@ -142,4 +145,85 @@ final class TerminalPathFallback extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Under the Codex command: Codex connects only once this Mac trusts
+/// ViberMate's certificate. The same row in Access and launch and in the
+/// setup guide; its owner shows it only while the certificate is not
+/// trusted.
+final class CodexCertificateRow extends StatelessWidget {
+  const CodexCertificateRow({
+    required this.controller,
+    required this.copy,
+    this.narrow = false,
+    this.keyPrefix = 'setup',
+    super.key,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+  final bool narrow;
+
+  /// Keys the row and its button: '[keyPrefix]-codex-requirement' and
+  /// '[keyPrefix]-install-trust'.
+  final String keyPrefix;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = controller.rootCAStatus;
+    final busy = controller.rootCAMutating || controller.rootCALoading;
+    final label = Wrap(
+      spacing: ViberSpacing.md,
+      runSpacing: ViberSpacing.xs,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          copy('settings.root_ca.title'),
+          style: Theme.of(context).textTheme.labelLarge,
+        ),
+        if (status != null) rootCAStatusPill(context, copy, status),
+      ],
+    );
+    final button = OutlinedButton.icon(
+      key: Key('$keyPrefix-install-trust'),
+      onPressed: busy
+          ? null
+          : () => unawaited(confirmRootTrustInstall(context, controller, copy)),
+      icon: busy
+          ? const SizedBox.square(
+              dimension: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            )
+          : const Icon(Icons.verified_user_outlined, size: 14),
+      label: Text(copy('setup.start.install_trust')),
+    );
+    return Semantics(
+      container: true,
+      child: Column(
+        key: Key('$keyPrefix-codex-requirement'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (narrow) ...[
+            label,
+            const SizedBox(height: ViberSpacing.sm),
+            button,
+          ] else
+            Row(
+              children: [
+                Expanded(child: label),
+                const SizedBox(width: ViberSpacing.md),
+                button,
+              ],
+            ),
+          const SizedBox(height: ViberSpacing.xs),
+          Text(
+            copy('setup.start.codex_requirement'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -11,7 +11,10 @@ import '../../core/i18n/app_copy.dart';
 import 'agent_connection.dart';
 import 'launch_command.dart';
 import 'settings_view.dart'
-    show confirmTerminalCommandChange, rootCAErrorMessage;
+    show
+        confirmRootTrustInstall,
+        confirmTerminalCommandChange,
+        rootCAErrorMessage;
 import 'workbench_controller.dart';
 
 /// Where one step of the setup guide stands.
@@ -221,13 +224,16 @@ Widget? launchStoppedAction({
 }) {
   if (launchNeedsRoot(controller, capture)) {
     final busy = controller.rootCAMutating || controller.rootCALoading;
-    return FilledButton.icon(
-      key: Key('$keyPrefix-install-trust'),
-      onPressed: busy
-          ? null
-          : () => unawaited(controller.installAndTrustRootCA()),
-      icon: const Icon(Icons.verified_user_outlined, size: 14),
-      label: Text(copy('setup.start.install_trust')),
+    return Builder(
+      builder: (context) => FilledButton.icon(
+        key: Key('$keyPrefix-install-trust'),
+        onPressed: busy
+            ? null
+            : () =>
+                  unawaited(confirmRootTrustInstall(context, controller, copy)),
+        icon: const Icon(Icons.verified_user_outlined, size: 14),
+        label: Text(copy('setup.start.install_trust')),
+      ),
     );
   }
   if (capture.kind != 'managed_run') return null;
@@ -1086,7 +1092,8 @@ final class _SetupCommandRow extends StatelessWidget {
   }
 }
 
-/// Under the Codex command: this Mac must trust ViberMate's certificate.
+/// Under the Codex command in step 2: the shared certificate row, lined up
+/// with the commands above it.
 final class _CodexRequirement extends StatelessWidget {
   const _CodexRequirement({
     required this.controller,
@@ -1099,29 +1106,14 @@ final class _CodexRequirement extends StatelessWidget {
   final bool narrow;
 
   @override
-  Widget build(BuildContext context) {
-    final busy = controller.rootCAMutating || controller.rootCALoading;
-    return _StepNote(
-      key: const Key('setup-codex-requirement'),
-      icon: Icons.info_outline,
-      iconColor: context.viberColors.textMuted,
-      text: copy('setup.start.codex_requirement'),
+  Widget build(BuildContext context) => Padding(
+    padding: EdgeInsets.only(left: narrow ? 0 : 92),
+    child: CodexCertificateRow(
+      controller: controller,
+      copy: copy,
       narrow: narrow,
-      action: OutlinedButton.icon(
-        key: const Key('setup-install-trust'),
-        onPressed: busy
-            ? null
-            : () => unawaited(controller.installAndTrustRootCA()),
-        icon: busy
-            ? const SizedBox.square(
-                dimension: 12,
-                child: CircularProgressIndicator(strokeWidth: 1.5),
-              )
-            : const Icon(Icons.verified_user_outlined, size: 14),
-        label: Text(copy('setup.start.install_trust')),
-      ),
-    );
-  }
+    ),
+  );
 }
 
 /// One neutral line in a step: an icon, a sentence and, optionally, its

@@ -145,6 +145,12 @@ func executeLocalDoctor(ctx context.Context, config statusConfig, env []string, 
 		if renderCLIMessage(env, out, failureKey, nil) != nil {
 			return 1, reasonRenderFailed
 		}
+		// Only Codex needs this Mac to trust the certificate; Claude Code
+		// can start now. The exit status still reports the failure.
+		if key == "cli.error.localRootUntrusted" &&
+			renderCLIMessage(env, out, "cli.doctor.root.next", nil) != nil {
+			return 1, reasonRenderFailed
+		}
 	}
 	if err := renderCLIMessage(env, out, "cli.doctor.localScope", nil); err != nil {
 		return 1, reasonRenderFailed

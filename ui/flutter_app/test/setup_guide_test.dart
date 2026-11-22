@@ -194,6 +194,11 @@ void main() {
 
     await tester.tap(find.byKey(const Key('setup-install-trust')));
     await tester.pump(const Duration(milliseconds: 300));
+    // The app says what trusting allows before macOS asks for a password.
+    expect(find.byKey(const Key('root-ca-install-confirmation')), findsOne);
+    expect(controller.rootCAStatus!.installed, isFalse);
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
+    await tester.pump(const Duration(milliseconds: 300));
     expect(controller.rootCAStatus!.installed, isTrue);
     expect(requirement, findsNothing);
     // The requirement reads as met instead of vanishing.
@@ -229,6 +234,8 @@ void main() {
   ) async {
     final controller = await open(tester, stage: PreviewFreshStage.failed);
     await tester.tap(find.byKey(const Key('launch-stopped-install-trust')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const Key('root-ca-install-continue')));
     await tester.pump(const Duration(milliseconds: 300));
     expect(controller.rootCAStatus!.installed, isTrue);
 

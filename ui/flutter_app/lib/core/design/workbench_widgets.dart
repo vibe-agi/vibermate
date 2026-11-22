@@ -1600,3 +1600,78 @@ final class _CommandBlockState extends State<CommandBlock> {
     );
   }
 }
+
+/// A chevron and a muted label that show or hide [child] below them, for
+/// details most people never need. The Terminal card's "Technical details"
+/// and the certificate's "Certificate details" share it.
+final class CompactDisclosure extends StatefulWidget {
+  const CompactDisclosure({
+    required this.label,
+    required this.child,
+    this.initiallyExpanded = false,
+    this.toggleKey,
+    super.key,
+  });
+
+  final String label;
+  final Widget child;
+
+  /// Open when first shown. Give the disclosure a new key to open it again
+  /// when what calls for it changes.
+  final bool initiallyExpanded;
+  final Key? toggleKey;
+
+  @override
+  State<CompactDisclosure> createState() => _CompactDisclosureState();
+}
+
+final class _CompactDisclosureState extends State<CompactDisclosure> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Semantics(
+            button: true,
+            expanded: _expanded,
+            child: InkWell(
+              key: widget.toggleKey,
+              borderRadius: ViberMetrics.controlRadius,
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: SizedBox(
+                height: ViberMetrics.controlHeight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _expanded ? Icons.expand_more : Icons.chevron_right,
+                      size: 15,
+                      color: colors.textFaint,
+                    ),
+                    const SizedBox(width: 3),
+                    Flexible(
+                      child: Text(
+                        widget.label,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.textMuted,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: ViberSpacing.xs),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (_expanded) widget.child,
+      ],
+    );
+  }
+}

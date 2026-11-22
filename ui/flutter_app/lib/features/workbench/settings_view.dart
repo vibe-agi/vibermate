@@ -2133,8 +2133,6 @@ final class _RootCASettingsPanel extends StatefulWidget {
 }
 
 final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
-  String? _copied;
-
   WorkbenchController get controller => widget.controller;
   AppCopy get copy => widget.copy;
 
@@ -2149,10 +2147,9 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
         border: Border(top: BorderSide(color: context.viberColors.dividerSoft)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(
                 Icons.verified_user_outlined,
@@ -2161,13 +2158,39 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: ContextHelpHeading(
-                  title: copy('settings.root_ca.title'),
-                  message: copy('settings.root_ca.detail'),
-                  dismissLabel: copy('common.dismiss'),
+                child: Text(
+                  copy('settings.root_ca.title'),
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
+              if (localDesktop && status != null)
+                IconButton(
+                  key: const Key('root-ca-retry'),
+                  onPressed:
+                      controller.rootCAMutating || controller.rootCALoading
+                      ? null
+                      : () => unawaited(controller.refreshRootCA()),
+                  tooltip: copy('settings.root_ca.retry'),
+                  icon: const Icon(Icons.refresh, size: 16),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
             ],
+          ),
+          // What the certificate is for, and that Codex needs it, is always
+          // on the page rather than behind a help button.
+          Padding(
+            padding: const EdgeInsets.only(left: 26, top: 2),
+            child: Text(
+              copy('settings.root_ca.detail'),
+              key: const Key('root-ca-purpose'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
           ),
           const SizedBox(height: 10),
           if (!localDesktop)
@@ -2188,11 +2211,10 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
             _RootCAStatusBody(
               status: status,
               copy: copy,
-              copied: _copied,
               mutating: controller.rootCAMutating || controller.rootCALoading,
               error: controller.rootCAError,
-              onCopy: _copyFingerprint,
-              onInstall: () => unawaited(controller.installAndTrustRootCA()),
+              onInstall: () =>
+                  unawaited(confirmRootTrustInstall(context, controller, copy)),
               onRemove: () => unawaited(controller.openRootCARemovalGuide()),
               onReplace: _confirmReplace,
               onRestart: () => unawaited(controller.restartForRootReset()),
@@ -2203,27 +2225,16 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
             ),
           if (controller.operationNotice == 'root_ca_updated') ...[
             const SizedBox(height: 8),
-            Text(
-              copy('settings.root_ca.updated'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.verified,
-              ),
+            InlineNotice(
+              key: const Key('root-ca-updated'),
+              message: copy('settings.root_ca.updated'),
+              onDismiss: controller.clearNotice,
+              dismissLabel: copy('common.dismiss'),
             ),
           ],
         ],
       ),
     );
-  }
-
-  Future<void> _copyFingerprint(String value) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: value));
-      if (!mounted) return;
-      setState(() => _copied = value);
-    } on Object {
-      if (!mounted) return;
-      setState(() => _copied = null);
-    }
   }
 
   Future<void> _confirmReplace() async {
@@ -2268,6 +2279,68 @@ final class _RootCASettingsPanelState extends State<_RootCASettingsPanel> {
   }
 }
 
+/// Says what trusting ViberMate's certificate allows, before macOS asks for
+/// a password, then trusts it. Every 'Install and trust' button goes
+/// through here: Settings, the setup guide and a stopped Codex launch.
+Future<bool> confirmRootTrustInstall(
+  BuildContext context,
+  WorkbenchController controller,
+  AppCopy copy,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      key: const Key('root-ca-install-confirmation'),
+      title: Text(copy('settings.root_ca.confirm_install.title')),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 430),
+        child: Text(copy('settings.root_ca.confirm_install.detail')),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: Text(copy('common.cancel')),
+        ),
+        FilledButton(
+          key: const Key('root-ca-install-continue'),
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: Text(copy('common.continue')),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return false;
+  return controller.installAndTrustRootCA();
+}
+
+/// The certificate's trust as a pill, in the same idiom as the Terminal
+/// command: neutral while it is a next step, the warning tone only for a
+/// half-finished authorization, green once trusted.
+StatusPill rootCAStatusPill(
+  BuildContext context,
+  AppCopy copy,
+  RootCAStatus status, {
+  Key? key,
+}) {
+  final colors = context.viberColors;
+  final (label, color, icon) = status.installed
+      ? ('settings.root_ca.status.trusted', colors.verified, Icons.check)
+      : !status.available
+      ? ('settings.root_ca.status.unknown', colors.danger, Icons.error_outline)
+      : status.certificatePresent == 'absent'
+      ? (
+          'settings.root_ca.status.not_installed',
+          colors.textMuted,
+          Icons.radio_button_unchecked,
+        )
+      : (
+          'settings.root_ca.status.needs_trust',
+          colors.warning,
+          Icons.gpp_maybe_outlined,
+        );
+  return StatusPill(key: key, label: copy(label), color: color, icon: icon);
+}
+
 final class _RootCAUnavailable extends StatelessWidget {
   const _RootCAUnavailable({
     required this.message,
@@ -2303,10 +2376,8 @@ final class _RootCAStatusBody extends StatelessWidget {
   const _RootCAStatusBody({
     required this.status,
     required this.copy,
-    required this.copied,
     required this.mutating,
     required this.error,
-    required this.onCopy,
     required this.onInstall,
     required this.onRemove,
     required this.onReplace,
@@ -2319,10 +2390,8 @@ final class _RootCAStatusBody extends StatelessWidget {
 
   final RootCAStatus status;
   final AppCopy copy;
-  final String? copied;
   final bool mutating;
   final String? error;
-  final ValueChanged<String> onCopy;
   final VoidCallback onInstall;
   final VoidCallback onRemove;
   final VoidCallback onReplace;
@@ -2334,107 +2403,44 @@ final class _RootCAStatusBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = status.installed
-        ? context.viberColors.verified
-        : status.available
-        ? context.viberColors.warning
-        : context.viberColors.danger;
-    final statusLabel = status.installed
-        ? copy('settings.root_ca.status.trusted')
-        : !status.available
-        ? copy('settings.root_ca.status.unknown')
-        : status.certificatePresent == 'absent'
-        ? copy('settings.root_ca.status.not_installed')
-        : copy('settings.root_ca.status.needs_trust');
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted);
     final replaceLabel = copy(
       status.certificatePresent == 'absent'
           ? 'settings.root_ca.replace_and_restart'
           : 'settings.root_ca.replace',
     );
+    // The details open by themselves when a guide refers to them or the
+    // trust status cannot be read.
+    final openDetails = guideIntent != null || !status.available;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Icon(Icons.circle, size: 10, color: statusColor),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                statusLabel,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelLarge?.copyWith(color: statusColor),
-              ),
-            ),
-            IconButton(
-              key: const Key('root-ca-retry'),
-              onPressed: mutating ? null : onRetry,
-              tooltip: copy('settings.root_ca.retry'),
-              icon: const Icon(Icons.refresh, size: 16),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        _RootCAFact(
-          label: copy('settings.root_ca.fingerprint'),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  status.fingerprint,
-                  style: monoStyle.copyWith(
-                    fontSize: ViberType.micro,
-                    color: context.viberColors.textMuted,
-                  ),
-                ),
-              ),
-              IconButton(
-                key: const Key('root-ca-copy-fingerprint'),
-                onPressed: mutating ? null : () => onCopy(status.fingerprint),
-                tooltip: copy('settings.root_ca.copy_fingerprint'),
-                icon: const Icon(Icons.copy, size: 15),
-                constraints: const BoxConstraints.tightFor(
-                  width: ViberMetrics.controlHeight,
-                  height: ViberMetrics.controlHeight,
-                ),
-                padding: EdgeInsets.zero,
-              ),
-            ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: rootCAStatusPill(
+            context,
+            copy,
+            status,
+            key: const Key('root-ca-status'),
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          copy.format('settings.root_ca.validity', {
-            'from': _rootCADate(status.notBefore),
-            'to': _rootCADate(status.notAfter),
-          }),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          copy('settings.root_ca.private_key'),
-          style: Theme.of(
-            context,
-          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
-        ),
-        if (status.available) ...[
-          const SizedBox(height: 9),
+        if (status.available && !restartRequired) ...[
+          const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (!restartRequired && status.installed)
+              if (status.installed)
                 OutlinedButton.icon(
                   key: const Key('root-ca-remove'),
                   onPressed: mutating ? null : onRemove,
                   icon: const Icon(Icons.remove_circle_outline, size: 15),
                   label: Text(copy('settings.root_ca.remove')),
                 )
-              else if (!restartRequired)
-                FilledButton.icon(
+              else
+                OutlinedButton.icon(
                   key: const Key('root-ca-install'),
                   onPressed: mutating ? null : onInstall,
                   icon: mutating
@@ -2451,44 +2457,88 @@ final class _RootCAStatusBody extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (!restartRequired)
-                Tooltip(
-                  message: canReplace
-                      ? replaceLabel
-                      : copy('settings.root_ca.active_captures'),
-                  child: OutlinedButton.icon(
-                    key: const Key('root-ca-replace'),
-                    onPressed: mutating || !canReplace ? null : onReplace,
-                    icon: const Icon(Icons.autorenew, size: 15),
-                    label: Text(replaceLabel),
-                  ),
-                ),
             ],
           ),
-          if (!restartRequired && !canReplace) ...[
-            const SizedBox(height: 6),
-            Text(
-              copy('settings.root_ca.active_captures'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ],
-          if (restartRequired) ...[
-            const SizedBox(height: 8),
-            InlineNotice(
-              message: copy('settings.root_ca.restart_required'),
-              error: false,
-            ),
-            const SizedBox(height: 8),
-            FilledButton.icon(
+        ],
+        if (status.available && restartRequired) ...[
+          const SizedBox(height: 8),
+          InlineNotice(
+            message: copy('settings.root_ca.restart_required'),
+            error: false,
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
               key: const Key('root-ca-restart'),
               onPressed: mutating ? null : onRestart,
               icon: const Icon(Icons.restart_alt, size: 15),
               label: Text(copy('settings.root_ca.restart')),
             ),
-          ],
+          ),
         ],
+        const SizedBox(height: 6),
+        CompactDisclosure(
+          key: ValueKey('root-ca-details-$openDetails'),
+          toggleKey: const Key('root-ca-details-toggle'),
+          label: copy('settings.root_ca.details'),
+          initiallyExpanded: openDetails,
+          child: Padding(
+            key: const Key('root-ca-details'),
+            padding: const EdgeInsets.only(left: 18, top: 4, bottom: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                CommandBlock(
+                  label: copy('settings.root_ca.fingerprint'),
+                  text: status.fingerprint,
+                  fontSize: ViberType.utility,
+                  enabled: !mutating,
+                  copyKey: const Key('root-ca-copy-fingerprint'),
+                  copyTooltip: copy('settings.root_ca.copy_fingerprint'),
+                  copiedLabel: copy('common.copied'),
+                  copyFailedLabel: copy('common.copy_failed'),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  copy.format('settings.root_ca.validity', {
+                    'from': _rootCADate(status.notBefore),
+                    'to': _rootCADate(status.notAfter),
+                  }),
+                  style: muted,
+                ),
+                const SizedBox(height: 3),
+                Text(copy('settings.root_ca.private_key'), style: muted),
+                const SizedBox(height: 3),
+                Text(copy('settings.root_ca.proxy_ca'), style: muted),
+                if (status.available && !restartRequired) ...[
+                  const SizedBox(height: 9),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Tooltip(
+                      message: canReplace
+                          ? replaceLabel
+                          : copy('settings.root_ca.active_captures'),
+                      child: OutlinedButton.icon(
+                        key: const Key('root-ca-replace'),
+                        onPressed: mutating || !canReplace ? null : onReplace,
+                        icon: const Icon(Icons.autorenew, size: 15),
+                        label: Text(replaceLabel),
+                      ),
+                    ),
+                  ),
+                  if (!canReplace) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      copy('settings.root_ca.active_captures'),
+                      style: muted,
+                    ),
+                  ],
+                ],
+              ],
+            ),
+          ),
+        ),
         if (!restartRequired && guideIntent != null) ...[
           const SizedBox(height: 8),
           InlineNotice(
@@ -2496,30 +2546,19 @@ final class _RootCAStatusBody extends StatelessWidget {
             error: false,
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const Key('root-ca-guide-check'),
-            onPressed: mutating ? null : onRetry,
-            icon: const Icon(Icons.refresh, size: 15),
-            label: Text(copy('settings.root_ca.guide.check')),
-          ),
-        ],
-        if (copied == status.fingerprint) ...[
-          const SizedBox(height: 6),
-          Text(
-            copy('settings.root_ca.copied'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.verified,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('root-ca-guide-check'),
+              onPressed: mutating ? null : onRetry,
+              icon: const Icon(Icons.refresh, size: 15),
+              label: Text(copy('settings.root_ca.guide.check')),
             ),
           ),
         ],
         if (!status.available) ...[
           const SizedBox(height: 6),
-          Text(
-            copy('settings.root_ca.recovery'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
+          Text(copy('settings.root_ca.recovery'), style: muted),
         ],
         if (error != null) ...[
           const SizedBox(height: 8),
@@ -2568,23 +2607,6 @@ String _rootCAGuideMessage(AppCopy copy, RootCAGuideIntent intent) =>
       RootCAGuideIntent.remove => copy('settings.root_ca.guide.remove'),
       RootCAGuideIntent.replace => copy('settings.root_ca.guide.replace'),
     };
-
-final class _RootCAFact extends StatelessWidget {
-  const _RootCAFact({required this.label, required this.child});
-
-  final String label;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label, style: Theme.of(context).textTheme.labelMedium),
-      const SizedBox(height: 3),
-      child,
-    ],
-  );
-}
 
 final class _ServerAccessPanel extends StatefulWidget {
   const _ServerAccessPanel({required this.controller, required this.copy});
@@ -3824,7 +3846,7 @@ final class _ManagedRunGuide extends StatelessWidget {
               Icon(
                 Icons.play_arrow_outlined,
                 size: 15,
-                color: context.viberColors.verified,
+                color: context.viberColors.route,
               ),
               const SizedBox(width: 6),
               Expanded(
@@ -4736,105 +4758,73 @@ final class _TerminalCommandDetails extends StatefulWidget {
 
 final class _TerminalCommandDetailsState
     extends State<_TerminalCommandDetails> {
-  bool _expanded = false;
-
   @override
   Widget build(BuildContext context) {
     final copy = widget.copy;
     final status = widget.status;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Semantics(
-          button: true,
-          expanded: _expanded,
-          child: InkWell(
-            key: const Key('terminal-command-details-toggle'),
-            borderRadius: ViberMetrics.controlRadius,
-            onTap: () => setState(() => _expanded = !_expanded),
-            child: SizedBox(
-              height: ViberMetrics.controlHeight,
-              child: Row(
-                children: [
-                  Icon(
-                    _expanded ? Icons.expand_more : Icons.chevron_right,
-                    size: 15,
-                    color: context.viberColors.textFaint,
-                  ),
-                  const SizedBox(width: 3),
-                  Text(
-                    copy('terminal.details'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.textMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+    return CompactDisclosure(
+      toggleKey: const Key('terminal-command-details-toggle'),
+      label: copy('terminal.details'),
+      child: Container(
+        key: const Key('terminal-command-technical-details'),
+        padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+        decoration: BoxDecoration(
+          color: context.viberColors.rail,
+          border: Border.all(color: context.viberColors.dividerSoft),
+          borderRadius: ViberMetrics.surfaceRadius,
         ),
-        if (_expanded)
-          Container(
-            key: const Key('terminal-command-technical-details'),
-            padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
-            decoration: BoxDecoration(
-              color: context.viberColors.rail,
-              border: Border.all(color: context.viberColors.dividerSoft),
-              borderRadius: ViberMetrics.surfaceRadius,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CommandPath(
+              label: copy('terminal.source_build'),
+              value: status.sourceBuild,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _CommandPath(
-                  label: copy('terminal.source_build'),
-                  value: status.sourceBuild,
-                ),
-                if (status.installedBuild case final installed?) ...[
-                  const SizedBox(height: 4),
-                  _CommandPath(
-                    label: copy('terminal.installed_build'),
-                    value: installed,
-                    muted: installed != status.sourceBuild,
-                  ),
-                ],
-                const SizedBox(height: 4),
-                _CommandPath(
-                  label: copy('terminal.target'),
-                  value: status.targetPath,
-                ),
-                const SizedBox(height: 4),
-                _CommandPath(
-                  label: copy('terminal.source'),
-                  value: status.sourcePath,
-                  muted: true,
-                ),
-                if (status.detail case final detail?) ...[
-                  const SizedBox(height: 4),
-                  _CommandPath(
-                    label: copy('terminal.diagnosis'),
-                    value: detail,
-                    muted: true,
-                  ),
-                ],
-                const SizedBox(height: 7),
-                Text(
-                  copy('terminal.boundary'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (status.state == TerminalCommandState.unownedTarget ||
-                    status.state == TerminalCommandState.conflict) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    copy('terminal.manual_resolution'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.warning,
-                    ),
-                  ),
-                ],
-              ],
+            if (status.installedBuild case final installed?) ...[
+              const SizedBox(height: 4),
+              _CommandPath(
+                label: copy('terminal.installed_build'),
+                value: installed,
+                muted: installed != status.sourceBuild,
+              ),
+            ],
+            const SizedBox(height: 4),
+            _CommandPath(
+              label: copy('terminal.target'),
+              value: status.targetPath,
             ),
-          ),
-      ],
+            const SizedBox(height: 4),
+            _CommandPath(
+              label: copy('terminal.source'),
+              value: status.sourcePath,
+              muted: true,
+            ),
+            if (status.detail case final detail?) ...[
+              const SizedBox(height: 4),
+              _CommandPath(
+                label: copy('terminal.diagnosis'),
+                value: detail,
+                muted: true,
+              ),
+            ],
+            const SizedBox(height: 7),
+            Text(
+              copy('terminal.boundary'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (status.state == TerminalCommandState.unownedTarget ||
+                status.state == TerminalCommandState.conflict) ...[
+              const SizedBox(height: 5),
+              Text(
+                copy('terminal.manual_resolution'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.warning,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
