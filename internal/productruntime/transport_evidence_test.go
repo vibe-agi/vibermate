@@ -2,10 +2,16 @@ package productruntime
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
@@ -76,6 +82,126 @@ func TestActualCleartextRequestPresentationIsAcceptedByActivity(t *testing.T) {
 	if err = converted.Validate(); err != nil {
 		t.Fatalf("real cleartext producer cannot enter Activity: %v", err)
 	}
+}
+
+// The vibermate profile's real presentation and transport evidence must enter
+// Activity; an Event that fails validation is dropped as invalid, so an
+// unrecognised mode would silently erase every translated Exchange.
+func TestViberMatePresentationIsAcceptedByActivity(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.EnableHTTP2 = true
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"h2", "http/1.1"}}
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := catalog.Resolve(wireprofile.ViberMateUpstreamWireProfileRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protocol := range []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP1, wireprofile.ApplicationProtocolHTTP2} {
+		t.Run(string(protocol), func(t *testing.T) {
+			t.Parallel()
+			request := presentationFixtureRequest(t, "https://example.com:"+port, profile, protocol)
+			presentation := request.WirePresentationEvidence()
+			if presentation.Mode != wireprofile.UpstreamWireModeOwnIdentity || presentation.UpstreamProtocol != protocol {
+				t.Fatalf("vibermate presentation = %+v", presentation)
+			}
+			variant, ok := profile.Variant(protocol)
+			if !ok {
+				t.Fatalf("vibermate has no %q variant", protocol)
+			}
+			connector, err := transportprofile.NewConnector(transportprofile.ConnectorOptions{
+				Dialer: &net.Dialer{}, RootCAs: roots,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection, evidence, err := connector.Connect(context.Background(), transportprofile.ConnectRequest{
+				Network: "tcp", Address: server.Listener.Addr().String(), TLSServerName: "example.com",
+				Plan: variant.TransportFingerprintPlan(),
+			})
+			if err != nil {
+				t.Fatalf("standard %q connect: %v", protocol, err)
+			}
+			_ = connection.Close()
+			converted := activityTransportEvidence(presentation, evidence)
+			if converted == nil || converted.Requested == nil || converted.Requested.Source != "standard" {
+				t.Fatalf("vibermate Activity evidence = %+v", converted)
+			}
+			if err := converted.Validate(); err != nil {
+				t.Fatalf("vibermate %q evidence cannot enter Activity: %v", protocol, err)
+			}
+		})
+	}
+	t.Run("cleartext", func(t *testing.T) {
+		t.Parallel()
+		request := presentationFixtureRequest(t, "http://127.0.0.1:12345", profile, wireprofile.ApplicationProtocolHTTP1)
+		converted := activityTransportEvidence(request.WirePresentationEvidence(), transportprofile.Evidence{})
+		if converted == nil || converted.Requested != nil {
+			t.Fatalf("vibermate cleartext Activity evidence = %+v", converted)
+		}
+		if err := converted.Validate(); err != nil {
+			t.Fatalf("vibermate cleartext evidence cannot enter Activity: %v", err)
+		}
+	})
+}
+
+func presentationFixtureRequest(
+	t *testing.T,
+	rawOrigin string,
+	profile wireprofile.CompiledUpstreamWireProfile,
+	protocol wireprofile.ApplicationProtocol,
+) providertransport.Request {
+	t.Helper()
+	ctx := context.Background()
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = gate.Start(ctx, offlinehold.RuntimeBinding{InstanceID: "presentation-fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	action, err := gate.BeginAction(ctx, offlinehold.ActionRequest{ActionID: "presentation-action-" + strconv.Quote(rawOrigin)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(action.Release)
+	origin, err := originidentity.ParseProviderOrigin(rawOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := providertransport.NewTarget(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, err := providertransport.NewOriginalRequestProvenance("presentation.fixture", 1, environment.CandidateDigest{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := egressprofile.RestoreResolved(egressprofile.Direct(), egressprofile.SelectionFlow, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := providertransport.NewRequest(providertransport.RequestOptions{
+		RequestID: "presentation-request", TargetRef: "presentation-target", Target: target, Provenance: provenance, Action: action,
+		Method: http.MethodPost, RelativePath: "v1/responses", Body: []byte(`{"model":"synthetic"}`), CredentialMode: providerauth.CredentialClientPassthrough, PassthroughOrigin: origin,
+		WireProfile: profile, EgressProfile: egressprofile.Direct(), ResolvedEgress: resolved, ClientProtocol: protocol, ExchangeID: "presentation-exchange", ParentAttemptID: "presentation-parent", EgressAttemptID: "presentation-egress",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
 }
 
 func TestActivityTransportEvidenceRetainsFailedProfileReason(t *testing.T) {

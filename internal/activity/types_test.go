@@ -318,6 +318,87 @@ func TestTransportEvidenceRejectsPresentationAndTransportContradictions(
 	}
 }
 
+func TestTransportEvidenceAcceptsOnlyAProductFreeOwnIdentity(t *testing.T) {
+	t.Parallel()
+
+	standard := activity.TransportProfileEvidence{
+		Ref:      "standard-strict-h2",
+		Revision: 1,
+		Source:   "standard",
+	}
+	valid := activity.TransportEvidence{
+		Presentation: &activity.WirePresentationEvidence{
+			RequestedRef:     "vibermate",
+			EffectiveRef:     "vibermate",
+			Revision:         1,
+			Mode:             "own_identity",
+			ClientProtocol:   "h2",
+			UpstreamProtocol: "h2",
+		},
+		Requested:              &standard,
+		Effective:              &standard,
+		FallbackChain:          []activity.TransportProfileEvidence{standard},
+		UpstreamOfferedALPN:    []string{"h2"},
+		UpstreamNegotiatedALPN: "h2",
+		HTTPTransport:          "http2",
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("own-identity evidence rejected: %v", err)
+	}
+	cleartext := activity.TransportEvidence{Presentation: &activity.WirePresentationEvidence{
+		RequestedRef: "vibermate", EffectiveRef: "vibermate", Revision: 1, Mode: "own_identity",
+		ClientProtocol: "http/1.1", UpstreamProtocol: "http/1.1",
+	}}
+	if err := cleartext.Validate(); err != nil {
+		t.Fatalf("own-identity cleartext evidence rejected: %v", err)
+	}
+
+	observed := activity.TransportProfileEvidence{
+		Ref:      "observed-client-strict-h2",
+		Revision: 2,
+		Source:   "observed_client",
+	}
+	named := activity.TransportProfileEvidence{
+		Ref:      "claude-code-2.1.220-darwin-arm64-strict-h1",
+		Revision: 1,
+		Source:   "named_profile",
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*activity.TransportEvidence)
+	}{
+		{"names a product", func(value *activity.TransportEvidence) {
+			value.Presentation.Product = "claude_code"
+		}},
+		{"carries product evidence", func(value *activity.TransportEvidence) {
+			value.Presentation.EvidenceDigest = strings.Repeat("a", 64)
+		}},
+		{"replayed the client ClientHello", func(value *activity.TransportEvidence) {
+			value.Requested, value.Effective = &observed, &observed
+			value.FallbackChain = []activity.TransportProfileEvidence{observed}
+		}},
+		{"replayed a named ClientHello", func(value *activity.TransportEvidence) {
+			value.Requested, value.Effective = &named, &named
+			value.FallbackChain = []activity.TransportProfileEvidence{named}
+		}},
+		{"claims the cleartext lowering", func(value *activity.TransportEvidence) {
+			value.Requested, value.Effective, value.FallbackChain = nil, nil, nil
+			value.UpstreamOfferedALPN, value.UpstreamNegotiatedALPN, value.HTTPTransport = nil, "", ""
+			value.Presentation.UpstreamProtocol = "http/1.1"
+			value.Presentation.ProtocolAdjustment = "cleartext_http1"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := valid.Clone()
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("contradictory own-identity evidence was accepted")
+			}
+		})
+	}
+}
+
 func TestExchangePageRequestHasOneTypedCaptureAuthority(t *testing.T) {
 	t.Parallel()
 
