@@ -42,7 +42,7 @@ final class SetupGuideProgress {
     required this.startedRun,
     required this.failedLaunch,
     required this.observed,
-    this.launched = false,
+    this.reach = TerminalReach.notReady,
     this.blocked = false,
   });
 
@@ -73,7 +73,7 @@ final class SetupGuideProgress {
       startedRun: started,
       failedLaunch: latest != null && latest.stoppedBeforeStart ? latest : null,
       observed: captures.any((capture) => capture.observation == 'observed'),
-      launched: managed.isNotEmpty,
+      reach: controller.terminalReach,
       blocked:
           started != null &&
           agentCannotConnect(
@@ -99,9 +99,9 @@ final class SetupGuideProgress {
   final CaptureRecord? failedLaunch;
   final bool observed;
 
-  /// A `vibermate run` launch reached ViberMate, which proves Terminal found
-  /// the command however it was typed.
-  final bool launched;
+  /// How far typing the Terminal command gets someone: the same rule the
+  /// Terminal command card and the launch commands follow.
+  final TerminalReach reach;
 
   /// The started agent cannot connect through ViberMate, so its first
   /// request will never arrive.
@@ -115,8 +115,8 @@ final class SetupGuideProgress {
   bool get commandFound =>
       commandInstalled &&
       (!local ||
-          launched ||
-          command!.shellFindsCommand != ShellCommandLookup.notFound);
+          reach == TerminalReach.works ||
+          reach == TerminalReach.fullPathWorks);
 
   SetupStepState get commandStep => !local
       ? SetupStepState.hint
@@ -306,9 +306,11 @@ final class _SetupGuideState extends State<SetupGuide> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final copy = widget.copy;
-    final progress = SetupGuideProgress.of(controller);
     final guide = LayoutBuilder(
       builder: (context, constraints) {
+        // Read at layout, after SetupFactsWatcher has marked the shell check
+        // as expected, so the first frame already says 'Checking'.
+        final progress = SetupGuideProgress.of(controller);
         // Each step's button goes under its text when the guide is narrow,
         // which also happens beside an open directory on a small window.
         final narrow = constraints.maxWidth < 520;
@@ -369,33 +371,48 @@ final class _SetupGuideState extends State<SetupGuide> {
         state: state,
         title: copy('setup.command.title'),
         copy: copy,
-        summary: copy('terminal.state_detail.current'),
+        summary: status != null && progress.reach == TerminalReach.fullPathWorks
+            ? copy.format('terminal.state_detail.full_path_works', {
+                'path': vibermateFullPath(status),
+              })
+            : copy('terminal.state_detail.current'),
         narrow: narrow,
       );
     }
     if (status != null && progress.commandInstalled) {
-      // Set up, but a new Terminal window does not find it yet.
+      // Set up, but a new Terminal window does not find it yet, or the shell
+      // has not answered.
+      final checking = progress.reach == TerminalReach.checking;
+      final pending = controller.terminalShellCheckPending;
       return _SetupStep(
         key: const Key('setup-step-command'),
         number: 1,
         state: state,
         title: copy('setup.command.title'),
         copy: copy,
-        status: StatusPill(
-          label: copy('terminal.state.not_on_path'),
-          color: context.viberColors.warning,
+        status: checking
+            ? terminalCheckingPill(context, copy)
+            : terminalNotOnPathPill(context, copy),
+        detail: copy(
+          checking
+              ? 'terminal.state_detail.checking'
+              : 'terminal.state_detail.not_on_path',
         ),
-        detail: copy('terminal.state_detail.not_on_path'),
         action: OutlinedButton.icon(
           key: const Key('setup-command-check'),
-          onPressed: controller.terminalCommandLoading
+          onPressed: controller.terminalCommandLoading || pending
               ? null
               : () => unawaited(controller.checkTerminalShell()),
-          icon: const Icon(Icons.refresh, size: 14),
+          icon: pending
+              ? const SizedBox.square(
+                  dimension: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                )
+              : const Icon(Icons.refresh, size: 14),
           label: Text(copy('setup.command.check')),
         ),
         narrow: narrow,
-        children: [TerminalPathHint(status: status, copy: copy)],
+        children: [if (!checking) TerminalPathHint(status: status, copy: copy)],
       );
     }
     final busy =
@@ -779,15 +796,19 @@ final class _SetupFactsWatcherState extends State<SetupFactsWatcher>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // The page below builds after this, so it opens on 'Checking' instead
+    // of showing Ready and then changing.
+    widget.controller.expectShellCheck();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(widget.controller.refreshSetupFacts());
+      // Asked even if gone by now, so the expected check is not left open.
+      unawaited(widget.controller.refreshSetupFacts(checkShell: true));
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      unawaited(widget.controller.refreshSetupFacts());
+      unawaited(widget.controller.refreshSetupFacts(checkShell: true));
     }
   }
 

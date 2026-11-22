@@ -4,6 +4,7 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
   PreviewTerminalCommandService({
     TerminalCommandStatus? initial,
     this.shellLookup = ShellCommandLookup.found,
+    this.shellDelay = Duration.zero,
   }) : _status =
            initial ??
            const TerminalCommandStatus(
@@ -18,11 +19,16 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
   /// as on most Macs, unless the preview asks for another answer.
   ShellCommandLookup shellLookup;
 
+  /// How long the answer takes, as a slow shell profile would.
+  Duration shellDelay;
+
   @override
-  Future<ShellCommandCheck> checkShell(TerminalCommandStatus status) async =>
-      status.ready
-      ? ShellCommandCheck(shellLookup, shell: 'zsh')
-      : ShellCommandCheck.unknown;
+  Future<ShellCommandCheck> checkShell(TerminalCommandStatus status) async {
+    if (shellDelay > Duration.zero) await Future<void>.delayed(shellDelay);
+    return status.ready
+        ? ShellCommandCheck(shellLookup, shell: 'zsh')
+        : ShellCommandCheck.unknown;
+  }
 
   @override
   Future<TerminalCommandStatus> inspect() async => _status;

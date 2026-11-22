@@ -20,9 +20,13 @@ final class _CountingCommands implements TerminalCommandService {
 
   final PreviewTerminalCommandService _inner;
   int checks = 0;
+  int inspections = 0;
 
   @override
-  Future<TerminalCommandStatus> inspect() => _inner.inspect();
+  Future<TerminalCommandStatus> inspect() {
+    inspections += 1;
+    return _inner.inspect();
+  }
 
   @override
   Future<TerminalCommandStatus> execute(TerminalCommandOperation operation) =>
@@ -118,6 +122,35 @@ void main() {
       },
     );
 
+    test('starts the shell the way a new Terminal window does', () async {
+      // Each guard fails the check: a wrong flag or command, a TERM other
+      // than dumb, or stdin left open, which blocks `read` until the time
+      // limit.
+      final shell = fakeShell('zsh', '''
+[ "\$1" = -lic ] || exit 1
+[ "\$2" = 'command -v vibermate' ] || exit 1
+[ "\$TERM" = dumb ] || exit 1
+read -r _
+echo "$target"''');
+      final check = await LoginShellProbe(
+        environment: {'SHELL': shell},
+        timeout: const Duration(seconds: 2),
+      ).check(target);
+      expect(check.lookup, ShellCommandLookup.found);
+    });
+
+    test('an unfamiliar shell is not started', () async {
+      final marker = File('${scratch.path}/started');
+      final shell = fakeShell('tcsh', 'touch ${marker.path}; exit 1');
+      final check = await LoginShellProbe(
+        environment: {'SHELL': shell},
+      ).check(target);
+      // Its failure could mean anything, so it never reads as not found.
+      expect(check.lookup, ShellCommandLookup.unknown);
+      expect(check.shell, 'tcsh');
+      expect(marker.existsSync(), isFalse);
+    });
+
     test('no SHELL means the check cannot run', () async {
       final check = await const LoginShellProbe(environment: {}).check(target);
       expect(check.lookup, ShellCommandLookup.unknown);
@@ -146,7 +179,16 @@ void main() {
       'echo \'export PATH="\$HOME/.local/bin:\$PATH"\' >> ~/.bash_profile',
     );
     expect(shellPathLine('fish'), 'fish_add_path ~/.local/bin');
-    expect(shellPathLine(null), contains('~/.zshrc'));
+    // sh, dash and ksh read ~/.profile as login shells.
+    for (final shell in ['sh', 'dash', 'ksh']) {
+      expect(
+        shellPathLine(shell),
+        'echo \'export PATH="\$HOME/.local/bin:\$PATH"\' >> ~/.profile',
+      );
+    }
+    // A shell whose settings file is not known gets no line to run.
+    expect(shellPathLine('tcsh'), isNull);
+    expect(shellPathLine(null), isNull);
   });
 
   group('the guide and Settings', () {
@@ -381,6 +423,173 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump(const Duration(milliseconds: 300));
       expect(service.checks, checks + 2);
+      await close(tester, controller);
+    });
+
+    testWidgets(
+      'returning to the window off the guide never starts the shell',
+      (tester) async {
+        final service = _CountingCommands(
+          PreviewTerminalCommandService(
+            initial: previewFreshTerminalCommand(PreviewFreshStage.command),
+            shellLookup: ShellCommandLookup.notFound,
+          ),
+        );
+        final controller = await open(tester, commands: service);
+        expect(controller.setupGuideEligible, isTrue);
+        controller.selectSection(WorkbenchSection.environments);
+        await tester.pump(const Duration(milliseconds: 300));
+        final checks = service.checks;
+        final inspections = service.inspections;
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(service.checks, checks, reason: 'Routing is on screen');
+        expect(service.inspections, inspections + 1);
+        await close(tester, controller);
+      },
+    );
+
+    testWidgets('one focus reads the command once with the guide on screen', (
+      tester,
+    ) async {
+      final service = _CountingCommands(
+        PreviewTerminalCommandService(
+          initial: previewFreshTerminalCommand(PreviewFreshStage.command),
+          shellLookup: ShellCommandLookup.notFound,
+        ),
+      );
+      final controller = await open(tester, commands: service);
+      final checks = service.checks;
+      final inspections = service.inspections;
+      // The controller and the guide both reread on focus; they share it.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(service.inspections, inspections + 1);
+      expect(service.checks, checks + 1);
+      await close(tester, controller);
+    });
+
+    testWidgets('until the shell answers, both screens say Checking', (
+      tester,
+    ) async {
+      final service = PreviewTerminalCommandService(
+        initial: previewFreshTerminalCommand(PreviewFreshStage.command),
+        shellLookup: ShellCommandLookup.notFound,
+        shellDelay: const Duration(seconds: 2),
+      );
+      final controller = await open(tester, commands: service);
+      // Never Ready first: step 1 stays open with a neutral pill, and no
+      // command can be copied before it is known which form works.
+      expect(inStep('command', find.text('Checking Terminal…')), findsOne);
+      expect(inStep('command', find.text('Done')), findsNothing);
+      TextButton copyButton(String key) =>
+          tester.widget<TextButton>(find.byKey(Key(key)));
+      expect(copyButton('setup-copy-claude').onPressed, isNull);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('setup-command-check')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(
+        inStep('command', find.text("Installed · Terminal can't find it yet")),
+        findsOne,
+      );
+      expect(copyButton('setup-copy-claude').onPressed, isNotNull);
+      expect(find.text('~/.local/bin/vibermate run -- claude'), findsWidgets);
+
+      // Settings opens on its own check, keeping the last answer meanwhile.
+      service.shellLookup = ShellCommandLookup.found;
+      controller.openAccessSettings();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final state = find.byKey(const Key('terminal-command-state'));
+      expect(
+        tester.widget<StatusPill>(state).label,
+        "Installed · Terminal can't find it yet",
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(tester.widget<StatusPill>(state).label, 'Ready');
+      expect(copyButton('managed-run-copy-claude').onPressed, isNotNull);
+      expect(find.text('vibermate run -- claude'), findsOne);
+      await close(tester, controller);
+    });
+
+    testWidgets('a command just set up is checked before it is copied', (
+      tester,
+    ) async {
+      final service = PreviewTerminalCommandService(
+        initial: previewFreshTerminalCommand(PreviewFreshStage.command),
+        shellLookup: ShellCommandLookup.notFound,
+        shellDelay: const Duration(seconds: 2),
+      );
+      final controller = await open(
+        tester,
+        commands: service,
+        stage: PreviewFreshStage.command,
+      );
+      controller.hideSetupGuide();
+      await tester.pump(const Duration(seconds: 3));
+      // Removing forgets the answer; setting it up again asks anew.
+      await controller.changeTerminalCommand(TerminalCommandOperation.remove);
+      await controller.changeTerminalCommand(TerminalCommandOperation.install);
+      controller.openAccessSettings();
+      await tester.pump();
+      final state = find.byKey(const Key('terminal-command-state'));
+      expect(tester.widget<StatusPill>(state).label, 'Checking Terminal…');
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const Key('managed-run-copy-claude')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(
+        tester.widget<StatusPill>(state).label,
+        "Installed · Terminal can't find it yet",
+      );
+      await close(tester, controller);
+    });
+
+    testWidgets('a launch with the full path is Ready on both screens', (
+      tester,
+    ) async {
+      final controller = await open(tester, stage: PreviewFreshStage.waiting);
+      expect(controller.terminalReach, TerminalReach.fullPathWorks);
+      const works =
+          'Works with the full path ~/.local/bin/vibermate. To type just '
+          'vibermate, run the PATH line once.';
+      expect(inStep('command', find.text('Done')), findsOne);
+      expect(inStep('command', find.text(works)), findsOne);
+      controller.openAccessSettings();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final state = find.byKey(const Key('terminal-command-state'));
+      expect(tester.widget<StatusPill>(state).label, 'Ready');
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('terminal-command-detail')))
+            .data,
+        works,
+      );
+      // The launch proved only the form that ran: commands keep the path,
+      // and the PATH line stays offered.
+      expect(find.byKey(const Key('terminal-path-hint')), findsOne);
+      expect(find.text('~/.local/bin/vibermate run -- codex'), findsOne);
       await close(tester, controller);
     });
   });

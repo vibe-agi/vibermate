@@ -3446,6 +3446,7 @@ final class AppCopy {
     'terminal.state.unowned_target': 'Location in use',
     'terminal.state.conflict': 'Needs attention',
     'terminal.state.not_on_path': 'Installed · Terminal can\'t find it yet',
+    'terminal.state.checking': 'Checking Terminal…',
     'terminal.state_detail.not_installed':
         'Set it up once, then copy an Agent launch command below.',
     'terminal.state_detail.current': 'vibermate is ready to use in Terminal.',
@@ -3460,7 +3461,10 @@ final class AppCopy {
     'terminal.state_detail.conflict':
         'This Terminal entry changed outside ViberMate. It was left unchanged.',
     'terminal.state_detail.not_on_path':
-        'If Terminal says “command not found: vibermate”, open a new Terminal window. Still not found? Run this line once, or use the full path below.',
+        'A new Terminal window can\'t find vibermate yet, because your shell doesn\'t look in ~/.local/bin. Run this line once, then open a new window. Until then, use the full path below.',
+    'terminal.state_detail.checking': 'Checking that Terminal finds it…',
+    'terminal.state_detail.full_path_works':
+        'Works with the full path {path}. To type just vibermate, run the PATH line once.',
     'terminal.path.run_once': 'Run once in Terminal, then open a new window',
     'terminal.path.full_path': 'Or start with the full path',
     'terminal.path.copy_line': 'Copy the PATH line',
@@ -6376,6 +6380,7 @@ final class AppCopy {
     'terminal.state.unowned_target': '位置已占用',
     'terminal.state.conflict': '需要处理',
     'terminal.state.not_on_path': '已安装 · 终端暂时找不到它',
+    'terminal.state.checking': '正在检查终端…',
     'terminal.state_detail.not_installed': '设置一次后，即可在下方复制 Agent 启动命令。',
     'terminal.state_detail.current': '现在可以在终端中使用 vibermate。',
     'terminal.state_detail.source_updated': 'ViberMate 已更新，请确认新命令后再使用。',
@@ -6385,7 +6390,10 @@ final class AppCopy {
         '另一个项目占用了 vibermate 的终端位置，ViberMate 未对它做任何修改。',
     'terminal.state_detail.conflict': '此终端入口在 ViberMate 外发生了变化，现已保持原样。',
     'terminal.state_detail.not_on_path':
-        '如果终端提示“command not found: vibermate”，请新开一个终端窗口。仍然找不到？运行一次下面这行，或使用下方的完整路径。',
+        '新开的终端窗口还找不到 vibermate，因为你的 shell 不会在 ~/.local/bin 中查找命令。请运行一次下面这行，然后新开一个窗口；在此之前，可以使用下方的完整路径。',
+    'terminal.state_detail.checking': '正在检查终端能否找到它…',
+    'terminal.state_detail.full_path_works':
+        '使用完整路径 {path} 可以启动。若想直接输入 vibermate，请运行一次 PATH 设置命令。',
     'terminal.path.run_once': '在终端中运行一次，然后新开一个窗口',
     'terminal.path.full_path': '或使用完整路径启动',
     'terminal.path.copy_line': '复制 PATH 设置命令',

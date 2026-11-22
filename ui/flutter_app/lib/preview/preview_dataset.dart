@@ -10,7 +10,9 @@ import 'preview_terminal_command.dart';
 ///    `arrive=` (1, failed) playing a short timeline from the start, and
 ///    `client=` (recognized, unverified) choosing the agent build launched;
 ///  * with either, `shell=` (missing, unknown) choosing what a new Terminal
-///    window answers when asked for the vibermate command; found otherwise.
+///    window answers when asked for the vibermate command; found otherwise,
+///    and `shell_delay=` (milliseconds, at most 10000) how long it takes to
+///    answer, as a slow shell profile would.
 ///
 /// The macOS preview has no query, so it always shows the seeded workbench.
 final class PreviewDataset {
@@ -20,6 +22,7 @@ final class PreviewDataset {
     this.arrive,
     this.client = PreviewFreshClient.known,
     this.shell = ShellCommandLookup.found,
+    this.shellDelay = Duration.zero,
   });
 
   factory PreviewDataset.fromQuery(Map<String, String> query) {
@@ -28,13 +31,22 @@ final class PreviewDataset {
       'unknown' => ShellCommandLookup.unknown,
       _ => ShellCommandLookup.found,
     };
-    if (query['dataset'] != 'fresh') return PreviewDataset(shell: shell);
+    final delay = Duration(
+      milliseconds: (int.tryParse(query['shell_delay'] ?? '') ?? 0).clamp(
+        0,
+        10000,
+      ),
+    );
+    if (query['dataset'] != 'fresh') {
+      return PreviewDataset(shell: shell, shellDelay: delay);
+    }
     return PreviewDataset(
       fresh: true,
       stage: PreviewFreshStage.parse(query['stage']),
       arrive: PreviewFreshArrival.parse(query['arrive']),
       client: PreviewFreshClient.parse(query['client']),
       shell: shell,
+      shellDelay: delay,
     );
   }
 
@@ -43,6 +55,7 @@ final class PreviewDataset {
   final PreviewFreshArrival? arrive;
   final PreviewFreshClient client;
   final ShellCommandLookup shell;
+  final Duration shellDelay;
 
   /// Without a stage, a timeline starts with the Terminal command ready,
   /// because nothing can launch before it is.
@@ -54,7 +67,10 @@ final class PreviewDataset {
     if (!fresh) {
       return PreviewFixture(
         api: PreviewControlApi(seedRuntimeUsers: seedRuntimeUsers),
-        terminalCommands: PreviewTerminalCommandService(shellLookup: shell),
+        terminalCommands: PreviewTerminalCommandService(
+          shellLookup: shell,
+          shellDelay: shellDelay,
+        ),
       );
     }
     return PreviewFixture.freshInstall(
@@ -62,6 +78,7 @@ final class PreviewDataset {
       arrive: arrive,
       client: client,
       shell: shell,
+      shellDelay: shellDelay,
     );
   }
 }
@@ -75,6 +92,7 @@ final class PreviewFixture {
     PreviewFreshArrival? arrive,
     PreviewFreshClient client = PreviewFreshClient.known,
     ShellCommandLookup shell = ShellCommandLookup.found,
+    Duration shellDelay = Duration.zero,
   }) => PreviewFixture(
     api: PreviewControlApi.freshInstall(
       stage: stage,
@@ -84,6 +102,7 @@ final class PreviewFixture {
     terminalCommands: PreviewTerminalCommandService(
       initial: previewFreshTerminalCommand(stage),
       shellLookup: shell,
+      shellDelay: shellDelay,
     ),
   );
 

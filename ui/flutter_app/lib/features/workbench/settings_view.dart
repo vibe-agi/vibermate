@@ -4942,12 +4942,15 @@ final class _TerminalCommandPanel extends StatelessWidget {
                   tooltip: copy('terminal.refresh_status'),
                   onPressed:
                       controller.terminalCommandLoading ||
-                          controller.terminalCommandMutating
+                          controller.terminalCommandMutating ||
+                          controller.terminalShellCheckPending
                       ? null
                       : () => unawaited(
                           controller.refreshTerminalCommand(checkShell: true),
                         ),
-                  icon: controller.terminalCommandLoading
+                  icon:
+                      controller.terminalCommandLoading ||
+                          controller.terminalShellCheckPending
                       ? const SizedBox.square(
                           dimension: 13,
                           child: CircularProgressIndicator(strokeWidth: 1.4),
@@ -5020,11 +5023,18 @@ final class _TerminalCommandStatusView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lookup = status.ready ? status.shellFindsCommand : null;
+    // The guide reads the same rule, so the card and step 1 always agree.
+    final reach = controller.terminalReach;
+    final current = status.state == TerminalCommandState.current;
     // Set up, but a new Terminal window does not find it: a warning, not
-    // 'Ready', until the person's shell looks in ~/.local/bin.
-    final notOnPath =
-        status.state == TerminalCommandState.current &&
-        lookup == ShellCommandLookup.notFound;
+    // 'Ready', until the person's shell looks in ~/.local/bin, or until
+    // an agent started with the full path proves the command works.
+    final notOnPath = current && reach == TerminalReach.notFound;
+    final checking = current && reach == TerminalReach.checking;
+    final fullPathOnly = current && reach == TerminalReach.fullPathWorks;
+    // The fix for PATH sits right under the sentence that mentions it.
+    final hint =
+        reach == TerminalReach.notFound || reach == TerminalReach.fullPathWorks;
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
       child: Column(
@@ -5033,31 +5043,44 @@ final class _TerminalCommandStatusView extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final narrow = constraints.maxWidth < 560;
-              final pill = StatusPill(
-                key: const Key('terminal-command-state'),
-                label: copy(
-                  notOnPath
-                      ? 'terminal.state.not_on_path'
-                      : 'terminal.state.${status.state.wireName}',
-                ),
-                color: notOnPath
-                    ? context.viberColors.warning
-                    : _stateColor(context, status.state),
-                icon: notOnPath ? Icons.search_off : _stateIcon(status.state),
-              );
+              const pillKey = Key('terminal-command-state');
+              final pill = notOnPath
+                  ? terminalNotOnPathPill(context, copy, key: pillKey)
+                  : checking
+                  ? terminalCheckingPill(context, copy, key: pillKey)
+                  : StatusPill(
+                      key: pillKey,
+                      label: copy('terminal.state.${status.state.wireName}'),
+                      color: _stateColor(context, status.state),
+                      icon: _stateIcon(status.state),
+                    );
               final detail = Text(
-                copy(
-                  notOnPath
-                      ? 'terminal.state_detail.not_on_path'
-                      : 'terminal.state_detail.${status.state.wireName}',
-                ),
+                notOnPath
+                    ? copy('terminal.state_detail.not_on_path')
+                    : checking
+                    ? copy('terminal.state_detail.checking')
+                    : fullPathOnly
+                    ? copy.format('terminal.state_detail.full_path_works', {
+                        'path': vibermateFullPath(status),
+                      })
+                    : copy('terminal.state_detail.${status.state.wireName}'),
+                key: const Key('terminal-command-detail'),
                 style: Theme.of(context).textTheme.bodyMedium,
               );
-              // The longer warning sits above its explanation.
-              final summary = notOnPath
+              // The longer warning sits above its explanation, and the PATH
+              // line follows it directly.
+              final summary = hint
                   ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [pill, const SizedBox(height: 6), detail],
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(alignment: Alignment.centerLeft, child: pill),
+                        const SizedBox(height: 6),
+                        detail,
+                        if (hint) ...[
+                          const SizedBox(height: 9),
+                          TerminalPathHint(status: status, copy: copy),
+                        ],
+                      ],
                     )
                   : Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -5084,7 +5107,10 @@ final class _TerminalCommandStatusView extends StatelessWidget {
                 );
               }
               return Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                // Beside a long summary the button lines up with the pill.
+                crossAxisAlignment: hint
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   Expanded(child: summary),
                   const SizedBox(width: 16),
@@ -5093,10 +5119,7 @@ final class _TerminalCommandStatusView extends StatelessWidget {
               );
             },
           ),
-          if (lookup == ShellCommandLookup.notFound) ...[
-            const SizedBox(height: 9),
-            TerminalPathHint(status: status, copy: copy),
-          ] else if (lookup == ShellCommandLookup.unknown) ...[
+          if (lookup == ShellCommandLookup.unknown) ...[
             const SizedBox(height: 9),
             TerminalPathFallback(status: status, copy: copy),
           ],

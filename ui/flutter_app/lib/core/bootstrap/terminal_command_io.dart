@@ -174,12 +174,20 @@ final class LoginShellProbe {
 
   static const _maximumOutputBytes = 16 * 1024;
 
+  static const _probedShells = {'zsh', 'bash', 'sh', 'dash', 'ksh', 'fish'};
+
   Future<ShellCommandCheck> check(String targetPath) async {
     final shell = (environment ?? Platform.environment)['SHELL'];
     if (shell == null || !shell.startsWith('/')) {
       return ShellCommandCheck.unknown;
     }
     final name = _basename(shell);
+    // Only shells known to take `-lic` and to have `command -v`: another
+    // shell could fail for reasons unrelated to PATH, which must not read
+    // as 'not found'.
+    if (!_probedShells.contains(name)) {
+      return ShellCommandCheck(ShellCommandLookup.unknown, shell: name);
+    }
     Process process;
     try {
       process = await Process.start(

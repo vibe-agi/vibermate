@@ -36,6 +36,30 @@ enum RootCAGuideIntent { remove, replace }
 /// or connecting from a browser or another computer.
 enum AccessFocus { terminal, remote }
 
+/// How far typing the Terminal command gets someone on this Mac. The setup
+/// guide, the Terminal command card and the launch commands all read it, so
+/// they never disagree.
+enum TerminalReach {
+  /// Not set up, or set up and in need of repair: the command's own state
+  /// says what to do.
+  notReady,
+
+  /// Set up; the login shell has not answered yet.
+  checking,
+
+  /// Typing `vibermate` works: a new Terminal window finds it, the shell
+  /// could not be asked, or a launch already came through it.
+  works,
+
+  /// A launch came through, but a new Terminal window does not find
+  /// `vibermate` by name: the full path is what works.
+  fullPathWorks,
+
+  /// Set up, but a new Terminal window does not find it, and nothing has
+  /// been started through it.
+  notFound,
+}
+
 typedef _AccountReadScope = ({int epoch, int settings, String origin});
 
 _AccountReadScope _accountReadScope(ProviderAccount account) => (
@@ -2718,19 +2742,40 @@ final class WorkbenchController extends ChangeNotifier
     notifyListeners();
   }
 
-  /// Rereads what the guide's steps depend on, and asks the login shell
-  /// whether it finds the Terminal command. The guide and Access and launch
-  /// call this when they first show and when the window regains focus; never
-  /// on the five-second poll, because the Terminal command check starts the
-  /// packaged binary and the shell check starts the person's shell.
-  Future<void> refreshSetupFacts() async {
-    if (_disposed) return;
+  /// Rereads what the guide's steps depend on: the Terminal command, the
+  /// certificate and, on a Server, its address. Called when the guide or
+  /// Access and launch shows and when the window regains focus; never on the
+  /// five-second poll, because the Terminal command check starts the
+  /// packaged binary.
+  ///
+  /// [checkShell] also asks the login shell whether a new Terminal window
+  /// finds the command, which starts the person's shell and runs their
+  /// profile: only the guide and Access and launch ask, while on screen.
+  /// Calls that overlap share one read, so a focus reads the packaged binary
+  /// and the certificate once.
+  Future<void> refreshSetupFacts({bool checkShell = false}) {
+    if (_disposed) return Future<void>.value();
+    if (checkShell) _requestShellCheck();
+    final inFlight = _setupFactsRead;
+    if (inFlight != null) {
+      // A shell check asked for after the read began runs once it ends.
+      return checkShell
+          ? inFlight.then((_) => _runRequestedShellCheck())
+          : inFlight;
+    }
+    final read = _readSetupFacts();
+    _setupFactsRead = read;
+    return read.whenComplete(() {
+      if (identical(_setupFactsRead, read)) _setupFactsRead = null;
+    });
+  }
+
+  Future<void>? _setupFactsRead;
+
+  Future<void> _readSetupFacts() async {
     await Future.wait([
       if (terminalManagement)
-        refreshTerminalCommand(
-          quiet: terminalCommand != null,
-          checkShell: true,
-        ),
+        refreshTerminalCommand(quiet: terminalCommand != null),
       if (rootTrustManagement) refreshRootCA(quiet: rootCAStatus != null),
       // A Server's guide shows its own address in the commands.
       if (!terminalManagement && serverManagement && serverAccess == null)
@@ -3099,6 +3144,8 @@ final class WorkbenchController extends ChangeNotifier
     bool quiet = false,
     bool checkShell = false,
   }) async {
+    if (checkShell) _requestShellCheck();
+    // A read or change under way runs the requested check when it ends.
     if (_disposed || terminalCommandLoading || terminalCommandMutating) return;
     if (!quiet) {
       terminalCommandLoading = true;
@@ -3112,13 +3159,14 @@ final class WorkbenchController extends ChangeNotifier
       terminalCommandLoading = false;
       notifyListeners();
     } catch (error) {
-      if (_disposed || quiet) return;
-      terminalCommandLoading = false;
-      terminalCommandError = _terminalCommandError(error);
-      notifyListeners();
-      return;
+      if (_disposed) return;
+      if (!quiet) {
+        terminalCommandLoading = false;
+        terminalCommandError = _terminalCommandError(error);
+        notifyListeners();
+      }
     }
-    if (checkShell) await checkTerminalShell();
+    await _runRequestedShellCheck();
   }
 
   /// What the login shell last answered for the command at
@@ -3126,6 +3174,64 @@ final class WorkbenchController extends ChangeNotifier
   ShellCommandCheck? _shellCheck;
   String? _shellCheckTarget;
   bool _shellCheckRunning = false;
+
+  /// A check was asked for and starts when the read under way ends.
+  bool _shellCheckRequested = false;
+
+  /// The login shell is being asked, or is about to be, whether a new
+  /// Terminal window finds the command.
+  bool get terminalShellCheckPending =>
+      _shellCheckRunning || _shellCheckRequested;
+
+  /// A `vibermate run` launch reached this Runtime, which proves Terminal
+  /// found the command, however it was typed.
+  bool get launchedFromTerminal =>
+      data?.captures.any((capture) => capture.kind == 'managed_run') ?? false;
+
+  /// How far typing the Terminal command gets someone on this Mac.
+  TerminalReach get terminalReach {
+    final status = terminalCommand;
+    if (status == null || !status.ready) return TerminalReach.notReady;
+    final launched = launchedFromTerminal;
+    return switch (status.shellFindsCommand) {
+      ShellCommandLookup.notFound =>
+        launched ? TerminalReach.fullPathWorks : TerminalReach.notFound,
+      null when !launched && terminalShellCheckPending =>
+        TerminalReach.checking,
+      _ => TerminalReach.works,
+    };
+  }
+
+  /// Someone can start an agent with the Terminal command, by name or by
+  /// its full path.
+  bool get terminalCommandWorks => switch (terminalReach) {
+    TerminalReach.works || TerminalReach.fullPathWorks => true,
+    _ => false,
+  };
+
+  /// The guide or Access and launch is about to show and will ask the
+  /// shell: its first frame already says it is checking instead of showing
+  /// Ready and then changing. Nothing is notified; the page reads this as it
+  /// builds.
+  void expectShellCheck() {
+    if (terminalManagement && !_shellCheckRunning) _shellCheckRequested = true;
+  }
+
+  void _requestShellCheck() {
+    // A check already running answers this request too.
+    if (!terminalManagement || _shellCheckRunning || _shellCheckRequested) {
+      return;
+    }
+    _shellCheckRequested = true;
+    final status = terminalCommand;
+    // Nothing has answered for this command yet: say it is being checked.
+    if (status != null && status.ready && status.shellFindsCommand == null) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> _runRequestedShellCheck() =>
+      _shellCheckRequested ? checkTerminalShell() : Future<void>.value();
 
   TerminalCommandStatus _withShellCheck(TerminalCommandStatus status) {
     final check = _shellCheck;
@@ -3143,14 +3249,15 @@ final class WorkbenchController extends ChangeNotifier
   /// shows or the window regains focus; never on the poll.
   Future<void> checkTerminalShell() async {
     final status = terminalCommand;
-    if (_disposed ||
-        !terminalManagement ||
-        status == null ||
-        !status.ready ||
-        _shellCheckRunning) {
+    if (_disposed || _shellCheckRunning) return;
+    if (!terminalManagement || status == null || !status.ready) {
+      // Nothing to ask about: a command that is not set up is not checked.
+      _shellCheckRequested = false;
       return;
     }
+    _shellCheckRequested = false;
     _shellCheckRunning = true;
+    notifyListeners();
     ShellCommandCheck check;
     try {
       check = await _terminalCommands.checkShell(status);
@@ -3160,7 +3267,10 @@ final class WorkbenchController extends ChangeNotifier
     _shellCheckRunning = false;
     if (_disposed) return;
     final current = terminalCommand;
-    if (current == null || current.targetPath != status.targetPath) return;
+    if (current == null || current.targetPath != status.targetPath) {
+      notifyListeners();
+      return;
+    }
     _shellCheck = check;
     _shellCheckTarget = status.targetPath;
     terminalCommand = _withShellCheck(current);
@@ -3284,10 +3394,9 @@ final class WorkbenchController extends ChangeNotifier
       terminalCommandMutating = false;
       notifyListeners();
       // A command just set up or repaired is only useful once a new Terminal
-      // window finds it.
-      if (operation != TerminalCommandOperation.remove) {
-        unawaited(checkTerminalShell());
-      }
+      // window finds it. A removed one is not checked, which also settles a
+      // check asked for meanwhile.
+      unawaited(checkTerminalShell());
       return true;
     } catch (error) {
       if (_disposed) return false;
@@ -3301,6 +3410,8 @@ final class WorkbenchController extends ChangeNotifier
       terminalCommandError = original;
       terminalCommandMutating = false;
       notifyListeners();
+      // A check asked for while the change ran still gets its answer.
+      unawaited(_runRequestedShellCheck());
       return false;
     }
   }
@@ -5940,6 +6051,7 @@ final class WorkbenchController extends ChangeNotifier
     if (_disposed) return;
     if (state == AppLifecycleState.resumed && setupGuideEligible) {
       // Back from Terminal, where the person may have just set something up.
+      // The shell is asked only while the guide or Access and launch shows.
       unawaited(refreshSetupFacts());
     }
     if (state == AppLifecycleState.hidden ||

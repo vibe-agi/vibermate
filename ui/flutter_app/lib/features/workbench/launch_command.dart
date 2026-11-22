@@ -58,14 +58,20 @@ String vibermateFullPath(TerminalCommandStatus status) {
 }
 
 /// The line that puts `~/.local/bin` on PATH for [shell]: the person runs it
-/// once, so ViberMate itself never edits a shell profile. Terminal starts
-/// bash as a login shell, which reads ~/.bash_profile.
-String shellPathLine(String? shell) => switch (shell) {
+/// once, so ViberMate itself never edits a shell profile. Terminal starts the
+/// shell as a login shell: bash reads ~/.bash_profile, and sh, dash and ksh
+/// read ~/.profile. Null for a shell whose settings file is not known, which
+/// then gets only the full-path command.
+String? shellPathLine(String? shell) => switch (shell) {
+  'zsh' => _exportPathTo('~/.zshrc'),
+  'bash' => _exportPathTo('~/.bash_profile'),
+  'sh' || 'dash' || 'ksh' => _exportPathTo('~/.profile'),
   'fish' => 'fish_add_path ~/.local/bin',
-  'bash' =>
-    "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bash_profile",
-  _ => "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc",
+  _ => null,
 };
+
+String _exportPathTo(String file) =>
+    "echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $file";
 
 /// [value] as one word for Terminal: unchanged when it has no characters a
 /// shell treats specially, otherwise in single quotes.
@@ -84,32 +90,63 @@ final class TerminalPathHint extends StatelessWidget {
   final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) => Column(
-    key: const Key('terminal-path-hint'),
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      CommandBlock(
-        label: copy('terminal.path.run_once'),
-        text: shellPathLine(status.loginShell),
-        copyKey: const Key('terminal-path-copy-line'),
-        textKey: const Key('terminal-path-line'),
-        copyTooltip: copy('terminal.path.copy_line'),
-        copiedLabel: copy('common.copied'),
-        copyFailedLabel: copy('common.copy_failed'),
-      ),
-      const SizedBox(height: ViberSpacing.md),
-      CommandBlock(
-        label: copy('terminal.path.full_path'),
-        text: '${vibermateFullPath(status)} run -- claude',
-        copyKey: const Key('terminal-path-copy-full'),
-        textKey: const Key('terminal-path-full'),
-        copyTooltip: copy('terminal.path.copy_full'),
-        copiedLabel: copy('common.copied'),
-        copyFailedLabel: copy('common.copy_failed'),
-      ),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final line = shellPathLine(status.loginShell);
+    return Column(
+      key: const Key('terminal-path-hint'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (line != null) ...[
+          CommandBlock(
+            label: copy('terminal.path.run_once'),
+            text: line,
+            copyKey: const Key('terminal-path-copy-line'),
+            textKey: const Key('terminal-path-line'),
+            copyTooltip: copy('terminal.path.copy_line'),
+            copiedLabel: copy('common.copied'),
+            copyFailedLabel: copy('common.copy_failed'),
+          ),
+          const SizedBox(height: ViberSpacing.md),
+        ],
+        CommandBlock(
+          label: line == null ? null : copy('terminal.path.full_path'),
+          text: '${vibermateFullPath(status)} run -- claude',
+          copyKey: const Key('terminal-path-copy-full'),
+          textKey: const Key('terminal-path-full'),
+          copyTooltip: copy('terminal.path.copy_full'),
+          copiedLabel: copy('common.copied'),
+          copyFailedLabel: copy('common.copy_failed'),
+        ),
+      ],
+    );
+  }
 }
+
+/// 'Installed · Terminal can't find it yet': the same pill on the Terminal
+/// command card and in step 1 of the setup guide.
+StatusPill terminalNotOnPathPill(
+  BuildContext context,
+  AppCopy copy, {
+  Key? key,
+}) => StatusPill(
+  key: key,
+  label: copy('terminal.state.not_on_path'),
+  color: context.viberColors.warning,
+  icon: Icons.search_off,
+);
+
+/// While the login shell is asked whether it finds the command: neutral,
+/// neither Ready nor a warning, on the card and in the guide.
+StatusPill terminalCheckingPill(
+  BuildContext context,
+  AppCopy copy, {
+  Key? key,
+}) => StatusPill(
+  key: key,
+  label: copy('terminal.state.checking'),
+  color: context.viberColors.textMuted,
+  icon: Icons.hourglass_empty,
+);
 
 /// The login shell could not be asked: one muted line, and the full-path
 /// command it points at.
@@ -295,9 +332,12 @@ final class LaunchCommandCard extends StatelessWidget {
     final muted = Theme.of(
       context,
     ).textTheme.bodySmall?.copyWith(color: colors.textMuted);
+    final local = controller.terminalManagement;
+    final ready = !local || controller.terminalCommand?.ready == true;
+    // Until the login shell answers, whether to copy `vibermate` or its
+    // full path is not known yet; it takes at most a few seconds.
     final enabled =
-        !controller.terminalManagement ||
-        controller.terminalCommand?.ready == true;
+        ready && (!local || controller.terminalReach != TerminalReach.checking);
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 480;
@@ -356,7 +396,7 @@ final class LaunchCommandCard extends StatelessWidget {
               Text(copy('terminal.run.lead'), style: muted),
               const SizedBox(height: ViberSpacing.md),
             ],
-            if (!enabled) ...[
+            if (!ready) ...[
               Text(
                 copy('terminal.run.install_first'),
                 style: Theme.of(context).textTheme.bodySmall,
