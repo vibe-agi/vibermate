@@ -33,12 +33,25 @@ func (side fakeClientSide) RenderProviderError(_ protocolcore.Request, providerE
 	return native.WithClientStatus(http.StatusBadRequest)
 }
 
+// renderingClientSide renders every class as one fixed native error, such as
+// none at all or one of another dialect.
+type renderingClientSide struct {
+	fakeClientSide
+	native protocolcore.NativeProviderError
+}
+
+func (side renderingClientSide) RenderProviderError(protocolcore.Request, protocolcore.ProviderError) protocolcore.NativeProviderError {
+	return side.native
+}
+
 // fakeProviderSide is a Responses provider side recording the contexts it
 // receives.
 type fakeProviderSide struct {
 	contexts  *[]ProviderContext
 	class     protocolcore.ProviderError
 	streamErr error
+	// finishErr, when set, is returned by FinishDecoded after Feed succeeded.
+	finishErr error
 }
 
 func (fakeProviderSide) Dialect() protocolspec.Dialect { return protocolspec.DialectOpenAIResponses }
@@ -75,12 +88,12 @@ func (side fakeProviderSide) NewProviderStream(providerContext ProviderContext, 
 	if err != nil {
 		return nil, err
 	}
-	return &fakeProviderStream{assembler: assembler, err: side.streamErr}, nil
+	return &fakeProviderStream{assembler: assembler, err: side.streamErr, finishErr: side.finishErr}, nil
 }
 
 func (side fakeProviderSide) NewAggregatingStream(providerContext ProviderContext, request protocolcore.Request) (Stream, error) {
 	*side.contexts = append(*side.contexts, providerContext)
-	return &fakeProviderStream{err: side.streamErr}, nil
+	return &fakeProviderStream{err: side.streamErr, finishErr: side.finishErr}, nil
 }
 
 func (side fakeProviderSide) ClassifyRejection(protocolcore.Request, int, http.Header, []byte) protocolcore.ProviderError {
@@ -91,6 +104,7 @@ func (side fakeProviderSide) ClassifyRejection(protocolcore.Request, int, http.H
 type fakeProviderStream struct {
 	assembler *Assembler
 	err       error
+	finishErr error
 }
 
 func (stream *fakeProviderStream) Feed(_ context.Context, fragment []byte) ([]byte, error) {
@@ -120,6 +134,9 @@ func (*fakeProviderStream) TerminalReceived() bool { return true }
 func (stream *fakeProviderStream) FinishDecoded(context.Context) (PendingTerminal, error) {
 	if stream.err != nil {
 		return nil, stream.err
+	}
+	if stream.finishErr != nil {
+		return nil, stream.finishErr
 	}
 	return nil, errors.New("fake stream has no terminal")
 }
@@ -151,6 +168,11 @@ func (sourceProviderSide) EncodeSourceRequest(protocolcore.Request, []byte, http
 
 func composeFixture(t *testing.T, provider ProviderSide) *Path {
 	t.Helper()
+	return composeFixtureWith(t, fakeClientSide{}, provider)
+}
+
+func composeFixtureWith(t *testing.T, client ClientSide, provider ProviderSide) *Path {
+	t.Helper()
 	identifier, err := protocolspec.NewCodecPairID("anthropic-messages-to-openai-responses")
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +183,7 @@ func composeFixture(t *testing.T, provider ProviderSide) *Path {
 	}
 	path, err := Compose(ComposeOptions{
 		ID: identifier, Revision: 1, ClientOperationIDs: []protocolspec.ClientOperationID{operation},
-		Client: fakeClientSide{}, Provider: provider,
+		Client: client, Provider: provider,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -294,6 +316,93 @@ func TestComposedPathTranslatesRejectionsAndStreamFailures(t *testing.T) {
 	}
 	if _, err := stream.Feed(context.Background(), []byte("x")); !errors.Is(err, plain) || protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectAnthropicMessages) != nil {
 		t.Fatalf("an unclassified failure was rewritten: %v", err)
+	}
+}
+
+// A client side that renders nothing of its own dialect leaves the caller
+// today's generic envelope, for a rejection and for a stream failure alike.
+func TestComposedPathNeedsTheClientHalfOfATranslation(t *testing.T) {
+	t.Parallel()
+	var contexts []ProviderContext
+	class := protocolcore.ProviderError{Class: protocolcore.ProviderErrorRateLimited, Status: http.StatusTooManyRequests}
+	failure := func() *protocolcore.Failure {
+		failure := protocolcore.NewFailure(protocolcore.ReasonProviderResponseFailed, "$", errors.New("response.failed"))
+		failure.Provider = &class
+		return failure
+	}
+	for name, native := range map[string]protocolcore.NativeProviderError{
+		"no native error":       {},
+		"another dialect's one": protocolcore.NewNativeProviderError(protocolspec.DialectOpenAIChat, []byte(`{"error":{"type":"rate_limit"}}`)),
+	} {
+		client := renderingClientSide{native: native}
+		path := composeFixtureWith(t, client, fakeProviderSide{contexts: &contexts, class: class})
+		if rendered, got, ok := path.TranslateProviderRejection(streamingRequest(), http.StatusTooManyRequests, nil, nil); ok ||
+			got != (protocolcore.ProviderError{}) || rendered.ForDialect(protocolspec.DialectAnthropicMessages) != nil {
+			t.Fatalf("%s: TranslateProviderRejection() = %+v, %v", name, got, ok)
+		}
+		failing := composeFixtureWith(t, client, fakeProviderSide{contexts: &contexts, streamErr: failure()})
+		stream, err := failing.NewStreamFor(ProviderContext{}, streamingRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Feed(context.Background(), []byte("x")); protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectOpenAIChat) != nil ||
+			protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectAnthropicMessages) != nil {
+			t.Fatalf("%s: Feed() attached a native error: %v", name, err)
+		}
+	}
+}
+
+// Every stream a composed path hands out renders classified failures: the
+// aggregating stream too, and a failure that first appears at FinishDecoded.
+// A class that does not validate is never rendered.
+func TestComposedStreamsRenderEveryClassifiedFailure(t *testing.T) {
+	t.Parallel()
+	var contexts []ProviderContext
+	classified := func(class protocolcore.ProviderErrorClass) *protocolcore.Failure {
+		failure := protocolcore.NewFailure(protocolcore.ReasonProviderResponseFailed, "$", errors.New("response.failed"))
+		failure.Provider = &protocolcore.ProviderError{Class: class}
+		return failure
+	}
+	rendered := func(err error) bool {
+		return strings.Contains(string(protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectAnthropicMessages)), "overloaded")
+	}
+	request := streamingRequest()
+
+	aggregating := composeFixture(t, fakeProviderSide{contexts: &contexts, streamErr: classified(protocolcore.ProviderErrorOverloaded)})
+	unary := request
+	unary.Stream = false
+	stream, err := aggregating.NewAggregatingStream(ProviderContext{}, unary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Feed(context.Background(), []byte("x")); !rendered(err) {
+		t.Fatalf("aggregating Feed() did not render the class: %v", err)
+	}
+	if _, err := stream.FinishDecoded(context.Background()); !rendered(err) {
+		t.Fatalf("aggregating FinishDecoded() did not render the class: %v", err)
+	}
+
+	// Feed succeeds; the classified failure is new at FinishDecoded.
+	late := composeFixture(t, fakeProviderSide{contexts: &contexts, finishErr: classified(protocolcore.ProviderErrorOverloaded)})
+	stream, err = late.NewStreamFor(ProviderContext{}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Feed(context.Background(), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.FinishDecoded(context.Background()); !rendered(err) {
+		t.Fatalf("FinishDecoded() did not render a failure that first appeared there: %v", err)
+	}
+
+	invalid := composeFixture(t, fakeProviderSide{contexts: &contexts, streamErr: classified("not_a_class")})
+	stream, err = invalid.NewStreamFor(ProviderContext{}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Feed(context.Background(), []byte("x")); err == nil ||
+		protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectAnthropicMessages) != nil {
+		t.Fatalf("an invalid class was rendered: %v", err)
 	}
 }
 
