@@ -2841,6 +2841,137 @@ func (pipeline *Pipeline) consumeProviderStream(
 	frozenRequest providertransport.Request,
 	responseMetadata http.Header,
 ) error {
+	relay := &providerStreamRelay{beginTransformed: func() error {
+		envelope, err := transformer.Envelope()
+		if err == nil {
+			envelope, err = normalizeNativeTransformedEnvelope(
+				envelope, request, selection, frozenRequest, decoded, transformer.beforeHeaders, responseMetadata,
+			)
+		}
+		if err != nil {
+			return newFailure(
+				ReasonMessageTransformFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		if err := downstream.Begin(ctx, envelope); err != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		if len(nativeResponseHeaders(envelope.Headers())) > 0 {
+			ledger.RecordProviderMetadata()
+		}
+		if err := ledger.RecordHoldEnvelope(); err != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		return nil
+	}}
+	if err := pipeline.readProviderStream(
+		ctx,
+		request,
+		stream,
+		body,
+		downstream,
+		ledger,
+		transformer,
+		frozenRequest,
+		relay,
+	); err != nil {
+		return err
+	}
+
+	terminal, err := stream.FinishDecoded(ctx)
+	if err != nil {
+		return err
+	}
+	result.Translation = result.Translation.Merge(
+		terminal.TranslationReport(),
+	)
+	intents := terminal.ToolIntents()
+	if err := pipeline.decideStreamTools(
+		ctx,
+		request,
+		selection,
+		decoded,
+		intents,
+		downstream,
+	); err != nil {
+		_ = terminal.Reject()
+		return err
+	}
+	release, err := terminal.Approve()
+	if err != nil {
+		return err
+	}
+	// A compatible text-only stream is released incrementally as each event
+	// becomes safe. Its terminal approval therefore has no buffered bytes to
+	// publish. Empty release is a successful terminal state, not a failed
+	// downstream write. Tool-bearing streams still enter this branch with the
+	// bytes held behind approval.
+	if len(release) > 0 {
+		committed, writeErr := writeDownstream(ctx, downstream, release)
+		if committed > 0 {
+			if err := ledger.RecordSemanticWrite(committed); err != nil {
+				return err
+			}
+			if len(intents) > 0 {
+				if err := ledger.RecordToolExposure(toolKeys(intents)); err != nil {
+					return err
+				}
+			}
+		}
+		if writeErr != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				writeErr,
+			)
+		}
+	}
+	if err := ledger.RecordTerminal(); err != nil {
+		return err
+	}
+	responseForEvidence := terminal.BorrowDecodedResponse()
+	captured.response = &responseForEvidence
+	return nil
+}
+
+// providerStreamRelay is what reading a provider stream does downstream for
+// a streaming client: it writes the client bytes the decoder releases as soon
+// as they are safe, and beginTransformed commits the envelope a response
+// script produced once its first event was transformed.
+type providerStreamRelay struct {
+	beginTransformed func() error
+}
+
+// readProviderStream feeds a provider event stream, through any response
+// script, to its decoder until the decoder's terminal or the end of the body.
+// Only the decoder's semantic progress resets the idle timer, so the timer
+// measures upstream silence, not quiet output, and keepalives go out only
+// while a downstream envelope is held.
+func (pipeline *Pipeline) readProviderStream(
+	ctx context.Context,
+	request ClientRequest,
+	stream protocolpath.Stream,
+	body io.ReadCloser,
+	downstream Downstream,
+	ledger *CommitLedger,
+	transformer *streamMessageTransformer,
+	frozenRequest providertransport.Request,
+	relay *providerStreamRelay,
+) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
 	readDone := make(chan struct{})
@@ -2898,38 +3029,8 @@ func (pipeline *Pipeline) consumeProviderStream(
 				}
 				fragment = transformed
 				if headerReady {
-					envelope, envelopeErr := transformer.Envelope()
-					if envelopeErr == nil {
-						envelope, envelopeErr = normalizeNativeTransformedEnvelope(
-							envelope, request, selection, frozenRequest, decoded, transformer.beforeHeaders, responseMetadata,
-						)
-					}
-					if envelopeErr != nil {
-						return newFailure(
-							ReasonMessageTransformFailed,
-							request.exchangeID,
-							0,
-							envelopeErr,
-						)
-					}
-					if beginErr := downstream.Begin(ctx, envelope); beginErr != nil {
-						return newFailure(
-							ReasonDownstreamCommitFailed,
-							request.exchangeID,
-							0,
-							beginErr,
-						)
-					}
-					if len(nativeResponseHeaders(envelope.Headers())) > 0 {
-						ledger.RecordProviderMetadata()
-					}
-					if recordErr := ledger.RecordHoldEnvelope(); recordErr != nil {
-						return newFailure(
-							ReasonDownstreamCommitFailed,
-							request.exchangeID,
-							0,
-							recordErr,
-						)
+					if err := relay.beginTransformed(); err != nil {
+						return err
 					}
 				}
 			}
@@ -3000,61 +3101,6 @@ func (pipeline *Pipeline) consumeProviderStream(
 		}
 		pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer, reachedEOF)
 	}
-
-	terminal, err := stream.FinishDecoded(ctx)
-	if err != nil {
-		return err
-	}
-	result.Translation = result.Translation.Merge(
-		terminal.TranslationReport(),
-	)
-	intents := terminal.ToolIntents()
-	if err := pipeline.decideStreamTools(
-		ctx,
-		request,
-		selection,
-		decoded,
-		intents,
-		downstream,
-	); err != nil {
-		_ = terminal.Reject()
-		return err
-	}
-	release, err := terminal.Approve()
-	if err != nil {
-		return err
-	}
-	// A compatible text-only stream is released incrementally as each event
-	// becomes safe. Its terminal approval therefore has no buffered bytes to
-	// publish. Empty release is a successful terminal state, not a failed
-	// downstream write. Tool-bearing streams still enter this branch with the
-	// bytes held behind approval.
-	if len(release) > 0 {
-		committed, writeErr := writeDownstream(ctx, downstream, release)
-		if committed > 0 {
-			if err := ledger.RecordSemanticWrite(committed); err != nil {
-				return err
-			}
-			if len(intents) > 0 {
-				if err := ledger.RecordToolExposure(toolKeys(intents)); err != nil {
-					return err
-				}
-			}
-		}
-		if writeErr != nil {
-			return newFailure(
-				ReasonDownstreamCommitFailed,
-				request.exchangeID,
-				0,
-				writeErr,
-			)
-		}
-	}
-	if err := ledger.RecordTerminal(); err != nil {
-		return err
-	}
-	responseForEvidence := terminal.BorrowDecodedResponse()
-	captured.response = &responseForEvidence
 	return nil
 }
 
