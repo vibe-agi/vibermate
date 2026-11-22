@@ -87,6 +87,15 @@ type anthropicTranslatedToolDefinitionWire struct {
 	DeferLoading *bool `json:"defer_loading,omitempty"`
 }
 
+// anthropicTranslatedToolReferenceWire is a tool_reference part as the
+// translated profile decodes it: strictly, with the cache breakpoint any
+// content block may carry.
+type anthropicTranslatedToolReferenceWire struct {
+	Type         string          `json:"type"`
+	ToolName     string          `json:"tool_name"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
 type anthropicThinkingBlockWire struct {
 	Type      string `json:"type"`
 	Thinking  string `json:"thinking"`
@@ -1825,12 +1834,15 @@ func decodeTranslatedToolResultContent(
 			notices = mediaReport
 			parts = append(parts, protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartMedia, Media: &media})
 		case "tool_reference":
-			var reference anthropicToolReferenceBlockWire
+			var reference anthropicTranslatedToolReferenceWire
 			if err := decodeStrict(rawPart, &reference); err != nil || !validToolReferenceName(reference.ToolName) {
 				if err == nil {
 					err = errors.New("tool reference is invalid")
 				}
 				return "", nil, report.Build(), protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, partPath, err)
+			}
+			if rawPresent(reference.CacheControl) {
+				notices = cacheNotice(partPath + ".cache_control")
 			}
 			parts = append(parts, protocolcore.ToolResultPart{Kind: protocolcore.ToolResultPartToolReference, ToolName: reference.ToolName})
 		default:

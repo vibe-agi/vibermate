@@ -342,7 +342,7 @@ func TestTranslatedProfileKeepsToolResultParts(t *testing.T) {
 			{"type":"tool_use","id":"toolu_4","name":"Bash","input":{}}
 		]},
 		{"role":"user","content":[
-			{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"WebFetch"}]},
+			{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"WebFetch","cache_control":{"type":"ephemeral"}}]},
 			{"type":"tool_result","tool_use_id":"toolu_2","content":[
 				{"type":"text","text":"PDF file read: a.pdf","cache_control":{"type":"ephemeral"}},
 				{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0="}},
@@ -410,6 +410,7 @@ func TestTranslatedProfileKeepsToolResultParts(t *testing.T) {
 		t.Fatalf("loaded tools = %q", loaded)
 	}
 	wantNotices := []string{
+		"cache_control_not_forwarded $.messages[2].content[0].content[0].cache_control",
 		"cache_control_not_forwarded $.messages[2].content[1].content[0].cache_control",
 		"cache_control_not_forwarded $.messages[2].content[4].cache_control",
 	}
@@ -424,9 +425,10 @@ func TestTranslatedProfileKeepsToolResultParts(t *testing.T) {
 	}
 
 	for name, part := range map[string]string{
-		"search result":          `{"type":"search_result","source":"x","title":"x","content":[]}`,
-		"unknown text member":    `{"type":"text","text":"x","extra":1}`,
-		"invalid tool reference": `{"type":"tool_reference","tool_name":" padded "}`,
+		"search result":            `{"type":"search_result","source":"x","title":"x","content":[]}`,
+		"unknown text member":      `{"type":"text","text":"x","extra":1}`,
+		"invalid tool reference":   `{"type":"tool_reference","tool_name":" padded "}`,
+		"unknown reference member": `{"type":"tool_reference","tool_name":"Read","title":"x"}`,
 	} {
 		body := requestBody(`[
 			{"role":"user","content":"go"},
