@@ -298,7 +298,8 @@ func (assembler *Assembler) ArmBarrier() {
 	assembler.barrier = true
 }
 
-// ToolCall adds one complete tool call. It arms the barrier.
+// ToolCall adds one complete tool call. It arms the barrier at once, even
+// when the call itself waits for an open block.
 func (assembler *Assembler) ToolCall(key string, call protocolcore.ToolCall) ([]byte, error) {
 	return assembler.submit(assemblerEvent{kind: eventToolCall, key: key, call: call.Clone()})
 }
@@ -338,6 +339,10 @@ func (assembler *Assembler) submit(event assemblerEvent) ([]byte, error) {
 			return nil, assembler.fail(assemblerViolation("tool call identity is duplicated"))
 		}
 		assembler.calls[event.call.Key] = struct{}{}
+		// The barrier holds from the call's arrival, not from its replay: a
+		// call that waits for an open block must not let the rest of that
+		// block reach the client before the tool decision.
+		assembler.barrier = true
 	}
 	if event.kind == eventReasoningDone {
 		if err := event.reasoning.Validate(); err != nil {

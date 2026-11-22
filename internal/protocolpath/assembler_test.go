@@ -347,7 +347,8 @@ func TestAssemblerInterleaveBufferIsBounded(t *testing.T) {
 }
 
 // A function call that completes while text is still open waits for the
-// text block and is held from the moment it arrives.
+// text block, and arms the barrier the moment it arrives: the rest of the
+// open block is held with it.
 func TestAssemblerToolCallWaitsForTheOpenTextBlock(t *testing.T) {
 	t.Parallel()
 	assembler := newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{})
@@ -357,11 +358,11 @@ func TestAssemblerToolCallWaitsForTheOpenTextBlock(t *testing.T) {
 	tape.record(assembler.ToolCall("2", call))
 	tape.record(assembler.Text("1:0", "ing"))
 	tape.record(assembler.TextDone("1:0", "Working"))
-	if tape.live.String() != "T0[ t0:Work t0:ing ]0 " {
+	if tape.live.String() != "T0[ t0:Work " {
 		t.Fatalf("live = %q", tape.live.String())
 	}
 	terminal := finish(t, assembler, terminalResponse(protocolcore.StopReasonToolUse, textBlock("Working"), protocolcore.ContentBlock{Kind: protocolcore.BlockToolCall, ToolCall: call}))
-	if release := approve(t, terminal); release != "C1:Bash{} E:tool_use" {
+	if release := approve(t, terminal); release != "t0:ing ]0 C1:Bash{} E:tool_use" {
 		t.Fatalf("release = %q", release)
 	}
 }
