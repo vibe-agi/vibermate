@@ -857,3 +857,46 @@ func FuzzDecodeClientRequest(f *testing.F) {
 		_, _, _ = codec.DecodeClientRequest(body)
 	})
 }
+
+// TestCompatibleToolOutputsCarryFiles is the one widening re-admission needs
+// (design 6.9): a function_call_output may hold an input_file with exactly
+// one source. Only the compatible decoder, used by R->R and by re-admission,
+// accepts it; the strict one still refuses multimodal tool output.
+func TestCompatibleToolOutputsCarryFiles(t *testing.T) {
+	t.Parallel()
+	body := func(part string) []byte {
+		return []byte(`{"model":"m","store":false,"input":[{"role":"user","content":"read"},` +
+			`{"type":"function_call","call_id":"call_1","name":"Read","arguments":"{}"},` +
+			`{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"PDF"},` + part + `]}]}`)
+	}
+	codec := newTestCodec(t)
+	for name, part := range map[string]string{
+		"inline data with a name": `{"type":"input_file","file_data":"data:application/pdf;base64,JVBERi0=","filename":"a.pdf"}`,
+		"inline data":             `{"type":"input_file","file_data":"data:application/pdf;base64,JVBERi0="}`,
+		"a file id":               `{"type":"input_file","file_id":"file-1"}`,
+		"a file URL":              `{"type":"input_file","file_url":"https://example.com/a.pdf"}`,
+	} {
+		request, _, err := codec.DecodeCompatibleClientRequest(body(part))
+		if err != nil {
+			t.Errorf("%s: compatible decode refused: %v", name, err)
+			continue
+		}
+		if output := request.Messages[2].Blocks[0].ToolResult.Content; output != "PDF" {
+			t.Errorf("%s: output text = %q", name, output)
+		}
+		if _, _, err := codec.DecodeClientRequest(body(part)); err == nil {
+			t.Errorf("%s: strict decode accepted multimodal tool output", name)
+		}
+	}
+	for name, part := range map[string]string{
+		"no source":     `{"type":"input_file","filename":"a.pdf"}`,
+		"two sources":   `{"type":"input_file","file_id":"file-1","file_url":"https://example.com/a.pdf"}`,
+		"padded source": `{"type":"input_file","file_id":" file-1"}`,
+		"padded name":   `{"type":"input_file","file_id":"file-1","filename":" a.pdf"}`,
+		"wrong type":    `{"type":"input_file","file_id":1}`,
+	} {
+		if _, _, err := codec.DecodeCompatibleClientRequest(body(part)); err == nil {
+			t.Errorf("%s: compatible decode accepted %s", name, part)
+		}
+	}
+}

@@ -1563,6 +1563,54 @@ func validateResponsesInputImage(raw json.RawMessage) error {
 	}
 }
 
+// toolOutputFileWire is an input_file part of a tool output. It has its own
+// wire type so the shared tool-output part keeps refusing these members on
+// every other part type.
+type toolOutputFileWire struct {
+	Type     string `json:"type"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+	FileURL  string `json:"file_url,omitempty"`
+	Filename string `json:"filename,omitempty"`
+}
+
+// validateResponsesToolOutputFile admits an input_file tool-output part with
+// exactly one source and an optional file name.
+func validateResponsesToolOutputFile(raw json.RawMessage) error {
+	var file toolOutputFileWire
+	if err := decodeClientWire(raw, &file, true); err != nil {
+		return err
+	}
+	if file.Type != "input_file" {
+		return errors.New("Responses input file type is invalid")
+	}
+	sources := 0
+	for _, value := range []string{file.FileData, file.FileID, file.FileURL} {
+		if value != "" {
+			sources++
+		}
+	}
+	if sources != 1 {
+		return errors.New("Responses input file requires exactly one file source")
+	}
+	var err error
+	switch {
+	case file.FileData != "":
+		err = validateBoundedString(file.FileData, protocolcore.MaxProviderExtensionBytes)
+	case file.FileID != "":
+		err = validateBoundedString(file.FileID, 512)
+	default:
+		err = validateBoundedString(file.FileURL, protocolcore.MaxProviderExtensionBytes)
+	}
+	if err != nil {
+		return err
+	}
+	if file.Filename != "" {
+		return validateBoundedString(file.Filename, 1024)
+	}
+	return nil
+}
+
 func validateResponsesInputAudio(raw json.RawMessage) error {
 	var audio inputAudioWire
 	if err := decodeClientWire(raw, &audio, true); err != nil {
@@ -1859,6 +1907,21 @@ func decodeToolOutputText(
 				)
 			}
 			if err := validateResponsesInputImage(rawItem); err != nil {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+		case "input_file":
+			// A translated provider body carries a document a tool returned
+			// (design 6.3); the same-dialect wire may carry one too.
+			if !compatible {
+				return "", protocolcore.TranslationReport{}, invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New("multimodal tool output requires a same-dialect path"),
+				)
+			}
+			if err := validateResponsesToolOutputFile(rawItem); err != nil {
 				return "", protocolcore.TranslationReport{}, invalidClient(
 					fmt.Sprintf("%s[%d]", path, index),
 					err,
