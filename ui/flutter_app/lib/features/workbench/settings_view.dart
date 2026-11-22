@@ -2589,9 +2589,6 @@ final class _ServerAccessPanel extends StatefulWidget {
 }
 
 final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
-  String? _copiedClient;
-  bool _copyFailed = false;
-
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -2763,8 +2760,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                             command: controller.runtimeWebURL,
                             copyLabel: copy('server.web.copy'),
                             enabled: true,
-                            onCopy: () =>
-                                _copyCommand('Web', controller.runtimeWebURL),
+                            copy: copy,
                           ),
                         ],
                         const SizedBox(height: 10),
@@ -2790,10 +2786,7 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                               'vibermate login --server ${controller.runtimeServerURL}',
                           copyLabel: copy('server.login.command.copy'),
                           enabled: guide.available,
-                          onCopy: () => _copyCommand(
-                            copy('server.login.command.client'),
-                            'vibermate login --server ${controller.runtimeServerURL}',
-                          ),
+                          copy: copy,
                         ),
                         const SizedBox(height: 10),
                         Text(
@@ -2823,32 +2816,12 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                                       : 'Codex',
                                 }),
                                 enabled: guide.available,
-                                onCopy: () => _copyCommand(
-                                  client == 'claude' ? 'Claude' : 'Codex',
-                                  'vibermate run --server ${controller.runtimeServerURL} -- $client',
-                                ),
+                                copy: copy,
                               ),
                               if (index == 0) const SizedBox(height: 7),
                             ],
                           ],
                         ),
-                        if (_copiedClient case final client?) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            copy.format('terminal.run.copied', {
-                              'client': client,
-                            }),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: context.viberColors.verified),
-                          ),
-                        ] else if (_copyFailed) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            copy('terminal.run.copy_failed'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: context.viberColors.danger),
-                          ),
-                        ],
                       ],
                     ),
                   ),
@@ -2859,23 +2832,6 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
         ),
       ],
     );
-  }
-
-  Future<void> _copyCommand(String client, String command) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: command));
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = client;
-        _copyFailed = false;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _copiedClient = null;
-        _copyFailed = true;
-      });
-    }
   }
 }
 
@@ -3833,24 +3789,15 @@ final class _RuntimeUserRow extends StatelessWidget {
   }
 }
 
-final class _ManagedRunGuide extends StatefulWidget {
+final class _ManagedRunGuide extends StatelessWidget {
   const _ManagedRunGuide({required this.copy, required this.status});
 
   final AppCopy copy;
   final TerminalCommandStatus? status;
 
   @override
-  State<_ManagedRunGuide> createState() => _ManagedRunGuideState();
-}
-
-final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
-  String? _copied;
-  bool _copyFailed = false;
-
-  @override
   Widget build(BuildContext context) {
-    final copy = widget.copy;
-    final state = widget.status?.state;
+    final state = status?.state;
     final enabled =
         state == TerminalCommandState.current ||
         state == TerminalCommandState.sourceUpdated;
@@ -3862,7 +3809,7 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
         borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
@@ -3879,26 +3826,6 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
                   dismissLabel: copy('common.dismiss'),
                 ),
               ),
-              if (_copied case final value?)
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    copy.format('terminal.run.copied', {'client': value}),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.verified,
-                    ),
-                  ),
-                )
-              else if (_copyFailed)
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    copy('terminal.run.copy_failed'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.danger,
-                    ),
-                  ),
-                ),
             ],
           ),
           if (!enabled) ...[
@@ -3909,29 +3836,20 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
             ),
           ],
           const SizedBox(height: 7),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              _RunCommand(
-                client: 'Claude',
-                command: 'vibermate run -- claude',
-                copyLabel: copy.format('terminal.run.copy', {
-                  'client': 'Claude',
-                }),
-                enabled: enabled,
-                onCopy: () => _copy('Claude', 'vibermate run -- claude'),
-              ),
-              _RunCommand(
-                client: 'Codex',
-                command: 'vibermate run -- codex',
-                copyLabel: copy.format('terminal.run.copy', {
-                  'client': 'Codex',
-                }),
-                enabled: enabled,
-                onCopy: () => _copy('Codex', 'vibermate run -- codex'),
-              ),
-            ],
+          _RunCommand(
+            client: 'Claude',
+            command: 'vibermate run -- claude',
+            copyLabel: copy.format('terminal.run.copy', {'client': 'Claude'}),
+            enabled: enabled,
+            copy: copy,
+          ),
+          const SizedBox(height: 7),
+          _RunCommand(
+            client: 'Codex',
+            command: 'vibermate run -- codex',
+            copyLabel: copy.format('terminal.run.copy', {'client': 'Codex'}),
+            enabled: enabled,
+            copy: copy,
           ),
           const SizedBox(height: 6),
           Text(
@@ -3945,83 +3863,33 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
       ),
     );
   }
-
-  Future<void> _copy(String client, String command) async {
-    try {
-      await Clipboard.setData(ClipboardData(text: command));
-      if (!mounted) return;
-      setState(() {
-        _copied = client;
-        _copyFailed = false;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _copied = null;
-        _copyFailed = true;
-      });
-    }
-  }
 }
 
+/// One copyable command, keyed by the client it starts.
 final class _RunCommand extends StatelessWidget {
   const _RunCommand({
     required this.client,
     required this.command,
     required this.copyLabel,
     required this.enabled,
-    required this.onCopy,
+    required this.copy,
   });
 
   final String client;
   final String command;
   final String copyLabel;
   final bool enabled;
-  final VoidCallback onCopy;
+  final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: ViberMetrics.controlHeight),
-      decoration: BoxDecoration(
-        color: context.viberColors.rail,
-        border: Border.all(color: context.viberColors.divider),
-        borderRadius: ViberMetrics.controlRadius,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(left: 8, right: 5),
-              child: Text(
-                command,
-                softWrap: true,
-                style: monoStyle.copyWith(
-                  fontSize: ViberType.utility,
-                  color: enabled
-                      ? context.viberColors.text
-                      : context.viberColors.textFaint,
-                ),
-              ),
-            ),
-          ),
-          IconButton(
-            key: Key('managed-run-copy-${client.toLowerCase()}'),
-            onPressed: enabled ? onCopy : null,
-            tooltip: copyLabel,
-            icon: const Icon(Icons.copy, size: 12),
-            constraints: const BoxConstraints.tightFor(
-              width: ViberMetrics.controlHeight,
-              height: ViberMetrics.controlHeight,
-            ),
-            padding: EdgeInsets.zero,
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => CommandBlock(
+    text: command,
+    copyTooltip: copyLabel,
+    copiedLabel: copy('common.copied'),
+    copyFailedLabel: copy('common.copy_failed'),
+    enabled: enabled,
+    copyKey: Key('managed-run-copy-${client.toLowerCase()}'),
+  );
 }
 
 /// _StorageDisclosure satisfies INV-STORE-DISCLOSED. It states where evidence
@@ -4077,23 +3945,12 @@ final class _StorageDisclosure extends StatelessWidget {
               (copy('settings.storage.directory'), location.dataDirectory),
               (copy('settings.storage.database'), location.databasePath),
             ]) ...[
-              Text(entry.$1, style: Theme.of(context).textTheme.bodySmall),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: SelectableText(
-                      entry.$2,
-                      style: monoStyle.copyWith(fontSize: ViberType.supporting),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: copy.format('common.copy', {'field': entry.$1}),
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: entry.$2)),
-                    icon: const Icon(Icons.copy_outlined, size: 14),
-                  ),
-                ],
+              CommandBlock(
+                label: entry.$1,
+                text: entry.$2,
+                copyTooltip: copy.format('common.copy', {'field': entry.$1}),
+                copiedLabel: copy('common.copied'),
+                copyFailedLabel: copy('common.copy_failed'),
               ),
               const SizedBox(height: 8),
             ],
@@ -4384,19 +4241,15 @@ final class _ServerBackupGuide extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 6),
-        for (final command in [backup, restore])
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: SelectableText(command, style: monoStyle)),
-              IconButton(
-                tooltip: copy('settings.storage.copy_command'),
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: command)),
-                icon: const Icon(Icons.copy_outlined, size: 14),
-              ),
-            ],
+        for (final (index, command) in [backup, restore].indexed) ...[
+          if (index > 0) const SizedBox(height: 6),
+          CommandBlock(
+            text: command,
+            copyTooltip: copy('settings.storage.copy_command'),
+            copiedLabel: copy('common.copied'),
+            copyFailedLabel: copy('common.copy_failed'),
           ),
+        ],
       ],
     );
   }

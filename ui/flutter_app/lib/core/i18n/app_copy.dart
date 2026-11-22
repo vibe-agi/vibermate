@@ -1104,6 +1104,9 @@ final class AppCopy {
     'common.save': 'Save changes',
     'common.add': 'Add',
     'common.copy': 'Copy {field}',
+    'common.copied': 'Copied',
+    'common.copy_failed':
+        'Couldn\'t copy. Select the text and copy it yourself.',
     'common.time.now': 'now',
     'common.time.minutes': '{count}m',
     'common.time.hours': '{count}h',
@@ -4318,6 +4321,8 @@ final class AppCopy {
     'common.save': '保存更改',
     'common.add': '添加',
     'common.copy': '复制{field}',
+    'common.copied': '已复制',
+    'common.copy_failed': '无法复制。请选中文字后手动复制。',
     'common.time.now': '刚刚',
     'common.time.minutes': '{count} 分前',
     'common.time.hours': '{count} 小时前',

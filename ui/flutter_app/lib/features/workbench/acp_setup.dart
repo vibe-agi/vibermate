@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../core/design/viber_theme.dart';
+import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 
 final class ACPSetupGuide extends StatefulWidget {
@@ -25,7 +25,6 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
   final _agent = TextEditingController(text: 'codex-acp');
   String _editor = 'Zed', _kind = 'Codex';
   bool _content = false;
-  String? _notice;
 
   @override
   void dispose() {
@@ -155,38 +154,17 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            color: context.viberColors.input,
-            child: SelectableText(
-              _configuration,
-              key: const Key('acp-editor-json'),
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
-            ),
+          CommandBlock(
+            text: _configuration,
+            textKey: const Key('acp-editor-json'),
+            copyKey: const Key('acp-copy-config'),
+            copyTooltip: copy('acp.setup.copy'),
+            copiedLabel: copy('common.copied'),
+            copyFailedLabel: copy('common.copy_failed'),
+            enabled:
+                _program.text.trim().isNotEmpty &&
+                _agent.text.trim().isNotEmpty,
           ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            key: const Key('acp-copy-config'),
-            onPressed:
-                _program.text.trim().isEmpty || _agent.text.trim().isEmpty
-                ? null
-                : () async {
-                    try {
-                      await Clipboard.setData(
-                        ClipboardData(text: _configuration),
-                      );
-                      if (mounted) setState(() => _notice = 'acp.setup.copied');
-                    } on Object {
-                      if (mounted) setState(() => _notice = 'acp.setup.failed');
-                    }
-                  },
-            icon: const Icon(Icons.copy, size: 16),
-            label: Text(copy('acp.setup.copy')),
-          ),
-          if (_notice != null) Text(copy(_notice!)),
           const SizedBox(height: 8),
           Text(
             copy(
@@ -217,7 +195,7 @@ final class _ACPSetupGuideState extends State<ACPSetupGuide> {
           TextField(
             key: Key(key),
             controller: controller,
-            onChanged: (_) => setState(() => _notice = null),
+            onChanged: (_) => setState(() {}),
           ),
         ],
       );

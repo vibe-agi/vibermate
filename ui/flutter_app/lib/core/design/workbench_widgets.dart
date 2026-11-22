@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'viber_theme.dart';
 
@@ -1371,6 +1374,224 @@ final class CenteredMessage extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Text someone copies into Terminal or a configuration file. It is one
+/// bordered block in Terminal's font: a command stays on one line and scrolls
+/// sideways instead of wrapping, because a wrapped command reads as two and
+/// invites retyping; multi-line text keeps its own line breaks. The copy
+/// button sits at the block's top-right, and copying announces [copiedLabel]
+/// once, in the verified colour.
+final class CommandBlock extends StatefulWidget {
+  const CommandBlock({
+    required this.text,
+    required this.copyTooltip,
+    required this.copiedLabel,
+    required this.copyFailedLabel,
+    this.label,
+    this.copyLabel,
+    this.enabled = true,
+    this.fontSize = ViberType.supporting,
+    this.copyKey,
+    this.textKey,
+    this.onCopied,
+    super.key,
+  });
+
+  /// What is copied, exactly as shown.
+  final String text;
+  final String copyTooltip;
+  final String copiedLabel;
+
+  /// Shown under the block when the clipboard refused the text, which stays
+  /// on screen to select by hand.
+  final String copyFailedLabel;
+
+  /// A small label above the block.
+  final String? label;
+
+  /// A labelled button ('Copy') in place of the copy icon. Its label turns
+  /// into [copiedLabel] after copying.
+  final String? copyLabel;
+  final bool enabled;
+  final double fontSize;
+  final Key? copyKey;
+  final Key? textKey;
+  final VoidCallback? onCopied;
+
+  @override
+  State<CommandBlock> createState() => _CommandBlockState();
+}
+
+final class _CommandBlockState extends State<CommandBlock> {
+  static const _confirmation = Duration(seconds: 2);
+
+  bool _copied = false;
+  bool _failed = false;
+  Timer? _reset;
+
+  @override
+  void didUpdateWidget(covariant CommandBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _reset?.cancel();
+      _copied = false;
+      _failed = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.text));
+      if (!mounted) return;
+      _reset?.cancel();
+      _reset = Timer(_confirmation, () {
+        if (mounted) setState(() => _copied = false);
+      });
+      setState(() {
+        _copied = true;
+        _failed = false;
+      });
+      widget.onCopied?.call();
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _copied = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final onCopy = widget.enabled ? () => unawaited(_copy()) : null;
+    final copyLabel = widget.copyLabel;
+    final Widget button = copyLabel != null
+        ? Tooltip(
+            message: widget.copyTooltip,
+            child: TextButton.icon(
+              key: widget.copyKey,
+              onPressed: onCopy,
+              style: _copied
+                  ? TextButton.styleFrom(foregroundColor: colors.verified)
+                  : null,
+              icon: Icon(_copied ? Icons.check : Icons.copy, size: 13),
+              label: Text(_copied ? widget.copiedLabel : copyLabel),
+            ),
+          )
+        : IconButton(
+            key: widget.copyKey,
+            onPressed: onCopy,
+            tooltip: widget.copyTooltip,
+            icon: Icon(
+              _copied ? Icons.check : Icons.copy,
+              size: 14,
+              color: _copied ? colors.verified : null,
+            ),
+            constraints: const BoxConstraints.tightFor(
+              width: ViberMetrics.controlHeight,
+              height: ViberMetrics.controlHeight,
+            ),
+            padding: EdgeInsets.zero,
+          );
+    final block = DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.rail,
+        border: Border.all(color: colors.divider),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Container(
+                constraints: const BoxConstraints(
+                  minHeight: ViberMetrics.controlHeight,
+                ),
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: ViberSpacing.md,
+                  vertical: ViberSpacing.sm,
+                ),
+                child: SelectableText(
+                  widget.text,
+                  key: widget.textKey,
+                  style: monoStyle.copyWith(
+                    fontSize: widget.fontSize,
+                    color: widget.enabled ? colors.text : colors.textFaint,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // The icon form says 'Copied' beside the icon; a labelled button
+          // says it on itself.
+          if (_copied && copyLabel == null)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: ViberSpacing.xs,
+                top: ViberSpacing.sm,
+              ),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(
+                  widget.copiedLabel,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colors.verified,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          if (copyLabel != null)
+            Semantics(liveRegion: _copied, child: button)
+          else
+            button,
+        ],
+      ),
+    );
+    return Semantics(
+      container: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.label case final label?) ...[
+            Text(
+              label,
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(color: colors.textMuted),
+            ),
+            const SizedBox(height: ViberSpacing.xs),
+          ],
+          block,
+          if (_failed)
+            Padding(
+              padding: const EdgeInsets.only(top: ViberSpacing.xs),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(
+                  widget.copyFailedLabel,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colors.danger),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

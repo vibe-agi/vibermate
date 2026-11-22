@@ -991,7 +991,13 @@ void main() {
       await tester.tap(copyClaude);
       await tester.pumpAndSettle();
       expect(copiedCommand, 'vibermate run -- claude');
-      expect(find.text('Claude command copied'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('managed-run-guide')),
+          matching: find.text('Copied'),
+        ),
+        findsOneWidget,
+      );
 
       final remove = find.byKey(const Key('terminal-command-remove'));
       await _openSettingsTab(tester, const Key('settings-tab-access'));
@@ -1254,11 +1260,21 @@ void main() {
       find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
       findsOneWidget,
     );
-    final command = tester.widget<Text>(
-      find.text('vibermate run --server http://192.168.1.44:9666 -- codex'),
+    // The whole command stays on one line and scrolls sideways; it is
+    // neither wrapped mid-command nor cut short.
+    expect(
+      find.ancestor(
+        of: find.text(
+          'vibermate run --server http://192.168.1.44:9666 -- codex',
+        ),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SingleChildScrollView &&
+              widget.scrollDirection == Axis.horizontal,
+        ),
+      ),
+      findsOneWidget,
     );
-    expect(command.maxLines, isNot(1));
-    expect(command.overflow, isNot(TextOverflow.ellipsis));
     expect(controller.serverAccess?.requiresRuntimeUserLogin, isTrue);
     expect(controller.runtimeUsers?.single.username, 'alice');
     expect(controller.runtimeUsage, isNull);
