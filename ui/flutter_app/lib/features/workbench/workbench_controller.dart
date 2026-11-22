@@ -1054,6 +1054,7 @@ final class WorkbenchController extends ChangeNotifier
   /// here, so the missing trust may be what stopped it.
   bool stoppedBeforeRootTrust(CaptureRecord capture) =>
       _launchesStoppedBeforeRootTrust?.contains(capture.key) ?? false;
+
   ProductUpdateResult? productUpdate;
   bool productUpdateLoading = false;
   RuntimeStorageLocation? storageLocation;

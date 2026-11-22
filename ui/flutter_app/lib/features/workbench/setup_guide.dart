@@ -138,8 +138,7 @@ String _runCommandPrefix(WorkbenchController controller) =>
     : 'vibermate run --server ${controller.runtimeServerURL} ';
 
 /// The routing set a launch ran on: the selected session's assignment once
-/// read, otherwise the one the session list names. Null when none is known,
-/// which for a launch means none was attached.
+/// read, otherwise the one the session list names. Null when none is known.
 String? launchRoutingSetId(
   WorkbenchController controller,
   CaptureRecord capture,
@@ -205,10 +204,21 @@ String launchStoppedDetail(
 ) => copy(
   launchNeedsRoot(controller, capture)
       ? 'capture.launch_incomplete.detail.codex_root'
-      : launchRoutingSetId(controller, capture) == null
+      : launchWithoutRoutingSet(controller, capture)
       ? 'capture.launch_incomplete.detail.no_routing_set'
       : 'capture.launch_incomplete.detail',
 );
+
+/// The open session's assignment was read and it has none. The session list
+/// alone cannot say so: its routing set may also be missing because the
+/// Runtime could not read it for that page.
+bool launchWithoutRoutingSet(
+  WorkbenchController controller,
+  CaptureRecord capture,
+) =>
+    controller.selectedCaptureKey == capture.key &&
+    controller.selectedCaptureLaunchIncomplete &&
+    controller.selectedAssignment == null;
 
 /// The one action for a launch that stopped before its agent started:
 /// 'Install and trust' when the certificate stopped it, otherwise 'Copy
