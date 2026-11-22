@@ -2442,7 +2442,10 @@ func newHTTPDownstream(
 }
 
 // Compatibility is selected from the frozen CLIENT contract, never the
-// selected provider origin or untrusted client-identifying headers.
+// selected provider origin or untrusted client-identifying headers. On
+// /v1/responses the data frame needs a keepalive basis from the admission:
+// exact release evidence, or a run the Runtime recognized as Codex by its
+// publisher's signature (ADR 0026).
 func responsesDataKeepaliveFor(plan environment.RequestPlan, admission captureadmission.Admission) bool {
 	if admission.Validate() != nil || plan.ProtocolPlan().ClientDialect() != protocolspec.DialectOpenAIResponses {
 		return false
@@ -2459,7 +2462,7 @@ func responsesDataKeepaliveFor(plan environment.RequestPlan, admission capturead
 	if op.ID().String() == operationcatalog.OpenAICodexResponsesCreateID && op.PathPattern() == "/backend-api/codex/responses" {
 		return origin.Host() == "chatgpt.com" && origin.Port() == 443
 	}
-	return op.ID().String() == operationcatalog.OpenAIResponsesCreateID && op.PathPattern() == "/v1/responses" && admission.Supports(clientadapter.FeatureResponsesDataKeepalive)
+	return op.ID().String() == operationcatalog.OpenAIResponsesCreateID && op.PathPattern() == "/v1/responses" && admission.ProtectionBasis(clientadapter.FeatureResponsesDataKeepalive) != clientadapter.ProtectionNone
 }
 
 func (downstream *httpDownstream) Begin(
