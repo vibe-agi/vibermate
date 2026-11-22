@@ -916,7 +916,8 @@ final class LaunchStoppedNotice extends StatelessWidget {
             icon: const Icon(Icons.verified_user_outlined, size: 14),
             label: Text(copy('setup.start.install_trust')),
           )
-        : _CopyAgainButton(
+        : CopyCommandAgainButton(
+            key: const Key('launch-stopped-copy-again'),
             command: setupLaunchCommand(controller, client),
             copy: copy,
           );
@@ -973,24 +974,28 @@ final class LaunchStoppedNotice extends StatelessWidget {
   }
 }
 
-final class _CopyAgainButton extends StatefulWidget {
-  const _CopyAgainButton({required this.command, required this.copy});
+/// 'Copy command again', for a launch that stopped before its agent started.
+final class CopyCommandAgainButton extends StatefulWidget {
+  const CopyCommandAgainButton({
+    required this.command,
+    required this.copy,
+    super.key,
+  });
 
   final String command;
   final AppCopy copy;
 
   @override
-  State<_CopyAgainButton> createState() => _CopyAgainButtonState();
+  State<CopyCommandAgainButton> createState() => _CopyCommandAgainButtonState();
 }
 
-final class _CopyAgainButtonState extends State<_CopyAgainButton> {
+final class _CopyCommandAgainButtonState extends State<CopyCommandAgainButton> {
   bool _copied = false;
 
   @override
   Widget build(BuildContext context) => Tooltip(
     message: widget.command,
     child: OutlinedButton.icon(
-      key: const Key('launch-stopped-copy-again'),
       onPressed: () async {
         await Clipboard.setData(ClipboardData(text: widget.command));
         if (mounted) setState(() => _copied = true);

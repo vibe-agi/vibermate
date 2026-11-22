@@ -393,6 +393,8 @@ final class AppCopy {
     'ledger.result.canceled': 'Canceled',
     'ledger.result.scripts': '{count} scripts',
     'ledger.empty': 'No requests yet',
+    'ledger.waiting':
+        'Waiting for the first request. Type a prompt in {agent}; it appears here within a few seconds.',
     'ledger.empty_filter': 'No loaded request matches this filter',
     'ledger.partial': 'Counts cover loaded requests',
     'ledger.load_earlier': 'Load earlier requests',
@@ -876,6 +878,7 @@ final class AppCopy {
     'capture.detail.unavailable.detail':
         'The runtime could not load these details. Retry to read them again; this does not mean the run has no requests.',
     'capture.launch_incomplete': 'This launch stopped before {agent} started',
+    'capture.launch_incomplete.badge': 'Didn\'t start',
     'capture.launch_incomplete.detail':
         'Terminal shows the reason. The most common ones: Codex needs this Mac to trust ViberMate\'s certificate, or Terminal couldn\'t find the agent. Fix it, then run the command again. You can delete this record.',
     'capture.launch_incomplete.detail.codex_root':
@@ -3383,6 +3386,8 @@ final class AppCopy {
     'notice.network.approval_denied':
         'Decision applied. Waiting work was refused.',
     'notice.network.rules_saved': 'Connection rule set saved atomically.',
+    'notice.root_ca_updated':
+        'This Mac now trusts ViberMate\'s certificate. Run the command again.',
     'notice.inventory.endpoint_created':
         'Upstream service created. Link existing accounts to use them here.',
     'notice.inventory.account_created':
@@ -3675,6 +3680,7 @@ final class AppCopy {
     'ledger.result.canceled': '已取消',
     'ledger.result.scripts': '{count} 个脚本',
     'ledger.empty': '暂无请求',
+    'ledger.waiting': '正在等待第一个请求。在 {agent} 中输入一条消息，几秒内就会显示在这里。',
     'ledger.empty_filter': '已加载的请求中没有符合此筛选的记录',
     'ledger.partial': '计数仅含已加载的请求',
     'ledger.load_earlier': '加载更早的请求',
@@ -4079,6 +4085,7 @@ final class AppCopy {
     'capture.detail.unavailable': '运行记录详情暂时无法读取',
     'capture.detail.unavailable.detail': 'Runtime 未能读取详情。请重试；这不代表该运行记录没有请求。',
     'capture.launch_incomplete': '本次启动在 {agent} 运行前已停止',
+    'capture.launch_incomplete.badge': '未启动',
     'capture.launch_incomplete.detail':
         '原因显示在终端中。最常见的原因：Codex 需要这台 Mac 信任 ViberMate 的证书，或终端找不到 Agent 命令。处理后请重新运行命令。此记录可以删除。',
     'capture.launch_incomplete.detail.codex_root':
@@ -6187,6 +6194,7 @@ final class AppCopy {
     'notice.network.approval_allowed': '决定已生效；等待中的工作获准继续。',
     'notice.network.approval_denied': '决定已生效；等待中的工作已被拒绝。',
     'notice.network.rules_saved': '连接规则集已原子保存。',
+    'notice.root_ca_updated': '这台 Mac 已信任 ViberMate 证书。请重新运行命令。',
     'notice.inventory.endpoint_created': '上游服务已创建；现在可以关联已有账号。',
     'notice.inventory.account_created': '上游账号已保存。先关联到适用的上游服务，再在流量策略中选择使用。',
     'notice.inventory.account_created.action': '关联到上游服务',

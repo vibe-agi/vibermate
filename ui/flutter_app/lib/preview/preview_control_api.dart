@@ -520,7 +520,10 @@ final class PreviewControlApi
     final id = 'run-fresh-$_freshRuns';
     final started = phase != PreviewFreshRunPhase.neverStarted;
     final observed = phase == PreviewFreshRunPhase.observed;
-    final createdAt = _now.subtract(const Duration(minutes: 2));
+    // Each later launch starts a little later, as runs do.
+    final createdAt = _now.subtract(
+      Duration(minutes: 2) - Duration(seconds: 10 * _freshRuns),
+    );
     final observedAt = _now.subtract(const Duration(minutes: 1));
     final capture = CaptureRecord(
       key: 'managed_run:$id',

@@ -4912,7 +4912,8 @@ final class WorkbenchController extends ChangeNotifier
               // must not turn a confirmed assignment into an unassigned run.
               if (ownsAssignmentRequest()) {
                 selectedAssignment = assignment;
-                selectedCaptureLaunchIncomplete = assignment == null;
+                selectedCaptureLaunchIncomplete =
+                    assignment == null || capture.stoppedBeforeStart;
                 if (errorMessage == _captureAssignmentError) {
                   errorMessage = null;
                 }
@@ -4956,7 +4957,15 @@ final class WorkbenchController extends ChangeNotifier
       final acp = values[2] as ACPRecord?;
       selectedAssignment = assignment;
       selectedACP = acp;
-      selectedCaptureLaunchIncomplete = selectedAssignment == null;
+      selectedCaptureLaunchIncomplete =
+          selectedAssignment == null || capture.stoppedBeforeStart;
+      // The stopped launch offers "Install and trust" only when this Mac is
+      // known not to trust the certificate.
+      if (capture.stoppedBeforeStart &&
+          rootTrustManagement &&
+          rootCAStatus == null) {
+        unawaited(refreshRootCA(quiet: true));
+      }
       if (summary.contentBodiesAvailable == false) {
         _summaryBodiesAbsent = true;
         selectedCaptureConversations = const ConversationPage(
@@ -5022,6 +5031,14 @@ final class WorkbenchController extends ChangeNotifier
       final allKnownAbsent =
           directoryBodies.isNotEmpty &&
           directoryBodies.every((value) => value == false);
+      if (!_captureViewChosen &&
+          available.isEmpty &&
+          capture.running &&
+          capture.observation == 'waiting_for_traffic') {
+        // Nothing to summarise yet: the request list says what it waits for,
+        // and the first request decides the view as usual.
+        showCaptureRequestRecords = true;
+      }
       if (!_captureViewChosen && (anyRetainedBody || allKnownAbsent)) {
         showCaptureRequestRecords = anyRetainedBody;
         _captureViewChosen = true;

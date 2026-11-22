@@ -17,6 +17,7 @@ import 'conversation_timeline.dart';
 import 'deletion_dialog.dart';
 import 'evidence_search_dialog.dart';
 import 'session_ledger.dart';
+import 'settings_view.dart' show rootCAErrorMessage;
 import 'setup_guide.dart';
 import 'workbench_controller.dart';
 import 'control_failure_notice.dart';
@@ -496,11 +497,16 @@ final class _CaptureRow extends StatelessWidget {
         capture.id;
     final activity = _relativeTime(activityAt, copy);
     final state = _localizedCopy(copy, 'capture.state', capture.state);
+    // The slot under the time carries the session's outcome; a launch that
+    // stopped before its agent started is the one outcome shown here.
+    final outcome = capture.stoppedBeforeStart
+        ? copy('capture.launch_incomplete.badge')
+        : null;
     return Semantics(
       key: Key('capture-row-${capture.key}'),
       selected: selected,
       button: true,
-      label: '${capture.displayName}, $subtitle, $state',
+      label: [capture.displayName, subtitle, state, ?outcome].join(', '),
       child: Material(
         color: selected ? context.viberColors.selection : Colors.transparent,
         child: InkWell(
@@ -559,6 +565,18 @@ final class _CaptureRow extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ),
+                          if (outcome case final value?) ...[
+                            const SizedBox(width: ViberSpacing.sm),
+                            Text(
+                              value,
+                              key: Key('capture-outcome-${capture.key}'),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: context.viberColors.danger,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
                         ],
                       ),
                     ],
@@ -730,7 +748,7 @@ final class _CaptureDetail extends StatelessWidget {
             ),
           if (controller.errorMessage case final message?)
             InlineNotice(message: message, error: true),
-          if (notice case final value?)
+          if (notice case final value? when copy.maybe('notice.$value') != null)
             InlineNotice(
               message: copy('notice.$value'),
               onDismiss: controller.clearNotice,
@@ -804,12 +822,10 @@ final class _CaptureDetail extends StatelessWidget {
                     ),
                   )
                 : controller.selectedCaptureLaunchIncomplete
-                ? CenteredMessage(
-                    icon: Icons.error_outline,
-                    title: copy.format('capture.launch_incomplete', {
-                      'agent': capture.displayName,
-                    }),
-                    detail: copy('capture.launch_incomplete.detail'),
+                ? _LaunchStoppedMessage(
+                    capture: capture,
+                    controller: controller,
+                    copy: copy,
                   )
                 : controller.selectedACP != null
                 ? ACPObservationView(
@@ -852,6 +868,75 @@ final class _CaptureDetail extends StatelessWidget {
       }
     }
     return environment.routes.firstOrNull;
+  }
+}
+
+/// In place of the request list of a launch that stopped before its agent
+/// started: why, and the one action that helps. Delete stays in the header.
+final class _LaunchStoppedMessage extends StatelessWidget {
+  const _LaunchStoppedMessage({
+    required this.capture,
+    required this.controller,
+    required this.copy,
+  });
+
+  final CaptureRecord capture;
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final root = controller.rootCAStatus;
+    final codex = setupClientOf(capture) == 'codex';
+    final needsRoot =
+        codex &&
+        controller.rootTrustManagement &&
+        root != null &&
+        !(root.rootValid && root.installed);
+    final busy = controller.rootCAMutating || controller.rootCALoading;
+    final command = setupLaunchCommand(controller, setupClientOf(capture));
+    return CenteredMessage(
+      key: const Key('capture-launch-stopped'),
+      icon: Icons.error_outline,
+      title: copy.format('capture.launch_incomplete', {
+        'agent': capture.displayName,
+      }),
+      detail: copy(
+        needsRoot
+            ? 'capture.launch_incomplete.detail.codex_root'
+            : 'capture.launch_incomplete.detail',
+      ),
+      action: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (needsRoot)
+            FilledButton.icon(
+              key: const Key('capture-launch-install-trust'),
+              onPressed: busy
+                  ? null
+                  : () => unawaited(controller.installAndTrustRootCA()),
+              icon: const Icon(Icons.verified_user_outlined, size: 14),
+              label: Text(copy('setup.start.install_trust')),
+            )
+          else if (capture.kind == 'managed_run')
+            CopyCommandAgainButton(
+              key: const Key('capture-launch-copy-again'),
+              command: command,
+              copy: copy,
+            ),
+          if (controller.rootCAError case final error? when needsRoot) ...[
+            const SizedBox(height: ViberSpacing.sm),
+            Text(
+              rootCAErrorMessage(copy, error),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
