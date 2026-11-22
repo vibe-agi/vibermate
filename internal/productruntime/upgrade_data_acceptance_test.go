@@ -146,9 +146,42 @@ func (f *task7Fixture) close() {
 		task7Must(f.t, closer.Close())
 	}
 }
+
+// task7Config describes the one static-header account and the routing sets
+// a fixture publishes. configure uses the upgrade fixture's values; other
+// acceptance tests pass their own provider and client.
+type task7Config struct {
+	AccountID     string
+	AccountName   string
+	ProviderToken string
+	EndpointID    upstreamendpoint.ID
+	Environments  []task7EnvironmentConfig
+}
+
+type task7EnvironmentConfig struct {
+	ID             environment.EnvironmentID
+	Name           string
+	Mode           environment.ContentRecordingMode
+	ClientProtocol environment.ClientProtocol
+	ClientOrigin   string
+	// BackendProtocol is the single route's protocol on the account's service.
+	BackendProtocol environment.ClientProtocol
+	// Customize, when set, edits the aggregate after the shared fields.
+	Customize func(*environment.Environment)
+}
+
 func (f *task7Fixture) configure() {
+	config := task7Config{AccountID: "task7-account", AccountName: "Task7 Synthetic", ProviderToken: "synthetic-task7-provider", EndpointID: upstreamendpoint.ChatGPTOfficialID}
+	for _, mode := range []environment.ContentRecordingMode{environment.ContentRecordingFull, environment.ContentRecordingMetadataOnly, environment.ContentRecordingOff} {
+		// The real Codex profile scopes the client origin to chatgpt.com.
+		config.Environments = append(config.Environments, task7EnvironmentConfig{ID: environment.EnvironmentID("task7-" + string(mode)), Name: "Task7 " + string(mode), Mode: mode, ClientProtocol: environment.ClientProtocolOpenAIResponses, ClientOrigin: "https://chatgpt.com", BackendProtocol: environment.ClientProtocolOpenAIResponses})
+	}
+	f.configureFor(config)
+}
+
+func (f *task7Fixture) configureFor(config task7Config) {
 	t, ctx, r := f.t, f.ctx, f.runtime
-	material, e := providerauth.NewMaterial("synthetic-task7-provider", nil, nil)
+	material, e := providerauth.NewMaterial(config.ProviderToken, nil, nil)
 	task7Must(t, e)
 	defer material.Destroy()
 	encoded, e := material.MarshalBinary()
@@ -157,26 +190,30 @@ func (f *task7Fixture) configure() {
 	secret, e := secretstore.NewValue(encoded)
 	task7Must(t, e)
 	defer secret.Destroy()
-	account, e := r.accounts.Create(ctx, provideraccount.CreateCommand{ID: "task7-account", DisplayName: "Task7 Synthetic", UpstreamEndpointID: upstreamendpoint.ChatGPTOfficialID, Driver: providerauth.StaticHeaderDriverRef(), Secret: secret})
+	account, e := r.accounts.Create(ctx, provideraccount.CreateCommand{ID: provideraccount.ID(config.AccountID), DisplayName: config.AccountName, UpstreamEndpointID: config.EndpointID, Driver: providerauth.StaticHeaderDriverRef(), Secret: secret})
 	task7Must(t, e)
-	endpoint, e := r.endpoints.Get(ctx, upstreamendpoint.ChatGPTOfficialID)
+	endpoint, e := r.endpoints.Get(ctx, config.EndpointID)
 	task7Must(t, e)
-	for _, mode := range []environment.ContentRecordingMode{environment.ContentRecordingFull, environment.ContentRecordingMetadataOnly, environment.ContentRecordingOff} {
-		aggregate, _, _ := compatibilityEnvironment(t, environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses)
-		aggregate.ID = environment.EnvironmentID("task7-" + string(mode))
-		aggregate.Name = "Task7 " + string(mode)
+	for _, environmentConfig := range config.Environments {
+		mode := environmentConfig.Mode
+		// The route's protocol, target and account are all replaced below.
+		aggregate, _, _ := compatibilityEnvironment(t, environmentConfig.ClientProtocol, protocolspec.DialectOpenAIResponses)
+		aggregate.ID = environmentConfig.ID
+		aggregate.Name = environmentConfig.Name
 		aggregate.ContentRecording.Mode = mode
 		if mode == environment.ContentRecordingOff {
 			aggregate.ContentRecording = environment.ContentRecordingPolicy{Mode: mode}
 		}
 		route := &aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
-		route.BackendProtocol = string(environment.ClientProtocolOpenAIResponses)
+		route.BackendProtocol = string(environmentConfig.BackendProtocol)
 		route.ProviderTarget = environment.ProviderTarget{ID: endpoint.ID.String(), Revision: environment.Revision(endpoint.Revision), Origin: endpoint.Origin, RealmID: endpoint.RealmID, Capabilities: endpoint.Capabilities}
 		route.AccountPolicy.FixedAccountID = account.Account.ID.String()
 		route.AccountPolicy.Accounts = []environment.RouteAccountReference{{ID: account.Account.ID.String(), Revision: environment.Revision(account.Account.Revision), DisplayName: account.Account.DisplayName}}
-		// The real Codex profile scopes the client origin to chatgpt.com.
-		aggregate.ClientEndpoints[0].ClientOrigin, e = originidentity.ParseClientOrigin("https://chatgpt.com")
+		aggregate.ClientEndpoints[0].ClientOrigin, e = originidentity.ParseClientOrigin(environmentConfig.ClientOrigin)
 		task7Must(t, e)
+		if environmentConfig.Customize != nil {
+			environmentConfig.Customize(&aggregate)
+		}
 		draft, e := r.environments.SaveDraft(ctx, environment.DraftCommand{Candidate: aggregate})
 		task7Must(t, e)
 		preview, e := r.environments.Preview(ctx, aggregate.ID, draft.Revision)
@@ -199,10 +236,15 @@ func (f *task7Fixture) capture(mode environment.ContentRecordingMode) (string, s
 	return grant.Capture.ID, grant.Credential.Value()
 }
 
-type task7PrivateTransport struct{ target *url.URL }
+// task7PrivateTransport delivers provider requests for exactly one host to
+// the fixture's private server and refuses every other destination.
+type task7PrivateTransport struct {
+	host   string
+	target *url.URL
+}
 
 func (p task7PrivateTransport) RoundTrip(r *http.Request, _ providertransport.TransportDispatch) (*http.Response, transportprofile.Evidence, error) {
-	if r.URL.Host != "chatgpt.com" {
+	if r.URL.Host != p.host {
 		return nil, transportprofile.Evidence{}, fmt.Errorf("private fixture rejected destination %s", r.URL.Host)
 	}
 	c := r.Clone(r.Context())
@@ -214,7 +256,27 @@ func (p task7PrivateTransport) RoundTrip(r *http.Request, _ providertransport.Tr
 	response, e := http.DefaultTransport.RoundTrip(c)
 	return response, transportprofile.Evidence{}, e
 }
+
+// task7HostPort is one client destination the proxy's connection policy
+// allows, under its own rule ID.
+type task7HostPort struct {
+	RuleID string
+	Host   string
+	Port   uint16
+}
+
+// task7BindOptions names the provider host the private transport serves and
+// the client destinations the proxy accepts.
+type task7BindOptions struct {
+	ProviderHost    string
+	ClientHostPorts []task7HostPort
+}
+
 func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
+	return f.bindWith(upstream, task7BindOptions{ProviderHost: "chatgpt.com", ClientHostPorts: []task7HostPort{{RuleID: "task7.chatgpt", Host: "chatgpt.com", Port: 443}}})
+}
+
+func (f *task7Fixture) bindWith(upstream http.Handler, options task7BindOptions) *url.URL {
 	t, ctx, r := f.t, f.ctx, f.runtime
 	private := httptest.NewServer(upstream)
 	t.Cleanup(private.Close)
@@ -222,7 +284,7 @@ func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
 	task7Must(t, e)
 	auth, e := providertransport.NewStaticBearerAuthenticator(f.options.Secrets)
 	task7Must(t, e)
-	f.provider, e = providertransport.NewClient(providertransport.ClientOptions{Coordinator: r.offlineHold, Authenticators: []providertransport.Authenticator{auth}, Transport: task7PrivateTransport{target}, InstanceIDs: NewCryptographicInstanceIDSource(), Audit: r.egressCompletion})
+	f.provider, e = providertransport.NewClient(providertransport.ClientOptions{Coordinator: r.offlineHold, Authenticators: []providertransport.Authenticator{auth}, Transport: task7PrivateTransport{host: options.ProviderHost, target: target}, InstanceIDs: NewCryptographicInstanceIDSource(), Audit: r.egressCompletion})
 	task7Must(t, e)
 	accountReads, e := accountoperation.New(accountoperation.Options{Accounts: r.accounts, Transport: f.provider})
 	task7Must(t, e)
@@ -233,7 +295,11 @@ func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
 	request := exchangeBuildRequest{recorder: r.recorder, ownerContext: ctx, actions: r.offlineHold, accounts: r.accounts, provider: f.provider, toolDecisions: decisions, activities: r.activities, identities: r.conversationIDs, contents: r.contents, usage: r.recordingStorage, clock: SystemClock{}, hold: exchange.DefaultHoldPolicy(), annotations: f.annotations}
 	admission, e := captureadmission.NewAuthorizer(r.captureRuns, r.manualCaptures)
 	task7Must(t, e)
-	policy, e := (connectionpolicy.Snapshot{Revision: 1, Mode: connectionpolicy.ModeDenyUnknown, Rules: []connectionpolicy.Rule{{ID: "task7.chatgpt", Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort("chatgpt.com", 443)}}}).Compile()
+	rules := make([]connectionpolicy.Rule, 0, len(options.ClientHostPorts))
+	for _, destination := range options.ClientHostPorts {
+		rules = append(rules, connectionpolicy.Rule{ID: destination.RuleID, Priority: 1, Decision: connectionpolicy.DecisionAllow, Match: connectionpolicy.MatchExactHostPort(destination.Host, destination.Port)})
+	}
+	policy, e := (connectionpolicy.Snapshot{Revision: 1, Mode: connectionpolicy.ModeDenyUnknown, Rules: rules}).Compile()
 	task7Must(t, e)
 	blind, e := newBlindTunnelDialer(r.offlineHold)
 	task7Must(t, e)

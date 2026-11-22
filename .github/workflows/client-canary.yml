@@ -73,7 +73,7 @@ jobs:
   claude-latest:
     name: newest Claude Code release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.release.outputs.version }}
     steps:
@@ -107,9 +107,12 @@ jobs:
           test -f "${claude_binary}"
           test "$("${claude_binary}" --version)" = "${VERSION} (Claude Code)"
           export VIBERMATE_CLAUDE_ACCEPTANCE="${claude_binary}"
-          if ! go test -count=1 -v -run '^TestInstalledClaude' ./internal/runlauncher; then
+          # The launcher tests and TestInstalledClaudeOnResponses, which runs
+          # the release through the real runtime on translated routes.
+          packages=(./internal/runlauncher ./internal/productruntime)
+          if ! go test -count=1 -v -run '^TestInstalledClaude' "${packages[@]}"; then
             echo "::warning::installed-Claude tests failed once against ${VERSION}; retrying"
-            go test -count=1 -v -run '^TestInstalledClaude' ./internal/runlauncher
+            go test -count=1 -v -run '^TestInstalledClaude' "${packages[@]}"
           fi
 
   report:
