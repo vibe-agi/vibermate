@@ -111,7 +111,12 @@ func recognizedPolicyViolations(policies []RecognizedClientPolicy) []string {
 				))
 			}
 		}
-		if policy.IdentityCanary != (Canary{}) {
+		// A row that names only its client needs no proof yet. Once it grants
+		// anything, the identity canary is the darwin proof that the newest
+		// release is still the client the row describes, so it is required:
+		// ProtectionCanaries would otherwise drop it without a word.
+		if policy.IdentityCanary != (Canary{}) ||
+			len(policy.Grants)+len(policy.Unconditional) > 0 {
 			checkCanary("identity", policy.IdentityCanary)
 		}
 		for _, grant := range policy.Grants {
@@ -194,6 +199,15 @@ func TestRecognizedClientPoliciesAreConsistent(t *testing.T) {
 		}},
 		{"an identity canary without the prefix", func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
 			policies[1].IdentityCanary.Test = "TestCodexIsRecognized"
+			return policies
+		}},
+		{"grants without an identity canary", func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+			policies[0].IdentityCanary = Canary{}
+			return policies
+		}},
+		{"an unconditional entry without an identity canary", func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+			policies[1].Grants = nil
+			policies[1].IdentityCanary = Canary{}
 			return policies
 		}},
 	} {
@@ -372,6 +386,35 @@ func TestRecognizedClientsNameOnlyTheCurrentRevision(t *testing.T) {
 		got, found := live.Client(catalog.Revision(), label)
 		if !found || got != (RecognizedClient{ID: id}) {
 			t.Fatalf("live Client(%q) = %+v, %v", label, got, found)
+		}
+	}
+}
+
+// The policy table is validated by tests, not at start-up, so the index masks
+// what it reads with the known bits: a bit no reader understands can never
+// reach an admission, which refuses unknown bits.
+func TestRecognizedPolicyFeaturesCarryOnlyKnownBits(t *testing.T) {
+	t.Parallel()
+
+	const unknown Feature = 1 << 40
+	policies := designedRecognizedClientPolicies()
+	policies[1].Grants[0].Feature |= unknown
+	policies[1].Grants = append(policies[1].Grants, ProtectionGrant{
+		unknown << 1, ProofStreamFrame,
+		Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsAnUnknownBit"},
+	})
+	if got := policyFeatures(policies, "codex-cli"); got != FeatureResponsesDataKeepalive {
+		t.Fatalf("policyFeatures() = %b, want only the keepalive bit %b", got, FeatureResponsesDataKeepalive)
+	}
+	for _, state := range []ProtectionSwitch{ProtectionsOn, ProtectionsOff} {
+		clients, err := newRecognizedClients(BuiltInCatalog(), state, policies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, found := clients.Client(BuiltInCatalog().Revision(), "codex")
+		if !found || got.Policy != FeatureResponsesDataKeepalive ||
+			got.Policy&^knownFeatures != 0 || got.Protections&^knownFeatures != 0 {
+			t.Fatalf("switch %d: Client(codex) = %+v, %v", state, got, found)
 		}
 	}
 }
