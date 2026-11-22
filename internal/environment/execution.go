@@ -28,7 +28,7 @@ var (
 	ErrAccountReadAmbiguous     = errors.New("account read requires one fixed account on one frozen route")
 	// ErrTranslatedChatGPTRoute refuses a route that would send another
 	// dialect's requests to a ChatGPT plan. Compile errors wrap it together
-	// with ErrInvalidEnvironment.
+	// with ErrInvalidEnvironment; Restore never returns it.
 	ErrTranslatedChatGPTRoute = errors.New("a ChatGPT plan serves only clients of its own protocol")
 )
 
@@ -435,6 +435,7 @@ func (plan RequestPlan) UsesOriginalAccount() bool {
 func compileExecution(
 	compiler Compiler,
 	aggregate Environment,
+	kind compilationKind,
 ) ([]CompiledEndpointPlan, map[string]int, error) {
 	if compiler.protocols == nil || compiler.wireProfiles == nil {
 		return nil, nil, ErrCompilerUnavailable
@@ -530,6 +531,7 @@ func compileExecution(
 						compiler,
 						route,
 						clientDialect,
+						kind,
 					)
 					if err != nil {
 						return nil, nil, err
@@ -610,6 +612,7 @@ func compileRoute(
 	compiler Compiler,
 	route UpstreamRoute,
 	client protocolspec.Dialect,
+	kind compilationKind,
 ) (CompiledRoutePlan, error) {
 	if len(route.PluginBindings) != 0 {
 		return CompiledRoutePlan{}, ErrUnsupportedPluginBinding
@@ -619,8 +622,12 @@ func compileRoute(
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q: %w", route.ID, err)
 	}
 	// Checked before the codec pair resolves, so the refusal does not depend
-	// on which translating pairs a build registers.
-	if client != backend && targetsChatGPTPlan(route.ProviderTarget) {
+	// on which translating pairs a build registers. Only a candidate (a draft
+	// or a publish) is refused: a revision already published keeps restoring,
+	// as frozen evidence does, so it cannot stop the runtime from starting.
+	// No cross-dialect Responses pair was registered before this check, so no
+	// stored revision holds the route it exists to stop.
+	if kind == compileCandidate && client != backend && targetsChatGPTPlan(route.ProviderTarget) {
 		return CompiledRoutePlan{}, fmt.Errorf(
 			"%w: route %q: %w", ErrInvalidEnvironment, route.ID, ErrTranslatedChatGPTRoute,
 		)

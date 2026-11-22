@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -109,11 +110,60 @@ func TestTranslatedRouteToChatGPTPlanIsRefused(t *testing.T) {
 			if !errors.Is(err, ErrTranslatedChatGPTRoute) || !errors.Is(err, ErrInvalidEnvironment) {
 				t.Fatalf("Compile() error = %v, want a translated ChatGPT route refusal", err)
 			}
-			// Published revisions are rebuilt by the same route compiler.
-			if _, err := compiler.Restore(value); !errors.Is(err, ErrTranslatedChatGPTRoute) {
-				t.Fatalf("Restore() error = %v, want a translated ChatGPT route refusal", err)
+			// A revision already published is frozen evidence: it restores,
+			// so it cannot stop the runtime from starting.
+			if _, err := compiler.Restore(value); err != nil {
+				t.Fatalf("Restore() error = %v, want the published revision restored", err)
 			}
 		})
+	}
+}
+
+// A revision published before the guard existed can hold an Anthropic->Chat
+// route to a custom Chat service on chatgpt.com (custom services accept any
+// origin). The runtime must still start with it and serve it, while any new
+// draft of that Environment is refused until the route changes.
+func TestPublishedTranslatedChatGPTRouteStillRecovers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	value := routedFixture(t, 0, "openai_chat", "https://chatgpt.com", "target.custom")
+	compiler := translatingTestCompiler(t, accountCatalogFor(value))
+	if _, err := compiler.Compile(value); !errors.Is(err, ErrTranslatedChatGPTRoute) {
+		t.Fatalf("Compile() error = %v, want a translated ChatGPT route refusal", err)
+	}
+	// Seeded directly: no candidate compile can publish it any more.
+	repository := newMemoryRepository()
+	repository.active[value.ID] = value.Clone()
+	repository.revisions[value.ID] = map[Revision]Environment{value.Revision: value.Clone()}
+
+	manager, err := NewManager(ctx, repository, compiler, NewAtomicProjection(), nil)
+	if err != nil {
+		t.Fatalf("NewManager() error = %v, want the published revision recovered", err)
+	}
+	for name, read := range map[string]func() (EnvironmentSnapshot, error){
+		"projection": func() (EnvironmentSnapshot, error) { return manager.Resolve(value.ID) },
+		"active":     func() (EnvironmentSnapshot, error) { return manager.Get(ctx, value.ID) },
+		"history":    func() (EnvironmentSnapshot, error) { return manager.GetRevision(ctx, value.ID, value.Revision) },
+	} {
+		snapshot, err := read()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		codec := compiledDefaultRoute(t, snapshot, 0).CodecPlan()
+		if codec.ClientDialect() != protocolspec.DialectAnthropicMessages ||
+			codec.ProviderDialect() != protocolspec.DialectOpenAIChat {
+			t.Fatalf("%s: codec = %s -> %s", name, codec.ClientDialect(), codec.ProviderDialect())
+		}
+	}
+	if listed, err := manager.List(ctx); err != nil || len(listed) != 2 {
+		t.Fatalf("List() = %d snapshots, %v", len(listed), err)
+	}
+	next := value.Clone()
+	next.Revision++
+	next.Name = "Edited after the upgrade"
+	_, err = manager.SaveDraft(ctx, DraftCommand{ExpectedBaseRevision: value.Revision, Candidate: next})
+	if !errors.Is(err, ErrTranslatedChatGPTRoute) {
+		t.Fatalf("SaveDraft() error = %v, want a translated ChatGPT route refusal", err)
 	}
 }
 

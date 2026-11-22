@@ -90,7 +90,7 @@ func (compiler Compiler) compile(input Environment, kind compilationKind) (Envir
 			return EnvironmentSnapshot{}, err
 		}
 	}
-	compiled, compiledOrigins, err := compileExecution(compiler, normalized)
+	compiled, compiledOrigins, err := compileExecution(compiler, normalized, kind)
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
