@@ -852,6 +852,7 @@ final class AppCopy {
         'Waiting for your agent… This page updates by itself.',
     'setup.start.done': '{agent} started.',
     'setup.start.copy_again': 'Copy command again',
+    'setup.start.copy_launch': 'Copy launch command',
     'setup.prompt.title': 'Send your first prompt',
     'setup.prompt.detail':
         'Type anything in your agent. Its requests appear here within a few seconds.',
@@ -4099,6 +4100,7 @@ final class AppCopy {
     'setup.start.waiting': '正在等待 Agent……此页面会自动更新。',
     'setup.start.done': '{agent} 已启动。',
     'setup.start.copy_again': '再次复制命令',
+    'setup.start.copy_launch': '复制启动命令',
     'setup.prompt.title': '发送第一条消息',
     'setup.prompt.detail': '在 Agent 中随便输入一句话，几秒内它的请求就会显示在这里。',
     'setup.prompt.done': 'Agent 的请求已开始显示。',

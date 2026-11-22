@@ -524,13 +524,17 @@ final class PreviewControlApi
   int _exchangeCount(CaptureRecord capture) =>
       _exchangeCounts[capture.id] ?? (capture.id == 'run-1' ? 224 : 24);
 
-  /// Adds one `vibermate run` launch on the built-in routing set, at [phase]
-  /// of its first minute, and returns its id.
+  /// Adds one `vibermate run` launch, at [phase] of its first minute, and
+  /// returns its id. It runs Claude Code or Codex unless [program] names
+  /// another one, on the built-in routing set unless [environmentId] names
+  /// another.
   String addFreshRun({
     required bool codex,
     required PreviewFreshRunPhase phase,
     String? recognition,
     String? version,
+    String? program,
+    String environmentId = 'system_transparent',
   }) {
     _requireOpen();
     // A launch that started picks up the dataset's client build: a known
@@ -560,14 +564,14 @@ final class PreviewControlApi
       key: 'managed_run:$id',
       id: id,
       kind: 'managed_run',
-      displayName: codex ? 'Codex' : 'Claude Code',
+      displayName: program ?? (codex ? 'Codex' : 'Claude Code'),
       state: started ? 'attached' : 'finished',
       observation: observed ? 'observed' : 'waiting_for_traffic',
       createdAt: createdAt,
       updatedAt: observed ? observedAt : createdAt,
       activityAt: observed ? observedAt : createdAt,
       managedRun: ManagedRunSummary(
-        executableLabel: codex ? 'codex' : 'claude',
+        executableLabel: program ?? (codex ? 'codex' : 'claude'),
         cwd: '/Users/mira/Code/my-project',
         canonicalExecutablePath: codex
             ? '/opt/homebrew/bin/codex'
@@ -608,7 +612,7 @@ final class PreviewControlApi
     _captures[capture.key] = capture;
     _exchangeCounts[id] = observed ? 1 : 0;
     final environment = _environments.firstWhere(
-      (value) => value.id == 'system_transparent',
+      (value) => value.id == environmentId,
     );
     _assignments[capture.key] = CaptureAssignment(
       captureKey: capture.key,

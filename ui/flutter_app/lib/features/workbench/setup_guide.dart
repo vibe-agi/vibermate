@@ -9,6 +9,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'agent_connection.dart';
+import 'routing_set_name.dart';
 import 'settings_view.dart'
     show confirmTerminalCommandChange, rootCAErrorMessage;
 import 'workbench_controller.dart';
@@ -128,9 +129,52 @@ final class SetupGuideProgress {
 /// The launch command for [client] ('claude' or 'codex'), as this App or a
 /// Server's own computer would run it.
 String setupLaunchCommand(WorkbenchController controller, String client) =>
+    '${_runCommandPrefix(controller)}-- $client';
+
+/// `vibermate run `, with the Server to sign in to when this is not the App.
+String _runCommandPrefix(WorkbenchController controller) =>
     controller.terminalManagement || controller.runtimeServerURL.isEmpty
-    ? 'vibermate run -- $client'
-    : 'vibermate run --server ${controller.runtimeServerURL} -- $client';
+    ? 'vibermate run '
+    : 'vibermate run --server ${controller.runtimeServerURL} ';
+
+/// The routing set a launch ran on: the selected session's assignment once
+/// read, otherwise the one the session list names. Null when none is known,
+/// which for a launch means none was attached.
+String? launchRoutingSetId(
+  WorkbenchController controller,
+  CaptureRecord capture,
+) =>
+    (controller.selectedCaptureKey == capture.key
+        ? controller.selectedAssignment?.environmentId
+        : null) ??
+    capture.environment?.id;
+
+/// The command that starts [capture]'s program again on the routing set it
+/// launched with. The launch's own arguments are not recorded, so only the
+/// program is repeated. [sameRoutingSet] is false when that set is unknown
+/// and the command uses the built-in one.
+({String command, bool sameRoutingSet}) relaunchCommand(
+  WorkbenchController controller,
+  CaptureRecord capture,
+) {
+  final program = capture.managedRun?.executableLabel ?? setupClientOf(capture);
+  final routingSet = launchRoutingSetId(controller, capture);
+  final environment = routingSet == null || routingSet == builtInRoutingSetId
+      ? ''
+      : '--env ${_shellWord(routingSet)} ';
+  return (
+    command:
+        '${_runCommandPrefix(controller)}$environment-- ${_shellWord(program)}',
+    sameRoutingSet: routingSet != null,
+  );
+}
+
+/// [value] as one word for Terminal: unchanged when it has no characters a
+/// shell treats specially, otherwise in single quotes.
+String _shellWord(String value) =>
+    RegExp(r'^[A-Za-z0-9._+@%=:,/-]+$').hasMatch(value)
+    ? value
+    : "'${value.replaceAll("'", r"'\''")}'";
 
 /// The agent a run launched: 'codex' or 'claude'.
 String setupClientOf(CaptureRecord capture) =>
@@ -184,9 +228,11 @@ Widget? launchStoppedAction({
     );
   }
   if (capture.kind != 'managed_run') return null;
+  final relaunch = relaunchCommand(controller, capture);
   return CopyCommandAgainButton(
     key: Key('$keyPrefix-copy-again'),
-    command: setupLaunchCommand(controller, setupClientOf(capture)),
+    command: relaunch.command,
+    again: relaunch.sameRoutingSet,
     copy: copy,
   );
 }
@@ -1106,15 +1152,19 @@ final class LaunchStoppedNotice extends StatelessWidget {
 }
 
 /// 'Copy command again', for a launch that stopped before its agent started.
+/// Reads 'Copy launch command' when [again] is false: the command could not
+/// be rebuilt as it was run.
 final class CopyCommandAgainButton extends StatefulWidget {
   const CopyCommandAgainButton({
     required this.command,
     required this.copy,
+    this.again = true,
     super.key,
   });
 
   final String command;
   final AppCopy copy;
+  final bool again;
 
   @override
   State<CopyCommandAgainButton> createState() => _CopyCommandAgainButtonState();
@@ -1122,21 +1172,61 @@ final class CopyCommandAgainButton extends StatefulWidget {
 
 final class _CopyCommandAgainButtonState extends State<CopyCommandAgainButton> {
   bool _copied = false;
+  bool _failed = false;
+
+  Future<void> _copy() async {
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.command));
+      if (!mounted) return;
+      setState(() {
+        _copied = true;
+        _failed = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _copied = false;
+        _failed = true;
+      });
+    }
+  }
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-    message: widget.command,
-    child: OutlinedButton.icon(
-      onPressed: () async {
-        await Clipboard.setData(ClipboardData(text: widget.command));
-        if (mounted) setState(() => _copied = true);
-      },
-      icon: Icon(_copied ? Icons.check : Icons.copy, size: 14),
-      label: Text(
-        widget.copy(_copied ? 'setup.start.copied' : 'setup.start.copy_again'),
+  Widget build(BuildContext context) {
+    final button = Tooltip(
+      message: widget.command,
+      child: OutlinedButton.icon(
+        onPressed: () => unawaited(_copy()),
+        icon: Icon(_copied ? Icons.check : Icons.copy, size: 14),
+        label: Text(
+          widget.copy(
+            _copied
+                ? 'setup.start.copied'
+                : widget.again
+                ? 'setup.start.copy_again'
+                : 'setup.start.copy_launch',
+          ),
+        ),
       ),
-    ),
-  );
+    );
+    if (!_failed) return button;
+    // Without the clipboard, the command stays on screen to select.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        button,
+        const SizedBox(height: ViberSpacing.xs),
+        Text(
+          widget.copy('terminal.run.copy_failed'),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.danger),
+        ),
+        SelectableText(widget.command, style: monoStyle),
+      ],
+    );
+  }
 }
 
 /// Above the request list of the session that completed the guide: it is

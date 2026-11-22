@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
@@ -148,6 +149,91 @@ void main() {
       (capture) => capture.running,
     );
     expect(controller.selectedCaptureKey, running.key);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  Future<String?> copyAgain(
+    WidgetTester tester,
+    WorkbenchController controller,
+    String runId,
+  ) async {
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await controller.refresh();
+    await controller.selectCapture('managed_run:$runId');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    final button = find.byKey(const Key('capture-launch-copy-again'));
+    expect(button, findsOneWidget);
+    expect(find.text('Copy command again'), findsOneWidget);
+    await tester.tap(button);
+    await tester.pump(const Duration(milliseconds: 300));
+    return copied;
+  }
+
+  testWidgets('copy again repeats the program that was launched', (
+    tester,
+  ) async {
+    final (controller, api) = await open(tester);
+    final id = api.addFreshRun(
+      codex: false,
+      phase: PreviewFreshRunPhase.neverStarted,
+      program: 'aider',
+    );
+    expect(
+      await copyAgain(tester, controller, id),
+      'vibermate run -- aider',
+      reason: 'never the Claude Code command for another program',
+    );
+    expect(find.text('Copied'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('copy again keeps the routing set the launch asked for', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewFixture.freshInstall().terminalCommands,
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    final id = api.addFreshRun(
+      codex: false,
+      phase: PreviewFreshRunPhase.neverStarted,
+      environmentId: 'work',
+    );
+    expect(
+      await copyAgain(tester, controller, id),
+      'vibermate run --env work -- claude',
+    );
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });
