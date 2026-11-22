@@ -663,7 +663,11 @@ final class _CaptureRow extends StatelessWidget {
                               key: Key('capture-outcome-${capture.key}'),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
-                                    color: context.viberColors.danger,
+                                    // "Didn't start" is a failed outcome, as
+                                    // in the ledger; "Can't connect" is red.
+                                    color: capture.stoppedBeforeStart
+                                        ? context.viberColors.warning
+                                        : context.viberColors.danger,
                                     fontWeight: FontWeight.w600,
                                   ),
                             ),

@@ -58,7 +58,11 @@ void main() {
     expect(badge, findsOneWidget);
     expect(tester.widget<Text>(badge).data, "Didn't start");
     final context = tester.element(badge);
-    expect(tester.widget<Text>(badge).style?.color, context.viberColors.danger);
+    // The ledger's Failed colour; red stays for Blocked and Can't connect.
+    expect(
+      tester.widget<Text>(badge).style?.color,
+      context.viberColors.warning,
+    );
 
     await tester.tap(find.byKey(Key('capture-row-${capture.key}')));
     await tester.pump(const Duration(milliseconds: 300));

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
+import 'package:vibermate_app/features/workbench/setup_guide.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -106,6 +109,63 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(inStep('command', find.text('Done')), findsOneWidget);
     expect(find.byKey(const Key('setup-waiting')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('step markers sit level with their titles and keep size', (
+    tester,
+  ) async {
+    final controller = await open(tester);
+    // The guide alone at 200% text, as wide as its pane allows.
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(1440, 900),
+            textScaler: TextScaler.linear(2),
+          ),
+          child: Scaffold(
+            body: SingleChildScrollView(
+              child: SizedBox(
+                width: 640,
+                child: SetupGuide(
+                  controller: controller,
+                  copy: AppCopy.forLanguage(AppLanguage.english),
+                  onConnectOtherApp: null,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    // Step 1 has its button beside the title, which makes its row taller.
+    final digit = inStep('command', find.text('1'));
+    final button = find.byKey(const Key('setup-command-action'));
+    expect(
+      tester.getCenter(digit).dy,
+      moreOrLessEquals(tester.getCenter(button).dy, epsilon: 1),
+      reason: 'the marker is not left above a taller heading row',
+    );
+    // At 200% text the digits keep the size that fits their 20 px circles.
+    for (final number in [digit, inStep('start', find.text('2'))]) {
+      expect(
+        tester.renderObject<RenderParagraph>(number).textScaler,
+        TextScaler.noScaling,
+      );
+    }
+    expect(
+      tester
+          .renderObject<RenderParagraph>(
+            inStep('command', find.text('Set up the vibermate command')),
+          )
+          .textScaler,
+      const TextScaler.linear(2),
+      reason: 'only the decorative digit keeps its size',
+    );
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });

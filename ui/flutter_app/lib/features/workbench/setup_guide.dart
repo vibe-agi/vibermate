@@ -552,7 +552,7 @@ final class _SetupGuideState extends State<SetupGuide> {
       status: failed != null && !retryAfterTrust
           ? StatusPill(
               label: copy('setup.status.failed'),
-              color: context.viberColors.danger,
+              color: context.viberColors.warning,
             )
           : null,
       detail: copy(
@@ -834,29 +834,38 @@ final class _SetupStep extends StatelessWidget {
         ],
       ],
     );
+    // A button beside the title makes the heading row taller than the
+    // title; the marker is centred on that row so it stays level with it.
+    final inlineAction = action != null && !narrow;
     return Semantics(
       container: true,
       label: '$label, $title',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: ViberSpacing.lg),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _StepMarker(number: number, state: state),
-            const SizedBox(width: ViberSpacing.lg),
-            Expanded(
+            Row(
+              crossAxisAlignment: inlineAction
+                  ? CrossAxisAlignment.center
+                  : CrossAxisAlignment.start,
+              children: [
+                _StepMarker(number: number, state: state),
+                const SizedBox(width: ViberSpacing.lg),
+                Expanded(child: heading),
+                if (action case final value? when inlineAction) ...[
+                  const SizedBox(width: ViberSpacing.md),
+                  value,
+                ],
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(
+                left: _StepMarker.size + ViberSpacing.lg,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(child: heading),
-                      if (action case final value? when !narrow) ...[
-                        const SizedBox(width: ViberSpacing.md),
-                        value,
-                      ],
-                    ],
-                  ),
                   if (detail case final value?) ...[
                     const SizedBox(height: ViberSpacing.xs),
                     Text(value, style: Theme.of(context).textTheme.bodySmall),
@@ -882,6 +891,8 @@ final class _SetupStep extends StatelessWidget {
 final class _StepMarker extends StatelessWidget {
   const _StepMarker({required this.number, required this.state});
 
+  static const double size = 20;
+
   final int number;
   final SetupStepState state;
 
@@ -900,8 +911,8 @@ final class _StepMarker extends StatelessWidget {
     };
     return ExcludeSemantics(
       child: Container(
-        width: 20,
-        height: 20,
+        width: size,
+        height: size,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: fill,
@@ -915,6 +926,9 @@ final class _StepMarker extends StatelessWidget {
             ? Icon(Icons.check, size: 12, color: foreground)
             : Text(
                 '$number',
+                // The circle keeps its size, so its digit does too; the
+                // marker is decorative and the step's label carries it.
+                textScaler: TextScaler.noScaling,
                 style: TextStyle(
                   color: foreground,
                   fontSize: ViberType.utility,
@@ -1188,12 +1202,14 @@ final class LaunchStoppedNotice extends StatelessWidget {
       capture: capture,
       keyPrefix: 'launch-stopped',
     );
+    // A launch that never started is a failed outcome: the ledger's Failed
+    // colour, not the Blocked or Can't connect red.
     final colors = context.viberColors;
     return Container(
       padding: const EdgeInsets.all(ViberSpacing.lg),
       decoration: BoxDecoration(
-        color: colors.danger.withValues(alpha: 0.06),
-        border: Border.all(color: colors.danger.withValues(alpha: 0.28)),
+        color: colors.warning.withValues(alpha: 0.06),
+        border: Border.all(color: colors.warning.withValues(alpha: 0.28)),
         borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
@@ -1202,7 +1218,7 @@ final class LaunchStoppedNotice extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.error_outline, size: 16, color: colors.danger),
+              Icon(Icons.error_outline, size: 16, color: colors.warning),
               const SizedBox(width: ViberSpacing.md),
               Expanded(
                 child: Column(
