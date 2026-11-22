@@ -1,0 +1,226 @@
+{
+  "path": "anthropic-messages-to-openai-chat",
+  "fixture": "claude-models.003",
+  "decode": {
+    "notices": [
+      "cache_control_not_forwarded $.system[2].cache_control",
+      "cache_control_not_forwarded $.system[3].cache_control",
+      "unknown_request_field_not_forwarded $.messages[1].output_config",
+      "unknown_request_field_not_forwarded $.tools[10].defer_loading",
+      "metadata_not_forwarded $.metadata"
+    ]
+  },
+  "providerRequest": {
+    "method": "POST",
+    "relativePath": "chat/completions",
+    "headers": {
+      "Accept": [
+        "text/event-stream"
+      ]
+    },
+    "bodyBytes": 50111,
+    "notices": [
+      "thinking_mode_not_forwarded $.thinking.type",
+      "thinking_display_not_forwarded $.thinking.display",
+      "context_management_not_forwarded $.context_management",
+      "diagnostics_not_forwarded $.diagnostics",
+      "reasoning_effort_downgraded $.output_config.effort"
+    ],
+    "readmission": "accepted"
+  },
+  "streams": {
+    "stream-empty": {
+      "live": [
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0},\"container\":null,\"stop_details\":null}}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text"
+          }
+        ],
+        "extensions": [
+          "openai-chat/reasoning_usage at $.usage.completion_tokens_details: {\"reasoning_tokens\":2}"
+        ],
+        "usage": [
+          "inputUncached=8 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-chat)",
+          "output=7 (openai-chat)",
+          "reasoning=2 (openai-chat)"
+        ]
+      },
+      "notices": [
+        "reasoning_usage_not_forwarded $.usage.completion_tokens_details",
+        "late_usage_accounting $.usage"
+      ],
+      "release": "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"container\":null,\"stop_details\":null},\"usage\":{\"input_tokens\":8,\"output_tokens\":7,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    },
+    "stream-text": {
+      "live": [
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0},\"container\":null,\"stop_details\":null}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Golden \"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"reply.\"}}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Golden reply."
+          }
+        ],
+        "extensions": [
+          "openai-chat/reasoning_content at $.choices[0].delta.reasoning_content: \"Golden thinking.\"",
+          "openai-chat/reasoning_usage at $.usage.completion_tokens_details: {\"reasoning_tokens\":2}"
+        ],
+        "usage": [
+          "inputUncached=8 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-chat)",
+          "output=7 (openai-chat)",
+          "reasoning=2 (openai-chat)"
+        ]
+      },
+      "notices": [
+        "reasoning_content_not_forwarded $.choices[0].delta.reasoning_content",
+        "reasoning_usage_not_forwarded $.usage.completion_tokens_details",
+        "late_usage_accounting $.usage"
+      ],
+      "release": "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"container\":null,\"stop_details\":null},\"usage\":{\"input_tokens\":8,\"output_tokens\":7,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    },
+    "stream-text-tool": {
+      "live": [
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0},\"container\":null,\"stop_details\":null}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Before the tool.\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Before the tool."
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Agent",
+            "toolKey": "anthropic-messages-openai-chat/call_golden_1"
+          }
+        ],
+        "extensions": [
+          "openai-chat/reasoning_usage at $.usage.completion_tokens_details: {\"reasoning_tokens\":2}"
+        ],
+        "usage": [
+          "inputUncached=8 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-chat)",
+          "output=7 (openai-chat)",
+          "reasoning=2 (openai-chat)"
+        ]
+      },
+      "intents": [
+        {
+          "responseId": "chatcmpl-golden",
+          "ordinal": 0,
+          "kind": "function",
+          "key": "anthropic-messages-openai-chat/call_golden_1",
+          "name": "Agent",
+          "arguments": "{\"golden\":true}"
+        }
+      ],
+      "notices": [
+        "reasoning_usage_not_forwarded $.usage.completion_tokens_details",
+        "late_usage_accounting $.usage"
+      ],
+      "release": "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_golden_1\",\"name\":\"Agent\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"golden\\\":true}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"container\":null,\"stop_details\":null},\"usage\":{\"input_tokens\":8,\"output_tokens\":7,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "rejectAfterApprove": "refused: stream terminal was already decided"
+    }
+  },
+  "unary": {
+    "unary-empty": {
+      "decodeNotices": [],
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text"
+          }
+        ],
+        "usage": [
+          "inputUncached=11 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=unknown",
+          "output=0 (openai-chat)",
+          "reasoning=unknown"
+        ]
+      },
+      "encodeNotices": [],
+      "clientResponse": "{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":0},\"container\":null,\"stop_details\":null}"
+    },
+    "unary-text": {
+      "decodeNotices": [],
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Golden reply."
+          }
+        ],
+        "usage": [
+          "inputUncached=8 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-chat)",
+          "output=7 (openai-chat)",
+          "reasoning=unknown"
+        ]
+      },
+      "encodeNotices": [],
+      "clientResponse": "{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"Golden reply.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":8,\"output_tokens\":7,\"cache_read_input_tokens\":3},\"container\":null,\"stop_details\":null}"
+    },
+    "unary-text-tool": {
+      "decodeNotices": [],
+      "response": {
+        "id": "chatcmpl-golden",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Before the tool."
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "Agent",
+            "toolKey": "anthropic-messages-openai-chat/call_golden_1"
+          }
+        ],
+        "usage": [
+          "inputUncached=11 (openai-chat)",
+          "cacheWrite=unknown",
+          "cacheRead=unknown",
+          "output=7 (openai-chat)",
+          "reasoning=unknown"
+        ]
+      },
+      "encodeNotices": [],
+      "clientResponse": "{\"id\":\"chatcmpl-golden\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"Before the tool.\"},{\"type\":\"tool_use\",\"id\":\"call_golden_1\",\"name\":\"Agent\",\"input\":{\"golden\":true}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":7},\"container\":null,\"stop_details\":null}"
+    }
+  }
+}

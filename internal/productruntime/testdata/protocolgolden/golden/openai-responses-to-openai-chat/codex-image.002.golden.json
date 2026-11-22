@@ -1,0 +1,12 @@
+{
+  "path": "openai-responses-to-openai-chat",
+  "fixture": "codex-image.002",
+  "decode": {
+    "error": "invalid_client_request at $.input[3].content[1]: json: unknown field \"image_url\"",
+    "notices": [
+      "message_item_identity_not_forwarded $.input[0].id",
+      "message_item_identity_not_forwarded $.input[1].id",
+      "message_item_identity_not_forwarded $.input[2].id"
+    ]
+  }
+}

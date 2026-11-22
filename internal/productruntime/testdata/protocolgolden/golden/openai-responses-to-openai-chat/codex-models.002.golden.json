@@ -1,0 +1,8 @@
+{
+  "path": "openai-responses-to-openai-chat",
+  "fixture": "codex-models.002",
+  "decode": {
+    "error": "invalid_client_request at $.input[0].tools[0]: tool namespace description is empty",
+    "notices": []
+  }
+}

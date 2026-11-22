@@ -1,0 +1,138 @@
+{
+  "path": "openai-responses-original-passthrough",
+  "fixture": "codex-models.002",
+  "decode": {
+    "notices": []
+  },
+  "providerRequest": {
+    "method": "POST",
+    "relativePath": "v1/responses",
+    "headers": {
+      "Accept": [
+        "text/event-stream"
+      ]
+    },
+    "bodyBytes": 61428,
+    "notices": [],
+    "readmission": "accepted"
+  },
+  "streams": {
+    "stream-codex-models.reply-0": {
+      "live": [
+        "data: {\"item\":{\"encrypted_content\":\"WIRE-ENCRYPTED-REASONING-0001\",\"id\":\"rs_wire_1\",\"summary\":[{\"text\":\"WIRE-REASONING-SUMMARY\",\"type\":\"summary_text\"}],\"type\":\"reasoning\"},\"output_index\":0,\"type\":\"response.output_item.done\"}\n\n",
+        "data: {\"item\":{\"content\":[{\"text\":\"WIRE-ASSISTANT-PREAMBLE\",\"type\":\"output_text\"}],\"id\":\"msg_wire_1\",\"phase\":\"commentary\",\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\"},\"output_index\":1,\"type\":\"response.output_item.done\"}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "resp_wire_1",
+        "reportedModel": "fixture",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "WIRE-ASSISTANT-PREAMBLE"
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "exec_command",
+            "toolKey": "openai-responses-call/call_wire_1"
+          }
+        ],
+        "extensions": [
+          "openai-responses/reasoning_summary at $.output[0].summary: {\"text\":\"WIRE-REASONING-SUMMARY\",\"type\":\"summary_text\"}",
+          "openai-responses/reasoning_encrypted_content at $.output[0].encrypted_content: \"WIRE-ENCRYPTED-REASONING-0001\""
+        ],
+        "usage": [
+          "inputUncached=4 (openai-responses)",
+          "cacheWrite=unknown",
+          "cacheRead=7 (openai-responses)",
+          "output=40 (openai-responses)",
+          "reasoning=9 (openai-responses)"
+        ]
+      },
+      "intents": [
+        {
+          "responseId": "resp_wire_1",
+          "ordinal": 0,
+          "kind": "function",
+          "key": "openai-responses-call/call_wire_1",
+          "itemKey": "openai-responses-item/fc_wire_1",
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"echo wire-fixture\"}"
+        }
+      ],
+      "notices": [],
+      "release": "data: {\"item\":{\"arguments\":\"{\\\"cmd\\\":\\\"echo wire-fixture\\\"}\",\"call_id\":\"call_wire_1\",\"id\":\"fc_wire_1\",\"name\":\"exec_command\",\"status\":\"completed\",\"type\":\"function_call\"},\"output_index\":2,\"type\":\"response.output_item.done\"}\n\ndata: {\"response\":{\"created_at\":1,\"id\":\"resp_wire_1\",\"model\":\"fixture\",\"output\":[],\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":7},\"output_tokens\":40,\"output_tokens_details\":{\"reasoning_tokens\":9},\"total_tokens\":51}},\"type\":\"response.completed\"}\n\n",
+      "rejectAfterApprove": "refused: Responses terminal was already decided"
+    },
+    "stream-public-text": {
+      "live": [
+        "data: {\"response\":{\"created_at\":1,\"id\":\"resp_golden_1\",\"model\":\"gpt-6.2-sol\",\"object\":\"response\",\"output\":[],\"status\":\"in_progress\"},\"sequence_number\":0,\"type\":\"response.created\"}\n\n",
+        "data: {\"response\":{\"created_at\":1,\"id\":\"resp_golden_1\",\"model\":\"gpt-6.2-sol\",\"object\":\"response\",\"output\":[],\"status\":\"in_progress\"},\"sequence_number\":1,\"type\":\"response.in_progress\"}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"id\":\"msg_golden_1\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+        "data: {\"type\":\"response.content_part.added\",\"sequence_number\":3,\"item_id\":\"msg_golden_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":4,\"item_id\":\"msg_golden_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Golden \"}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":5,\"item_id\":\"msg_golden_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"reply.\"}\n\n",
+        "data: {\"type\":\"response.output_text.done\",\"sequence_number\":6,\"item_id\":\"msg_golden_1\",\"output_index\":0,\"content_index\":0,\"text\":\"Golden reply.\"}\n\n",
+        "data: {\"type\":\"response.content_part.done\",\"sequence_number\":7,\"item_id\":\"msg_golden_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Golden reply.\",\"annotations\":[]}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"sequence_number\":8,\"output_index\":0,\"item\":{\"id\":\"msg_golden_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Golden reply.\",\"annotations\":[]}]}}\n\n"
+      ],
+      "terminalReceived": true,
+      "response": {
+        "id": "resp_golden_1",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "end_turn",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Golden reply."
+          }
+        ],
+        "usage": [
+          "inputUncached=8 (openai-responses)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-responses)",
+          "output=7 (openai-responses)",
+          "reasoning=0 (openai-responses)"
+        ]
+      },
+      "notices": [],
+      "release": "data: {\"response\":{\"created_at\":1,\"id\":\"resp_golden_1\",\"model\":\"gpt-6.2-sol\",\"object\":\"response\",\"output\":[{\"id\":\"msg_golden_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Golden reply.\",\"annotations\":[]}]}],\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":3},\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":18}},\"sequence_number\":9,\"type\":\"response.completed\"}\n\n",
+      "rejectAfterApprove": "refused: Responses terminal was already decided"
+    }
+  },
+  "unary": {
+    "unary-text-tool": {
+      "decodeNotices": [],
+      "response": {
+        "id": "resp_golden_2",
+        "reportedModel": "golden-upstream-model",
+        "stopReason": "tool_use",
+        "blocks": [
+          {
+            "kind": "text",
+            "text": "Golden reply."
+          },
+          {
+            "kind": "tool_call",
+            "toolName": "exec_command",
+            "toolKey": "openai-responses-call/call_golden_1"
+          }
+        ],
+        "extensions": [
+          "openai-responses/reasoning_summary at $.output[0].summary: {\"type\":\"summary_text\",\"text\":\"Golden summary.\"}",
+          "openai-responses/reasoning_encrypted_content at $.output[0].encrypted_content: \"golden-encrypted\""
+        ],
+        "usage": [
+          "inputUncached=8 (openai-responses)",
+          "cacheWrite=unknown",
+          "cacheRead=3 (openai-responses)",
+          "output=7 (openai-responses)",
+          "reasoning=2 (openai-responses)"
+        ]
+      },
+      "encodeNotices": [],
+      "clientResponse": "{\"created_at\":1,\"id\":\"resp_golden_2\",\"model\":\"gpt-6.2-sol\",\"object\":\"response\",\"output\":[{\"id\":\"rs_golden_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Golden summary.\"}],\"encrypted_content\":\"golden-encrypted\"},{\"id\":\"msg_golden_2\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Golden reply.\",\"annotations\":[]}]},{\"id\":\"fc_golden_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_golden_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"echo golden\\\"}\"}],\"status\":\"completed\",\"usage\":{\"input_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":3},\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":2},\"total_tokens\":18}}"
+    }
+  }
+}
