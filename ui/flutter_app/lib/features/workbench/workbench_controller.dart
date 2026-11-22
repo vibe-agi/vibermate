@@ -3202,6 +3202,15 @@ final class WorkbenchController extends ChangeNotifier
     };
   }
 
+  /// Whether to copy `vibermate` or its full path is not known yet: the
+  /// shell is being asked and has not answered for this command. A launch
+  /// that already came through proves only the form that ran, so this holds
+  /// even then; it lasts at most the check's few seconds.
+  bool get launchFormPending =>
+      terminalManagement &&
+      terminalShellCheckPending &&
+      terminalCommand?.shellFindsCommand == null;
+
   /// Someone can start an agent with the Terminal command, by name or by
   /// its full path.
   bool get terminalCommandWorks => switch (terminalReach) {

@@ -565,6 +565,38 @@ echo "$target"''');
       await close(tester, controller);
     });
 
+    testWidgets('after a launch, Copy still waits for the shell to answer', (
+      tester,
+    ) async {
+      final service = PreviewTerminalCommandService(
+        initial: previewFreshTerminalCommand(PreviewFreshStage.waiting),
+        shellLookup: ShellCommandLookup.notFound,
+        shellDelay: const Duration(seconds: 2),
+      );
+      final controller = await open(
+        tester,
+        stage: PreviewFreshStage.waiting,
+        commands: service,
+      );
+      // The launch proves step 1, but not which form of the command ran.
+      expect(controller.terminalReach, TerminalReach.works);
+      expect(inStep('command', find.text('Done')), findsOne);
+      controller.openAccessSettings();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      TextButton copyButton() => tester.widget<TextButton>(
+        find.byKey(const Key('managed-run-copy-claude')),
+      );
+      expect(copyButton().onPressed, isNull);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      expect(controller.terminalReach, TerminalReach.fullPathWorks);
+      expect(copyButton().onPressed, isNotNull);
+      expect(find.text('~/.local/bin/vibermate run -- claude'), findsWidgets);
+      expect(find.text('vibermate run -- claude'), findsNothing);
+      await close(tester, controller);
+    });
+
     testWidgets('a launch with the full path is Ready on both screens', (
       tester,
     ) async {

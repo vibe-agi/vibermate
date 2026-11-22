@@ -357,8 +357,7 @@ final class LaunchCommandCard extends StatelessWidget {
     final ready = !local || controller.terminalCommand?.ready == true;
     // Until the login shell answers, whether to copy `vibermate` or its
     // full path is not known yet; it takes at most a few seconds.
-    final enabled =
-        ready && (!local || controller.terminalReach != TerminalReach.checking);
+    final enabled = ready && !controller.launchFormPending;
     final setUp = ready ? null : onSetUpCommand;
     return LayoutBuilder(
       builder: (context, constraints) {
