@@ -1078,6 +1078,7 @@ func appendTerminalEvents(
 	if usage.Output.Known {
 		outputTokens = usage.Output.Tokens
 	}
+	stopReason, _ := anthropicStopReason(reason)
 	if err := appendEvent(destination, "message_delta", struct {
 		Type  string `json:"type"`
 		Delta struct {
@@ -1095,7 +1096,7 @@ func appendTerminalEvents(
 			Container    any     `json:"container"`
 			StopDetails  any     `json:"stop_details"`
 		}{
-			StopReason:  string(reason),
+			StopReason:  stopReason,
 			Container:   nil,
 			StopDetails: nil,
 		},

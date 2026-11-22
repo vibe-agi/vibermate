@@ -533,24 +533,41 @@ func reasoningUsageNotice(path string) protocolcore.TranslationReport {
 }
 
 type anthropicResponseWire struct {
-	ID           string                         `json:"id"`
-	Type         string                         `json:"type"`
-	Role         string                         `json:"role"`
-	Model        string                         `json:"model"`
-	Content      []anthropicResponseContentWire `json:"content"`
-	StopReason   string                         `json:"stop_reason"`
-	StopSequence *string                        `json:"stop_sequence"`
-	Usage        anthropicUsageWire             `json:"usage"`
-	Container    any                            `json:"container"`
-	StopDetails  any                            `json:"stop_details"`
+	ID           string             `json:"id"`
+	Type         string             `json:"type"`
+	Role         string             `json:"role"`
+	Model        string             `json:"model"`
+	Content      []any              `json:"content"`
+	StopReason   string             `json:"stop_reason"`
+	StopSequence *string            `json:"stop_sequence"`
+	Usage        anthropicUsageWire `json:"usage"`
+	Container    any                `json:"container"`
+	StopDetails  any                `json:"stop_details"`
 }
 
-type anthropicResponseContentWire struct {
+// anthropicTextContentWire always writes text: Anthropic requires the
+// member, and an empty answer is still a text block with empty text.
+type anthropicTextContentWire struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type anthropicToolUseContentWire struct {
 	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// anthropicStopReason is the stop_reason both Anthropic client encoders
+// write. Anthropic has no incomplete terminal, so a provider's incomplete
+// response reads as end_turn; approximated reports that the caller must
+// declare it.
+func anthropicStopReason(reason protocolcore.StopReason) (value string, approximated bool) {
+	if reason == protocolcore.StopReasonIncomplete {
+		return string(protocolcore.StopReasonEndTurn), true
+	}
+	return string(reason), false
 }
 
 type anthropicUsageWire struct {
@@ -568,11 +585,11 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 			err,
 		)
 	}
-	content := make([]anthropicResponseContentWire, len(response.Blocks))
+	content := make([]any, len(response.Blocks))
 	for index, block := range response.Blocks {
 		switch block.Kind {
 		case protocolcore.BlockText:
-			content[index] = anthropicResponseContentWire{
+			content[index] = anthropicTextContentWire{
 				Type: "text",
 				Text: block.Text,
 			}
@@ -584,7 +601,7 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 					errors.New("only function tool calls can be encoded for Anthropic Messages"),
 				)
 			}
-			content[index] = anthropicResponseContentWire{
+			content[index] = anthropicToolUseContentWire{
 				Type:  "tool_use",
 				ID:    block.ToolCall.Key.WireID(),
 				Name:  block.ToolCall.Name,
@@ -598,7 +615,7 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 			)
 		}
 	}
-	stopReason := string(response.StopReason)
+	stopReason, _ := anthropicStopReason(response.StopReason)
 	var stopSequence *string
 	if response.StopReason == protocolcore.StopReasonStopSequence {
 		value := response.StopSequence
