@@ -528,6 +528,72 @@ func TestStreamFailsClosedOnInconsistentEvents(t *testing.T) {
 	}
 }
 
+// The framing checks this driver shares with the native relay (design 7.1):
+// no duplicated member, an SSE event name that matches its payload, and a
+// bound on the wire bytes of the whole stream. Each case would otherwise
+// stream to a clean terminal, since the decoded value it carries is valid.
+func TestStreamFramingFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	public := publicStream(mappedModel)
+	replaced := func(index int, old, new string) [][]byte {
+		payloads := slices.Clone(public)
+		if !strings.Contains(payloads[index], old) {
+			t.Fatalf("fixture event %d has no %s", index, old)
+		}
+		payloads[index] = strings.Replace(payloads[index], old, new, 1)
+		return [][]byte{sseWire(t, payloads...)}
+	}
+	// The SSE comments carry no event and spend no JSON budget; only the
+	// stream's wire bound counts them.
+	comment := []byte(": " + strings.Repeat("x", 1<<20) + "\n")
+	padded := [][]byte{sseWire(t, public[:len(public)-1]...)}
+	for range 17 {
+		padded = append(padded, comment)
+	}
+	padded = append(padded, sseWire(t, public[len(public)-1]))
+	for _, test := range []struct {
+		name      string
+		fragments [][]byte
+		reason    protocolcore.Reason
+	}{
+		{
+			// The last duplicate is the valid value, so reading it would pass.
+			name:      "a duplicated root member",
+			fragments: replaced(0, `"response":{`, `"response":{"id":"resp_other"},"response":{`),
+			reason:    protocolcore.ReasonMalformedEventStream,
+		},
+		{
+			name:      "a duplicated nested member",
+			fragments: replaced(20, `"name":"Bash"`, `"name":"Write","name":"Bash"`),
+			reason:    protocolcore.ReasonMalformedEventStream,
+		},
+		{
+			name: "an event name that differs from its payload type",
+			fragments: [][]byte{bytes.Replace(sseWire(t, public...),
+				[]byte("event: response.in_progress\n"), []byte("event: response.queued\n"), 1)},
+			reason: protocolcore.ReasonMalformedEventStream,
+		},
+		{
+			name:      "fragments that together exceed the response bound",
+			fragments: padded,
+			reason:    protocolcore.ReasonStreamLimitExceeded,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			side, _ := newStreamSide(t)
+			result, err := feed(t, side, streamRequest(t, "summarized", true), test.fragments...)
+			if protocolcore.ReasonOf(err) != test.reason {
+				t.Fatalf("err = %v, want %s", err, test.reason)
+			}
+			if bytes.Contains(result.live, []byte(`"tool_use"`)) {
+				t.Fatal("a held call reached the client")
+			}
+		})
+	}
+}
+
 func TestStreamDoneMarkerAfterTheTerminalIsAccepted(t *testing.T) {
 	t.Parallel()
 
