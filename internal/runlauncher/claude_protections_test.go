@@ -228,11 +228,12 @@ func TestInstalledClaudeWorkspaceToolsMatchTheClassifier(t *testing.T) {
 		if code != 0 || !parsed || result.IsError || !strings.Contains(result.Result, f.reply) {
 			t.Errorf("the turn did not complete: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
-		// Every request must decode for the Anthropic route, the only one on
-		// which the gate sees Claude Code's own definitions. Once ToolSearch
-		// has loaded a tool, each later request carries its tool_reference
-		// result, which the translated route refuses; that limit is the turn
-		// test's concern, so it is logged per request above, not failed here.
+		// Every request must decode for the Anthropic route, whose decode
+		// C2 hands the gate. Once ToolSearch has loaded a tool, each later
+		// request carries its tool_reference result, which the translated
+		// decode refuses, so such a request cannot cross a translated route
+		// at all. That limit is the turn test's concern: it is logged per
+		// request above, not failed here.
 		f.checkWire(t, false)
 	})
 
