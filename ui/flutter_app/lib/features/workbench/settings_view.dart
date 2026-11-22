@@ -1701,7 +1701,12 @@ final class _AccessSettingsPaneState extends State<_AccessSettingsPane> {
       ],
       if (controller.runtimeServerURL.isNotEmpty) ...[
         const SizedBox(height: 16),
-        _editorGuide(),
+        _AccessSection(
+          key: const Key('access-editor-section'),
+          title: copy('settings.access.editor.title'),
+          detail: copy('settings.access.editor.detail'),
+          children: [_editorGuide()],
+        ),
       ],
       if (controller.serverManagement || controller.webPrincipal != null) ...[
         const SizedBox(height: 16),

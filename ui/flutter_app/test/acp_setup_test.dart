@@ -41,6 +41,18 @@ void main() {
               as Map<String, dynamic>;
       Map<String, dynamic> config(String key) =>
           document()[key] as Map<String, dynamic>;
+      // Step 1 installs the adapter for the chosen agent.
+      expect(
+        tester
+            .widget<SelectableText>(
+              find.descendant(
+                of: find.byKey(const Key('acp-install-command')),
+                matching: find.byType(SelectableText),
+              ),
+            )
+            .data,
+        'npm install -g @agentclientprotocol/codex-acp@1.13.1',
+      );
       expect(config('agent_servers')['vibermate-codex'], {
         'type': 'custom',
         'command': '/Applications/My App/vibermate',
@@ -105,7 +117,27 @@ void main() {
         'agent',
         'acp',
       ]);
-      expect(find.text(copy('acp.boundary')), findsOneWidget);
+      // The limitation comes before any field.
+      final limitation = find.byKey(const Key('acp-setup-limitation'));
+      expect(find.text(copy('acp.setup.limitation')), findsOneWidget);
+      expect(
+        tester.getRect(limitation).top,
+        lessThan(tester.getRect(find.byKey(const Key('acp-agent-kind'))).top),
+      );
+      // The configuration scrolls sideways at phone width, unwrapped.
+      expect(
+        find.ancestor(
+          of: find.byKey(const Key('acp-editor-json')),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is SingleChildScrollView &&
+                widget.scrollDirection == Axis.horizontal,
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('acp-install-command')), findsNothing);
+      expect(find.text(copy('acp.setup.install.cursor')), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

@@ -230,6 +230,20 @@ final class AppCopy {
     'acp.user': 'You → Agent',
     'acp.agent': 'Agent → Editor',
     'acp.setup.title': 'Connect an ACP editor',
+    'acp.setup.limitation':
+        'ViberMate only observes editor sessions. Routing, accounts, scripts (including privacy scripts) and network exits don\'t apply to them.',
+    'acp.setup.agent': 'Agent',
+    'acp.setup.step.install': 'Install the adapter',
+    'acp.setup.step.choose': 'Choose your editor',
+    'acp.setup.step.copy':
+        'Copy the configuration into your editor\'s settings',
+    'acp.setup.install.copy': 'Copy install command',
+    'acp.setup.install.claude_node': 'Needs Node 22 or newer.',
+    'acp.setup.install.cursor':
+        'Cursor CLI needs no adapter: it speaks ACP itself.',
+    'acp.setup.guide': 'Setup guide',
+    'acp.setup.guide_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/acp-quickstart.md',
     'acp.login_required':
         'The Agent reports that login is required. Complete its authentication in the editor, then retry. This is the Agent’s account, not your ViberMate Runtime login.',
     'acp.setup.detail':
@@ -3661,6 +3675,17 @@ final class AppCopy {
     'acp.user': '你 → Agent',
     'acp.agent': 'Agent → 编辑器',
     'acp.setup.title': '接入 ACP 编辑器',
+    'acp.setup.limitation': 'ViberMate 只观察编辑器会话，不会对其应用流量策略、账号、脚本（包括隐私脚本）和网络出口。',
+    'acp.setup.agent': 'Agent',
+    'acp.setup.step.install': '安装适配器',
+    'acp.setup.step.choose': '选择编辑器',
+    'acp.setup.step.copy': '把配置复制到编辑器设置中',
+    'acp.setup.install.copy': '复制安装命令',
+    'acp.setup.install.claude_node': '需要 Node 22 或更高版本。',
+    'acp.setup.install.cursor': 'Cursor CLI 无需适配器，它本身支持 ACP。',
+    'acp.setup.guide': '设置指南',
+    'acp.setup.guide_url':
+        'https://github.com/vibe-agi/vibermate/blob/main/docs/acp-quickstart.md',
     'acp.login_required':
         'Agent 提示需要登录。请在编辑器中完成 Agent 身份验证后重试。这是 Agent 的账号，不是 ViberMate Runtime 登录。',
     'acp.setup.detail':
