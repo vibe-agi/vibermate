@@ -17,6 +17,8 @@ import '../../core/api/control_api.dart' show ControlProblem;
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
 import 'egress_profile_editor.dart';
+import 'launch_command.dart';
+import 'setup_guide.dart' show SetupFactsWatcher;
 import 'runtime_connection_guide.dart';
 import 'server_deployment_guide.dart';
 import 'network_exit_usage.dart';
@@ -1444,8 +1446,14 @@ final class _AccessSettingsPane extends StatelessWidget {
   final WorkbenchController controller;
   final AppCopy copy;
 
+  // On this Mac, showing the page or returning to the window rechecks the
+  // Terminal command, whether Terminal finds it, and the certificate.
   @override
-  Widget build(BuildContext context) => _SettingsPaneLayout(
+  Widget build(BuildContext context) => controller.terminalManagement
+      ? SetupFactsWatcher(controller: controller, child: _accessPane(context))
+      : _accessPane(context);
+
+  Widget _accessPane(BuildContext context) => _SettingsPaneLayout(
     scrollKey: const Key('settings-access-scroll'),
     children: [
       _SettingsPaneHeader(
@@ -4543,7 +4551,9 @@ final class _TerminalCommandPanel extends StatelessWidget {
                       controller.terminalCommandLoading ||
                           controller.terminalCommandMutating
                       ? null
-                      : () => unawaited(controller.refreshTerminalCommand()),
+                      : () => unawaited(
+                          controller.refreshTerminalCommand(checkShell: true),
+                        ),
                   icon: controller.terminalCommandLoading
                       ? const SizedBox.square(
                           dimension: 13,
@@ -4616,6 +4626,12 @@ final class _TerminalCommandStatusView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lookup = status.ready ? status.shellFindsCommand : null;
+    // Set up, but a new Terminal window does not find it: a warning, not
+    // 'Ready', until the person's shell looks in ~/.local/bin.
+    final notOnPath =
+        status.state == TerminalCommandState.current &&
+        lookup == ShellCommandLookup.notFound;
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
       child: Column(
@@ -4624,26 +4640,45 @@ final class _TerminalCommandStatusView extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final narrow = constraints.maxWidth < 560;
-              final summary = Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  StatusPill(
-                    label: copy('terminal.state.${status.state.wireName}'),
-                    color: _stateColor(context, status.state),
-                    icon: _stateIcon(status.state),
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 1),
-                      child: Text(
-                        copy('terminal.state_detail.${status.state.wireName}'),
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ),
-                ],
+              final pill = StatusPill(
+                key: const Key('terminal-command-state'),
+                label: copy(
+                  notOnPath
+                      ? 'terminal.state.not_on_path'
+                      : 'terminal.state.${status.state.wireName}',
+                ),
+                color: notOnPath
+                    ? context.viberColors.warning
+                    : _stateColor(context, status.state),
+                icon: notOnPath ? Icons.search_off : _stateIcon(status.state),
               );
+              final detail = Text(
+                copy(
+                  notOnPath
+                      ? 'terminal.state_detail.not_on_path'
+                      : 'terminal.state_detail.${status.state.wireName}',
+                ),
+                style: Theme.of(context).textTheme.bodyMedium,
+              );
+              // The longer warning sits above its explanation.
+              final summary = notOnPath
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [pill, const SizedBox(height: 6), detail],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        pill,
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: detail,
+                          ),
+                        ),
+                      ],
+                    );
               final actions = _TerminalCommandActions(
                 controller: controller,
                 copy: copy,
@@ -4665,6 +4700,13 @@ final class _TerminalCommandStatusView extends StatelessWidget {
               );
             },
           ),
+          if (lookup == ShellCommandLookup.notFound) ...[
+            const SizedBox(height: 9),
+            TerminalPathHint(status: status, copy: copy),
+          ] else if (lookup == ShellCommandLookup.unknown) ...[
+            const SizedBox(height: 9),
+            TerminalPathFallback(status: status, copy: copy),
+          ],
           const SizedBox(height: 3),
           _TerminalCommandDetails(
             key: ValueKey('terminal-command-details-${status.state.wireName}'),
@@ -4951,7 +4993,11 @@ Future<void> confirmTerminalCommandChange(
             ),
             const SizedBox(height: 10),
             Text(
-              copy('terminal.confirm.boundary'),
+              copy(
+                operation == TerminalCommandOperation.remove
+                    ? 'terminal.confirm.remove.boundary'
+                    : 'terminal.confirm.boundary',
+              ),
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -4986,7 +5032,8 @@ Color _stateColor(BuildContext context, TerminalCommandState state) =>
 
 IconData _stateIcon(TerminalCommandState state) => switch (state) {
   TerminalCommandState.current => Icons.check_circle_outline,
-  TerminalCommandState.notInstalled => Icons.remove_circle_outline,
+  // A state, not a second 'Set up' button: a hollow circle.
+  TerminalCommandState.notInstalled => Icons.radio_button_unchecked,
   TerminalCommandState.sourceUpdated => Icons.update,
   TerminalCommandState.targetMissing => Icons.link_off,
   _ => Icons.error_outline,

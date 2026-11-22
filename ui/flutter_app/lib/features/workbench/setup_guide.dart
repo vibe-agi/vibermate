@@ -9,7 +9,7 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'agent_connection.dart';
-import 'routing_set_name.dart';
+import 'launch_command.dart';
 import 'settings_view.dart'
     show confirmTerminalCommandChange, rootCAErrorMessage;
 import 'workbench_controller.dart';
@@ -39,6 +39,7 @@ final class SetupGuideProgress {
     required this.startedRun,
     required this.failedLaunch,
     required this.observed,
+    this.launched = false,
     this.blocked = false,
   });
 
@@ -69,6 +70,7 @@ final class SetupGuideProgress {
       startedRun: started,
       failedLaunch: latest != null && latest.stoppedBeforeStart ? latest : null,
       observed: captures.any((capture) => capture.observation == 'observed'),
+      launched: managed.isNotEmpty,
       blocked:
           started != null &&
           agentCannotConnect(
@@ -94,24 +96,34 @@ final class SetupGuideProgress {
   final CaptureRecord? failedLaunch;
   final bool observed;
 
+  /// A `vibermate run` launch reached ViberMate, which proves Terminal found
+  /// the command however it was typed.
+  final bool launched;
+
   /// The started agent cannot connect through ViberMate, so its first
   /// request will never arrive.
   final bool blocked;
 
-  bool get commandReady =>
-      !local ||
-      command?.state == TerminalCommandState.current ||
-      command?.state == TerminalCommandState.sourceUpdated;
+  /// The command is set up, so its launch commands can be copied.
+  bool get commandInstalled => !local || command?.ready == true;
+
+  /// Set up, and a new Terminal window finds it: the shell said so, could
+  /// not be asked, or a launch already came through it.
+  bool get commandFound =>
+      commandInstalled &&
+      (!local ||
+          launched ||
+          command!.shellFindsCommand != ShellCommandLookup.notFound);
 
   SetupStepState get commandStep => !local
       ? SetupStepState.hint
-      : commandReady
+      : commandFound
       ? SetupStepState.done
       : SetupStepState.current;
 
   SetupStepState get startStep => startedRun != null
       ? SetupStepState.done
-      : commandReady
+      : commandInstalled
       ? SetupStepState.current
       : SetupStepState.upcoming;
 
@@ -125,17 +137,6 @@ final class SetupGuideProgress {
   /// ViberMate's certificate (the launcher's own check).
   bool get codexNeedsRoot => rootTrusted == false;
 }
-
-/// The launch command for [client] ('claude' or 'codex'), as this App or a
-/// Server's own computer would run it.
-String setupLaunchCommand(WorkbenchController controller, String client) =>
-    '${_runCommandPrefix(controller)}-- $client';
-
-/// `vibermate run `, with the Server to sign in to when this is not the App.
-String _runCommandPrefix(WorkbenchController controller) =>
-    controller.terminalManagement || controller.runtimeServerURL.isEmpty
-    ? 'vibermate run '
-    : 'vibermate run --server ${controller.runtimeServerURL} ';
 
 /// The routing set a launch ran on: the selected session's assignment once
 /// read, otherwise the one the session list names. Null when none is known.
@@ -158,22 +159,11 @@ String? launchRoutingSetId(
 ) {
   final program = capture.managedRun?.executableLabel ?? setupClientOf(capture);
   final routingSet = launchRoutingSetId(controller, capture);
-  final environment = routingSet == null || routingSet == builtInRoutingSetId
-      ? ''
-      : '--env ${_shellWord(routingSet)} ';
   return (
-    command:
-        '${_runCommandPrefix(controller)}$environment-- ${_shellWord(program)}',
+    command: launchCommand(controller, program, routingSetId: routingSet),
     sameRoutingSet: routingSet != null,
   );
 }
-
-/// [value] as one word for Terminal: unchanged when it has no characters a
-/// shell treats specially, otherwise in single quotes.
-String _shellWord(String value) =>
-    RegExp(r'^[A-Za-z0-9._+@%=:,/-]+$').hasMatch(value)
-    ? value
-    : "'${value.replaceAll("'", r"'\''")}'";
 
 /// The agent a run launched: 'codex' or 'claude'.
 String setupClientOf(CaptureRecord capture) =>
@@ -296,14 +286,6 @@ final class _SetupGuideState extends State<SetupGuide> {
   String? _copied;
   bool _copyFailed = false;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(widget.controller.refreshSetupFacts());
-    });
-  }
-
   Future<void> _copy(String key, String text) async {
     try {
       await Clipboard.setData(ClipboardData(text: text));
@@ -326,7 +308,7 @@ final class _SetupGuideState extends State<SetupGuide> {
     final controller = widget.controller;
     final copy = widget.copy;
     final progress = SetupGuideProgress.of(controller);
-    return LayoutBuilder(
+    final guide = LayoutBuilder(
       builder: (context, constraints) {
         // Each step's button goes under its text when the guide is narrow,
         // which also happens beside an open directory on a small window.
@@ -369,6 +351,7 @@ final class _SetupGuideState extends State<SetupGuide> {
         );
       },
     );
+    return SetupFactsWatcher(controller: controller, child: guide);
   }
 
   Widget _commandStep(
@@ -389,6 +372,31 @@ final class _SetupGuideState extends State<SetupGuide> {
         copy: copy,
         summary: copy('terminal.state_detail.current'),
         narrow: narrow,
+      );
+    }
+    if (status != null && progress.commandInstalled) {
+      // Set up, but a new Terminal window does not find it yet.
+      return _SetupStep(
+        key: const Key('setup-step-command'),
+        number: 1,
+        state: state,
+        title: copy('setup.command.title'),
+        copy: copy,
+        status: StatusPill(
+          label: copy('terminal.state.not_on_path'),
+          color: context.viberColors.warning,
+        ),
+        detail: copy('terminal.state_detail.not_on_path'),
+        action: OutlinedButton.icon(
+          key: const Key('setup-command-check'),
+          onPressed: controller.terminalCommandLoading
+              ? null
+              : () => unawaited(controller.checkTerminalShell()),
+          icon: const Icon(Icons.refresh, size: 14),
+          label: Text(copy('setup.command.check')),
+        ),
+        narrow: narrow,
+        children: [TerminalPathHint(status: status, copy: copy)],
       );
     }
     final busy =
@@ -537,9 +545,9 @@ final class _SetupGuideState extends State<SetupGuide> {
         failed == null &&
         progress.rootTrusted == true &&
         controller.rootTrustedHere;
-    final enabled = progress.commandReady;
+    final enabled = progress.commandInstalled;
     Widget commandRow(String client, String label) {
-      final command = setupLaunchCommand(controller, client);
+      final command = launchCommand(controller, client);
       return _SetupCommandRow(
         key: Key('setup-command-$client'),
         label: label,
@@ -762,6 +770,52 @@ final class _SetupGuideState extends State<SetupGuide> {
   }
 }
 
+/// Rereads what setting up depends on when [child] first shows, and again
+/// whenever the window regains focus while it is on screen: meanwhile the
+/// person may have set up the command, fixed their PATH in Terminal or
+/// trusted the certificate.
+final class SetupFactsWatcher extends StatefulWidget {
+  const SetupFactsWatcher({
+    required this.controller,
+    required this.child,
+    super.key,
+  });
+
+  final WorkbenchController controller;
+  final Widget child;
+
+  @override
+  State<SetupFactsWatcher> createState() => _SetupFactsWatcherState();
+}
+
+final class _SetupFactsWatcherState extends State<SetupFactsWatcher>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(widget.controller.refreshSetupFacts());
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      unawaited(widget.controller.refreshSetupFacts());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// One numbered step: a marker, the title with its status, the action, one
 /// muted line, and what the step needs below. A finished step is one line.
 final class _SetupStep extends StatelessWidget {
@@ -835,14 +889,12 @@ final class _SetupStep extends StatelessWidget {
         ),
       );
     }
-    final heading = Row(
-      children: [
-        Flexible(child: titleText),
-        if (status case final pill?) ...[
-          const SizedBox(width: ViberSpacing.md),
-          pill,
-        ],
-      ],
+    // A long status goes under the title rather than squeezing it.
+    final heading = Wrap(
+      spacing: ViberSpacing.md,
+      runSpacing: ViberSpacing.xs,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [titleText, ?status],
     );
     // A button beside the title makes the heading row taller than the
     // title; the marker is centred on that row so it stays level with it.

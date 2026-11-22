@@ -2681,14 +2681,19 @@ final class WorkbenchController extends ChangeNotifier
     notifyListeners();
   }
 
-  /// Rereads what the guide's steps depend on. The guide calls this when it
-  /// first shows and the window regains focus; never on the five-second poll,
-  /// because the Terminal command check starts the packaged binary.
+  /// Rereads what the guide's steps depend on, and asks the login shell
+  /// whether it finds the Terminal command. The guide and Access and launch
+  /// call this when they first show and when the window regains focus; never
+  /// on the five-second poll, because the Terminal command check starts the
+  /// packaged binary and the shell check starts the person's shell.
   Future<void> refreshSetupFacts() async {
     if (_disposed) return;
     await Future.wait([
       if (terminalManagement)
-        refreshTerminalCommand(quiet: terminalCommand != null),
+        refreshTerminalCommand(
+          quiet: terminalCommand != null,
+          checkShell: true,
+        ),
       if (rootTrustManagement) refreshRootCA(quiet: rootCAStatus != null),
       // A Server's guide shows its own address in the commands.
       if (!terminalManagement && serverManagement && serverAccess == null)
@@ -3050,7 +3055,13 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
-  Future<void> refreshTerminalCommand({bool quiet = false}) async {
+  /// Rereads the Terminal command. [checkShell] also asks the login shell
+  /// whether a new Terminal window finds it; the five-second poll never
+  /// does, because that starts the person's shell and runs their profile.
+  Future<void> refreshTerminalCommand({
+    bool quiet = false,
+    bool checkShell = false,
+  }) async {
     if (_disposed || terminalCommandLoading || terminalCommandMutating) return;
     if (!quiet) {
       terminalCommandLoading = true;
@@ -3060,7 +3071,7 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = await _terminalCommands.inspect();
       if (_disposed) return;
-      terminalCommand = updated;
+      terminalCommand = _withShellCheck(updated);
       terminalCommandLoading = false;
       notifyListeners();
     } catch (error) {
@@ -3068,8 +3079,61 @@ final class WorkbenchController extends ChangeNotifier
       terminalCommandLoading = false;
       terminalCommandError = _terminalCommandError(error);
       notifyListeners();
+      return;
     }
+    if (checkShell) await checkTerminalShell();
   }
+
+  /// What the login shell last answered for the command at
+  /// [_shellCheckTarget]. A status read keeps it while that target stays.
+  ShellCommandCheck? _shellCheck;
+  String? _shellCheckTarget;
+  bool _shellCheckRunning = false;
+
+  TerminalCommandStatus _withShellCheck(TerminalCommandStatus status) {
+    final check = _shellCheck;
+    if (check == null ||
+        !status.ready ||
+        status.targetPath != _shellCheckTarget) {
+      return status;
+    }
+    return status.withShellCheck(check);
+  }
+
+  /// Asks the login shell whether a new Terminal window finds the installed
+  /// command. Runs after setting the command up or repairing it, on the
+  /// Terminal card's refresh button, and when Settings or the setup guide
+  /// shows or the window regains focus; never on the poll.
+  Future<void> checkTerminalShell() async {
+    final status = terminalCommand;
+    if (_disposed ||
+        !terminalManagement ||
+        status == null ||
+        !status.ready ||
+        _shellCheckRunning) {
+      return;
+    }
+    _shellCheckRunning = true;
+    ShellCommandCheck check;
+    try {
+      check = await _terminalCommands.checkShell(status);
+    } on Object {
+      check = ShellCommandCheck.unknown;
+    }
+    _shellCheckRunning = false;
+    if (_disposed) return;
+    final current = terminalCommand;
+    if (current == null || current.targetPath != status.targetPath) return;
+    _shellCheck = check;
+    _shellCheckTarget = status.targetPath;
+    terminalCommand = _withShellCheck(current);
+    notifyListeners();
+  }
+
+  /// A `vibermate run` launch reached this Runtime, which proves Terminal
+  /// found the command, however it was typed.
+  bool get launchedFromTerminal =>
+      data?.captures.any((capture) => capture.kind == 'managed_run') ?? false;
 
   // Once per App startup, maintain only an existing receipt-owned link.
   // Never install a new command or replace a package-manager/user-owned file.
@@ -3177,7 +3241,8 @@ final class WorkbenchController extends ChangeNotifier
     try {
       final updated = await _terminalCommands.execute(operation);
       if (_disposed) return false;
-      terminalCommand = updated;
+      if (operation == TerminalCommandOperation.remove) _shellCheck = null;
+      terminalCommand = _withShellCheck(updated);
       terminalCommandNotice = switch (operation) {
         TerminalCommandOperation.install => 'terminal.notice.installed',
         TerminalCommandOperation.refresh => 'terminal.notice.refreshed',
@@ -3186,12 +3251,17 @@ final class WorkbenchController extends ChangeNotifier
       };
       terminalCommandMutating = false;
       notifyListeners();
+      // A command just set up or repaired is only useful once a new Terminal
+      // window finds it.
+      if (operation != TerminalCommandOperation.remove) {
+        unawaited(checkTerminalShell());
+      }
       return true;
     } catch (error) {
       if (_disposed) return false;
       final original = _terminalCommandError(error);
       try {
-        terminalCommand = await _terminalCommands.inspect();
+        terminalCommand = _withShellCheck(await _terminalCommands.inspect());
       } on Object {
         // Preserve the mutation failure; reconciliation is best effort only.
       }

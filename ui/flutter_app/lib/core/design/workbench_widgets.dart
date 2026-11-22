@@ -916,13 +916,17 @@ final class StatusPill extends StatelessWidget {
                   color: tone,
                 ),
                 const SizedBox(width: ViberSpacing.xs),
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: tone,
-                    fontSize: ViberType.utility,
-                    height: 1.15,
-                    fontWeight: FontWeight.w600,
+                // A pill narrower than its label wraps it instead of
+                // overflowing.
+                Flexible(
+                  child: Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: tone,
+                      fontSize: ViberType.utility,
+                      height: 1.15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],

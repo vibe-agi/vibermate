@@ -846,6 +846,7 @@ final class AppCopy {
     'setup.command.detail':
         'Adds the vibermate command for Terminal (in ~/\u2060.local/\u2060bin). Nothing else on your Mac changes.',
     'setup.command.open_settings': 'Open Terminal settings',
+    'setup.command.check': 'Check again',
     'setup.start.title': 'Start Claude Code or Codex',
     'setup.start.detail':
         'In Terminal, go to your project folder and run one of these. Keep ViberMate open while you work.',
@@ -3369,13 +3370,14 @@ final class AppCopy {
         'ViberMate manages only its exact ~/.local/bin/vibermate symlink and private ownership record. Shell profiles are never edited.',
     'terminal.manual_resolution':
         'This item is not proven to belong to ViberMate, so the App will not replace or remove it.',
-    'terminal.state.not_installed': 'Set up',
+    'terminal.state.not_installed': 'Not set up',
     'terminal.state.current': 'Ready',
     'terminal.state.source_updated': 'Update available',
     'terminal.state.source_missing': 'Needs attention',
     'terminal.state.target_missing': 'Repair needed',
     'terminal.state.unowned_target': 'Location in use',
     'terminal.state.conflict': 'Needs attention',
+    'terminal.state.not_on_path': 'Installed · Terminal can\'t find it yet',
     'terminal.state_detail.not_installed':
         'Set it up once, then copy an Agent launch command below.',
     'terminal.state_detail.current': 'vibermate is ready to use in Terminal.',
@@ -3389,14 +3391,22 @@ final class AppCopy {
         'Another item already uses the vibermate Terminal location. ViberMate left it unchanged.',
     'terminal.state_detail.conflict':
         'This Terminal entry changed outside ViberMate. It was left unchanged.',
+    'terminal.state_detail.not_on_path':
+        'If Terminal says “command not found: vibermate”, open a new Terminal window. Still not found? Run this line once, or use the full path below.',
+    'terminal.path.run_once': 'Run once in Terminal, then open a new window',
+    'terminal.path.full_path': 'Or start with the full path',
+    'terminal.path.copy_line': 'Copy the PATH line',
+    'terminal.path.copy_full': 'Copy the full-path command',
+    'terminal.path.unknown':
+        'If Terminal says “command not found”, use the full path shown below.',
     'terminal.action.install': 'Set up command',
     'terminal.action.refresh': 'Use updated command',
     'terminal.action.repair': 'Repair command',
     'terminal.action.remove': 'Remove from Terminal',
     'terminal.action.clean_record': 'Clean stale record',
-    'terminal.confirm.install.title': 'Install vibermate for Terminal?',
+    'terminal.confirm.install.title': 'Set up the vibermate command?',
     'terminal.confirm.install.detail':
-        'Create a ViberMate-owned symbolic link at {target}. No existing object will be replaced.',
+        'ViberMate will add the vibermate command at {target}. It won\'t replace any existing file or change your shell settings.',
     'terminal.confirm.refresh.title': 'Acknowledge the packaged update?',
     'terminal.confirm.refresh.detail':
         'Refresh the private ownership record for {target}. The existing link is not replaced.',
@@ -3407,7 +3417,8 @@ final class AppCopy {
     'terminal.confirm.remove.detail':
         'Remove {target} only if its exact link and ownership record still belong to this App.',
     'terminal.confirm.boundary':
-        'A changed or unowned file is refused. Conversation and traffic evidence are unaffected.',
+        'You can remove it here at any time. Your saved sessions are not affected.',
+    'terminal.confirm.remove.boundary': 'Your saved sessions are not affected.',
     'terminal.notice.installed': 'Terminal command installed.',
     'terminal.notice.refreshed': 'Terminal command update acknowledged.',
     'terminal.notice.auto_refreshed':
@@ -4108,6 +4119,7 @@ final class AppCopy {
     'setup.command.detail':
         '为终端添加 vibermate 命令（位于 ~/\u2060.local/\u2060bin），不会改动这台 Mac 上的其他内容。',
     'setup.command.open_settings': '打开终端设置',
+    'setup.command.check': '重新检查',
     'setup.start.title': '启动 Claude Code 或 Codex',
     'setup.start.detail': '在终端中进入项目目录，运行下面任一命令。使用 Agent 期间请保持 ViberMate 打开。',
     'setup.start.copy': '复制',
@@ -6239,6 +6251,7 @@ final class AppCopy {
     'terminal.state.target_missing': '需要修复',
     'terminal.state.unowned_target': '位置已占用',
     'terminal.state.conflict': '需要处理',
+    'terminal.state.not_on_path': '已安装 · 终端暂时找不到它',
     'terminal.state_detail.not_installed': '设置一次后，即可在下方复制 Agent 启动命令。',
     'terminal.state_detail.current': '现在可以在终端中使用 vibermate。',
     'terminal.state_detail.source_updated': 'ViberMate 已更新，请确认新命令后再使用。',
@@ -6247,14 +6260,21 @@ final class AppCopy {
     'terminal.state_detail.unowned_target':
         '另一个项目占用了 vibermate 的终端位置，ViberMate 未对它做任何修改。',
     'terminal.state_detail.conflict': '此终端入口在 ViberMate 外发生了变化，现已保持原样。',
+    'terminal.state_detail.not_on_path':
+        '如果终端提示“command not found: vibermate”，请新开一个终端窗口。仍然找不到？运行一次下面这行，或使用下方的完整路径。',
+    'terminal.path.run_once': '在终端中运行一次，然后新开一个窗口',
+    'terminal.path.full_path': '或使用完整路径启动',
+    'terminal.path.copy_line': '复制 PATH 设置命令',
+    'terminal.path.copy_full': '复制完整路径命令',
+    'terminal.path.unknown': '如果终端提示“command not found”，请使用下方显示的完整路径。',
     'terminal.action.install': '设置终端命令',
     'terminal.action.refresh': '使用新命令',
     'terminal.action.repair': '一键修复',
     'terminal.action.remove': '从终端移除',
     'terminal.action.clean_record': '清理失效记录',
-    'terminal.confirm.install.title': '为终端安装 vibermate？',
+    'terminal.confirm.install.title': '设置 vibermate 命令？',
     'terminal.confirm.install.detail':
-        '在 {target} 创建由 ViberMate 管理的符号链接；不会替换任何现有对象。',
+        'ViberMate 将在 {target} 添加 vibermate 命令，不会替换已有文件，也不会修改你的 shell 配置。',
     'terminal.confirm.refresh.title': '确认打包命令更新？',
     'terminal.confirm.refresh.detail': '刷新 {target} 的私有归属记录，不会替换已有链接。',
     'terminal.confirm.repair.title': '修复终端命令？',
@@ -6262,7 +6282,8 @@ final class AppCopy {
         '只清理 ViberMate 精确匹配的失效记录，再重新创建 {target}；不会替换任何现有对象。',
     'terminal.confirm.remove.title': '移除终端命令？',
     'terminal.confirm.remove.detail': '只有当 {target} 的精确链接和归属记录仍属于此 App 时才会移除。',
-    'terminal.confirm.boundary': '已变化或无归属的文件会被拒绝；对话与流量证据不受影响。',
+    'terminal.confirm.boundary': '随时可以在这里移除，已保存的运行记录不受影响。',
+    'terminal.confirm.remove.boundary': '已保存的运行记录不受影响。',
     'terminal.notice.installed': '终端命令已安装。',
     'terminal.notice.refreshed': '已确认终端命令更新。',
     'terminal.notice.auto_refreshed': '终端命令已随 App 更新同步。新启动的运行将使用更新后的命令。',

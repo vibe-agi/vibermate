@@ -936,7 +936,7 @@ void main() {
       final panel = find.byKey(const Key('terminal-command-panel'));
       expect(panel, findsOneWidget);
       await tester.ensureVisible(panel);
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
       expect(find.byKey(const Key('terminal-command-install')), findsOneWidget);
       expect(
         tester
@@ -953,14 +953,14 @@ void main() {
         find.byKey(const Key('terminal-command-confirmation')),
         findsOneWidget,
       );
-      expect(find.text('Install vibermate for Terminal?'), findsOneWidget);
+      expect(find.text('Set up the vibermate command?'), findsOneWidget);
       expect(
-        find.textContaining('No existing object will be replaced.'),
+        find.textContaining("It won't replace any existing file"),
         findsOneWidget,
       );
       await tester.tap(find.text('Cancel').last);
       await tester.pumpAndSettle();
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('terminal-command-install')));
       await tester.pumpAndSettle();
@@ -1021,7 +1021,7 @@ void main() {
         find.byKey(const Key('terminal-command-confirm-action')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Set up'), findsOneWidget);
+      expect(find.text('Not set up'), findsOneWidget);
       expect(find.text('Owned Terminal command removed.'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
@@ -1052,7 +1052,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(install);
     await tester.pumpAndSettle();
-    expect(find.text('为终端安装 vibermate？'), findsOneWidget);
+    expect(find.text('设置 vibermate 命令？'), findsOneWidget);
     expect(
       find.byKey(const Key('terminal-command-confirm-action')),
       findsOneWidget,

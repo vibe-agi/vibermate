@@ -16,4 +16,8 @@ final class PackagedTerminalCommandService implements TerminalCommandService {
       Future.error(
         const TerminalCommandException(TerminalCommandFailure.unavailable),
       );
+
+  @override
+  Future<ShellCommandCheck> checkShell(TerminalCommandStatus status) async =>
+      ShellCommandCheck.unknown;
 }

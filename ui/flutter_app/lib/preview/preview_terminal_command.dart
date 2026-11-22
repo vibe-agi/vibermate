@@ -1,16 +1,28 @@
 import '../core/bootstrap/terminal_command.dart';
 
 final class PreviewTerminalCommandService implements TerminalCommandService {
-  PreviewTerminalCommandService({TerminalCommandStatus? initial})
-    : _status =
-          initial ??
-          const TerminalCommandStatus(
-            state: TerminalCommandState.notInstalled,
-            sourcePath: '/Applications/ViberMate.app/Contents/MacOS/vibermate',
-            targetPath: '/Users/preview/.local/bin/vibermate',
-          );
+  PreviewTerminalCommandService({
+    TerminalCommandStatus? initial,
+    this.shellLookup = ShellCommandLookup.found,
+  }) : _status =
+           initial ??
+           const TerminalCommandStatus(
+             state: TerminalCommandState.notInstalled,
+             sourcePath: '/Applications/ViberMate.app/Contents/MacOS/vibermate',
+             targetPath: '/Users/preview/.local/bin/vibermate',
+           );
 
   TerminalCommandStatus _status;
+
+  /// What a new Terminal window answers once the command is set up: found,
+  /// as on most Macs, unless the preview asks for another answer.
+  ShellCommandLookup shellLookup;
+
+  @override
+  Future<ShellCommandCheck> checkShell(TerminalCommandStatus status) async =>
+      status.ready
+      ? ShellCommandCheck(shellLookup, shell: 'zsh')
+      : ShellCommandCheck.unknown;
 
   @override
   Future<TerminalCommandStatus> inspect() async => _status;
