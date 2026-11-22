@@ -1042,6 +1042,18 @@ final class WorkbenchController extends ChangeNotifier
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
   RootCAStatus? rootCAStatus;
+
+  /// Set once 'Install and trust' succeeds in this app session: the launches
+  /// that had already stopped before their agent started by then.
+  Set<String>? _launchesStoppedBeforeRootTrust;
+
+  /// This Mac came to trust ViberMate's certificate from this app session.
+  bool get rootTrustedHere => _launchesStoppedBeforeRootTrust != null;
+
+  /// [capture] stopped before this Mac came to trust ViberMate's certificate
+  /// here, so the missing trust may be what stopped it.
+  bool stoppedBeforeRootTrust(CaptureRecord capture) =>
+      _launchesStoppedBeforeRootTrust?.contains(capture.key) ?? false;
   ProductUpdateResult? productUpdate;
   bool productUpdateLoading = false;
   RuntimeStorageLocation? storageLocation;
@@ -1883,6 +1895,11 @@ final class WorkbenchController extends ChangeNotifier
       }
       rootCAGuideIntent = null;
       operationNotice = 'root_ca_updated';
+      _launchesStoppedBeforeRootTrust = {
+        ...?_launchesStoppedBeforeRootTrust,
+        for (final capture in data?.captures ?? const <CaptureRecord>[])
+          if (capture.stoppedBeforeStart) capture.key,
+      };
       notifyListeners();
       return true;
     } catch (error) {

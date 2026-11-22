@@ -10,16 +10,22 @@ import 'package:vibermate_app/preview/preview_dataset.dart';
 import 'package:vibermate_app/preview/preview_root_trust_installer.dart';
 
 void main() {
+  // The preview Runtime behind the guide that open() last showed.
+  late PreviewControlApi api;
+
   Future<WorkbenchController> open(
     WidgetTester tester, {
     PreviewFreshStage stage = PreviewFreshStage.start,
     Size size = const Size(1440, 900),
     AppLanguage language = AppLanguage.english,
     bool dark = false,
+    bool rootTrusted = false,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = PreviewFixture.freshInstall(stage: stage);
+    api = fixture.api;
+    if (rootTrusted) api.setRootTrustForPreview(installed: true);
     final controller = WorkbenchController(
       api: fixture.api,
       terminalCommands: fixture.terminalCommands,
@@ -130,6 +136,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(controller.rootCAStatus!.installed, isTrue);
     expect(requirement, findsNothing);
+    // The requirement reads as met instead of vanishing.
+    final ready = find.byKey(const Key('setup-codex-ready'));
+    expect(ready, findsOneWidget);
+    expect(
+      find.descendant(
+        of: ready,
+        matching: find.text("Codex: this Mac trusts ViberMate's certificate."),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });
@@ -139,7 +155,71 @@ void main() {
   ) async {
     final controller = await open(tester, stage: PreviewFreshStage.trusted);
     expect(find.byKey(const Key('setup-codex-requirement')), findsNothing);
+    expect(
+      find.byKey(const Key('setup-codex-ready')),
+      findsNothing,
+      reason: 'nothing was done here to confirm',
+    );
     expect(find.byKey(const Key('setup-waiting')), findsOneWidget);
+    await close(tester, controller);
+  });
+
+  testWidgets('trusting the certificate turns the failure into a retry', (
+    tester,
+  ) async {
+    final controller = await open(tester, stage: PreviewFreshStage.failed);
+    await tester.tap(find.byKey(const Key('launch-stopped-install-trust')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.rootCAStatus!.installed, isTrue);
+
+    final retry = find.byKey(const Key('setup-root-trusted-retry'));
+    expect(retry, findsOneWidget);
+    expect(
+      find.descendant(
+        of: retry,
+        matching: find.text(
+          "This Mac now trusts ViberMate's certificate. Run the Codex command "
+          'again.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('setup-root-trusted-copy-again')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('setup-launch-failed')), findsNothing);
+    expect(inStep('start', find.text("Didn't start")), findsNothing);
+    final row = find.byKey(
+      Key('capture-outcome-${controller.data!.captures.single.key}'),
+    );
+    expect(row, findsOneWidget, reason: 'the row keeps its badge');
+
+    // A Codex launch that stops after the trust is explained as usual.
+    api.addFreshRun(codex: true, phase: PreviewFreshRunPhase.neverStarted);
+    await controller.refresh();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(retry, findsNothing);
+    expect(find.byKey(const Key('setup-launch-failed')), findsOneWidget);
+    expect(inStep('start', find.text("Didn't start")), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('a Mac that already trusted the certificate keeps the failure', (
+    tester,
+  ) async {
+    final controller = await open(
+      tester,
+      stage: PreviewFreshStage.failed,
+      rootTrusted: true,
+    );
+    expect(find.byKey(const Key('setup-launch-failed')), findsOneWidget);
+    expect(find.byKey(const Key('setup-root-trusted-retry')), findsNothing);
+    expect(find.byKey(const Key('setup-codex-ready')), findsNothing);
+    expect(inStep('start', find.text("Didn't start")), findsOneWidget);
+    expect(find.byKey(const Key('launch-stopped-copy-again')), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await close(tester, controller);
   });
 

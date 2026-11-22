@@ -848,6 +848,10 @@ final class AppCopy {
     'setup.start.codex_requirement':
         'Codex only: needs ViberMate\'s certificate trusted on this Mac. macOS asks for your password once.',
     'setup.start.install_trust': 'Install and trust',
+    'setup.start.codex_ready':
+        'Codex: this Mac trusts ViberMate\'s certificate.',
+    'setup.start.root_trusted_retry':
+        'This Mac now trusts ViberMate\'s certificate. Run the Codex command again.',
     'setup.start.waiting':
         'Waiting for your agent… This page updates by itself.',
     'setup.start.done': '{agent} started.',
@@ -4100,6 +4104,8 @@ final class AppCopy {
     'setup.start.codex_requirement':
         '仅 Codex：需要这台 Mac 信任 ViberMate 证书。macOS 会要求输入一次密码。',
     'setup.start.install_trust': '安装并信任',
+    'setup.start.codex_ready': 'Codex：这台 Mac 已信任 ViberMate 证书。',
+    'setup.start.root_trusted_retry': '这台 Mac 已信任 ViberMate 证书。请重新运行 Codex 命令。',
     'setup.start.waiting': '正在等待 Agent……此页面会自动更新。',
     'setup.start.done': '{agent} 已启动。',
     'setup.start.copy_again': '再次复制命令',

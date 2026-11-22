@@ -513,6 +513,20 @@ final class _SetupGuideState extends State<SetupGuide> {
         : null;
     final failedCodex = failed != null && setupClientOf(failed) == 'codex';
     final installFromFailure = failedCodex && progress.codexNeedsRoot;
+    // The certificate was trusted here after this Codex launch stopped, so
+    // running it again is all that is left; a later failure is explained
+    // as usual.
+    final retryAfterTrust =
+        failed != null &&
+        failedCodex &&
+        progress.rootTrusted == true &&
+        controller.stoppedBeforeRootTrust(failed);
+    // The Codex requirement was met during this app session: say so where
+    // the requirement stood instead of letting the line vanish.
+    final codexReady =
+        failed == null &&
+        progress.rootTrusted == true &&
+        controller.rootTrustedHere;
     final enabled = progress.commandReady;
     Widget commandRow(String client, String label) {
       final command = setupLaunchCommand(controller, client);
@@ -535,7 +549,7 @@ final class _SetupGuideState extends State<SetupGuide> {
       state: state,
       title: copy('setup.start.title'),
       copy: copy,
-      status: failed != null
+      status: failed != null && !retryAfterTrust
           ? StatusPill(
               label: copy('setup.status.failed'),
               color: context.viberColors.danger,
@@ -552,12 +566,37 @@ final class _SetupGuideState extends State<SetupGuide> {
         if (progress.codexNeedsRoot && !installFromFailure) ...[
           const SizedBox(height: ViberSpacing.sm),
           _CodexRequirement(controller: controller, copy: copy, narrow: narrow),
+        ] else if (codexReady) ...[
+          const SizedBox(height: ViberSpacing.sm),
+          _StepNote(
+            key: const Key('setup-codex-ready'),
+            icon: Icons.check,
+            iconColor: context.viberColors.verified,
+            text: copy('setup.start.codex_ready'),
+            narrow: narrow,
+          ),
         ],
         if (controller.rootCAError case final error?) ...[
           const SizedBox(height: ViberSpacing.sm),
           InlineNotice(message: rootCAErrorMessage(copy, error), error: true),
         ],
-        if (failed != null) ...[
+        if (failed != null && retryAfterTrust) ...[
+          const SizedBox(height: ViberSpacing.md),
+          _StepNote(
+            key: const Key('setup-root-trusted-retry'),
+            icon: Icons.check,
+            iconColor: context.viberColors.verified,
+            text: copy('setup.start.root_trusted_retry'),
+            narrow: narrow,
+            indent: false,
+            action: launchStoppedAction(
+              controller: controller,
+              copy: copy,
+              capture: failed,
+              keyPrefix: 'setup-root-trusted',
+            ),
+          ),
+        ] else if (failed != null) ...[
           const SizedBox(height: ViberSpacing.md),
           LaunchStoppedNotice(
             key: const Key('setup-launch-failed'),
@@ -982,48 +1021,90 @@ final class _CodexRequirement extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final busy = controller.rootCAMutating || controller.rootCALoading;
-    final button = OutlinedButton.icon(
-      key: const Key('setup-install-trust'),
-      onPressed: busy
-          ? null
-          : () => unawaited(controller.installAndTrustRootCA()),
-      icon: busy
-          ? const SizedBox.square(
-              dimension: 12,
-              child: CircularProgressIndicator(strokeWidth: 1.5),
-            )
-          : const Icon(Icons.verified_user_outlined, size: 14),
-      label: Text(copy('setup.start.install_trust')),
-    );
-    final text = Text(
-      copy('setup.start.codex_requirement'),
-      style: Theme.of(context).textTheme.bodySmall,
-    );
-    return Container(
+    return _StepNote(
       key: const Key('setup-codex-requirement'),
-      padding: EdgeInsets.only(left: narrow ? 0 : 92),
-      child: narrow
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                text,
-                const SizedBox(height: ViberSpacing.sm),
-                button,
-              ],
-            )
-          : Row(
-              children: [
-                Icon(
-                  Icons.info_outline,
-                  size: 14,
-                  color: context.viberColors.textMuted,
-                ),
-                const SizedBox(width: ViberSpacing.sm),
-                Expanded(child: text),
-                const SizedBox(width: ViberSpacing.md),
-                button,
-              ],
-            ),
+      icon: Icons.info_outline,
+      iconColor: context.viberColors.textMuted,
+      text: copy('setup.start.codex_requirement'),
+      narrow: narrow,
+      action: OutlinedButton.icon(
+        key: const Key('setup-install-trust'),
+        onPressed: busy
+            ? null
+            : () => unawaited(controller.installAndTrustRootCA()),
+        icon: busy
+            ? const SizedBox.square(
+                dimension: 12,
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              )
+            : const Icon(Icons.verified_user_outlined, size: 14),
+        label: Text(copy('setup.start.install_trust')),
+      ),
+    );
+  }
+}
+
+/// One neutral line in a step: an icon, a sentence and, optionally, its
+/// button. By default it lines up with the launch commands above it; at
+/// phone width the button goes full width under the sentence.
+final class _StepNote extends StatelessWidget {
+  const _StepNote({
+    required this.icon,
+    required this.iconColor,
+    required this.text,
+    required this.narrow,
+    this.indent = true,
+    this.action,
+    super.key,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String text;
+  final bool narrow;
+
+  /// Start under the commands rather than under the step's title.
+  final bool indent;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    final line = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Icon(icon, size: 14, color: iconColor),
+        ),
+        const SizedBox(width: ViberSpacing.sm),
+        Expanded(
+          child: Text(text, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+    if (narrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          line,
+          if (action case final value?) ...[
+            const SizedBox(height: ViberSpacing.sm),
+            value,
+          ],
+        ],
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.only(left: indent ? 92 : 0),
+      child: Row(
+        children: [
+          Expanded(child: line),
+          if (action case final value?) ...[
+            const SizedBox(width: ViberSpacing.md),
+            value,
+          ],
+        ],
+      ),
     );
   }
 }
