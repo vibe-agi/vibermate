@@ -106,6 +106,7 @@ type Admission struct {
 	runtime            capturerun.RuntimeMetadata
 	runtimeUsername    string
 	runtimeUserID      runtimeuser.UserID
+	recognizedClient   clientadapter.RecognizedClient
 }
 
 // NewManual constructs the route-neutral admission produced by a future
@@ -175,6 +176,9 @@ func (admission Admission) Validate() error {
 		if admission.adapter != nil && admission.adapter.Validate() != nil {
 			return fmt.Errorf("%w: client adapter evidence is invalid", ErrInvalidAdmission)
 		}
+		if err := admission.validateRecognizedClient(); err != nil {
+			return err
+		}
 		if admission.runtime.Validate() != nil {
 			return fmt.Errorf("%w: managed runtime metadata is invalid", ErrInvalidAdmission)
 		}
@@ -192,7 +196,8 @@ func (admission Admission) Validate() error {
 			hasWorkspace || admission.workspaceRoot != "" ||
 			admission.runtime != (capturerun.RuntimeMetadata{}) ||
 			admission.runtimeUsername != "" || admission.runtimeUserID != "" ||
-			admission.confidence != AttributionConfigured {
+			admission.confidence != AttributionConfigured ||
+			admission.recognizedClient != (clientadapter.RecognizedClient{}) {
 			return fmt.Errorf("%w: manual-capture evidence is invalid", ErrInvalidAdmission)
 		}
 	}
@@ -276,9 +281,57 @@ func (admission Admission) RuntimeUsername() (string, bool) {
 
 // Supports reports only feature evidence carried by a digest-verified client
 // adapter. Manual and configured admissions cannot acquire adapter capability
-// by naming a client or presenting a proxy credential.
+// by naming a client or presenting a proxy credential. Readers that also serve
+// publisher-recognized clients ask ProtectionBasis, which never lets a
+// recognized run take the exact-release path.
 func (admission Admission) Supports(feature clientadapter.Feature) bool {
 	return admission.adapter != nil && admission.adapter.Supports(feature)
+}
+
+// ProtectionBasis says why this connection's client may use one protection.
+// Exact release evidence decides alone when present. A run the Runtime
+// recognized by its publisher's signature gets what the recognized-client
+// policy grants its client. Each reader still applies the protection's own
+// proof at its point of use.
+func (admission Admission) ProtectionBasis(
+	feature clientadapter.Feature,
+) clientadapter.ProtectionBasis {
+	if admission.kind != KindManagedRun || !feature.Single() {
+		return clientadapter.ProtectionNone
+	}
+	if admission.adapter != nil {
+		if admission.adapter.Supports(feature) {
+			return clientadapter.ProtectionExactRelease
+		}
+		return clientadapter.ProtectionNone // a verified run never falls through
+	}
+	if admission.recognizedClient.ID != "" &&
+		admission.recognizedClient.Protections.Includes(feature) {
+		return clientadapter.ProtectionRecognizedClient
+	}
+	return clientadapter.ProtectionNone
+}
+
+// validateRecognizedClient keeps the recognized basis apart from the exact
+// one: a recognized client never accompanies release evidence, stays at
+// configured confidence, and receives only known bits its policy grants.
+func (admission Admission) validateRecognizedClient() error {
+	client := admission.recognizedClient
+	if client == (clientadapter.RecognizedClient{}) {
+		return nil
+	}
+	knownBits := func(features clientadapter.Feature) bool {
+		return features == 0 || features.Includes(features)
+	}
+	if client.ID == "" ||
+		admission.adapter != nil ||
+		admission.confidence != AttributionConfigured ||
+		!knownBits(client.Policy) ||
+		!knownBits(client.Protections) ||
+		client.Protections&^client.Policy != 0 {
+		return fmt.Errorf("%w: recognized client evidence is inconsistent", ErrInvalidAdmission)
+	}
+	return nil
 }
 
 func validOpaqueID(value string) bool {

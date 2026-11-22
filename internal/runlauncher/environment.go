@@ -82,6 +82,7 @@ func buildEnvironment(
 		return nil, err
 	}
 	managedClientCredential := usesManagedClientCredential(base, grant)
+	fallback := decideStreamingFallback(base, grant, managedClientCredential)
 	preserved := make(map[string]string)
 	deletedByEnvironment := make(
 		map[string]struct{},
@@ -108,7 +109,7 @@ func buildEnvironment(
 			key,
 			grant.LaunchRecipe,
 			managedClientCredential,
-		) || launchPolicyManagesEnvironment(key, grant) {
+		) || launchPolicyManagesEnvironment(key, fallback.policy) {
 			continue
 		}
 		preserved[key] = value
@@ -126,9 +127,7 @@ func buildEnvironment(
 	preserved["NO_PROXY"] = noProxy
 	preserved["no_proxy"] = noProxy
 	preserved["VIBERMATE_CAPTURE_RUN_ID"] = grant.Run.ID
-	if grant.Adapter != nil &&
-		grant.Adapter.StreamingFallbackPolicy ==
-			clientadapter.StreamingFallbackCoreOwned {
+	if fallback.policy == clientadapter.StreamingFallbackCoreOwned {
 		preserved[claudeDisableNonStreamingFallback] = "1"
 	}
 	switch grant.LaunchRecipe {
@@ -168,14 +167,73 @@ func buildEnvironment(
 	return result, nil
 }
 
+// launchPolicyManagesEnvironment drops every inherited casing of the fallback
+// variable exactly when the launcher sets it, so the set and the drop read one
+// decision.
 func launchPolicyManagesEnvironment(
 	key string,
-	grant capturecontrol.LaunchGrant,
+	policy clientadapter.StreamingFallbackPolicy,
 ) bool {
-	return grant.Adapter != nil &&
-		grant.Adapter.StreamingFallbackPolicy ==
-			clientadapter.StreamingFallbackCoreOwned &&
+	return policy == clientadapter.StreamingFallbackCoreOwned &&
 		strings.EqualFold(key, claudeDisableNonStreamingFallback)
+}
+
+// streamingFallbackDecision is the single launch-time decision about
+// CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK (ADR 0026).
+type streamingFallbackDecision struct {
+	policy             clientadapter.StreamingFallbackPolicy
+	switchedOff        bool   // a recognized grant would have received core_owned
+	switchValue        string // the operator variable's value as the launcher saw it
+	switchUnrecognized bool   // that value is neither on nor off
+}
+
+// decideStreamingFallback: a verified grant carries its exact release's
+// policy, unchanged. A publisher-recognized Claude Code receives core_owned
+// only when its own target is an authority whose every route is Upstream,
+// where the Exchange holds the stream, and the launcher's operator switch is
+// not off. On Original Destination Core performs no recovery, so the client
+// keeps its own. Every input is a field restart recovery already compares, or
+// the launcher's own BaseEnvironment, so a recomputed child environment is
+// identical.
+func decideStreamingFallback(
+	base []string,
+	grant capturecontrol.LaunchGrant,
+	managedTarget bool,
+) streamingFallbackDecision {
+	switch {
+	case grant.Adapter != nil:
+		return streamingFallbackDecision{
+			policy: grant.Adapter.StreamingFallbackPolicy,
+		}
+	case grant.Signer != nil &&
+		grant.Recognition == clientadapter.RecognitionRecognized:
+		state, value, recognized :=
+			clientadapter.ProtectionSwitchFromEnvironment(base)
+		decision := streamingFallbackDecision{
+			policy:             clientadapter.StreamingFallbackClientDefault,
+			switchValue:        value,
+			switchUnrecognized: !recognized,
+		}
+		if !managedTarget {
+			return decision
+		}
+		policy := clientadapter.RecognizedStreamingFallbackPolicy(
+			grant.Signer.ID,
+			grant.Signer.LaunchRecipe,
+			grant.Signer.InstallShape,
+		)
+		if policy == clientadapter.StreamingFallbackCoreOwned &&
+			state == clientadapter.ProtectionsOff {
+			decision.switchedOff = true
+			return decision
+		}
+		decision.policy = policy
+		return decision
+	default:
+		return streamingFallbackDecision{
+			policy: clientadapter.StreamingFallbackClientDefault,
+		}
+	}
 }
 
 func environmentManaged(

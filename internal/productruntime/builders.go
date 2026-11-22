@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -775,12 +776,13 @@ func buildOriginal(
 }
 
 type captureBuildRequest struct {
-	nativeRevocation captureassignment.NativeRevocation
-	repository       capturerun.Repository
-	clock            capturerun.Clock
-	random           io.Reader
-	barrier          capturerun.EvidenceBarrier
-	archiveBarrier   evidencearchive.CaptureCreationBarrier
+	nativeRevocation  captureassignment.NativeRevocation
+	repository        capturerun.Repository
+	clock             capturerun.Clock
+	random            io.Reader
+	barrier           capturerun.EvidenceBarrier
+	archiveBarrier    evidencearchive.CaptureCreationBarrier
+	recognizedClients clientadapter.RecognizedClients
 }
 
 type captureRuntime interface {
@@ -803,6 +805,7 @@ func buildCapture(
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
 	options.ArchiveBarrier = request.archiveBarrier
+	options.RecognizedClients = request.recognizedClients
 	return capturerun.NewManager(ctx, options)
 }
 

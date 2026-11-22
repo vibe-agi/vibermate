@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -90,12 +91,25 @@ func (gate Gate) Decide(
 	}
 }
 
+// safeWorkspaceGroup approves a group only with a structured-tools basis,
+// local-launcher workspace evidence and every resolved path inside that
+// workspace. Exact releases keep the containment rule. A recognized client's
+// group also needs recognizedBuiltInCall, absolute paths and no
+// execution-bearing mutation (ADR 0026).
 func safeWorkspaceGroup(
 	decision exchange.ToolDecisionContext,
 	intents []protocolcore.ToolIntent,
 ) bool {
+	recognized := false
+	switch decision.StructuredWorkspaceToolsBasis() {
+	case clientadapter.ProtectionExactRelease:
+	case clientadapter.ProtectionRecognizedClient:
+		recognized = true
+	default:
+		return false
+	}
 	root, available := decision.WorkspaceRoot()
-	if !decision.StructuredWorkspaceTools() || !available || len(intents) == 0 {
+	if !available || len(intents) == 0 {
 		return false
 	}
 	realRoot, err := filepath.EvalSymlinks(root)
@@ -122,6 +136,10 @@ func safeWorkspaceGroup(
 			}
 		}
 	}
+	var decoded recognizedDefinitions
+	if recognized {
+		decoded = make(recognizedDefinitions)
+	}
 	for _, intent := range intents {
 		if intent.Call.Namespace != "" ||
 			intent.Call.EffectiveKind() != protocolcore.ToolKindFunction {
@@ -131,7 +149,10 @@ func safeWorkspaceGroup(
 		if !exists || definition.EffectiveKind() != protocolcore.ToolKindFunction {
 			return false
 		}
-		if !safeWorkspaceIntent(realRoot, definition, intent) {
+		if recognized && !recognizedBuiltInCall(decoded, definition, intent) {
+			return false
+		}
+		if !safeWorkspaceIntent(realRoot, definition, intent, recognized) {
 			return false
 		}
 	}
@@ -140,10 +161,15 @@ func safeWorkspaceGroup(
 
 type toolArguments map[string]json.RawMessage
 
+// safeWorkspaceIntent checks one call's path. On the recognized basis the
+// path must also be present and absolute (Claude Code's file tools take
+// absolute paths; a relative one would resolve against a cwd the gate cannot
+// see), and a mutating tool must not touch an execution-bearing path.
 func safeWorkspaceIntent(
 	realRoot string,
 	definition protocolcore.ToolDefinition,
 	intent protocolcore.ToolIntent,
+	recognized bool,
 ) bool {
 	var arguments toolArguments
 	if json.Unmarshal(intent.Call.Arguments.Bytes(), &arguments) != nil {
@@ -171,7 +197,7 @@ func safeWorkspaceIntent(
 	}
 	rawPath, present := arguments[pathField]
 	if !present {
-		if !optionalPath {
+		if !optionalPath || recognized {
 			return false
 		}
 	} else {
@@ -179,7 +205,14 @@ func safeWorkspaceIntent(
 		if json.Unmarshal(rawPath, &path) != nil || path == "" {
 			return false
 		}
+		if recognized && !filepath.IsAbs(path) {
+			return false
+		}
 		if !insideWorkspace(realRoot, path, allowCreate) {
+			return false
+		}
+		if recognized && recognizedToolShapes[intent.Call.Name].mutating &&
+			executionBearing(realRoot, filepath.Clean(path)) {
 			return false
 		}
 	}

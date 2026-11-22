@@ -3073,18 +3073,22 @@ func (pipeline *Pipeline) decideTools(
 		return nil
 	}
 	workspaceRoot := ""
-	structuredWorkspaceTools := false
+	structuredBasis := clientadapter.ProtectionNone
 	if admission, available := request.CaptureAdmission(); available {
 		var local bool
 		workspaceRoot, local = admission.LocalWorkspaceRoot()
-		structuredWorkspaceTools = local && admission.Supports(
-			clientadapter.FeatureStructuredWorkspaceTools,
-		)
+		if local {
+			// Exact release evidence decides alone; a recognized client's
+			// basis still needs the gate's per-request proof (ADR 0026).
+			structuredBasis = admission.ProtectionBasis(
+				clientadapter.FeatureStructuredWorkspaceTools,
+			)
+		}
 	}
-	decisionContext, err := NewToolDecisionContext(
+	decisionContext, err := NewToolDecisionContextForBasis(
 		selection.policySet,
 		workspaceRoot,
-		structuredWorkspaceTools,
+		structuredBasis,
 		decoded.Tools,
 		decoded.ToolNamespaces,
 	)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
@@ -51,6 +52,20 @@ func TestNativeSensitiveToolEvidenceRecheckedByGateAndAuthority(t *testing.T) {
 	}
 	if _, err = exchange.NewSensitiveClientToolDecisionRequest(c.id, binding, policy, intents, nativetool.SensitiveToolWitness{}); err == nil {
 		t.Fatal("missing sensitive witness admitted")
+	}
+	// A sensitive native decision refuses every structured-tools basis, even
+	// with a valid witness (ADR 0026).
+	for _, basis := range []clientadapter.ProtectionBasis{
+		clientadapter.ProtectionExactRelease,
+		clientadapter.ProtectionRecognizedClient,
+	} {
+		structured, err := exchange.NewToolDecisionContextForBasis(plan.PolicySet(), "", basis, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := exchange.NewSensitiveClientToolDecisionRequest(c.id, binding, structured, intents, witness); err == nil {
+			t.Fatalf("sensitive native request accepted the %s basis", basis)
+		}
 	}
 	changed := append([]protocolcore.ToolIntent{}, intents...)
 	changed[0].Call.Arguments, _ = protocolcore.NewJSONObject([]byte(`{"path":"other","proof":"different"}`), 1024)

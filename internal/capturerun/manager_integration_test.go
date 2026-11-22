@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -194,6 +195,152 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 	view, err := second.GetRun(context.Background(), grant.Run.ID)
 	if err != nil || !reflect.DeepEqual(view.Runtime, recovered.Runtime) {
 		t.Fatalf("CaptureRun runtime view = %+v, %v", view.Runtime, err)
+	}
+}
+
+// A publisher-recognized run names its client through the index built from
+// the host's catalog, on every read that serves it. Release evidence, another
+// tier or another catalog revision names none, and no wire changes.
+func TestRecognizedRunEvidenceNamesItsClient(t *testing.T) {
+	t.Parallel()
+
+	catalog := clientadapter.BuiltInCatalog()
+	clients, err := clientadapter.NewRecognizedClients(catalog, clientadapter.ProtectionsOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, ok := catalog.ExpectedEvidenceForPlatform("claude-code", "2.1.220", "darwin", "arm64")
+	if !ok {
+		t.Fatal("the catalogued Claude Code release is missing")
+	}
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC))
+	indexed := newManagerWithClients(t, store, clock, clients)
+	unindexed := newManager(t, store, clock)
+	// A recognized row carries the index's whole value, not only its client,
+	// so the carrier is held to the policy bits too once a row grants any.
+	claude, claudeFound := clients.Client(catalog.Revision(), "claude")
+	codex, codexFound := clients.Client(catalog.Revision(), "codex")
+	if !claudeFound || claude.ID != "claude-code" || !codexFound || codex.ID != "codex-cli" {
+		t.Fatalf("the built-in index named %+v and %+v", claude, codex)
+	}
+
+	for _, testCase := range []struct {
+		name        string
+		label       string
+		revision    clientadapter.CatalogRevision
+		recognition clientadapter.Recognition
+		adapter     *clientadapter.Evidence
+		want        clientadapter.RecognizedClient
+	}{
+		{"recognized claude", "claude", catalog.Revision(), clientadapter.RecognitionRecognized, nil, claude},
+		{"recognized codex", "codex", catalog.Revision(), clientadapter.RecognitionRecognized, nil, codex},
+		{"verified claude", "claude", catalog.Revision(), clientadapter.RecognitionVerified, &verified,
+			clientadapter.RecognizedClient{}},
+		{"unverified claude", "claude", catalog.Revision(), clientadapter.RecognitionUnverified, nil,
+			clientadapter.RecognizedClient{}},
+		{"unknown program", "agent", catalog.Revision(), clientadapter.RecognitionUnknown, nil,
+			clientadapter.RecognizedClient{}},
+		{"recognized at another revision", "claude", catalog.Revision() - 1, clientadapter.RecognitionRecognized, nil,
+			clientadapter.RecognizedClient{}},
+		{"recognized under another label", "claude-code", catalog.Revision(), clientadapter.RecognitionRecognized, nil,
+			clientadapter.RecognizedClient{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			grant, err := indexed.Create(context.Background(), capturerun.CreateCommand{
+				CWD:                     filepath.Join(t.TempDir(), "workspace"),
+				CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", testCase.label),
+				ExecutableLabel:         testCase.label,
+				Lifetime:                2 * time.Minute,
+				CatalogRevision:         testCase.revision,
+				Adapter:                 testCase.adapter,
+				Recognition:             testCase.recognition,
+				Workspace:               testWorkspaceScope(t),
+			})
+			if err != nil {
+				t.Fatalf("create CaptureRun: %v", err)
+			}
+			evidence, err := indexed.AuthorizeProxy(context.Background(), grant.ProxyCapability)
+			if err != nil || evidence.RecognizedClient != testCase.want {
+				t.Fatalf("AuthorizeProxy().RecognizedClient = %+v, %v, want %+v",
+					evidence.RecognizedClient, err, testCase.want)
+			}
+			view, err := indexed.GetRun(context.Background(), grant.Run.ID)
+			if err != nil || view.RecognizedClient != testCase.want {
+				t.Fatalf("GetRun().RecognizedClient = %+v, %v, want %+v",
+					view.RecognizedClient, err, testCase.want)
+			}
+			page, err := indexed.ListRuns(context.Background(), capturerun.PageRequest{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := false
+			for _, item := range page.Items {
+				if item.ID != grant.Run.ID {
+					continue
+				}
+				listed = true
+				if item.RecognizedClient != testCase.want {
+					t.Fatalf("ListRuns().RecognizedClient = %+v, want %+v",
+						item.RecognizedClient, testCase.want)
+				}
+			}
+			if !listed {
+				t.Fatal("ListRuns did not return the run")
+			}
+
+			// Without an index nothing is named, and the launcher wire and
+			// the View's own JSON are byte-identical either way.
+			plainEvidence, err := unindexed.AuthorizeProxy(context.Background(), grant.ProxyCapability)
+			if err != nil || plainEvidence.RecognizedClient != (clientadapter.RecognizedClient{}) {
+				t.Fatalf("unindexed AuthorizeProxy() = %+v, %v", plainEvidence.RecognizedClient, err)
+			}
+			plain, err := unindexed.GetRun(context.Background(), grant.Run.ID)
+			if err != nil || plain.RecognizedClient != (clientadapter.RecognizedClient{}) {
+				t.Fatalf("unindexed GetRun() = %+v, %v", plain.RecognizedClient, err)
+			}
+			for _, pair := range [][2]any{
+				{capturecontrol.CaptureRunViewOf(view), capturecontrol.CaptureRunViewOf(plain)},
+				{view, plain},
+			} {
+				indexedJSON, indexedErr := json.Marshal(pair[0])
+				plainJSON, plainErr := json.Marshal(pair[1])
+				if indexedErr != nil || plainErr != nil || !bytes.Equal(indexedJSON, plainJSON) {
+					t.Fatalf("a wire changed:\n%s\n%s (%v, %v)",
+						indexedJSON, plainJSON, indexedErr, plainErr)
+				}
+			}
+		})
+	}
+}
+
+// A Manager built from DefaultOptions has the zero index, which names no
+// client: a host that forgets the catalog fails closed.
+func TestZeroIndexNamesNoClient(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownStore(t, store)
+	manager := newManager(t, store, newClock(time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)))
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                2 * time.Minute,
+		CatalogRevision:         clientadapter.BuiltInCatalog().Revision(),
+		Recognition:             clientadapter.RecognitionRecognized,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := manager.AuthorizeProxy(context.Background(), grant.ProxyCapability)
+	if err != nil || evidence.RecognizedClient != (clientadapter.RecognizedClient{}) {
+		t.Fatalf("AuthorizeProxy().RecognizedClient = %+v, %v", evidence.RecognizedClient, err)
+	}
+	view, err := manager.GetRun(context.Background(), grant.Run.ID)
+	if err != nil || view.RecognizedClient != (clientadapter.RecognizedClient{}) {
+		t.Fatalf("GetRun().RecognizedClient = %+v, %v", view.RecognizedClient, err)
 	}
 }
 
@@ -812,6 +959,23 @@ func newManager(
 	t.Helper()
 	options := capturerun.DefaultOptions(store.CaptureRunRepository())
 	options.Clock = clock
+	manager, err := capturerun.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatalf("open CaptureRun manager: %v", err)
+	}
+	return manager
+}
+
+func newManagerWithClients(
+	t *testing.T,
+	store *runtimepersistence.Store,
+	clock capturerun.Clock,
+	clients clientadapter.RecognizedClients,
+) *capturerun.Manager {
+	t.Helper()
+	options := capturerun.DefaultOptions(store.CaptureRunRepository())
+	options.Clock = clock
+	options.RecognizedClients = clients
 	manager, err := capturerun.NewManager(context.Background(), options)
 	if err != nil {
 		t.Fatalf("open CaptureRun manager: %v", err)

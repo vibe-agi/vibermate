@@ -1,0 +1,120 @@
+[
+  {
+    "name": "Edit",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "old_string": {
+          "type": "string"
+        },
+        "new_string": {
+          "type": "string"
+        },
+        "replace_all": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "NotebookEdit",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "notebook_path": {
+          "type": "string"
+        },
+        "cell_id": {
+          "type": "string"
+        },
+        "new_source": {
+          "type": "string"
+        },
+        "cell_type": {
+          "type": "string",
+          "enum": [
+            "code",
+            "markdown"
+          ]
+        },
+        "edit_mode": {
+          "type": "string",
+          "enum": [
+            "replace",
+            "insert",
+            "delete"
+          ]
+        }
+      },
+      "required": [
+        "notebook_path",
+        "new_source"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "Read",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pages": {
+          "type": "string"
+        },
+        "allow_large": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "file_path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "Write",
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_path",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

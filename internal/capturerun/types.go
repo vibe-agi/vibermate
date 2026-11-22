@@ -284,6 +284,10 @@ type View struct {
 	// ActivityAt is scoped to this run, not its native client session.
 	// Heartbeats never advance this read-side projection.
 	ActivityAt time.Time `json:"-"`
+	// RecognizedClient names the client of a publisher-recognized run, as the
+	// Runtime's own catalog index established it from the stored revision and
+	// label (ADR 0026). Only Manager reads fill it, and no wire carries it.
+	RecognizedClient clientadapter.RecognizedClient `json:"-"`
 }
 
 func (view View) ActivityTime() time.Time {
@@ -487,6 +491,10 @@ type Evidence struct {
 	RuntimeUsername string
 	LoginSessionID  runtimeuser.LoginSessionID
 	DeviceName      string
+	// RecognizedClient is set only for a publisher-recognized run without
+	// release evidence whose stored catalog revision and label the Runtime's
+	// index names (ADR 0026). It grants nothing by itself.
+	RecognizedClient clientadapter.RecognizedClient
 }
 
 // AdmissionRef returns the exact short-lived ingress identity owned by a
@@ -498,7 +506,10 @@ func AdmissionRef(runID string) (string, error) {
 	return "capture-run/" + runID, nil
 }
 
-func evidenceOf(record DurableRecord) Evidence {
+func evidenceOf(
+	record DurableRecord,
+	clients clientadapter.RecognizedClients,
+) Evidence {
 	workspace, _ := workspaceidentity.NewScope(
 		record.MachineID,
 		record.WorkspaceID,
@@ -523,7 +534,33 @@ func evidenceOf(record DurableRecord) Evidence {
 		RuntimeUsername: record.RuntimeUsername,
 		LoginSessionID:  record.LoginSessionID,
 		DeviceName:      record.DeviceName,
+		RecognizedClient: recognizedClientOf(
+			clients,
+			record.Recognition,
+			record.Adapter,
+			record.CatalogRevision,
+			record.ExecutableLabel,
+		),
 	}
+}
+
+// recognizedClientOf names a run's client only when the Runtime recognized it
+// by its publisher's signature and holds no release evidence for it. A
+// verified run never falls through to the recognized basis, and a run stored
+// under another catalog revision names no client.
+func recognizedClientOf(
+	clients clientadapter.RecognizedClients,
+	recognition clientadapter.Recognition,
+	adapter *clientadapter.Evidence,
+	revision clientadapter.CatalogRevision,
+	label string,
+) clientadapter.RecognizedClient {
+	if NormalizedRecognition(recognition) != clientadapter.RecognitionRecognized ||
+		adapter != nil {
+		return clientadapter.RecognizedClient{}
+	}
+	client, _ := clients.Client(revision, label)
+	return client
 }
 
 // RuntimeMetadata is display-only launcher evidence. It never grants capture,

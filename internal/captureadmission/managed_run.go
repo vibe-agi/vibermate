@@ -21,6 +21,9 @@ type ManagedRunEvidence struct {
 	Adapter         *clientadapter.Evidence
 	Runtime         capturerun.RuntimeMetadata
 	RuntimeUsername string
+	// RecognizedClient is what the Runtime's catalog index names for a
+	// publisher-recognized run (ADR 0026). It is set only without Adapter.
+	RecognizedClient clientadapter.RecognizedClient
 }
 
 type ManagedRuntimeMetadata = capturerun.RuntimeMetadata
@@ -46,6 +49,7 @@ func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 		runtime:            evidence.Runtime,
 		runtimeUsername:    evidence.RuntimeUsername,
 		runtimeUserID:      evidence.RuntimeUserID,
+		recognizedClient:   evidence.RecognizedClient,
 	}
 	if evidence.Workspace != (admission.workspace) {
 		if err := evidence.Workspace.Validate(); err != nil {

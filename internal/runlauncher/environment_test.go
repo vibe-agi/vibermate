@@ -605,3 +605,221 @@ func testCaptureRunView(
 // builtinNoProxy is what proxy-variable clients exclude when the Environment
 // sets no capture scope.
 var builtinNoProxy = capturescope.Compile(nil, nil, capturescope.Options{}).NoProxy()
+
+func recognizedSignerGrant(
+	id string,
+	shape clientadapter.InstallShape,
+	recipe clientadapter.LaunchRecipe,
+	managed []string,
+) capturecontrol.LaunchGrant {
+	run := recognizedRun()
+	label := "claude"
+	if id == "codex-cli" {
+		label = "codex"
+	}
+	run.ExecutableLabel = label
+	return capturecontrol.LaunchGrant{
+		Run:             run,
+		CatalogRevision: run.CatalogRevision,
+		LaunchRecipe:    recipe,
+		Recognition:     clientadapter.RecognitionRecognized,
+		Signer: &capturecontrol.ClientSignerView{
+			ID:              id,
+			Revision:        1,
+			CatalogRevision: run.CatalogRevision,
+			InstallShape:    shape,
+			LaunchRecipe:    recipe,
+			SignedPath:      "/opt/example/" + label,
+		},
+		ExecutablePath:               "/opt/example/" + label,
+		ProxyAddress:                 "http://127.0.0.1:32123",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		RootPEMPath:                  "/tmp/root.pem",
+		ProtectedAuthorities:         append([]string{}, managed...),
+		ManagedCredentialAuthorities: append([]string{}, managed...),
+	}
+}
+
+func verifiedAdapterGrant(
+	recipe clientadapter.LaunchRecipe,
+	managed []string,
+) capturecontrol.LaunchGrant {
+	adapter := testAdapterEvidence(recipe)
+	return capturecontrol.LaunchGrant{
+		Run:                          testCaptureRunView("run-verified", clientadapter.RecognitionVerified, adapter),
+		CatalogRevision:              7,
+		LaunchRecipe:                 recipe,
+		Recognition:                  clientadapter.RecognitionVerified,
+		Adapter:                      adapter,
+		ExecutablePath:               "/tmp/client",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		RootPEMPath:                  "/tmp/root.pem",
+		ProtectedAuthorities:         append([]string{}, managed...),
+		ManagedCredentialAuthorities: append([]string{}, managed...),
+	}
+}
+
+func genericGrant() capturecontrol.LaunchGrant {
+	return capturecontrol.LaunchGrant{
+		Run:                          testCaptureRunView("run-generic", clientadapter.RecognitionUnknown, nil),
+		CatalogRevision:              7,
+		LaunchRecipe:                 clientadapter.LaunchGeneric,
+		Recognition:                  clientadapter.RecognitionUnknown,
+		ExecutablePath:               "/tmp/agent",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
+	}
+}
+
+type fallbackGrantCase struct {
+	name  string
+	grant capturecontrol.LaunchGrant
+	want  clientadapter.StreamingFallbackPolicy
+	// recognized grants read the operator switch; no other grant does.
+	recognized bool
+}
+
+// fallbackGrantCases are the grant shapes the launcher's one fallback
+// decision serves. While the recognized-client policy grants no fallback,
+// only a verified core_owned adapter receives core_owned.
+func fallbackGrantCases() []fallbackGrantCase {
+	anthropic := []string{"api.anthropic.com:443"}
+	return []fallbackGrantCase{
+		{"verified core_owned, managed target",
+			verifiedAdapterGrant(clientadapter.LaunchNodeEnvProxy, anthropic),
+			clientadapter.StreamingFallbackCoreOwned, false},
+		{"verified core_owned, unmanaged target",
+			verifiedAdapterGrant(clientadapter.LaunchNodeEnvProxy, []string{}),
+			clientadapter.StreamingFallbackCoreOwned, false},
+		{"verified client_default",
+			verifiedAdapterGrant(clientadapter.LaunchCodexResponsesHTTP, []string{}),
+			clientadapter.StreamingFallbackClientDefault, false},
+		{"generic", genericGrant(), clientadapter.StreamingFallbackClientDefault, false},
+		{"recognized claude, managed target",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, anthropic),
+			clientadapter.StreamingFallbackClientDefault, true},
+		{"recognized claude, unmanaged target",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, []string{}),
+			clientadapter.StreamingFallbackClientDefault, true},
+		{"recognized claude, wrapper shape",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNPMWrapperNativeChild, clientadapter.LaunchNodeEnvProxy, anthropic),
+			clientadapter.StreamingFallbackClientDefault, true},
+		{"recognized codex",
+			recognizedSignerGrant("codex-cli", clientadapter.InstallNPMWrapperNativeChild, clientadapter.LaunchCodexResponsesHTTP, []string{}),
+			clientadapter.StreamingFallbackClientDefault, true},
+	}
+}
+
+// A verified grant keeps its exact release's policy, and a generic one keeps
+// the client's own. A recognized grant reads the operator switch from the
+// launcher's base environment and, while the recognized-client policy grants
+// no fallback, passes the user's own value through for every switch value.
+func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range fallbackGrantCases() {
+		for _, switchValue := range []string{"", "on", "off", "0", "banana"} {
+			name := testCase.name + "/switch " + switchValue
+			if switchValue == "" {
+				name = testCase.name + "/switch unset"
+			}
+			t.Run(name, func(t *testing.T) {
+				base := []string{
+					"PATH=/usr/bin:/bin",
+					"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0",
+				}
+				if switchValue != "" {
+					base = append(base, clientadapter.RecognizedProtectionsVariable+"="+switchValue)
+				}
+				if err := validateGrant(testCase.grant); err != nil {
+					t.Fatalf("the fixture grant is invalid: %v", err)
+				}
+				decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
+				if decision.policy != testCase.want || decision.switchedOff {
+					t.Fatalf("decision = %+v, want policy %s", decision, testCase.want)
+				}
+				_, recognized := clientadapter.ParseProtectionSwitch(switchValue)
+				if testCase.recognized {
+					if decision.switchValue != switchValue || decision.switchUnrecognized != !recognized {
+						t.Fatalf("the switch was read as %+v", decision)
+					}
+				} else if decision.switchValue != "" || decision.switchUnrecognized {
+					t.Fatalf("a grant without a signer read the switch: %+v", decision)
+				}
+				environment, err := buildEnvironment(base, testCase.grant)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "0"
+				if testCase.want == clientadapter.StreamingFallbackCoreOwned {
+					want = "1"
+				}
+				if got := environmentMap(environment)[claudeDisableNonStreamingFallback]; got != want {
+					t.Fatalf("%s = %q, want %q", claudeDisableNonStreamingFallback, got, want)
+				}
+			})
+		}
+	}
+}
+
+// The base loop drops an inherited value, in any casing, exactly when the set
+// branch writes the variable, because both read one decision.
+func TestStreamingFallbackDecisionIsTheSameForSetAndDrop(t *testing.T) {
+	t.Parallel()
+
+	inherited := [][]string{
+		nil,
+		{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0"},
+		{"claude_code_disable_nonstreaming_fallback=0"},
+		{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=", "Claude_Code_Disable_NonStreaming_Fallback=false"},
+	}
+	for _, testCase := range fallbackGrantCases() {
+		for index, values := range inherited {
+			base := append([]string{"PATH=/usr/bin:/bin"}, values...)
+			decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
+			environment, err := buildEnvironment(base, testCase.grant)
+			if err != nil {
+				t.Fatalf("%s/%d: %v", testCase.name, index, err)
+			}
+			got := make(map[string]string)
+			for key, value := range environmentMap(environment) {
+				if strings.EqualFold(key, claudeDisableNonStreamingFallback) {
+					got[key] = value
+				}
+			}
+			want := make(map[string]string)
+			if decision.policy == clientadapter.StreamingFallbackCoreOwned {
+				want[claudeDisableNonStreamingFallback] = "1"
+			} else {
+				for key, value := range environmentMap(values) {
+					want[key] = value
+				}
+			}
+			if len(got) != len(want) {
+				t.Fatalf("%s/%d: fallback variables %v, want %v", testCase.name, index, got, want)
+			}
+			for key, value := range want {
+				if got[key] != value {
+					t.Fatalf("%s/%d: fallback variables %v, want %v", testCase.name, index, got, want)
+				}
+			}
+			for _, entry := range base {
+				key, _, _ := strings.Cut(entry, "=")
+				dropped := launchPolicyManagesEnvironment(key, decision.policy)
+				if dropped != (decision.policy == clientadapter.StreamingFallbackCoreOwned &&
+					strings.EqualFold(key, claudeDisableNonStreamingFallback)) {
+					t.Fatalf("%s/%d: %s dropped = %v under %s", testCase.name, index, key, dropped, decision.policy)
+				}
+			}
+		}
+	}
+}

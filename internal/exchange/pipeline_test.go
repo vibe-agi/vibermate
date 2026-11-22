@@ -2178,6 +2178,17 @@ func TestToolDecisionWorkspaceAuthorityRequiresLocalEvidence(t *testing.T) {
 	if !ok {
 		t.Fatal("built-in Claude evidence is unavailable")
 	}
+	claudePolicy := clientadapter.FeatureStructuredWorkspaceTools |
+		clientadapter.FeatureCoreOwnedStreamingFallback
+	claude := clientadapter.RecognizedClient{ID: "claude-code", Policy: claudePolicy, Protections: claudePolicy}
+	codex := clientadapter.RecognizedClient{
+		ID:          "codex-cli",
+		Policy:      clientadapter.FeatureResponsesDataKeepalive,
+		Protections: clientadapter.FeatureResponsesDataKeepalive,
+	}
+	switchedOff := clientadapter.RecognizedClient{ID: "claude-code", Policy: claudePolicy}
+	exact := clientadapter.ProtectionExactRelease
+	none := clientadapter.ProtectionNone
 	for _, test := range []struct {
 		name       string
 		evidence   workspaceidentity.Evidence
@@ -2185,14 +2196,23 @@ func TestToolDecisionWorkspaceAuthorityRequiresLocalEvidence(t *testing.T) {
 		adapter    *clientadapter.Evidence
 		wantRoot   string
 		structured bool
+		client     clientadapter.RecognizedClient
+		basis      clientadapter.ProtectionBasis
 	}{
-		{"local", workspaceidentity.EvidenceLocalLauncher, root, &adapter, root, true},
-		{"RemoteWorkspaceExisting", workspaceidentity.EvidenceRegisteredCompanion, root, &adapter, "", false},
-		{"RemoteWorkspaceSymlink", workspaceidentity.EvidenceRegisteredCompanion, link, &adapter, "", false},
-		{"RemoteWorkspaceMissing", workspaceidentity.EvidenceRegisteredCompanion, filepath.Join(root, "missing"), &adapter, "", false},
-		{"unscoped", "", root, &adapter, "", false},
-		{"local-without-root", workspaceidentity.EvidenceLocalLauncher, "", &adapter, "", false},
-		{"local-unverified-client", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false},
+		{"local", workspaceidentity.EvidenceLocalLauncher, root, &adapter, root, true, clientadapter.RecognizedClient{}, exact},
+		{"RemoteWorkspaceExisting", workspaceidentity.EvidenceRegisteredCompanion, root, &adapter, "", false, clientadapter.RecognizedClient{}, none},
+		{"RemoteWorkspaceSymlink", workspaceidentity.EvidenceRegisteredCompanion, link, &adapter, "", false, clientadapter.RecognizedClient{}, none},
+		{"RemoteWorkspaceMissing", workspaceidentity.EvidenceRegisteredCompanion, filepath.Join(root, "missing"), &adapter, "", false, clientadapter.RecognizedClient{}, none},
+		{"unscoped", "", root, &adapter, "", false, clientadapter.RecognizedClient{}, none},
+		{"local-without-root", workspaceidentity.EvidenceLocalLauncher, "", &adapter, "", false, clientadapter.RecognizedClient{}, none},
+		{"local-unverified-client", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false, clientadapter.RecognizedClient{}, none},
+		// A recognized client's basis reaches the gate only with local
+		// evidence and a switched-on tools grant, and never as the exact
+		// basis the bool reports (ADR 0026).
+		{"local-recognized-claude", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false, claude, clientadapter.ProtectionRecognizedClient},
+		{"remote-recognized-claude", workspaceidentity.EvidenceRegisteredCompanion, root, nil, "", false, claude, none},
+		{"local-recognized-codex", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false, codex, none},
+		{"local-recognized-claude-switched-off", workspaceidentity.EvidenceLocalLauncher, root, nil, root, false, switchedOff, none},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if test.name == "RemoteWorkspaceSymlink" && linkErr != nil {
@@ -2213,6 +2233,7 @@ func TestToolDecisionWorkspaceAuthorityRequiresLocalEvidence(t *testing.T) {
 			admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
 				CaptureRunID: "run-workspace-authority", SourceLabel: "claude",
 				WorkspaceRoot: test.root, Workspace: scope, Adapter: test.adapter,
+				RecognizedClient: test.client,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2247,6 +2268,9 @@ func TestToolDecisionWorkspaceAuthorityRequiresLocalEvidence(t *testing.T) {
 			}
 			if decision.Context().StructuredWorkspaceTools() != test.structured {
 				t.Errorf("structured workspace authority = %v; want %v", decision.Context().StructuredWorkspaceTools(), test.structured)
+			}
+			if got := decision.Context().StructuredWorkspaceToolsBasis(); got != test.basis {
+				t.Errorf("structured workspace basis = %s; want %s", got, test.basis)
 			}
 			if claimed, ok := admission.WorkspaceRoot(); ok != (test.root != "") || claimed != test.root {
 				t.Fatalf("display/redaction claim = %q, %v; want %q", claimed, ok, test.root)

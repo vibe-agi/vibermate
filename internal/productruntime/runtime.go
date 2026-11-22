@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/codexoauth"
@@ -778,13 +779,26 @@ func startWithBuilders(
 	}
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
+	// The index names a recognized run's client from the host's own catalog
+	// (ADR 0026). Without a catalog it is the zero index, which names none.
+	var recognizedClients clientadapter.RecognizedClients
+	if options.ClientCatalog.Valid() {
+		recognizedClients, err = clientadapter.NewRecognizedClients(
+			options.ClientCatalog,
+			options.RecognizedClientProtections,
+		)
+		if err != nil {
+			return fail("recognized-client index", err)
+		}
+	}
 	archiveBarrier := evidencearchive.NewBarrier()
 	captureRuns, err := buildCapture(ctx, captureBuildRequest{
-		nativeRevocation: nativeRevoker,
-		repository:       captureRunRepository,
-		clock:            options.Clock,
-		random:           securityRandom,
-		archiveBarrier:   archiveBarrier,
+		nativeRevocation:  nativeRevoker,
+		repository:        captureRunRepository,
+		clock:             options.Clock,
+		random:            securityRandom,
+		archiveBarrier:    archiveBarrier,
+		recognizedClients: recognizedClients,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress, recorder: recorder,
 		},

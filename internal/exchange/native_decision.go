@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/nativetool"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -8,7 +9,7 @@ import (
 // NewClientToolDecisionRequest freezes a native policy question. It never
 // supplies workspace authority, a model route or permission to send.
 func NewClientToolDecisionRequest(id nativetool.ID, binding nativetool.Binding, policy ToolDecisionContext, intents []protocolcore.ToolIntent, witness *nativetool.RegisteredParentWitness) (ToolDecisionRequest, error) {
-	if _, err := nativetool.NewID(string(id)); err != nil || binding.Digest() == (nativetool.Digest{}) || policy.policySet.Validate() != nil || policy.policySet != binding.Plan().PolicySet() || policy.workspaceRoot != "" || policy.structuredWorkspaceTools || len(policy.tools) != 0 || len(policy.toolNamespaces) != 0 || !binding.MatchesIntents(intents) {
+	if _, err := nativetool.NewID(string(id)); err != nil || binding.Digest() == (nativetool.Digest{}) || policy.policySet.Validate() != nil || policy.policySet != binding.Plan().PolicySet() || policy.workspaceRoot != "" || policy.structuredBasis != clientadapter.ProtectionNone || len(policy.tools) != 0 || len(policy.toolNamespaces) != 0 || !binding.MatchesIntents(intents) {
 		return ToolDecisionRequest{}, nativetool.ErrInvalid
 	}
 	var frozenWitness *nativetool.RegisteredParentWitness
@@ -42,7 +43,7 @@ func (request ToolDecisionRequest) NativeContext() (ToolDecisionContext, bool) {
 }
 
 func NewSensitiveClientToolDecisionRequest(id nativetool.ID, binding nativetool.Binding, policy ToolDecisionContext, intents []protocolcore.ToolIntent, witness nativetool.SensitiveToolWitness) (ToolDecisionRequest, error) {
-	if policy.policySet.Validate() != nil || policy.policySet != binding.Plan().PolicySet() || policy.workspaceRoot != "" || policy.structuredWorkspaceTools || len(policy.tools) != 0 || len(policy.toolNamespaces) != 0 || witness.Verify(id, binding, intents) != nil {
+	if policy.policySet.Validate() != nil || policy.policySet != binding.Plan().PolicySet() || policy.workspaceRoot != "" || policy.structuredBasis != clientadapter.ProtectionNone || len(policy.tools) != 0 || len(policy.toolNamespaces) != 0 || witness.Verify(id, binding, intents) != nil {
 		return ToolDecisionRequest{}, nativetool.ErrDenied
 	}
 	cloned := witness

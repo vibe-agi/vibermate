@@ -24,6 +24,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -1295,16 +1296,21 @@ type ToolDecisionRequest struct {
 
 // ToolDecisionContext freezes the policy and the only evidence allowed to
 // classify structured workspace actions. A tool name on its own is never
-// authority: Core also requires exact adapter capability, the request's tool
-// schema, and the launcher's canonical workspace root.
+// authority: Core also requires a structured-tools basis (exact adapter
+// capability, or a recognized client whose request definitions and call
+// arguments the gate proves), the request's tool schema, and the launcher's
+// canonical workspace root.
 type ToolDecisionContext struct {
-	policySet                environment.PolicySet
-	workspaceRoot            string
-	structuredWorkspaceTools bool
-	tools                    []protocolcore.ToolDefinition
-	toolNamespaces           []protocolcore.ToolNamespace
+	policySet       environment.PolicySet
+	workspaceRoot   string
+	structuredBasis clientadapter.ProtectionBasis
+	tools           []protocolcore.ToolDefinition
+	toolNamespaces  []protocolcore.ToolNamespace
 }
 
+// NewToolDecisionContext keeps the exact-release meaning of its flag: true is
+// the exact basis and false is none. Recognized-client evidence enters only
+// through NewToolDecisionContextForBasis.
 func NewToolDecisionContext(
 	policySet environment.PolicySet,
 	workspaceRoot string,
@@ -1312,8 +1318,34 @@ func NewToolDecisionContext(
 	tools []protocolcore.ToolDefinition,
 	toolNamespaces []protocolcore.ToolNamespace,
 ) (ToolDecisionContext, error) {
+	basis := clientadapter.ProtectionNone
+	if structuredWorkspaceTools {
+		basis = clientadapter.ProtectionExactRelease
+	}
+	return NewToolDecisionContextForBasis(
+		policySet,
+		workspaceRoot,
+		basis,
+		tools,
+		toolNamespaces,
+	)
+}
+
+// NewToolDecisionContextForBasis freezes the structured-tools basis the
+// connection's admission gave this request (ADR 0026). An invalid basis is
+// refused.
+func NewToolDecisionContextForBasis(
+	policySet environment.PolicySet,
+	workspaceRoot string,
+	structuredBasis clientadapter.ProtectionBasis,
+	tools []protocolcore.ToolDefinition,
+	toolNamespaces []protocolcore.ToolNamespace,
+) (ToolDecisionContext, error) {
 	if err := policySet.Validate(); err != nil {
 		return ToolDecisionContext{}, err
+	}
+	if !structuredBasis.Valid() {
+		return ToolDecisionContext{}, errors.New("tool decision structured-tools basis is invalid")
 	}
 	if workspaceRoot != "" &&
 		(!filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot) {
@@ -1354,8 +1386,8 @@ func NewToolDecisionContext(
 	}
 	return ToolDecisionContext{
 		policySet: policySet, workspaceRoot: workspaceRoot,
-		structuredWorkspaceTools: structuredWorkspaceTools,
-		tools:                    clonedTools, toolNamespaces: clonedNamespaces,
+		structuredBasis: structuredBasis,
+		tools:           clonedTools, toolNamespaces: clonedNamespaces,
 	}, nil
 }
 
@@ -1367,8 +1399,17 @@ func (context ToolDecisionContext) WorkspaceRoot() (string, bool) {
 	return context.workspaceRoot, context.workspaceRoot != ""
 }
 
+// StructuredWorkspaceTools keeps its exact meaning: it is true only for the
+// exact-release basis. Readers that also serve recognized clients ask
+// StructuredWorkspaceToolsBasis.
 func (context ToolDecisionContext) StructuredWorkspaceTools() bool {
-	return context.structuredWorkspaceTools
+	return context.structuredBasis == clientadapter.ProtectionExactRelease
+}
+
+// StructuredWorkspaceToolsBasis says on what ground structured workspace
+// actions may be classified for this request.
+func (context ToolDecisionContext) StructuredWorkspaceToolsBasis() clientadapter.ProtectionBasis {
+	return context.structuredBasis
 }
 
 func (context ToolDecisionContext) Tools() []protocolcore.ToolDefinition {
