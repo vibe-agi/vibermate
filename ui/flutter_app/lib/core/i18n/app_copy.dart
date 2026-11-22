@@ -2534,10 +2534,9 @@ final class AppCopy {
     'settings.tab.access': 'Access and launch',
     'settings.tab.safety': 'Safety and data',
     'settings.tab.users': 'Users',
-    'settings.section_detail.general':
-        'Appearance, language, transparent capture and updates',
+    'settings.section_detail.general': 'Appearance, language and updates',
     'settings.section_detail.access':
-        'Terminal command, editors, browser and other devices',
+        'Start Claude Code or Codex from Terminal or an editor',
     'settings.section_detail.users': 'Who can sign in to this Runtime',
     'settings.section_detail.safety':
         'Certificates, storage, backups and cleanup',
@@ -2555,10 +2554,20 @@ final class AppCopy {
     'settings.access.detail.server':
         'Connect an Agent from your computer. If you only need the browser, you are already connected.',
     'settings.access.detail.local':
-        'Set up the Terminal entry used to start managed Claude and Codex runs.',
+        'Start Claude Code or Codex from Terminal or an editor, and connect other devices.',
     'settings.access.local.title': 'On this Mac',
     'settings.access.local.no_account':
         'Using ViberMate on this Mac needs no sign-in or domain. For Codex, also trust the certificate under Safety and data.',
+    'settings.access.editor.title': 'Use from an editor (optional)',
+    'settings.access.editor.detail':
+        'Zed, JetBrains or VS Code start Claude Code or Codex through ViberMate (ACP).',
+    'settings.access.transparent.title': 'Transparent capture (experimental)',
+    'settings.access.transparent.badge': 'Experimental',
+    'settings.access.transparent.detail':
+        'Experimental. Only needed for agents you start with vibermate run --transparent; ordinary vibermate run works without it.',
+    'settings.access.other.title': 'Other ways to connect',
+    'settings.access.other.detail':
+        'A browser, another computer, or ViberMate on a server.',
     'settings.access.team.title': 'Browser or another device',
     'settings.access.team.optional':
         'Optional for local App use. Expand for the Web address and remote login steps.',
@@ -2568,7 +2577,7 @@ final class AppCopy {
     'settings.safety.detail':
         'Server connections, AI traffic inspection and stored data are separate controls.',
     'settings.server_connection.title': 'Server HTTPS',
-    'deployment.title': 'Deploy with your own domain',
+    'deployment.title': 'Run ViberMate on a server with your own domain',
     'deployment.detail':
         'ViberMate can obtain and renew a public HTTPS certificate. No separate Caddy installation is needed.',
     'deployment.configure': 'Configure automatic HTTPS',
@@ -3357,11 +3366,14 @@ final class AppCopy {
     'terminal.title': 'Terminal command',
     'terminal.description':
         'Use vibermate from Terminal to start managed Agent runs.',
-    'terminal.run.title': 'Start a managed run',
+    'terminal.run.title': 'Start Claude Code or Codex',
     'terminal.run.detail':
-        'Run from Terminal so the Agent keeps its TTY and the launcher can prove the workspace boundary.',
+        'Open Terminal, go to your project folder and paste a command. Your agent starts as usual with its own sign-in, and its requests appear in Sessions.',
     'terminal.run.install_first':
-        'Install or repair the Terminal command before copying a launch command.',
+        'Set up the vibermate command first, then copy a command below.',
+    'terminal.run.lead':
+        'In Terminal, go to your project folder and run one of these:',
+    'terminal.run.use_routing_set': 'Use a routing set instead',
     'terminal.run.copy': 'Copy {client} launch command',
     'terminal.run.copied': '{client} command copied',
     'terminal.run.copy_failed': 'Could not copy command',
@@ -5544,8 +5556,8 @@ final class AppCopy {
     'settings.tab.access': '接入与启动',
     'settings.tab.safety': '安全与数据',
     'settings.tab.users': '用户',
-    'settings.section_detail.general': '外观、语言、透明捕获与更新',
-    'settings.section_detail.access': '终端命令、编辑器、浏览器与其他设备',
+    'settings.section_detail.general': '外观、语言与更新',
+    'settings.section_detail.access': '从终端或编辑器启动 Claude Code 或 Codex',
     'settings.section_detail.users': '谁可以登录此 Runtime',
     'settings.section_detail.safety': '证书、存储、备份与清理',
     'settings.tab.proxy': '网络出口',
@@ -5559,17 +5571,26 @@ final class AppCopy {
     'settings.access.vless.absent': 'VLESS 内核未安装',
     'settings.access.vless.unknown': 'VLESS 内核可用性未知',
     'settings.access.detail.server': '从你的电脑接入 Agent；如果只使用网页，你已经完成连接。',
-    'settings.access.detail.local': '设置用于启动 Claude 与 Codex 托管运行的终端入口。',
+    'settings.access.detail.local': '从终端或编辑器启动 Claude Code 或 Codex，并接入其他设备。',
     'settings.access.local.title': '这台电脑',
     'settings.access.local.no_account':
         '在这台 Mac 上使用 ViberMate 无需登录或域名。使用 Codex 时，还需在「安全与数据」中信任证书。',
+    'settings.access.editor.title': '从编辑器使用（可选）',
+    'settings.access.editor.detail':
+        '让 Zed、JetBrains 或 VS Code 通过 ViberMate（ACP）启动 Claude Code 或 Codex。',
+    'settings.access.transparent.title': '透明捕获（实验性）',
+    'settings.access.transparent.badge': '实验性',
+    'settings.access.transparent.detail':
+        '实验性功能。仅用于通过 vibermate run --transparent 启动的 Agent；普通的 vibermate run 不需要它。',
+    'settings.access.other.title': '其他接入方式',
+    'settings.access.other.detail': '浏览器、其他电脑，或在服务器上运行的 ViberMate。',
     'settings.access.team.title': '从浏览器或其他设备接入',
     'settings.access.team.optional': '本机使用可跳过。展开后可查看网页地址和远程登录步骤。',
     'settings.access.team.detail': '先在「用户管理」中创建账号，再分享工作台地址和连接命令。',
     'settings.safety.title': '安全与数据',
     'settings.safety.detail': '服务器连接、AI 流量检查和数据留存分别管理，互不混淆。',
     'settings.server_connection.title': '服务器 HTTPS',
-    'deployment.title': '使用自有域名部署',
+    'deployment.title': '使用自有域名在服务器上运行 ViberMate',
     'deployment.detail': 'ViberMate 可自动申请和续期公网 HTTPS 证书，无需另外安装 Caddy。',
     'deployment.configure': '配置自动 HTTPS',
     'deployment.other': '已有证书或私网部署',
@@ -6242,9 +6263,12 @@ final class AppCopy {
     'preferences.warning.save_failed': '无法保存工作台偏好。运行时证据不受影响；下次导航变更会重试。',
     'terminal.title': '终端命令',
     'terminal.description': '在终端中使用 vibermate 启动托管的 Agent 运行。',
-    'terminal.run.title': '启动托管运行',
-    'terminal.run.detail': '请从终端运行，让 Agent 保留 TTY，并由启动器证明工作区边界。',
-    'terminal.run.install_first': '安装或修复终端命令后，才能复制启动命令。',
+    'terminal.run.title': '启动 Claude Code 或 Codex',
+    'terminal.run.detail':
+        '打开终端，进入项目目录并粘贴命令。Agent 会照常启动并使用自己的登录，它的请求会显示在「运行记录」中。',
+    'terminal.run.install_first': '请先设置 vibermate 命令，再复制下方命令。',
+    'terminal.run.lead': '在终端中进入项目文件夹，运行以下任一命令：',
+    'terminal.run.use_routing_set': '改用流量策略',
     'terminal.run.copy': '复制 {client} 启动命令',
     'terminal.run.copied': '已复制 {client} 命令',
     'terminal.run.copy_failed': '无法复制命令',

@@ -940,7 +940,7 @@ void main() {
       expect(find.byKey(const Key('terminal-command-install')), findsOneWidget);
       expect(
         tester
-            .widget<IconButton>(
+            .widget<TextButton>(
               find.byKey(const Key('managed-run-copy-claude')),
             )
             .onPressed,

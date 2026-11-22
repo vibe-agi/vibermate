@@ -32,6 +32,10 @@ export '../../core/preferences/workbench_preferences.dart'
 
 enum RootCAGuideIntent { remove, replace }
 
+/// What a link into Access and launch is for: starting an agent on this Mac,
+/// or connecting from a browser or another computer.
+enum AccessFocus { terminal, remote }
+
 typedef _AccountReadScope = ({int epoch, int settings, String origin});
 
 _AccountReadScope _accountReadScope(ProviderAccount account) => (
@@ -413,7 +417,19 @@ final class WorkbenchController extends ChangeNotifier
     SettingsDestination.safety,
   ];
 
+  /// Access and launch opens 'Browser or another device'. Only the Users
+  /// pane asks for it; leaving Settings resets it.
   bool remoteConnectionGuideRequested = false;
+
+  /// Where Access and launch scrolls when it next shows; read once.
+  AccessFocus? _pendingAccessFocus;
+
+  /// Where Access and launch should scroll, once.
+  AccessFocus? takeAccessFocus() {
+    final focus = _pendingAccessFocus;
+    _pendingAccessFocus = null;
+    return focus;
+  }
 
   Future<RuntimeRootCertificate> loadRuntimeRootCA() => _api.runtimeRootCA();
 
@@ -2342,6 +2358,10 @@ final class WorkbenchController extends ChangeNotifier
   void selectSection(WorkbenchSection value) {
     if (value == WorkbenchSection.usage && !serverManagement) return;
     if (section == value) return;
+    if (section == WorkbenchSection.settings) {
+      remoteConnectionGuideRequested = false;
+      _pendingAccessFocus = null;
+    }
     section = value;
     operationNotice = null;
     notifyListeners();
@@ -2581,10 +2601,14 @@ final class WorkbenchController extends ChangeNotifier
     }
   }
 
-  void openAccessSettings() {
+  /// Opens Access and launch on [focus]: the Terminal command for starting
+  /// an agent on this Mac, or the remote guide for a browser or another
+  /// computer.
+  void openAccessSettings({AccessFocus focus = AccessFocus.terminal}) {
     if (!accessSettingsAvailable) return;
     settingsTab = settingsDestinations.indexOf(SettingsDestination.access);
-    remoteConnectionGuideRequested = true;
+    remoteConnectionGuideRequested = focus == AccessFocus.remote;
+    _pendingAccessFocus = focus;
     section = WorkbenchSection.settings;
     operationNotice = null;
     notifyListeners();

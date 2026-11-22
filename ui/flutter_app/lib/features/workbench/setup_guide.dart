@@ -290,22 +290,15 @@ final class SetupGuide extends StatefulWidget {
 
 final class _SetupGuideState extends State<SetupGuide> {
   String? _copied;
-  bool _copyFailed = false;
 
   Future<void> _copy(String key, String text) async {
     try {
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      setState(() {
-        _copied = key;
-        _copyFailed = false;
-      });
+      setState(() => _copied = key);
     } on Object {
       if (!mounted) return;
-      setState(() {
-        _copied = null;
-        _copyFailed = true;
-      });
+      setState(() => _copied = null);
     }
   }
 
@@ -490,22 +483,23 @@ final class _SetupGuideState extends State<SetupGuide> {
       detail: copy('setup.server.install.detail'),
       action: OutlinedButton.icon(
         key: const Key('setup-open-access'),
-        onPressed: controller.openAccessSettings,
+        onPressed: () =>
+            controller.openAccessSettings(focus: AccessFocus.remote),
         icon: const Icon(Icons.menu_book_outlined, size: 14),
         label: Text(copy('capture.empty.web.action')),
       ),
       narrow: narrow,
       children: [
-        _SetupCommandRow(
+        CommandBlock(
           key: const Key('setup-command-login'),
           label: copy('server.login.command.client'),
-          command: login,
-          copy: copy,
-          enabled: controller.runtimeServerURL.isNotEmpty,
-          copied: _copied == 'login',
+          text: login,
+          copyLabel: copy('setup.start.copy'),
+          copiedLabel: copy('setup.start.copied'),
+          copyFailedLabel: copy('common.copy_failed'),
           copyTooltip: copy('server.login.command.copy'),
-          onCopy: () => _copy('login', login),
-          narrow: narrow,
+          fontSize: ViberType.body,
+          enabled: controller.runtimeServerURL.isNotEmpty,
         ),
       ],
     );
@@ -551,22 +545,6 @@ final class _SetupGuideState extends State<SetupGuide> {
         failed == null &&
         progress.rootTrusted == true &&
         controller.rootTrustedHere;
-    final enabled = progress.commandInstalled;
-    Widget commandRow(String client, String label) {
-      final command = launchCommand(controller, client);
-      return _SetupCommandRow(
-        key: Key('setup-command-$client'),
-        label: label,
-        command: command,
-        copy: copy,
-        enabled: enabled,
-        copied: _copied == client,
-        copyTooltip: copy.format('terminal.run.copy', {'client': label}),
-        onCopy: () => _copy(client, command),
-        narrow: narrow,
-      );
-    }
-
     return _SetupStep(
       key: const Key('setup-step-start'),
       number: 2,
@@ -584,22 +562,30 @@ final class _SetupGuideState extends State<SetupGuide> {
       ),
       narrow: narrow,
       children: [
-        commandRow('claude', 'Claude Code'),
-        const SizedBox(height: ViberSpacing.sm),
-        commandRow('codex', 'Codex'),
-        if (progress.codexNeedsRoot && !installFromFailure) ...[
-          const SizedBox(height: ViberSpacing.sm),
-          _CodexRequirement(controller: controller, copy: copy, narrow: narrow),
-        ] else if (codexReady) ...[
-          const SizedBox(height: ViberSpacing.sm),
-          _StepNote(
-            key: const Key('setup-codex-ready'),
-            icon: Icons.check,
-            iconColor: context.viberColors.verified,
-            text: copy('setup.start.codex_ready'),
-            narrow: narrow,
-          ),
-        ],
+        // The same commands as Access and launch; the step's line above
+        // already says where to run them.
+        LaunchCommandCard(
+          controller: controller,
+          copy: copy,
+          keyPrefix: 'setup',
+          lead: false,
+          codexFooter: progress.codexNeedsRoot && !installFromFailure
+              ? CodexCertificateRow(
+                  controller: controller,
+                  copy: copy,
+                  narrow: narrow,
+                )
+              : codexReady
+              ? _StepNote(
+                  key: const Key('setup-codex-ready'),
+                  icon: Icons.check,
+                  iconColor: context.viberColors.verified,
+                  text: copy('setup.start.codex_ready'),
+                  narrow: narrow,
+                  indent: false,
+                )
+              : null,
+        ),
         if (controller.rootCAError case final error?) ...[
           const SizedBox(height: ViberSpacing.sm),
           InlineNotice(message: rootCAErrorMessage(copy, error), error: true),
@@ -637,13 +623,6 @@ final class _SetupGuideState extends State<SetupGuide> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
-        if (_copyFailed)
-          Text(
-            copy('terminal.run.copy_failed'),
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: context.viberColors.danger),
-          ),
       ],
     );
   }
@@ -1007,113 +986,6 @@ final class _StepMarker extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A launch command in Terminal's font with a labelled Copy button.
-final class _SetupCommandRow extends StatelessWidget {
-  const _SetupCommandRow({
-    required this.label,
-    required this.command,
-    required this.copy,
-    required this.enabled,
-    required this.copied,
-    required this.copyTooltip,
-    required this.onCopy,
-    required this.narrow,
-    super.key,
-  });
-
-  final String label;
-  final String command;
-  final AppCopy copy;
-  final bool enabled;
-  final bool copied;
-  final String copyTooltip;
-  final VoidCallback onCopy;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.viberColors;
-    final box = Container(
-      constraints: const BoxConstraints(minHeight: ViberMetrics.controlHeight),
-      decoration: BoxDecoration(
-        color: colors.rail,
-        border: Border.all(color: colors.divider),
-        borderRadius: ViberMetrics.controlRadius,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: ViberSpacing.md,
-                vertical: ViberSpacing.sm,
-              ),
-              child: SelectableText(
-                command,
-                style: monoStyle.copyWith(
-                  fontSize: ViberType.body,
-                  color: enabled ? colors.text : colors.textFaint,
-                ),
-              ),
-            ),
-          ),
-          Tooltip(
-            message: copyTooltip,
-            child: TextButton.icon(
-              onPressed: enabled ? onCopy : null,
-              icon: Icon(copied ? Icons.check : Icons.copy, size: 13),
-              label: Text(
-                copy(copied ? 'setup.start.copied' : 'setup.start.copy'),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    final caption = Text(label, style: Theme.of(context).textTheme.labelLarge);
-    if (narrow) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          caption,
-          const SizedBox(height: ViberSpacing.xs),
-          box,
-        ],
-      );
-    }
-    return Row(
-      children: [
-        SizedBox(width: 92, child: caption),
-        Expanded(child: box),
-      ],
-    );
-  }
-}
-
-/// Under the Codex command in step 2: the shared certificate row, lined up
-/// with the commands above it.
-final class _CodexRequirement extends StatelessWidget {
-  const _CodexRequirement({
-    required this.controller,
-    required this.copy,
-    required this.narrow,
-  });
-
-  final WorkbenchController controller;
-  final AppCopy copy;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(left: narrow ? 0 : 92),
-    child: CodexCertificateRow(
-      controller: controller,
-      copy: copy,
-      narrow: narrow,
-    ),
-  );
 }
 
 /// One neutral line in a step: an icon, a sentence and, optionally, its

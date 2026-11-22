@@ -138,6 +138,14 @@ void main() {
           server || terminal ? 1 : keys.length - 1,
         );
         expect(find.byKey(const Key('runtime-users-panel')), findsNothing);
+        // On this Mac the remote guide is folded away under other ways to
+        // connect, unless a link asks for it.
+        expect(
+          find.byKey(const Key('server-runtime-access')),
+          server && !terminal ? findsOneWidget : findsNothing,
+        );
+        controller.openAccessSettings(focus: AccessFocus.remote);
+        await tester.pumpAndSettle();
         expect(
           find.byKey(const Key('server-runtime-access')),
           server ? findsOneWidget : findsNothing,
@@ -169,6 +177,11 @@ void main() {
         );
         await openSettingsTab(tester, 'access');
         expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+        // Browser or another device is one of the other ways to connect.
+        await tapVisible(
+          tester,
+          find.byKey(const ValueKey('access-other-section-false')),
+        );
         await tapVisible(
           tester,
           find.byKey(const ValueKey('settings-remote-guide-false')),

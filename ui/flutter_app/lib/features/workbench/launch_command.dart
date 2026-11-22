@@ -227,3 +227,161 @@ final class CodexCertificateRow extends StatelessWidget {
     );
   }
 }
+
+/// Start Claude Code or Codex: where to run the commands, then each command
+/// in Terminal's font with a labelled Copy that turns into Copied. Access
+/// and launch, the setup guide and every routing set show this card; the
+/// commands come from [launchCommand].
+final class LaunchCommandCard extends StatelessWidget {
+  const LaunchCommandCard({
+    required this.controller,
+    required this.copy,
+    this.routingSetId,
+    this.keyPrefix = 'managed-run',
+    this.lead = true,
+    this.requirement = false,
+    this.codexFooter,
+    this.onUseRoutingSet,
+    super.key,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  /// The routing set the commands start on; the built-in one when null.
+  final String? routingSetId;
+
+  /// Keys each row '[keyPrefix]-command-claude' and its button
+  /// '[keyPrefix]-copy-claude', and the same for Codex.
+  final String keyPrefix;
+
+  /// 'In Terminal, go to your project folder and run one of these:'.
+  final bool lead;
+
+  /// The line saying the agents must already be installed.
+  final bool requirement;
+
+  /// Shown under the Codex command, such as the certificate Codex needs.
+  final Widget? codexFooter;
+
+  /// 'Use a routing set instead', which opens Routing.
+  final VoidCallback? onUseRoutingSet;
+
+  static const double _labelWidth = 92;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final muted = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: colors.textMuted);
+    final enabled =
+        !controller.terminalManagement ||
+        controller.terminalCommand?.ready == true;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 480;
+        Widget indented(Widget child) => Padding(
+          padding: EdgeInsets.only(left: narrow ? 0 : _labelWidth),
+          child: child,
+        );
+        Widget row(String client, String label) {
+          final block = CommandBlock(
+            text: launchCommand(controller, client, routingSetId: routingSetId),
+            copyLabel: copy('setup.start.copy'),
+            copiedLabel: copy('setup.start.copied'),
+            copyFailedLabel: copy('common.copy_failed'),
+            copyTooltip: copy.format('terminal.run.copy', {'client': label}),
+            fontSize: ViberType.body,
+            enabled: enabled,
+            copyKey: Key('$keyPrefix-copy-$client'),
+          );
+          final caption = Text(
+            label,
+            style: Theme.of(context).textTheme.labelLarge,
+          );
+          return KeyedSubtree(
+            key: Key('$keyPrefix-command-$client'),
+            child: narrow
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      caption,
+                      const SizedBox(height: ViberSpacing.xs),
+                      block,
+                    ],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: _labelWidth,
+                        height: ViberMetrics.controlHeight,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: caption,
+                        ),
+                      ),
+                      Expanded(child: block),
+                    ],
+                  ),
+          );
+        }
+
+        return Column(
+          key: Key('$keyPrefix-launch-card'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (lead) ...[
+              Text(copy('terminal.run.lead'), style: muted),
+              const SizedBox(height: ViberSpacing.md),
+            ],
+            if (!enabled) ...[
+              Text(
+                copy('terminal.run.install_first'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: ViberSpacing.sm),
+            ],
+            row('claude', 'Claude Code'),
+            const SizedBox(height: ViberSpacing.sm),
+            row('codex', 'Codex'),
+            if (codexFooter case final footer?) ...[
+              const SizedBox(height: ViberSpacing.sm),
+              indented(footer),
+            ],
+            if (requirement) ...[
+              const SizedBox(height: ViberSpacing.sm),
+              indented(
+                Text(
+                  copy('terminal.run.requirement'),
+                  key: Key('$keyPrefix-requirement'),
+                  style: muted,
+                ),
+              ),
+            ],
+            if (onUseRoutingSet case final open?) ...[
+              const SizedBox(height: ViberSpacing.xs),
+              indented(
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    key: Key('$keyPrefix-use-routing-set'),
+                    onPressed: open,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: ViberSpacing.xs,
+                      ),
+                    ),
+                    icon: const Icon(Icons.alt_route, size: 14),
+                    label: Text(copy('terminal.run.use_routing_set')),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
