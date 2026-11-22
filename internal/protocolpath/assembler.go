@@ -679,11 +679,25 @@ func (assembler *Assembler) Terminal(response protocolcore.Response) error {
 
 func (assembler *Assembler) matchTerminal(response protocolcore.Response) error {
 	var terminal []protocolcore.ContentBlock
+	terminalCalls, streamedCalls := 0, 0
 	for _, block := range response.Blocks {
 		switch block.Kind {
 		case protocolcore.BlockText, protocolcore.BlockRefusal, protocolcore.BlockReasoning, protocolcore.BlockToolCall:
 			terminal = append(terminal, block)
 		}
+		if block.Kind == protocolcore.BlockToolCall {
+			terminalCalls++
+		}
+	}
+	for _, block := range assembler.order {
+		if block.kind == assembledToolCall {
+			streamedCalls++
+		}
+	}
+	// A call the terminal adds or drops is a tool mismatch, whatever else
+	// differs, so it is reported as one before the block count is compared.
+	if terminalCalls != streamedCalls {
+		return terminalToolMismatch()
 	}
 	if len(terminal) != len(assembler.order) {
 		return assemblerViolation("terminal blocks differ from the streamed blocks")
@@ -694,13 +708,17 @@ func (assembler *Assembler) matchTerminal(response protocolcore.Response) error 
 		}
 		if !block.matches(terminal[index]) {
 			if block.kind == assembledToolCall || terminal[index].Kind == protocolcore.BlockToolCall {
-				return protocolcore.NewFailure(protocolcore.ReasonToolCallIncomplete, "$.output",
-					errors.New("terminal tool calls differ from the streamed tool calls"))
+				return terminalToolMismatch()
 			}
 			return assemblerViolation("terminal content differs from the streamed content")
 		}
 	}
 	return nil
+}
+
+func terminalToolMismatch() error {
+	return protocolcore.NewFailure(protocolcore.ReasonToolCallIncomplete, "$.output",
+		errors.New("terminal tool calls differ from the streamed tool calls"))
 }
 
 func (block *assembledBlock) matches(terminal protocolcore.ContentBlock) bool {

@@ -384,11 +384,21 @@ func TestAssemblerChecksToolCallsBothWays(t *testing.T) {
 		if _, err := assembler.ToolCall("1", bash); err != nil {
 			t.Fatal(err)
 		}
-		if err := assembler.Terminal(response); err == nil {
-			t.Fatalf("%s: terminal accepted", name)
+		err := assembler.Terminal(response)
+		if protocolcore.ReasonOf(err) != protocolcore.ReasonToolCallIncomplete {
+			t.Fatalf("%s: Terminal() error = %v, want %s", name, err, protocolcore.ReasonToolCallIncomplete)
 		}
 	}
+	// A call the terminal adds after streamed text is a tool mismatch too.
 	assembler := newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{})
+	if _, err := assembler.TextDone("0", "Hello"); err != nil {
+		t.Fatal(err)
+	}
+	err := assembler.Terminal(terminalResponse(protocolcore.StopReasonToolUse, textBlock("Hello"), protocolcore.ContentBlock{Kind: protocolcore.BlockToolCall, ToolCall: bash}))
+	if protocolcore.ReasonOf(err) != protocolcore.ReasonToolCallIncomplete {
+		t.Fatalf("unstreamed call: Terminal() error = %v", err)
+	}
+	assembler = newTestAssembler(t, recordingEncoder{}, "", AssemblerOptions{})
 	if _, err := assembler.ToolCall("1", bash); err != nil {
 		t.Fatal(err)
 	}
