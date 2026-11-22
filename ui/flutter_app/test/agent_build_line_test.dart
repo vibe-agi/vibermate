@@ -128,6 +128,13 @@ void main() {
     // The guide stops waiting for a request that cannot arrive.
     expect(find.byKey(const Key('setup-cannot-connect')), findsOneWidget);
     expect(find.byKey(const Key('setup-prompt-waiting')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('setup-step-prompt')),
+        matching: find.text("Can't connect"),
+      ),
+      findsOneWidget,
+    );
 
     await openRun(tester, controller);
     expect(

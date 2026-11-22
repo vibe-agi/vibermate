@@ -491,12 +491,17 @@ final class _SetupGuideState extends State<SetupGuide> {
       state: state,
       title: copy('setup.prompt.title'),
       copy: copy,
-      status: state == SetupStepState.current
+      status: state != SetupStepState.current
+          ? null
+          : progress.blocked
           ? StatusPill(
+              label: copy('capture.cannot_connect.badge'),
+              color: context.viberColors.danger,
+            )
+          : StatusPill(
               label: copy('setup.status.waiting'),
               color: context.viberColors.route,
-            )
-          : null,
+            ),
       detail: copy('setup.prompt.detail'),
       narrow: narrow,
       children: [
