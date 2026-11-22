@@ -59,10 +59,17 @@ type RecognizedClientPolicy struct {
 
 // recognizedClientPolicies names both publisher-recognized clients. Each
 // grant is added only after the installed-client proof that re-proves it has
-// passed against a real release; Claude Code is granted nothing yet, so every
-// Claude reader of a recognized basis stays inactive.
+// passed against a real release; Claude Code's workspace tools are not
+// granted yet, so the tool gate's recognized basis stays inactive.
 var recognizedClientPolicies = [...]RecognizedClientPolicy{
-	{ClientID: "claude-code"},
+	{
+		ClientID:       "claude-code",
+		IdentityCanary: Canary{"internal/clientadapter", "TestInstalledClaudeIsRecognizedByItsSigner"},
+		Grants: []ProtectionGrant{
+			{FeatureCoreOwnedStreamingFallback, ProofLaunchInstruction,
+				Canary{"internal/runlauncher", "TestInstalledClaudeLeavesStreamFallbackToCore"}},
+		},
+	},
 	{
 		ClientID:       "codex-cli",
 		IdentityCanary: Canary{"internal/clientadapter", "TestInstalledCodexIsRecognizedByItsSigner"},

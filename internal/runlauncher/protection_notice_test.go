@@ -112,11 +112,11 @@ func TestProtectionNoticeNamesOnlyWhatTheLauncherSet(t *testing.T) {
 }
 
 // What the launcher prints follows from the one fallback decision it makes
-// for the grant. A verified release that leaves recovery to ViberMate says so
-// on every target, as its exact rule has always set the variable; nothing is
-// printed for a client that keeps its own retry, and a switch value the
-// launcher cannot read is reported for any signer grant, since only those
-// read it.
+// for the grant. A recognized Claude Code on an Upstream-only target, and a
+// verified release that leaves recovery to ViberMate on every target, as its
+// exact rule has always set the variable, say so; nothing is printed for a
+// client that keeps its own retry, and a switch value the launcher cannot
+// read is reported for any signer grant, since only those read it.
 func TestProtectionNoticeFollowsTheLaunchDecision(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +147,17 @@ func TestProtectionNoticeFollowsTheLaunchDecision(t *testing.T) {
 			recognizedSignerGrant("codex-cli", clientadapter.InstallNPMWrapperNativeChild, clientadapter.LaunchCodexResponsesHTTP, []string{}),
 			[]string{clientadapter.RecognizedProtectionsVariable + "=banana"},
 			[]string{"cli.protections.switchUnrecognized"}},
+		{"recognized claude, managed target",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, anthropic),
+			nil, []string{"cli.protections.streamingFallback"}},
+		{"recognized claude, managed target, switch off",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, anthropic),
+			[]string{clientadapter.RecognizedProtectionsVariable + "=off"},
+			[]string{"cli.protections.switchedOff"}},
+		{"recognized claude, managed target, unreadable switch",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, anthropic),
+			[]string{clientadapter.RecognizedProtectionsVariable + "=banana"},
+			[]string{"cli.protections.switchUnrecognized", "cli.protections.streamingFallback"}},
 		{"recognized claude, unmanaged target",
 			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, []string{}),
 			nil, nil},

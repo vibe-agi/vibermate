@@ -3,6 +3,7 @@ package runlauncher
 import (
 	"github.com/vibe-agi/vibermate/internal/capturescope"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/locales"
 )
 
 func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
@@ -683,14 +685,16 @@ func genericGrant() capturecontrol.LaunchGrant {
 type fallbackGrantCase struct {
 	name  string
 	grant capturecontrol.LaunchGrant
-	want  clientadapter.StreamingFallbackPolicy
+	// want is the policy while the operator switch is on, unset or unread.
+	want clientadapter.StreamingFallbackPolicy
 	// recognized grants read the operator switch; no other grant does.
 	recognized bool
 }
 
 // fallbackGrantCases are the grant shapes the launcher's one fallback
-// decision serves. While the recognized-client policy grants no fallback,
-// only a verified core_owned adapter receives core_owned.
+// decision serves. A verified grant carries its adapter's policy; a
+// publisher-recognized Claude Code whose own target is an Upstream-only
+// authority receives core_owned from the recognized-client policy.
 func fallbackGrantCases() []fallbackGrantCase {
 	anthropic := []string{"api.anthropic.com:443"}
 	return []fallbackGrantCase{
@@ -706,7 +710,7 @@ func fallbackGrantCases() []fallbackGrantCase {
 		{"generic", genericGrant(), clientadapter.StreamingFallbackClientDefault, false},
 		{"recognized claude, managed target",
 			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, anthropic),
-			clientadapter.StreamingFallbackClientDefault, true},
+			clientadapter.StreamingFallbackCoreOwned, true},
 		{"recognized claude, unmanaged target",
 			recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, []string{}),
 			clientadapter.StreamingFallbackClientDefault, true},
@@ -721,8 +725,8 @@ func fallbackGrantCases() []fallbackGrantCase {
 
 // A verified grant keeps its exact release's policy, and a generic one keeps
 // the client's own. A recognized grant reads the operator switch from the
-// launcher's base environment and, while the recognized-client policy grants
-// no fallback, passes the user's own value through for every switch value.
+// launcher's base environment: off withholds the fallback the policy would
+// have given, and every other value leaves the decision as it is.
 func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 	t.Parallel()
 
@@ -743,11 +747,18 @@ func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 				if err := validateGrant(testCase.grant); err != nil {
 					t.Fatalf("the fixture grant is invalid: %v", err)
 				}
-				decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
-				if decision.policy != testCase.want || decision.switchedOff {
-					t.Fatalf("decision = %+v, want policy %s", decision, testCase.want)
+				state, recognized := clientadapter.ParseProtectionSwitch(switchValue)
+				withheld := testCase.recognized &&
+					testCase.want == clientadapter.StreamingFallbackCoreOwned &&
+					state == clientadapter.ProtectionsOff
+				policy := testCase.want
+				if withheld {
+					policy = clientadapter.StreamingFallbackClientDefault
 				}
-				_, recognized := clientadapter.ParseProtectionSwitch(switchValue)
+				decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
+				if decision.policy != policy || decision.switchedOff != withheld {
+					t.Fatalf("decision = %+v, want policy %s and switchedOff %v", decision, policy, withheld)
+				}
 				if testCase.recognized {
 					if decision.switchValue != switchValue || decision.switchUnrecognized != !recognized {
 						t.Fatalf("the switch was read as %+v", decision)
@@ -760,7 +771,7 @@ func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "0"
-				if testCase.want == clientadapter.StreamingFallbackCoreOwned {
+				if policy == clientadapter.StreamingFallbackCoreOwned {
 					want = "1"
 				}
 				if got := environmentMap(environment)[claudeDisableNonStreamingFallback]; got != want {
@@ -768,6 +779,114 @@ func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A publisher-recognized Claude Code leaves stream recovery to ViberMate only
+// when its own target is an authority whose every route is Upstream, where
+// the Exchange holds the stream (ADR 0026). There the launcher drops every
+// inherited casing of the variable and sets 1; everywhere else the user's own
+// value reaches the client unchanged. The command says what it decided.
+func TestRecognizedClaudeLeavesStreamFallbackToCoreOnlyOnUpstreamTargets(t *testing.T) {
+	t.Parallel()
+
+	anthropic := []string{"api.anthropic.com:443"}
+	claude := func(managed []string) capturecontrol.LaunchGrant {
+		return recognizedSignerGrant("claude-code", clientadapter.InstallNativeSingleBinary, clientadapter.LaunchNodeEnvProxy, managed)
+	}
+	inherited := []string{
+		"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0",
+		"claude_code_disable_nonstreaming_fallback=false",
+	}
+	const (
+		fallback     = "cli.protections.streamingFallback"
+		switchedOff  = "cli.protections.switchedOff"
+		unrecognized = "cli.protections.switchUnrecognized"
+	)
+	for _, test := range []struct {
+		name   string
+		grant  capturecontrol.LaunchGrant
+		extra  []string
+		set    bool
+		notice []string
+	}{
+		{"recognized claude, managed target", claude(anthropic), nil, true, []string{fallback}},
+		{"recognized claude, managed base URL", claude([]string{"gateway.example:443"}),
+			[]string{"ANTHROPIC_BASE_URL=https://gateway.example"}, true, []string{fallback}},
+		{"recognized claude, unmanaged target", claude([]string{}), nil, false, nil},
+		{"recognized claude, base URL at an unmanaged host", claude(anthropic),
+			[]string{"ANTHROPIC_BASE_URL=https://gateway.example"}, false, nil},
+		{"recognized claude, switch off", claude(anthropic),
+			[]string{clientadapter.RecognizedProtectionsVariable + "=off"}, false, []string{switchedOff}},
+		{"recognized claude, switch 0", claude(anthropic),
+			[]string{clientadapter.RecognizedProtectionsVariable + "=0"}, false, []string{switchedOff}},
+		{"recognized claude, switch banana", claude(anthropic),
+			[]string{clientadapter.RecognizedProtectionsVariable + "=banana"}, true, []string{unrecognized, fallback}},
+		{"recognized claude, wrapper shape",
+			recognizedSignerGrant("claude-code", clientadapter.InstallNPMWrapperNativeChild, clientadapter.LaunchNodeEnvProxy, anthropic),
+			nil, false, nil},
+		{"recognized codex",
+			recognizedSignerGrant("codex-cli", clientadapter.InstallNPMWrapperNativeChild, clientadapter.LaunchCodexResponsesHTTP, []string{"api.openai.com:443"}),
+			[]string{"OPENAI_BASE_URL=https://api.openai.com/v1"}, false, nil},
+		{"verified client_default",
+			func() capturecontrol.LaunchGrant {
+				grant := verifiedAdapterGrant(clientadapter.LaunchNodeEnvProxy, anthropic)
+				grant.Adapter.StreamingFallbackPolicy = clientadapter.StreamingFallbackClientDefault
+				return grant
+			}(), nil, false, nil},
+		{"verified core_owned, unmanaged target",
+			verifiedAdapterGrant(clientadapter.LaunchNodeEnvProxy, []string{}), nil, true, []string{fallback}},
+	} {
+		base := append(append([]string{"PATH=/usr/bin:/bin"}, inherited...), test.extra...)
+		if err := validateGrant(test.grant); err != nil {
+			t.Fatalf("%s: the fixture grant is invalid: %v", test.name, err)
+		}
+		environment, err := buildEnvironment(base, test.grant)
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		got := make(map[string]string)
+		for key, value := range environmentMap(environment) {
+			if strings.EqualFold(key, claudeDisableNonStreamingFallback) {
+				got[key] = value
+			}
+		}
+		want := environmentMap(inherited)
+		if test.set {
+			want = map[string]string{claudeDisableNonStreamingFallback: "1"}
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: fallback variables %v, want %v", test.name, got, want)
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Fatalf("%s: fallback variables %v, want %v", test.name, got, want)
+			}
+		}
+		decision := decideStreamingFallback(base, test.grant, usesManagedClientCredential(base, test.grant))
+		_, value, _ := clientadapter.ProtectionSwitchFromEnvironment(base)
+		var lines []string
+		for _, key := range test.notice {
+			lines = append(lines, renderedNotice(t, locales.EnglishUS, key, value))
+		}
+		if notice := noticeLines(t, base, decision); !slices.Equal(notice, lines) {
+			t.Fatalf("%s: notice %q, want %q", test.name, notice, lines)
+		}
+	}
+	// The unread value is reported as typed.
+	base := []string{"PATH=/usr/bin:/bin", clientadapter.RecognizedProtectionsVariable + "=banana"}
+	decision := decideStreamingFallback(base, claude(anthropic), true)
+	if decision.policy != clientadapter.StreamingFallbackCoreOwned || !decision.switchUnrecognized ||
+		decision.switchValue != "banana" || decision.switchedOff {
+		t.Fatalf("switch banana decided %+v", decision)
+	}
+	// Switch 0 withholds the fallback, and the notice shows the value.
+	base = []string{"PATH=/usr/bin:/bin", clientadapter.RecognizedProtectionsVariable + "=0"}
+	decision = decideStreamingFallback(base, claude(anthropic), true)
+	if notice := noticeLines(t, base, decision); decision.policy != clientadapter.StreamingFallbackClientDefault ||
+		!decision.switchedOff || len(notice) != 1 ||
+		!strings.Contains(notice[0], clientadapter.RecognizedProtectionsVariable+"=0)") {
+		t.Fatalf("switch 0 decided %+v and noticed %q", decision, notice)
 	}
 }
 

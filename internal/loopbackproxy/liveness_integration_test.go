@@ -41,6 +41,10 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 		label              string
 		stale, switchedOff bool
 		basis              clientadapter.ProtectionBasis
+		// fallback is the stream fallback basis of a run without release
+		// evidence. No data-plane reader asks for it; the launcher applies
+		// it, and only a recognized Claude has one.
+		fallback clientadapter.ProtectionBasis
 	}{
 		{name: "configured_native", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n"},
 		{name: "manual_unknown_native", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n", manual: true},
@@ -58,7 +62,7 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 		{name: "generic_client_chatgpt_provider", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", provider: "https://chatgpt.com"},
 		{name: "native_client_private_provider", host: "chatgpt.com", path: "/backend-api/codex/responses", want: "event: keepalive\ndata: {\"type\":\"keepalive\"}\n\n", provider: "https://private.example"},
 		{name: "recognized_codex_generic", host: "api.openai.com", path: "/v1/responses", want: dataFrame, recognition: clientadapter.RecognitionRecognized, label: "codex", basis: clientadapter.ProtectionRecognizedClient},
-		{name: "recognized_claude_generic", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "claude"},
+		{name: "recognized_claude_generic", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "claude", fallback: clientadapter.ProtectionRecognizedClient},
 		{name: "unverified_codex_generic", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionUnverified, label: "codex"},
 		{name: "recognized_codex_stale_revision", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "codex", stale: true},
 		{name: "recognized_codex_switched_off", host: "api.openai.com", path: "/v1/responses", want: ": keepalive\n\n", recognition: clientadapter.RecognitionRecognized, label: "codex", switchedOff: true},
@@ -143,9 +147,12 @@ func TestResponsesKeepaliveUsesFrozenNativeClientContract(t *testing.T) {
 			if got := admission.ProtectionBasis(clientadapter.FeatureResponsesDataKeepalive); got != basis {
 				t.Fatalf("keepalive basis = %s, want %s", got, basis)
 			}
-			for _, other := range []clientadapter.Feature{clientadapter.FeatureCoreOwnedStreamingFallback, clientadapter.FeatureStructuredWorkspaceTools} {
-				if !test.verified && admission.ProtectionBasis(other) != clientadapter.ProtectionNone {
-					t.Fatalf("%s basis = %s for a run without release evidence", other.Name(), admission.ProtectionBasis(other))
+			if !test.verified {
+				if got := admission.ProtectionBasis(clientadapter.FeatureCoreOwnedStreamingFallback); got != test.fallback {
+					t.Fatalf("stream fallback basis = %s, want %s for a run without release evidence", got, test.fallback)
+				}
+				if got := admission.ProtectionBasis(clientadapter.FeatureStructuredWorkspaceTools); got != clientadapter.ProtectionNone {
+					t.Fatalf("workspace tools basis = %s for a run without release evidence", got)
 				}
 			}
 			fixture.exchanges.keepalive = true

@@ -644,8 +644,15 @@ func TestDesktopRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 			host := startHost(t, options)
 			defer shutdownHost(t, host)
 			for revision, want := range testCase.want {
-				if got := recognizedRunClient(t, host.Runtime(), "claude", revision); got.ID != want {
+				got := recognizedRunClient(t, host.Runtime(), "claude", revision)
+				if got.ID != want {
 					t.Fatalf("revision %d named %+v, want client %q", revision, got, want)
+				}
+				// A named Claude Code carries the stream fallback the policy
+				// grants it, which its launcher applies.
+				fallback := clientadapter.FeatureCoreOwnedStreamingFallback
+				if want != "" && got != (clientadapter.RecognizedClient{ID: want, Policy: fallback, Protections: fallback}) {
+					t.Fatalf("revision %d carries %+v, want only the stream fallback", revision, got)
 				}
 			}
 		})

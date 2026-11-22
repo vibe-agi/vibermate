@@ -8,9 +8,10 @@ import (
 )
 
 // designedRecognizedClientPolicies is the table ADR 0026 arrives at once every
-// grant has its installed-client proof. The live table grants Claude Code
-// nothing yet, so the index, the fallback projection and the canary list are
-// exercised against this fixture through the unexported delegates.
+// grant has its installed-client proof. The live table does not grant Claude
+// Code its workspace tools yet, so the index, the fallback projection and the
+// canary list are also exercised against this fixture through the unexported
+// delegates.
 func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 	return []RecognizedClientPolicy{
 		{
@@ -41,15 +42,24 @@ func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	t.Parallel()
 
-	// Codex has its keepalive grant, proven by C4, and its unconditional
-	// WebSocket fallback, proven by C3. Claude Code is named and granted
-	// nothing: its readers of a recognized basis stay inactive until a grant
-	// arrives with its proof.
+	// Claude Code has its stream fallback grant, proven by C1, and Codex its
+	// keepalive grant, proven by C4, and its unconditional WebSocket
+	// fallback, proven by C3. Each row names its identity proof (C5). Claude
+	// Code's workspace tools wait for their own proof, so the tool gate's
+	// recognized basis stays inactive.
+	claudeFallback := Canary{"internal/runlauncher", "TestInstalledClaudeLeavesStreamFallbackToCore"}
+	claudeIdentity := Canary{"internal/clientadapter", "TestInstalledClaudeIsRecognizedByItsSigner"}
 	codexKeepalive := Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
 	codexFallback := Canary{"internal/loopbackproxy", "TestInstalledCodexFallsBackToHTTPAfterProxy426"}
 	codexIdentity := Canary{"internal/clientadapter", "TestInstalledCodexIsRecognizedByItsSigner"}
 	want := []RecognizedClientPolicy{
-		{ClientID: "claude-code"},
+		{
+			ClientID:       "claude-code",
+			IdentityCanary: claudeIdentity,
+			Grants: []ProtectionGrant{
+				{FeatureCoreOwnedStreamingFallback, ProofLaunchInstruction, claudeFallback},
+			},
+		},
 		{
 			ClientID:       "codex-cli",
 			IdentityCanary: codexIdentity,
@@ -66,7 +76,7 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 		t.Fatalf("RecognizedClientPolicies() = %+v, want %+v", got, want)
 	}
 	for clientID, features := range map[string]Feature{
-		"claude-code": 0,
+		"claude-code": FeatureCoreOwnedStreamingFallback,
 		"codex-cli":   FeatureResponsesDataKeepalive,
 		"other":       0,
 		"":            0,
@@ -82,8 +92,8 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	}{
 		{"codex-cli", "linux", []Canary{codexKeepalive, codexFallback}},
 		{"codex-cli", "darwin", []Canary{codexKeepalive, codexFallback, codexIdentity}},
-		{"claude-code", "linux", nil},
-		{"claude-code", "darwin", nil},
+		{"claude-code", "linux", []Canary{claudeFallback}},
+		{"claude-code", "darwin", []Canary{claudeFallback, claudeIdentity}},
 		{"other", "darwin", nil},
 		{"", "darwin", nil},
 	} {
@@ -94,6 +104,8 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	}
 
 	got[0].ClientID = "changed"
+	got[0].Grants[0].Canary.Test = "changed"
+	got[0].Grants = append(got[0].Grants, ProtectionGrant{Feature: FeatureStructuredWorkspaceTools})
 	got[1].Grants[0].Feature = FeatureStructuredWorkspaceTools
 	got[1].Grants = append(got[1].Grants, ProtectionGrant{Feature: FeatureCoreOwnedStreamingFallback})
 	got[1].Unconditional[0].Canary.Test = "changed"
@@ -354,11 +366,27 @@ func TestRecognizedStreamingFallbackNeedsClaudeItsRecipeAndASignedBinary(t *test
 			t.Fatalf("%s got %q", testCase.name, policy)
 		}
 	}
-	// The live table grants no fallback yet.
+	// The live table grants Claude Code the fallback, under the same rule.
 	if policy := RecognizedStreamingFallbackPolicy(
 		"claude-code", LaunchNodeEnvProxy, InstallNativeSingleBinary,
-	); policy != StreamingFallbackClientDefault {
-		t.Fatalf("the live table gave Claude Code %q", policy)
+	); policy != StreamingFallbackCoreOwned {
+		t.Fatalf("the live table gave a signed Claude Code %q", policy)
+	}
+	for _, testCase := range []struct {
+		clientID string
+		recipe   LaunchRecipe
+		shape    InstallShape
+	}{
+		{"claude-code", LaunchNodeEnvProxy, InstallNPMWrapperNativeChild},
+		{"claude-code", LaunchCodexResponsesHTTP, InstallNativeSingleBinary},
+		{"codex-cli", LaunchCodexResponsesHTTP, InstallNativeSingleBinary},
+		{"codex-cli", LaunchNodeEnvProxy, InstallNativeSingleBinary},
+	} {
+		if policy := RecognizedStreamingFallbackPolicy(
+			testCase.clientID, testCase.recipe, testCase.shape,
+		); policy != StreamingFallbackClientDefault {
+			t.Fatalf("the live table gave %+v %q", testCase, policy)
+		}
 	}
 }
 
@@ -410,14 +438,19 @@ func TestRecognizedClientsNameOnlyTheCurrentRevision(t *testing.T) {
 		}
 	}
 
-	// The live table names both clients and grants only Codex its keepalive;
-	// a stored run at another revision names neither.
+	// The live table names both clients, grants Claude Code its stream
+	// fallback and Codex its keepalive; a stored run at another revision
+	// names neither.
 	live, err := NewRecognizedClients(catalog, ProtectionsOn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for label, want := range map[string]RecognizedClient{
-		"claude": {ID: "claude-code"},
+		"claude": {
+			ID:          "claude-code",
+			Policy:      FeatureCoreOwnedStreamingFallback,
+			Protections: FeatureCoreOwnedStreamingFallback,
+		},
 		"codex": {
 			ID:          "codex-cli",
 			Policy:      FeatureResponsesDataKeepalive,
@@ -608,20 +641,31 @@ func TestRecognizedClientsHonourTheSwitch(t *testing.T) {
 			t.Fatalf("Client(%q) = %+v, %v, want %+v switched off", label, got, found, want)
 		}
 	}
-	// The live table: the switch withdraws Codex's keepalive and keeps its
-	// policy, and a client the policy grants nothing is not switched off,
-	// because there was nothing to withdraw.
+	// The live table: the switch withdraws Claude Code's fallback and
+	// Codex's keepalive and keeps each policy.
 	live, err := NewRecognizedClients(catalog, ProtectionsOff)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, found := live.Client(catalog.Revision(), "codex"); !found ||
-		got != (RecognizedClient{ID: "codex-cli", Policy: FeatureResponsesDataKeepalive}) ||
-		!got.SwitchedOff() {
-		t.Fatalf("live Client(codex) with the switch off = %+v, %v", got, found)
+	for label, want := range map[string]RecognizedClient{
+		"claude": {ID: "claude-code", Policy: FeatureCoreOwnedStreamingFallback},
+		"codex":  {ID: "codex-cli", Policy: FeatureResponsesDataKeepalive},
+	} {
+		if got, found := live.Client(catalog.Revision(), label); !found || got != want || !got.SwitchedOff() {
+			t.Fatalf("live Client(%q) with the switch off = %+v, %v, want %+v switched off", label, got, found, want)
+		}
 	}
-	if got, _ := live.Client(catalog.Revision(), "claude"); got.SwitchedOff() {
-		t.Fatalf("an empty policy reads as switched off: %+v", got)
+	// A client the policy grants nothing is not switched off, because there
+	// was nothing to withdraw.
+	empty, err := newRecognizedClients(catalog, ProtectionsOff, []RecognizedClientPolicy{
+		{ClientID: "claude-code"}, {ClientID: "codex-cli"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, found := empty.Client(catalog.Revision(), "claude"); !found ||
+		got != (RecognizedClient{ID: "claude-code"}) || got.SwitchedOff() {
+		t.Fatalf("an empty policy with the switch off = %+v, %v", got, found)
 	}
 	if (RecognizedClient{}).SwitchedOff() {
 		t.Fatal("no client reads as switched off")

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
+	"github.com/vibe-agi/vibermate/locales"
 )
 
 // C1 (ADR 0026): when the launcher leaves stream recovery to ViberMate, an
@@ -23,6 +24,14 @@ import (
 // the stream with the proxy's own in-band error.
 func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 	binary := claudeNativeBinary(t)
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	notice, err := catalogs.Render(locales.EnglishUS, "cli.protections.streamingFallback", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index, test := range []struct {
 		name      string
 		shape     claudeGrantShape
@@ -31,6 +40,12 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 		inherited []string
 		protected bool
 	}{
+		{name: "protected/recognized_upstream/cut", shape: grantRecognized, managed: true, failure: streamCut, protected: true},
+		{name: "protected/recognized_upstream/in_band_error", shape: grantRecognized, managed: true, failure: streamInBandError, protected: true},
+		// An inherited 0 keeps the release's own fallback; the launcher must
+		// replace it.
+		{name: "protected/recognized_replaces_inherited_zero/cut", shape: grantRecognized, managed: true, failure: streamCut,
+			inherited: []string{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0"}, protected: true},
 		{name: "protected/verified_core_owned/cut", shape: grantVerifiedCoreOwned, managed: true, failure: streamCut, protected: true},
 		// The launcher must not set the variable for a recognized client on
 		// Original Destination, so the client keeps its own fallback.
@@ -54,6 +69,10 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 			t.Logf("exit=%d parsed=%v is_error=%v fallback requests=%d", code, parsed, result.IsError, fallbacks)
 			if err != nil {
 				t.Fatalf("the launch itself failed: code=%d err=%v stderr=%s", code, err, stderr.String())
+			}
+			// The command says it left recovery to ViberMate exactly when it did.
+			if announced := strings.Contains(stderr.String(), notice); announced != test.protected {
+				t.Fatalf("the fallback notice was printed=%v, want %v: stderr=%s", announced, test.protected, stderr.String())
 			}
 			if test.protected {
 				if fallbacks != 0 {
