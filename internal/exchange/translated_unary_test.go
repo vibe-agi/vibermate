@@ -343,8 +343,8 @@ func TestTranslatedUnaryAggregationOutlivesTheIdleBudgetWhileTheUpstreamProgress
 	go func() {
 		defer writer.Close()
 		_, _ = writer.Write(responsesWire(t, events[0]))
-		for sequence := range 8 {
-			time.Sleep(40 * time.Millisecond)
+		for sequence := range 10 {
+			time.Sleep(150 * time.Millisecond)
 			progress := `{"type":"response.in_progress","sequence_number":` + strconv.Itoa(100+sequence) +
 				`,"response":` + responsesObject("in_progress", "", "null") + `}`
 			if _, err := writer.Write(responsesWire(t, progress)); err != nil {
@@ -357,13 +357,13 @@ func TestTranslatedUnaryAggregationOutlivesTheIdleBudgetWhileTheUpstreamProgress
 	provider := &providerDouble{results: []providerResult{{response: response}}}
 	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions(),
 		func(options *Options) {
-			options.Stream = StreamBudgets{KeepaliveInterval: 5 * time.Millisecond, ProviderProgressTimeout: 150 * time.Millisecond}
+			options.Stream = StreamBudgets{KeepaliveInterval: 5 * time.Millisecond, ProviderProgressTimeout: time.Second}
 		})
 	started := time.Now()
 	turn := runTranslated(t, pipeline, translatedPlan(t, translatedPrimary), "exchange-unary-progress",
 		unaryRequest(t, claudeBody(claudeFirstTurn)))
 	message := unaryMessage(t, turn)
-	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
+	if elapsed := time.Since(started); elapsed < time.Second {
 		t.Fatalf("the answer took %v, shorter than the idle budget it should outlive", elapsed)
 	}
 	if len(message.Content) != 1 || message.Content[0].Text != "slow answer" || message.StopReason != anthropic.StopReasonEndTurn {
