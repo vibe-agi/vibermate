@@ -306,6 +306,11 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	launcher.announceProtections(decideStreamingFallback(
+		launcher.config.BaseEnvironment,
+		environmentGrant,
+		usesManagedClientCredential(launcher.config.BaseEnvironment, environmentGrant),
+	))
 	var providerArguments []string
 	explainResume := false
 	if request.ManagedAuth {
