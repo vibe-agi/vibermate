@@ -635,6 +635,42 @@ func TestCallCompletingWhileTextIsOpenWaitsForTheTextAndIsHeld(t *testing.T) {
 	}
 }
 
+// The barrier arms at a call's output_item.added (design 7.2), before any of
+// its arguments: text that arrives between the call's announcement and its
+// first argument event already waits for the tool decision.
+func TestCallAddedWhileTextIsOpenArmsTheBarrier(t *testing.T) {
+	t.Parallel()
+
+	side, _ := newStreamSide(t)
+	request := streamRequest(t, "summarized", true)
+	call := `{"id":"fc_1","type":"function_call","status":"completed","arguments":"{}","call_id":"call_1","name":"Bash"}`
+	message := `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there"}]}`
+	payloads := []string{
+		`{"type":"response.created","response":{"id":"resp_1","created_at":1,"model":"m","status":"in_progress","output":[]}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}`,
+		`{"type":"response.content_part.added","item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello"}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","arguments":"","call_id":"call_1","name":"Bash"}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" there"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":` + message + `}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"{}"}`,
+		`{"type":"response.output_item.done","output_index":1,"item":` + call + `}`,
+		`{"type":"response.completed","response":{"id":"resp_1","created_at":1,"model":"m","status":"completed","output":[` + message + `,` + call + `]}}`,
+	}
+	checkOpenAIEvents(t, payloads...)
+	result := everySplit(t, side, request, sseWire(t, payloads...))
+	if got := eventNames(t, result.live); !slices.Equal(got, []string{
+		"message_start", "content_block_start:text", "content_block_delta:text_delta",
+	}) {
+		t.Fatalf("live events = %v", got)
+	}
+	message2 := accumulate(t, approved(t, result))
+	if len(message2.Content) != 2 || message2.Content[0].Text != "Hello there" || message2.Content[1].Name != "Bash" ||
+		message2.StopReason != "tool_use" {
+		t.Fatalf("content = %+v", message2.Content)
+	}
+}
+
 func TestStreamProgressCountsEveryEventAndIgnoresUnknownOnes(t *testing.T) {
 	t.Parallel()
 
