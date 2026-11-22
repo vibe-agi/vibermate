@@ -281,7 +281,9 @@ func (admission Admission) RuntimeUsername() (string, bool) {
 
 // Supports reports only feature evidence carried by a digest-verified client
 // adapter. Manual and configured admissions cannot acquire adapter capability
-// by naming a client or presenting a proxy credential.
+// by naming a client or presenting a proxy credential. Readers that also serve
+// publisher-recognized clients ask ProtectionBasis, which never lets a
+// recognized run take the exact-release path.
 func (admission Admission) Supports(feature clientadapter.Feature) bool {
 	return admission.adapter != nil && admission.adapter.Supports(feature)
 }
