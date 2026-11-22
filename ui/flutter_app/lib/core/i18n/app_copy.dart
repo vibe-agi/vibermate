@@ -889,7 +889,9 @@ final class AppCopy {
     'capture.launch_incomplete': 'This launch stopped before {agent} started',
     'capture.launch_incomplete.badge': 'Didn\'t start',
     'capture.launch_incomplete.detail':
-        'Terminal shows the reason. The most common ones: Codex needs this Mac to trust ViberMate\'s certificate, or Terminal couldn\'t find the agent. Fix it, then run the command again. You can delete this record.',
+        'Terminal shows why. Fix it, then run the command again. You can delete this record.',
+    'capture.launch_incomplete.detail.no_routing_set':
+        'No routing set was attached. Terminal shows why; correct the routing set if needed, then run the command again. You can delete this record.',
     'capture.launch_incomplete.detail.codex_root':
         'Codex needs ViberMate\'s certificate trusted on this Mac. Install and trust it, then run the command again.',
     'capture.managed': 'Managed run',
@@ -4128,8 +4130,9 @@ final class AppCopy {
     'capture.detail.unavailable.detail': 'Runtime 未能读取详情。请重试；这不代表该运行记录没有请求。',
     'capture.launch_incomplete': '本次启动在 {agent} 运行前已停止',
     'capture.launch_incomplete.badge': '未启动',
-    'capture.launch_incomplete.detail':
-        '原因显示在终端中。最常见的原因：Codex 需要这台 Mac 信任 ViberMate 的证书，或终端找不到 Agent 命令。处理后请重新运行命令。此记录可以删除。',
+    'capture.launch_incomplete.detail': '终端中显示了原因。处理后请重新运行命令。此记录可以删除。',
+    'capture.launch_incomplete.detail.no_routing_set':
+        '未绑定流量策略。原因显示在终端中；按需修正流量策略后重新运行命令。此记录可以删除。',
     'capture.launch_incomplete.detail.codex_root':
         'Codex 需要这台 Mac 信任 ViberMate 的证书。请安装并信任后重新运行命令。',
     'capture.managed': '托管运行',

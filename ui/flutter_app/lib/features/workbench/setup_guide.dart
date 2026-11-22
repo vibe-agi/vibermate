@@ -196,7 +196,8 @@ bool launchNeedsRoot(WorkbenchController controller, CaptureRecord capture) =>
     setupClientOf(capture) == 'codex' && setupRootTrusted(controller) == false;
 
 /// What the notice of a launch that stopped before its agent started says
-/// under its title.
+/// under its title. Only causes that leave such a record are named: a
+/// program Terminal cannot find stops before any session is created.
 String launchStoppedDetail(
   AppCopy copy,
   WorkbenchController controller,
@@ -204,6 +205,8 @@ String launchStoppedDetail(
 ) => copy(
   launchNeedsRoot(controller, capture)
       ? 'capture.launch_incomplete.detail.codex_root'
+      : launchRoutingSetId(controller, capture) == null
+      ? 'capture.launch_incomplete.detail.no_routing_set'
       : 'capture.launch_incomplete.detail',
 );
 

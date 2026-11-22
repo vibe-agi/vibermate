@@ -86,6 +86,16 @@ void main() {
     expect(install, findsNothing);
     expect(find.byKey(const Key('capture-launch-copy-again')), findsOneWidget);
     expect(find.text('Copy command again'), findsOneWidget);
+    // Only causes that leave a record are named; a program Terminal cannot
+    // find stops before the session exists.
+    expect(
+      find.text(
+        'Terminal shows why. Fix it, then run the command again. You can '
+        'delete this record.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining("couldn't find"), findsNothing);
     expect(tester.takeException(), isNull);
     await close(tester, controller);
   });

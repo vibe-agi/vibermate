@@ -1187,6 +1187,10 @@ void main() {
         );
         expect(find.text('No routing set attached'), findsOneWidget);
         expect(
+          find.textContaining('No routing set was attached. Terminal shows'),
+          findsOneWidget,
+        );
+        expect(
           find.textContaining('capture_assignment_not_found'),
           findsNothing,
         );
