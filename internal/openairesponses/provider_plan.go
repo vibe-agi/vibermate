@@ -238,12 +238,12 @@ func (plan *requestPlan) planEnvelope(
 	notices *planNotices,
 ) error {
 	switch {
+	case sendsMaxOutputTokens(request):
+		plan.maxOutputTokens = max(minimumOutputTokens, request.MaxOutputTokens)
 	case request.MaxOutputTokens >= maxOutputTokensCap:
 		if err := notices.add(protocolcore.NoticeMaxOutputTokensNotForwarded, "$.max_tokens"); err != nil {
 			return err
 		}
-	case request.MaxOutputTokens > 0:
-		plan.maxOutputTokens = max(minimumOutputTokens, request.MaxOutputTokens)
 	}
 	if request.Temperature != nil || request.TopP != nil {
 		if profile.Sampling == SamplingForward {
@@ -335,6 +335,13 @@ func (plan *requestPlan) planEnvelope(
 		}
 	}
 	return nil
+}
+
+// sendsMaxOutputTokens reports a request whose body carries
+// max_output_tokens: a limit below Claude Code's generic cap. The rejection
+// classifier asks the same question.
+func sendsMaxOutputTokens(request protocolcore.Request) bool {
+	return request.MaxOutputTokens > 0 && request.MaxOutputTokens < maxOutputTokensCap
 }
 
 // effortForBudget approximates a thinking budget given without an effort.

@@ -1,8 +1,11 @@
 package openairesponses
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -214,20 +217,28 @@ func DefaultProviderSideOptions() ProviderSideOptions {
 }
 
 // ProviderSide is the OpenAI Responses provider wire edge for a client of
-// another dialect (design 4.3, 6). It encodes a neutral request into a
+// another dialect (design 4.3, 6-8). It encodes a neutral request into a
 // Responses body in two passes, an item plan and one write of that plan, and
-// re-admits the post-script body with the compatible decoder. It never
+// re-admits the post-script body with the compatible decoder. It turns
+// Responses output into neutral blocks for the client side, drives the
+// client's stream encoder through the shared Assembler, classifies upstream
+// rejections and estimates input tokens from the item plan. It never
 // forwards source bytes, so it does not implement SourceRequestEncoder.
 type ProviderSide struct {
 	options   ProviderSideOptions
 	resources protocolcore.ResourceLimits
-	// admission is the compatible decoder bounded at MaxRequestBytes.
+	// admission is the compatible decoder bounded at MaxRequestBytes. It
+	// also bounds and validates provider responses.
 	admission *Codec
+	// now and messageID are replaced only by tests.
+	now       func() time.Time
+	messageID func() string
 }
 
 var (
-	_ protocolpath.TransformedRequestAdmission = (*ProviderSide)(nil)
-	_ protocolpath.ProviderRequestAdmission    = (*ProviderSide)(nil)
+	_ protocolpath.ProviderSide             = (*ProviderSide)(nil)
+	_ protocolpath.ProviderRequestAdmission = (*ProviderSide)(nil)
+	_ protocolpath.TokenCounter             = (*ProviderSide)(nil)
 )
 
 func NewProviderSide(options ProviderSideOptions) (*ProviderSide, error) {
@@ -253,7 +264,21 @@ func NewProviderSide(options ProviderSideOptions) (*ProviderSide, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ProviderSide{options: options, resources: limits, admission: admission}, nil
+	return &ProviderSide{
+		options:   options,
+		resources: limits,
+		admission: admission,
+		now:       time.Now,
+		messageID: provisionalMessageID,
+	}, nil
+}
+
+// provisionalMessageID names the client message of a stream that began
+// without response.created: msg_vm_ and 24 random hex digits.
+func provisionalMessageID() string {
+	var random [12]byte
+	_, _ = rand.Read(random[:])
+	return "msg_vm_" + hex.EncodeToString(random[:])
 }
 
 func (*ProviderSide) Dialect() protocolspec.Dialect {
