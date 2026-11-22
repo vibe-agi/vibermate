@@ -1,0 +1,18 @@
+decode
+  client_attribution_not_forwarded $.system[0]
+  cache_control_not_forwarded $.system[2].cache_control
+  cache_control_not_forwarded $.system[3].cache_control
+  unknown_request_field_not_forwarded $.messages[1].output_config
+  cache_control_not_forwarded $.messages[3].content[5].cache_control
+  metadata_not_forwarded $.metadata
+encode
+  max_output_tokens_not_forwarded $.max_tokens
+  diagnostics_not_forwarded $.diagnostics
+  prompt_cache_key_derived $
+  deferred_tool_not_forwarded $.tools[22]
+  tool_schema_normalized $.tools
+  system_role_normalized $.messages[1].role
+  reasoning_not_replayed $.messages[2].blocks[0]
+  reasoning_not_replayed $.messages[2].blocks[1]
+  message_phase_inferred $.messages[2].blocks[2]
+  tool_reference_encoded $.messages[3].blocks[0].content

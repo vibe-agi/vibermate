@@ -1,0 +1,2 @@
+stream
+  reasoning_usage_not_forwarded $.usage
