@@ -965,26 +965,12 @@ final class _CannotConnectMessage extends StatelessWidget {
   final AppCopy copy;
 
   @override
-  Widget build(BuildContext context) {
-    final client = agentClientId(capture);
-    final versions = client == null
-        ? null
-        : controller.supportedClientVersions(client);
-    return CenteredMessage(
-      key: const Key('capture-cannot-connect'),
-      icon: Icons.error_outline,
-      title: copy('capture.client.compatibility.blocked'),
-      detail: [
-        copy.format('capture.cannot_connect.detail', {
-          'agent': capture.displayName,
-        }),
-        if (versions != null && versions.isNotEmpty)
-          copy.format('capture.cannot_connect.versions', {
-            'versions': versions.join(', '),
-          }),
-      ].join(' '),
-    );
-  }
+  Widget build(BuildContext context) => CenteredMessage(
+    key: const Key('capture-cannot-connect'),
+    icon: Icons.error_outline,
+    title: copy('capture.client.compatibility.blocked'),
+    detail: cannotConnectDetail(copy, controller, capture),
+  );
 }
 
 /// In place of the request list of a launch that stopped before its agent
@@ -1002,44 +988,24 @@ final class _LaunchStoppedMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final root = controller.rootCAStatus;
-    final codex = setupClientOf(capture) == 'codex';
-    final needsRoot =
-        codex &&
-        controller.rootTrustManagement &&
-        root != null &&
-        !(root.rootValid && root.installed);
-    final busy = controller.rootCAMutating || controller.rootCALoading;
-    final command = setupLaunchCommand(controller, setupClientOf(capture));
+    final needsRoot = launchNeedsRoot(controller, capture);
+    final action = launchStoppedAction(
+      controller: controller,
+      copy: copy,
+      capture: capture,
+      keyPrefix: 'capture-launch',
+    );
     return CenteredMessage(
       key: const Key('capture-launch-stopped'),
       icon: Icons.error_outline,
       title: copy.format('capture.launch_incomplete', {
         'agent': capture.displayName,
       }),
-      detail: copy(
-        needsRoot
-            ? 'capture.launch_incomplete.detail.codex_root'
-            : 'capture.launch_incomplete.detail',
-      ),
+      detail: launchStoppedDetail(copy, controller, capture),
       action: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (needsRoot)
-            FilledButton.icon(
-              key: const Key('capture-launch-install-trust'),
-              onPressed: busy
-                  ? null
-                  : () => unawaited(controller.installAndTrustRootCA()),
-              icon: const Icon(Icons.verified_user_outlined, size: 14),
-              label: Text(copy('setup.start.install_trust')),
-            )
-          else if (capture.kind == 'managed_run')
-            CopyCommandAgainButton(
-              key: const Key('capture-launch-copy-again'),
-              command: command,
-              copy: copy,
-            ),
+          ?action,
           if (controller.rootCAError case final error? when needsRoot) ...[
             const SizedBox(height: ViberSpacing.sm),
             Text(

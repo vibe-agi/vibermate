@@ -61,15 +61,10 @@ final class SetupGuideProgress {
       ),
     );
     final latest = newest(managed);
-    final root = controller.rootCAStatus;
     return SetupGuideProgress(
       local: controller.terminalManagement,
       command: controller.terminalCommand,
-      rootTrusted: !controller.rootTrustManagement
-          ? null
-          : root == null
-          ? null
-          : root.rootValid && root.installed,
+      rootTrusted: setupRootTrusted(controller),
       startedRun: started,
       failedLaunch: latest != null && latest.stoppedBeforeStart ? latest : null,
       observed: captures.any((capture) => capture.observation == 'observed'),
@@ -142,6 +137,81 @@ String setupClientOf(CaptureRecord capture) =>
     (capture.managedRun?.executableLabel.toLowerCase() ?? '').contains('codex')
     ? 'codex'
     : 'claude';
+
+/// Whether this Mac trusts ViberMate's certificate; null when that trust is
+/// not managed here or not read yet.
+bool? setupRootTrusted(WorkbenchController controller) {
+  final root = controller.rootCAStatus;
+  if (!controller.rootTrustManagement || root == null) return null;
+  return root.rootValid && root.installed;
+}
+
+/// A stopped Codex launch on a Mac known not to trust ViberMate's
+/// certificate: the launcher's own check is what stopped it.
+bool launchNeedsRoot(WorkbenchController controller, CaptureRecord capture) =>
+    setupClientOf(capture) == 'codex' && setupRootTrusted(controller) == false;
+
+/// What the notice of a launch that stopped before its agent started says
+/// under its title.
+String launchStoppedDetail(
+  AppCopy copy,
+  WorkbenchController controller,
+  CaptureRecord capture,
+) => copy(
+  launchNeedsRoot(controller, capture)
+      ? 'capture.launch_incomplete.detail.codex_root'
+      : 'capture.launch_incomplete.detail',
+);
+
+/// The one action for a launch that stopped before its agent started:
+/// 'Install and trust' when the certificate stopped it, otherwise 'Copy
+/// command again'. Null for a record that is not a `vibermate run` launch.
+Widget? launchStoppedAction({
+  required WorkbenchController controller,
+  required AppCopy copy,
+  required CaptureRecord capture,
+  required String keyPrefix,
+}) {
+  if (launchNeedsRoot(controller, capture)) {
+    final busy = controller.rootCAMutating || controller.rootCALoading;
+    return FilledButton.icon(
+      key: Key('$keyPrefix-install-trust'),
+      onPressed: busy
+          ? null
+          : () => unawaited(controller.installAndTrustRootCA()),
+      icon: const Icon(Icons.verified_user_outlined, size: 14),
+      label: Text(copy('setup.start.install_trust')),
+    );
+  }
+  if (capture.kind != 'managed_run') return null;
+  return CopyCommandAgainButton(
+    key: Key('$keyPrefix-copy-again'),
+    command: setupLaunchCommand(controller, setupClientOf(capture)),
+    copy: copy,
+  );
+}
+
+/// Why an agent that cannot connect through ViberMate fails, and which
+/// versions can.
+String cannotConnectDetail(
+  AppCopy copy,
+  WorkbenchController controller,
+  CaptureRecord capture,
+) {
+  final client = agentClientId(capture);
+  final versions = client == null
+      ? null
+      : controller.supportedClientVersions(client);
+  return [
+    copy.format('capture.cannot_connect.detail', {
+      'agent': capture.displayName,
+    }),
+    if (versions != null && versions.isNotEmpty)
+      copy.format('capture.cannot_connect.versions', {
+        'versions': versions.join(', '),
+      }),
+  ].join(' ');
+}
 
 /// The first-run guide on the empty Sessions screen: the steps to connect
 /// Claude Code or Codex, and whether each is done.
@@ -445,7 +515,6 @@ final class _SetupGuideState extends State<SetupGuide> {
             capture: failed,
             controller: controller,
             copy: copy,
-            rootTrusted: progress.rootTrusted,
             narrow: narrow,
           ),
         ] else if (state == SetupStepState.current) ...[
@@ -925,10 +994,6 @@ final class _CannotConnectNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.viberColors;
-    final client = agentClientId(capture);
-    final versions = client == null
-        ? null
-        : controller.supportedClientVersions(client);
     return Container(
       key: const Key('setup-cannot-connect'),
       padding: const EdgeInsets.all(ViberSpacing.lg),
@@ -952,15 +1017,7 @@ final class _CannotConnectNotice extends StatelessWidget {
                 ),
                 const SizedBox(height: ViberSpacing.xs),
                 Text(
-                  [
-                    copy.format('capture.cannot_connect.detail', {
-                      'agent': capture.displayName,
-                    }),
-                    if (versions != null && versions.isNotEmpty)
-                      copy.format('capture.cannot_connect.versions', {
-                        'versions': versions.join(', '),
-                      }),
-                  ].join(' '),
+                  cannotConnectDetail(copy, controller, capture),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -972,14 +1029,14 @@ final class _CannotConnectNotice extends StatelessWidget {
   }
 }
 
-/// A launch that stopped before its agent started: what to fix and the one
-/// action that helps. The guide shows it in step 2, the session in its body.
+/// A launch that stopped before its agent started, in step 2 of the guide:
+/// what to fix and the one action that helps. The session itself says the
+/// same in place of its request list.
 final class LaunchStoppedNotice extends StatelessWidget {
   const LaunchStoppedNotice({
     required this.capture,
     required this.controller,
     required this.copy,
-    required this.rootTrusted,
     this.narrow = false,
     super.key,
   });
@@ -987,28 +1044,16 @@ final class LaunchStoppedNotice extends StatelessWidget {
   final CaptureRecord capture;
   final WorkbenchController controller;
   final AppCopy copy;
-  final bool? rootTrusted;
   final bool narrow;
 
   @override
   Widget build(BuildContext context) {
-    final client = setupClientOf(capture);
-    final needsRoot = client == 'codex' && rootTrusted == false;
-    final busy = controller.rootCAMutating || controller.rootCALoading;
-    final Widget action = needsRoot
-        ? FilledButton.icon(
-            key: const Key('launch-stopped-install-trust'),
-            onPressed: busy
-                ? null
-                : () => unawaited(controller.installAndTrustRootCA()),
-            icon: const Icon(Icons.verified_user_outlined, size: 14),
-            label: Text(copy('setup.start.install_trust')),
-          )
-        : CopyCommandAgainButton(
-            key: const Key('launch-stopped-copy-again'),
-            command: setupLaunchCommand(controller, client),
-            copy: copy,
-          );
+    final action = launchStoppedAction(
+      controller: controller,
+      copy: copy,
+      capture: capture,
+      keyPrefix: 'launch-stopped',
+    );
     final colors = context.viberColors;
     return Container(
       padding: const EdgeInsets.all(ViberSpacing.lg),
@@ -1037,11 +1082,7 @@ final class LaunchStoppedNotice extends StatelessWidget {
                     ),
                     const SizedBox(height: ViberSpacing.xs),
                     Text(
-                      copy(
-                        needsRoot
-                            ? 'capture.launch_incomplete.detail.codex_root'
-                            : 'capture.launch_incomplete.detail',
-                      ),
+                      launchStoppedDetail(copy, controller, capture),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -1049,13 +1090,15 @@ final class LaunchStoppedNotice extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: ViberSpacing.md),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: narrow
-                ? SizedBox(width: double.infinity, child: action)
-                : action,
-          ),
+          if (action != null) ...[
+            const SizedBox(height: ViberSpacing.md),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: narrow
+                  ? SizedBox(width: double.infinity, child: action)
+                  : action,
+            ),
+          ],
         ],
       ),
     );
