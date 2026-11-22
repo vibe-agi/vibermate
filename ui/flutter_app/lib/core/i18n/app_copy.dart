@@ -3493,8 +3493,7 @@ final class AppCopy {
         'Terminal command is synced with this App update. New runs use the updated command.',
     'terminal.notice.auto_repaired':
         'The existing Terminal command link was repaired automatically.',
-    'terminal.attention':
-        'Check Terminal command in Settings → Access & launch.',
+    'terminal.attention': 'Check Terminal command in Settings → Access and launch.',
     'terminal.notice.repaired': 'Terminal command repaired and ready.',
     'terminal.notice.removed': 'Owned Terminal command removed.',
     'terminal.error.unavailable':
