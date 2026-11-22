@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
@@ -110,6 +111,39 @@ void main() {
     expect(inStep('command', find.text('Done')), findsOneWidget);
     expect(find.byKey(const Key('setup-waiting')), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await close(tester, controller);
+  });
+
+  testWidgets('a refused copy of vibermate doctor says so', (tester) async {
+    final controller = await open(tester);
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          throw PlatformException(code: 'denied');
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await tester.tap(find.byKey(const Key('setup-copy-doctor')));
+    await tester.pump();
+    expect(
+      find.text("Couldn't copy. Select the text and copy it yourself."),
+      findsOne,
+    );
+    expect(
+      tester
+          .getSemantics(find.byKey(const Key('setup-copy-failed')))
+          .flagsCollection
+          .isLiveRegion,
+      isTrue,
+    );
     await close(tester, controller);
   });
 

@@ -291,14 +291,24 @@ final class SetupGuide extends StatefulWidget {
 final class _SetupGuideState extends State<SetupGuide> {
   String? _copied;
 
+  /// The clipboard refused the footer's command, which then stays on screen
+  /// to select by hand.
+  bool _copyFailed = false;
+
   Future<void> _copy(String key, String text) async {
     try {
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      setState(() => _copied = key);
+      setState(() {
+        _copied = key;
+        _copyFailed = false;
+      });
     } on Object {
       if (!mounted) return;
-      setState(() => _copied = null);
+      setState(() {
+        _copied = null;
+        _copyFailed = true;
+      });
     }
   }
 
@@ -720,7 +730,7 @@ final class _SetupGuideState extends State<SetupGuide> {
       padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.sm),
       alignment: Alignment.centerLeft,
     );
-    return Wrap(
+    final links = Wrap(
       spacing: ViberSpacing.lg,
       runSpacing: ViberSpacing.xs,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -739,7 +749,9 @@ final class _SetupGuideState extends State<SetupGuide> {
             Flexible(
               child: Padding(
                 padding: const EdgeInsets.only(left: ViberSpacing.sm),
-                child: Text(
+                // Selectable, so the command can be copied by hand when the
+                // clipboard refuses it.
+                child: SelectableText(
                   copy('setup.footer.doctor'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -766,6 +778,26 @@ final class _SetupGuideState extends State<SetupGuide> {
           style: linkStyle,
           onPressed: controller.hideSetupGuide,
           child: Text(copy('setup.hide')),
+        ),
+      ],
+    );
+    if (!_copyFailed) return links;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        links,
+        Padding(
+          padding: const EdgeInsets.only(left: ViberSpacing.sm),
+          child: Semantics(
+            liveRegion: true,
+            child: Text(
+              copy('common.copy_failed'),
+              key: const Key('setup-copy-failed'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.viberColors.danger,
+              ),
+            ),
+          ),
         ),
       ],
     );
