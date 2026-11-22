@@ -120,6 +120,9 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return nil, fmt.Errorf("acquire Runtime Server generation: %w", err)
 	}
 	options.Runtime.SchemaUpgradeHostGuard = guard
+	// The Runtime names a recognized run's client from the same catalog the
+	// Server validates companion claims against (ADR 0026).
+	options.Runtime.ClientCatalog = options.ClientCatalog
 	runtime, err := productruntime.Start(ctx, options.Runtime)
 	if err != nil {
 		_ = guard.Release()

@@ -232,6 +232,9 @@ func startWithConstructors(ctx context.Context, options Options,
 		return fail("capability separation", errors.New("random capabilities collided"))
 	}
 
+	// The Runtime names a recognized run's client from the catalog this host
+	// verifies clients against (ADR 0026).
+	options.Runtime.ClientCatalog = options.ClientCatalog
 	runtime, err = startRuntime(ctx, options.Runtime)
 	if err != nil {
 		return fail("ProductRuntime", err)
@@ -271,6 +274,10 @@ func startWithConstructors(ctx context.Context, options Options,
 			options.Runtime.Clock,
 			random,
 		)
+		// Companions are validated against the catalog the shared Runtime's
+		// index was built from, so a claim names the client it was evaluated
+		// for. In production both are BuiltInCatalog.
+		remoteOptions.ClientCatalog = options.ClientCatalog
 		remoteOptions.ListenAddress = options.RemoteServerListenAddress
 		remoteOptions.Transport = options.RemoteServerTransport
 		remoteOptions.ManagementUIRoot = options.RemoteServerManagementUIRoot

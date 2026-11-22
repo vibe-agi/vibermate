@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
@@ -596,6 +598,89 @@ func controlCreateProbe(
 		t.Fatal(err)
 	}
 	return response
+}
+
+// The Desktop's Runtime names a recognized run's client from the catalog the
+// Desktop verifies clients against (ADR 0026). With a catalog at another
+// revision, a row stored under the built-in revision names none.
+func TestDesktopRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
+	t.Parallel()
+
+	builtIn := clientadapter.BuiltInCatalog()
+	custom, err := clientadapter.NewCatalogWithSigners(
+		builtIn.Revision()-1,
+		[]clientadapter.Release{clientadapter.ClaudeCode221220DarwinARM64()},
+		[]clientadapter.Signer{
+			clientadapter.ClaudeCodeSignerDarwin(),
+			clientadapter.CodexCLISignerDarwin(),
+			clientadapter.CodexCLINativeSignerDarwin(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		name    string
+		catalog *clientadapter.Catalog
+		want    map[clientadapter.CatalogRevision]string
+	}{
+		{"production catalog", nil, map[clientadapter.CatalogRevision]string{
+			builtIn.Revision():     "claude-code",
+			builtIn.Revision() - 1: "",
+		}},
+		{"unrelated catalog revision", &custom, map[clientadapter.CatalogRevision]string{
+			builtIn.Revision():     "",
+			builtIn.Revision() - 1: "claude-code",
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			options := hostOptions(t, newHostPaths(t, filepath.Join(root, "cache")), filepath.Join(root, "data"))
+			if testCase.catalog != nil {
+				options.ClientCatalog = *testCase.catalog
+			}
+			host := startHost(t, options)
+			defer shutdownHost(t, host)
+			for revision, want := range testCase.want {
+				if got := recognizedRunClient(t, host.Runtime(), "claude", revision); got.ID != want {
+					t.Fatalf("revision %d named %+v, want client %q", revision, got, want)
+				}
+			}
+		})
+	}
+}
+
+func recognizedRunClient(
+	t *testing.T,
+	runtime *productruntime.Runtime,
+	label string,
+	revision clientadapter.CatalogRevision,
+) clientadapter.RecognizedClient {
+	t.Helper()
+	directory := t.TempDir()
+	grant, err := runtime.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{
+		CWD:                     directory,
+		CanonicalExecutablePath: filepath.Join(directory, label),
+		ExecutableLabel:         label,
+		CatalogRevision:         revision,
+		Recognition:             clientadapter.RecognitionRecognized,
+		Lifetime:                time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := runtime.CaptureRuns().Finish(context.Background(), grant.Run.ID, grant.ControlCapability); err != nil {
+			t.Error(err)
+		}
+	}()
+	view, err := runtime.CaptureRunReader().GetRun(t.Context(), grant.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view.RecognizedClient
 }
 
 func newHostPaths(t *testing.T, cache string) desktophost.Paths {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
@@ -148,6 +149,15 @@ type Options struct {
 	Lifecycle              LifecycleOptions
 	// Nil Resources selects fresh finite production defaults.
 	Resources *exchange.ResourcePolicy
+	// ClientCatalog is trusted host input: the catalog the host verifies
+	// clients against. It names a recognized run's client from the run's
+	// stored catalog revision and label (ADR 0026) and grants nothing by
+	// itself. The zero value names no client.
+	ClientCatalog clientadapter.Catalog
+	// RecognizedClientProtections is the operator switch the host read at
+	// start-up. Off withdraws every recognized-basis protection from new
+	// connections; exact releases are unaffected.
+	RecognizedClientProtections clientadapter.ProtectionSwitch
 }
 
 func (o Options) validate() error {
@@ -161,6 +171,13 @@ func (o Options) validate() error {
 		if err := o.Resources.Validate(); err != nil {
 			return err
 		}
+	}
+	if o.ClientCatalog.Revision() != 0 && !o.ClientCatalog.Valid() {
+		return fmt.Errorf("%w: client catalog is invalid", ErrInvalidOptions)
+	}
+	if o.RecognizedClientProtections != clientadapter.ProtectionsOn &&
+		o.RecognizedClientProtections != clientadapter.ProtectionsOff {
+		return fmt.Errorf("%w: recognized-client protection switch is invalid", ErrInvalidOptions)
 	}
 	if o.Paths.dataDirectory == "" || o.Paths.databasePath == "" {
 		return fmt.Errorf("%w: runtime paths are missing", ErrInvalidOptions)

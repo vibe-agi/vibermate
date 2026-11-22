@@ -21,6 +21,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
@@ -1530,6 +1531,82 @@ func loginRemoteTestUser(
 		t.Fatalf("login integration Runtime User: %v", err)
 	}
 	return result
+}
+
+// The Server's Runtime names a recognized run's client from the catalog the
+// Server validates companion claims against (ADR 0026). Companion runs stored
+// under another catalog revision name none.
+func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
+	t.Parallel()
+
+	builtIn := clientadapter.BuiltInCatalog()
+	custom, err := clientadapter.NewCatalogWithSigners(
+		builtIn.Revision()-1,
+		[]clientadapter.Release{clientadapter.CodexCLI01592DarwinARM64()},
+		[]clientadapter.Signer{
+			clientadapter.ClaudeCodeSignerDarwin(),
+			clientadapter.CodexCLISignerDarwin(),
+			clientadapter.CodexCLINativeSignerDarwin(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		name    string
+		catalog *clientadapter.Catalog
+		want    map[clientadapter.CatalogRevision]string
+	}{
+		{"production catalog", nil, map[clientadapter.CatalogRevision]string{
+			builtIn.Revision():     "codex-cli",
+			builtIn.Revision() - 1: "",
+		}},
+		{"unrelated catalog revision", &custom, map[clientadapter.CatalogRevision]string{
+			builtIn.Revision():     "",
+			builtIn.Revision() - 1: "codex-cli",
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			options := serverOptions(t, t.TempDir())
+			if testCase.catalog != nil {
+				options.ClientCatalog = *testCase.catalog
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			host, err := serverhost.Start(ctx, options)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer shutdownServer(t, host)
+			runtime := host.Runtime()
+			for revision, want := range testCase.want {
+				directory := t.TempDir()
+				grant, err := runtime.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{
+					CWD:                     directory,
+					CanonicalExecutablePath: filepath.Join(directory, "codex"),
+					ExecutableLabel:         "codex",
+					CatalogRevision:         revision,
+					Recognition:             clientadapter.RecognitionRecognized,
+					Lifetime:                time.Minute,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				view, err := runtime.CaptureRunReader().GetRun(t.Context(), grant.Run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := runtime.CaptureRuns().Finish(context.Background(), grant.Run.ID, grant.ControlCapability); err != nil {
+					t.Fatal(err)
+				}
+				if view.RecognizedClient.ID != want {
+					t.Fatalf("revision %d named %+v, want client %q", revision, view.RecognizedClient, want)
+				}
+			}
+		})
+	}
 }
 
 func startServer(t *testing.T, root string) *serverhost.Host {

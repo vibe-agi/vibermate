@@ -6,9 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -53,12 +56,36 @@ func ProductionOptions(
 		Approvals: toolapproval.DefaultConfig(), ExchangeHold: exchange.DefaultHoldPolicy(),
 		Clock: productruntime.SystemClock{}, InstanceIDs: productruntime.NewCryptographicInstanceIDSource(),
 		SecurityRandom: rand.Reader, Lifecycle: productruntime.DefaultLifecycleOptions(),
+		RecognizedClientProtections: recognizedClientProtections(
+			os.Getenv(clientadapter.RecognizedProtectionsVariable),
+			os.Stderr,
+		),
 	}
 	hostOptions := serverhost.DefaultOptions(runtimeOptions)
 	hostOptions.ListenAddress = listenAddress
 	hostOptions.ManagementUIRoot = managementUIRoot
 	hostOptions.Transport = transport
 	return Options{Host: hostOptions, ReadyWriter: readyWriter, ShutdownTimeout: 25 * time.Second}, nil
+}
+
+// recognizedClientProtections reads the operator switch once, at start-up
+// (ADR 0026). A value that is neither on nor off is reported on one line and
+// otherwise ignored, so the App still shows the protections as on and an
+// operator who expected them off sees at once that the switch did not take.
+func recognizedClientProtections(
+	value string,
+	report io.Writer,
+) clientadapter.ProtectionSwitch {
+	state, recognized := clientadapter.ParseProtectionSwitch(value)
+	if !recognized && report != nil {
+		_, _ = fmt.Fprintf(
+			report,
+			"vibermated: ignoring %s=%q (use on or off); recognized-client protections stay on\n",
+			clientadapter.RecognizedProtectionsVariable,
+			value,
+		)
+	}
+	return state
 }
 
 func Run(ctx context.Context, options Options) error {
