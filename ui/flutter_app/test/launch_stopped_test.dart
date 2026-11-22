@@ -111,10 +111,11 @@ void main() {
     await tester.tap(find.byKey(Key('capture-row-${capture.key}')));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
+    // A short title, with what to do as its detail.
+    expect(find.text('Waiting for the first request'), findsOneWidget);
     expect(
       find.text(
-        'Waiting for the first request. Type a prompt in Claude Code; it '
-        'appears here within a few seconds.',
+        'Type a prompt in Claude Code; it appears here within a few seconds.',
       ),
       findsOneWidget,
     );

@@ -393,8 +393,9 @@ final class AppCopy {
     'ledger.result.canceled': 'Canceled',
     'ledger.result.scripts': '{count} scripts',
     'ledger.empty': 'No requests yet',
-    'ledger.waiting':
-        'Waiting for the first request. Type a prompt in {agent}; it appears here within a few seconds.',
+    'ledger.waiting': 'Waiting for the first request',
+    'ledger.waiting.detail':
+        'Type a prompt in {agent}; it appears here within a few seconds.',
     'ledger.empty_filter': 'No loaded request matches this filter',
     'ledger.partial': 'Counts cover loaded requests',
     'ledger.load_earlier': 'Load earlier requests',
@@ -861,6 +862,8 @@ final class AppCopy {
     'setup.prompt.detail':
         'Type anything in your agent. Its requests appear here within a few seconds.',
     'setup.prompt.done': 'Your agent\'s requests are arriving.',
+    'setup.prompt.waiting':
+        'Waiting for your first request… This page updates by itself.',
     'setup.server.install.title': 'Install vibermate and sign in',
     'setup.server.install.detail':
         'On the computer where your agent runs, install ViberMate, then sign in to this Server in Terminal:',
@@ -3720,7 +3723,8 @@ final class AppCopy {
     'ledger.result.canceled': '已取消',
     'ledger.result.scripts': '{count} 个脚本',
     'ledger.empty': '暂无请求',
-    'ledger.waiting': '正在等待第一个请求。在 {agent} 中输入一条消息，几秒内就会显示在这里。',
+    'ledger.waiting': '正在等待第一个请求',
+    'ledger.waiting.detail': '在 {agent} 中输入一条消息，几秒内就会显示在这里。',
     'ledger.empty_filter': '已加载的请求中没有符合此筛选的记录',
     'ledger.partial': '计数仅含已加载的请求',
     'ledger.load_earlier': '加载更早的请求',
@@ -4113,6 +4117,7 @@ final class AppCopy {
     'setup.prompt.title': '发送第一条消息',
     'setup.prompt.detail': '在 Agent 中随便输入一句话，几秒内它的请求就会显示在这里。',
     'setup.prompt.done': 'Agent 的请求已开始显示。',
+    'setup.prompt.waiting': '正在等待第一个请求……此页面会自动更新。',
     'setup.server.install.title': '安装 vibermate 并登录',
     'setup.server.install.detail': '在运行 Agent 的电脑上安装 ViberMate，然后在终端中登录此服务器：',
     'setup.server.start.detail': '在终端中进入项目目录，运行下面任一命令。',

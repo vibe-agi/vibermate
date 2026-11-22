@@ -230,12 +230,19 @@ void main() {
 
     expect(inStep('start', find.text('Claude Code started.')), findsOneWidget);
     expect(find.byKey(const Key('setup-prompt-waiting')), findsOneWidget);
+    // Step 2 says the agent started; step 3 waits for its first request.
     expect(
       inStep(
         'prompt',
-        find.text('Waiting for your agent… This page updates by itself.'),
+        find.text(
+          'Waiting for your first request… This page updates by itself.',
+        ),
       ),
       findsOneWidget,
+    );
+    expect(
+      find.text('Waiting for your agent… This page updates by itself.'),
+      findsNothing,
     );
     expect(controller.selectedCaptureKey, isNull);
     final row = find.byKey(

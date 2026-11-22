@@ -659,7 +659,11 @@ final class _SetupGuideState extends State<SetupGuide> {
               label: copy('setup.status.waiting'),
               color: context.viberColors.route,
             ),
-      detail: copy('setup.prompt.detail'),
+      // An agent that cannot connect gets only the explanation of why; the
+      // promise that its requests appear would contradict it.
+      detail: state == SetupStepState.current && progress.blocked
+          ? null
+          : copy('setup.prompt.detail'),
       narrow: narrow,
       children: [
         if (state == SetupStepState.current && progress.blocked)
@@ -678,7 +682,7 @@ final class _SetupGuideState extends State<SetupGuide> {
                 const SizedBox(width: ViberSpacing.md),
                 Expanded(
                   child: Text(
-                    copy('setup.start.waiting'),
+                    copy('setup.prompt.waiting'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),

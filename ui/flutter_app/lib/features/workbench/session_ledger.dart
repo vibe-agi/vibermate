@@ -279,14 +279,17 @@ final class _SessionLedgerState extends State<SessionLedger> {
                   ? CenteredMessage(
                       icon: Icons.receipt_long_outlined,
                       title: ordered.isEmpty && waiting != null
-                          ? copy.format('ledger.waiting', {
-                              'agent': waiting.displayName,
-                            })
+                          ? copy('ledger.waiting')
                           : copy(
                               ordered.isEmpty
                                   ? 'ledger.empty'
                                   : 'ledger.empty_filter',
                             ),
+                      detail: ordered.isEmpty && waiting != null
+                          ? copy.format('ledger.waiting.detail', {
+                              'agent': waiting.displayName,
+                            })
+                          : null,
                     )
                   : ListView.builder(
                       key: const Key('session-ledger-list'),

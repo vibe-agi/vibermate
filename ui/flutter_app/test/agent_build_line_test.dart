@@ -129,6 +129,14 @@ void main() {
     expect(find.byKey(const Key('setup-cannot-connect')), findsOneWidget);
     expect(find.byKey(const Key('setup-prompt-waiting')), findsNothing);
     expect(
+      find.text(
+        'Type anything in your agent. Its requests appear here within a few '
+        'seconds.',
+      ),
+      findsNothing,
+      reason: 'only the reason it cannot connect, never a promise',
+    );
+    expect(
       find.descendant(
         of: find.byKey(const Key('setup-step-prompt')),
         matching: find.text("Can't connect"),
