@@ -709,6 +709,7 @@ final class _StartWithRoutingSet extends StatelessWidget {
           copy: copy,
           routingSetId: environment.id,
           keyPrefix: 'environment-launch',
+          requirement: false,
         ),
       ],
     ),

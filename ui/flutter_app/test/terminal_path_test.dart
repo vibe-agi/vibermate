@@ -240,6 +240,11 @@ void main() {
       expect(inStep('command', find.text('Done')), findsOneWidget);
       expect(find.text('vibermate run -- claude'), findsOneWidget);
       expect(find.byKey(const Key('terminal-path-hint')), findsNothing);
+      // Step 2 says the agent must start by its own name in Terminal.
+      expect(
+        inStep('start', find.byKey(const Key('setup-requirement'))),
+        findsOne,
+      );
       await close(tester, controller);
     });
 

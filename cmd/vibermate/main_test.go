@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -969,5 +971,64 @@ func TestRootTrustMessagesNameCodexAndTheAppPlace(t *testing.T) {
 				t.Fatalf("%s %s lacks %q: %s", check.locale, check.key, expected, message)
 			}
 		}
+	}
+}
+
+func TestMissingProgramNamesTheCommandAndExplainsAliases(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const program = "vibermate-test-no-such-agent"
+	for _, check := range []struct {
+		lang     string
+		expected []string
+	}{
+		{"LANG=en_US.UTF-8", []string{"Couldn't find “" + program + "”", "Shell aliases and functions don't work here"}},
+		{"LANG=zh_CN.UTF-8", []string{"找不到“" + program + "”", "shell alias 或函数"}},
+	} {
+		var stdout, stderr strings.Builder
+		code, key := execute([]string{"run", "--", program}, []string{check.lang}, strings.NewReader(""), &stdout, &stderr)
+		if code != 1 || key != "" {
+			t.Fatalf("%s: code=%d key=%q stderr=%s", check.lang, code, key, stderr.String())
+		}
+		for _, expected := range check.expected {
+			if !strings.Contains(stderr.String(), expected) {
+				t.Fatalf("%s: stderr lacks %q: %s", check.lang, expected, stderr.String())
+			}
+		}
+		// Only the name typed, never a path from the environment.
+		if strings.Contains(stderr.String(), "/") {
+			t.Fatalf("%s: stderr names a path: %s", check.lang, stderr.String())
+		}
+	}
+	if got := launchFailureKey(fmt.Errorf("resolve: %w", &exec.Error{Name: "claude", Err: exec.ErrNotFound})); got != keyExecutableNotFound {
+		t.Fatalf("launchFailureKey(not found) = %q", got)
+	}
+}
+
+func TestCLIMessagesUseTheAppsWordForRoutingSets(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "locales", "en-US.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var english map[string]string
+	if err := json.Unmarshal(raw, &english); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range english {
+		if !strings.HasPrefix(key, "cli.") || strings.HasPrefix(key, "cli.error.transparent.") {
+			continue
+		}
+		for _, word := range []string{"Environment", "Traffic polic", "traffic polic", "transparent capture"} {
+			if strings.Contains(value, word) {
+				t.Errorf("%s says %q: %s", key, word, value)
+			}
+		}
+	}
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := catalogs.Render(locales.EnglishUS, keyEnvironmentMissing, nil)
+	if err != nil || !strings.HasPrefix(message, "No routing set has this ID.") || !strings.Contains(message, "open Routing and copy the set's launch command") {
+		t.Fatalf("environmentNotFound = %q, %v", message, err)
 	}
 }

@@ -246,7 +246,7 @@ final class LaunchCommandCard extends StatelessWidget {
     this.routingSetId,
     this.keyPrefix = 'managed-run',
     this.lead = true,
-    this.requirement = false,
+    this.requirement = true,
     this.codexFooter,
     this.onUseRoutingSet,
     super.key,
@@ -265,7 +265,9 @@ final class LaunchCommandCard extends StatelessWidget {
   /// 'In Terminal, go to your project folder and run one of these:'.
   final bool lead;
 
-  /// The line saying the agents must already be installed.
+  /// The line saying the agents must already be installed and start by
+  /// name: a shell alias is not enough, because the launcher looks the
+  /// program up on PATH.
   final bool requirement;
 
   /// Shown under the Codex command, such as the certificate Codex needs.

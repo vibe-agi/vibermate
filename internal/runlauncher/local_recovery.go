@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"time"
@@ -94,7 +95,7 @@ func (session *localRecoverySession) heartbeat(ctx context.Context, pid int) <-c
 				// Control-plane latency must not cut an authorized model stream.
 				// The Runtime still enforces the current proxy lease itself.
 				if !interrupted {
-					session.launcher.writeHeartbeatDiagnostic("vibermate: Desktop App connection interrupted; keeping the command running and waiting to reconnect. Open the App to restore proxy access.")
+					session.launcher.writeLocalizedHeartbeatDiagnostic("cli.run.appClosed", session.agent())
 					interrupted = true
 				}
 				timer.Reset(min(session.launcher.config.HeartbeatInterval, 2*time.Second))
@@ -102,12 +103,12 @@ func (session *localRecoverySession) heartbeat(ctx context.Context, pid int) <-c
 			}
 			if err != nil {
 				session.frontier.Withdraw()
-				session.launcher.writeHeartbeatDiagnostic("vibermate: Desktop reconnection was rejected or the launch policy changed. Start the command again to apply current authorization and client settings.")
+				session.launcher.writeLocalizedHeartbeatDiagnostic("cli.run.rejected", session.agent())
 				failure <- err
 				return
 			}
 			if interrupted {
-				session.launcher.writeHeartbeatDiagnostic("vibermate: Desktop App connection restored; the existing command can continue.")
+				session.launcher.writeLocalizedHeartbeatDiagnostic("cli.run.reconnected", session.agent())
 				interrupted = false
 			}
 			timer.Reset(session.launcher.config.HeartbeatInterval)
@@ -208,7 +209,7 @@ func (session *localRecoverySession) recover(ctx context.Context, pid int, heart
 	session.control, session.grant = next, grant
 	accepted = true
 	previousControl.close()
-	session.launcher.writeHeartbeatDiagnostic("vibermate: continuing the same process with a fresh Capture after Desktop restart. New requests appear in that Capture; tool approvals must be granted again.")
+	session.launcher.writeLocalizedHeartbeatDiagnostic("cli.run.restarted", nil)
 	return true, nil
 }
 
@@ -335,4 +336,14 @@ func localRootFingerprint(grant capturecontrol.LaunchGrant) ([sha256.Size]byte, 
 		return [sha256.Size]byte{}, errors.New("public Desktop Root is invalid")
 	}
 	return sha256.Sum256(certificate), nil
+}
+
+// agent names the agent in a recovery message: the program the person
+// started, as its run reports it.
+func (session *localRecoverySession) agent() map[string]string {
+	name := session.grant.Run.ExecutableLabel
+	if name == "" && len(session.request.Command) > 0 {
+		name = filepath.Base(session.request.Command[0])
+	}
+	return map[string]string{"agent": name}
 }

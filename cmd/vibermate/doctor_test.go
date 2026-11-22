@@ -119,12 +119,12 @@ func TestDoctorReportsExecutedChecksAndExplicitScope(t *testing.T) {
 				t.Fatalf("lacks %q: %s", expected, &out)
 			}
 		}
-		envText := "NOT CHECKED Environment"
+		envText := "NOT CHECKED Routing set"
 		if selected == "work" {
-			envText = "PASS Environment"
+			envText = "PASS Routing set"
 		}
 		if selected == "missing" {
-			envText = "FAIL Environment"
+			envText = "FAIL Routing set"
 		}
 		if !strings.Contains(out.String(), envText) {
 			t.Fatalf("missing environment outcome: %s", &out)

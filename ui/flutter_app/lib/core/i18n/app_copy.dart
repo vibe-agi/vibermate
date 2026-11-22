@@ -3377,6 +3377,8 @@ final class AppCopy {
         'Set up the vibermate command first, then copy a command below.',
     'terminal.run.lead':
         'In Terminal, go to your project folder and run one of these:',
+    'terminal.run.requirement':
+        'Claude Code or Codex must already be installed and start when you type claude or codex in Terminal.',
     'terminal.run.use_routing_set': 'Use a routing set instead',
     'terminal.run.step': '{number}. {title}',
     'terminal.run.step.install': 'Install the vibermate command',
@@ -6287,6 +6289,8 @@ final class AppCopy {
         '打开终端，进入项目目录并粘贴命令。Agent 会照常启动并使用自己的登录，它的请求会显示在「运行记录」中。',
     'terminal.run.install_first': '请先设置 vibermate 命令，再复制下方命令。',
     'terminal.run.lead': '在终端中进入项目文件夹，运行以下任一命令：',
+    'terminal.run.requirement':
+        '需先安装 Claude Code 或 Codex，并确认在终端输入 claude 或 codex 能直接启动。',
     'terminal.run.use_routing_set': '改用流量策略',
     'terminal.run.step': '{number}. {title}',
     'terminal.run.step.install': '安装 vibermate 命令',

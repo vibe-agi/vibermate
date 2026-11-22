@@ -242,7 +242,7 @@ func (launcher *Launcher) Run(
 		}
 	}
 	defer control.close()
-	launcher.announceCapturePreparation()
+	launcher.announceCapturePreparation(command[0])
 	var grant capturecontrol.LaunchGrant
 	err = launcher.callWithin(
 		ctx,
@@ -574,7 +574,7 @@ func validateLaunchExecutable(invocationPath, grantedPath string) error {
 // before the blocking create request begins. Until a recognized client's Root
 // question is answered, the child does not exist and no network connection can
 // appear in the App; silence here otherwise looks exactly like a dead daemon.
-func (launcher *Launcher) announceCapturePreparation() {
+func (launcher *Launcher) announceCapturePreparation(program string) {
 	if launcher == nil || launcher.config.Stderr == nil {
 		return
 	}
@@ -586,8 +586,21 @@ func (launcher *Launcher) announceCapturePreparation() {
 		)
 		return
 	}
-	_, _ = fmt.Fprintln(launcher.config.Stderr,
-		"vibermate: preparing Capture in the Desktop App. Network and tool approvals still follow your traffic policy.")
+	// Only the name the person typed, never a path resolved from PATH.
+	if message, ok := launcher.localized("cli.run.starting", map[string]string{"agent": filepath.Base(program)}); ok {
+		_, _ = fmt.Fprintln(launcher.config.Stderr, message)
+	}
+}
+
+// localized renders a launcher message in the person's language, the way
+// the CLI renders its errors. A message that cannot be rendered is left out.
+func (launcher *Launcher) localized(key string, parameters map[string]string) (string, bool) {
+	catalogs, err := locales.New()
+	if err != nil {
+		return "", false
+	}
+	message, err := catalogs.Render(locales.Detect(launcher.config.BaseEnvironment), key, parameters)
+	return message, err == nil
 }
 
 func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {

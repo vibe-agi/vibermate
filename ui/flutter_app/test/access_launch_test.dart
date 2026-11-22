@@ -90,6 +90,14 @@ void main() {
       find.text('In Terminal, go to your project folder and run one of these:'),
       findsOneWidget,
     );
+    // A shell alias is not enough: the agent must start by its name.
+    expect(
+      find.text(
+        'Claude Code or Codex must already be installed and start when you '
+        'type claude or codex in Terminal.',
+      ),
+      findsOneWidget,
+    );
     // Codex's certificate is its own step, between the command and the
     // launch commands.
     expect(find.byKey(const Key('access-codex-requirement')), findsOneWidget);
