@@ -223,47 +223,61 @@ func TestTranslatedUnaryResponseScriptSeesTheUpstreamEvents(t *testing.T) {
 	}
 }
 
-// An in-band response.failed during aggregation is an ordinary HTTP error
-// for a Stream=false client: nothing was begun, so nothing is aborted, and
-// the rendered error carries the status Claude Code's recovery needs. Its
-// reasoning state still feeds the rejected-seal memory, and the next turn
-// heals.
-func TestTranslatedUnaryInBandFailureIsAnHTTPError(t *testing.T) {
+// A failed response is an ordinary HTTP error for a Stream=false client,
+// whether the upstream streamed it in band or answered a failed JSON body:
+// nothing was begun, so nothing is aborted, and the rendered error carries
+// the status Claude Code's recovery needs. Its reasoning state feeds the
+// rejected-seal memory, and the next turn heals.
+func TestTranslatedUnaryFailedResponseIsAnHTTPError(t *testing.T) {
 	plan := translatedPlan(t, translatedPrimary)
 	message, _ := firstTurn(t, plan, translatedPrimary)
 	next := unaryRequest(t, replayedTurn(t, message))
-	provider := &providerDouble{results: []providerResult{
-		{response: responsesStream(t, append(slices.Clone(textTurnEvents("partial")[:4]), streamFailedEvent("invalid_encrypted_content")))},
-		{response: responsesStream(t, textTurnEvents("a.txt"))},
-	}}
-	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
-	failed := runTranslated(t, pipeline, plan, "exchange-unary-failed", next)
-	var failure *Failure
-	if !errors.As(failed.err, &failure) || failure.Code != ReasonProviderResponseFailed || failure.Provider == nil ||
-		failure.Provider.Class != protocolcore.ProviderErrorReasoningState {
-		t.Fatalf("err = %v", failed.err)
-	}
-	native := failure.NativeError
-	if native.ClientStatus(protocolspec.DialectAnthropicMessages) != http.StatusBadRequest ||
-		!bytes.Contains(native.ForDialect(protocolspec.DialectAnthropicMessages), []byte(`"capability_rejected: thinking_signature"`)) ||
-		bytes.Contains(native.ForDialect(protocolspec.DialectAnthropicMessages), []byte("secret")) {
-		t.Fatalf("rendered error = %s (status %d)", native.ForDialect(protocolspec.DialectAnthropicMessages),
-			native.ClientStatus(protocolspec.DialectAnthropicMessages))
-	}
-	if len(failed.downstream.envelopesSnapshot()) != 0 || len(failed.downstream.abortsSnapshot()) != 0 ||
-		len(failed.downstream.bytesSnapshot()) != 0 {
-		t.Fatalf("the failure began a response: %s", failed.downstream.bytesSnapshot())
-	}
-	if pipeline.reasoningRejections.size() != 1 {
-		t.Fatalf("rejected seals = %d, want 1", pipeline.reasoningRejections.size())
-	}
-	healed := runTranslated(t, pipeline, plan, "exchange-unary-healed", next)
-	if got := unaryMessage(t, healed); len(got.Content) != 1 || got.Content[0].Text != "a.txt" {
-		t.Fatalf("healed answer = %s", healed.downstream.bytesSnapshot())
-	}
-	if bytes.Contains(provider.requestsSnapshot()[1].Body(), []byte(`"type":"reasoning"`)) ||
-		!slices.Contains(noticeCodes(healed.result.Translation), string(protocolcore.NoticeReasoningNotReplayed)) {
-		t.Fatalf("the rejected seal was replayed: %s", provider.requestsSnapshot()[1].Body())
+	failedJSON := `{"id":"resp_1","object":"response","created_at":1700000000,"status":"failed","model":"` + translatedModel +
+		`","output":[],"error":{"code":"invalid_encrypted_content","message":"secret upstream text for rs_1"}}`
+	for _, form := range []struct {
+		name     string
+		response func() *http.Response
+	}{
+		{"in band", func() *http.Response {
+			return responsesStream(t, append(slices.Clone(textTurnEvents("partial")[:4]), streamFailedEvent("invalid_encrypted_content")))
+		}},
+		{"failed JSON body", func() *http.Response { return jsonResponse(http.StatusOK, []byte(failedJSON)) }},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			provider := &providerDouble{results: []providerResult{
+				{response: form.response()},
+				{response: responsesStream(t, textTurnEvents("a.txt"))},
+			}}
+			pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
+			failed := runTranslated(t, pipeline, plan, "exchange-unary-failed", next)
+			var failure *Failure
+			if !errors.As(failed.err, &failure) || failure.Code != ReasonProviderResponseFailed || failure.Provider == nil ||
+				failure.Provider.Class != protocolcore.ProviderErrorReasoningState {
+				t.Fatalf("err = %v", failed.err)
+			}
+			native := failure.NativeError
+			if native.ClientStatus(protocolspec.DialectAnthropicMessages) != http.StatusBadRequest ||
+				!bytes.Contains(native.ForDialect(protocolspec.DialectAnthropicMessages), []byte(`"capability_rejected: thinking_signature"`)) ||
+				bytes.Contains(native.ForDialect(protocolspec.DialectAnthropicMessages), []byte("secret")) {
+				t.Fatalf("rendered error = %s (status %d)", native.ForDialect(protocolspec.DialectAnthropicMessages),
+					native.ClientStatus(protocolspec.DialectAnthropicMessages))
+			}
+			if len(failed.downstream.envelopesSnapshot()) != 0 || len(failed.downstream.abortsSnapshot()) != 0 ||
+				len(failed.downstream.bytesSnapshot()) != 0 {
+				t.Fatalf("the failure began a response: %s", failed.downstream.bytesSnapshot())
+			}
+			if pipeline.reasoningRejections.size() != 1 {
+				t.Fatalf("rejected seals = %d, want 1", pipeline.reasoningRejections.size())
+			}
+			healed := runTranslated(t, pipeline, plan, "exchange-unary-healed", next)
+			if got := unaryMessage(t, healed); len(got.Content) != 1 || got.Content[0].Text != "a.txt" {
+				t.Fatalf("healed answer = %s", healed.downstream.bytesSnapshot())
+			}
+			if bytes.Contains(provider.requestsSnapshot()[1].Body(), []byte(`"type":"reasoning"`)) ||
+				!slices.Contains(noticeCodes(healed.result.Translation), string(protocolcore.NoticeReasoningNotReplayed)) {
+				t.Fatalf("the rejected seal was replayed: %s", provider.requestsSnapshot()[1].Body())
+			}
+		})
 	}
 }
 
