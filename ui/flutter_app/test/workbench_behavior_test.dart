@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
+import 'package:vibermate_app/core/api/account_facts_models.dart';
+import 'package:vibermate_app/core/api/client_protections.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
+import 'package:vibermate_app/core/api/native_tool_models.dart';
 import 'package:vibermate_app/core/bootstrap/runtime_connection.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
@@ -570,7 +573,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('captures-load-more')));
     await tester.pumpAndSettle();
-    expect(controller.data!.captures, hasLength(9));
+    expect(controller.data!.captures, hasLength(11));
     expect(controller.data!.captureNextCursor, isNull);
     expect(find.byKey(const Key('captures-load-more')), findsNothing);
     expect(tester.takeException(), isNull, reason: 'loaded Capture layout');
@@ -1823,6 +1826,200 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final chinese in [false, true]) {
+    testWidgets(
+      '390px recognized Claude Code shows its protections (${chinese ? 'zh' : 'en'})',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(390, 760));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          ViberMateApp(previewMode: true, preferChinese: chinese),
+        );
+        await tester.pumpAndSettle();
+        final row = find.byKey(const Key('capture-row-managed_run:run-9'));
+        await tester.ensureVisible(row);
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+
+        final section = find.byKey(
+          const Key('capture-client-protections-managed_run:run-9'),
+        );
+        expect(section, findsOneWidget);
+        for (final text
+            in chinese
+                ? const ['保护', '流式恢复由 ViberMate 负责', '安全文件工具自动放行']
+                : const [
+                    'Protections',
+                    'Stream recovery by ViberMate',
+                    'Safe file tools allowed',
+                  ]) {
+          expect(
+            find.descendant(of: section, matching: find.text(text)),
+            findsOneWidget,
+            reason: text,
+          );
+        }
+        expect(
+          find.descendant(of: section, matching: find.byIcon(Icons.check)),
+          findsNWidgets(2),
+        );
+        expect(tester.getRect(section).right, lessThanOrEqualTo(390));
+        expect(tester.takeException(), isNull);
+
+        // A tap explains every entry: what it does, why the client gets it,
+        // and who sets it.
+        await tester.tap(
+          find.byKey(
+            const Key('capture-protection-structured_workspace_tools'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final help = find.byKey(const Key('capture-client-protections-help'));
+        expect(help, findsOneWidget);
+        expect(
+          find.descendant(
+            of: help,
+            matching: find.text(
+              chinese
+                  ? '发布者已签名 · 每天在最新版本上重新验证'
+                  : 'Signed by its publisher · re-proven daily on the newest release',
+            ),
+          ),
+          findsNWidgets(2),
+        );
+        expect(
+          find.descendant(
+            of: help,
+            matching: find.textContaining(
+              chinese ? '由 vibermate 命令在启动时设置' : 'Set by the vibermate command',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: help,
+            matching: find.textContaining(
+              chinese ? '对 Git、编辑器、direnv' : 'Changes to Git, editor, direnv',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.getRect(help).right, lessThanOrEqualTo(390));
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.text(chinese ? '关闭' : 'Dismiss'));
+        await tester.pumpAndSettle();
+        expect(help, findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('a protection with nothing to act on reads as not used here', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    final row = find.byKey(const Key('capture-row-managed_run:run-10'));
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    Icon glyph(String id) => tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(Key('capture-protection-$id')),
+        matching: find.byType(Icon),
+      ),
+    );
+    final context = tester.element(
+      find.byKey(const Key('capture-client-protections-managed_run:run-10')),
+    );
+    final keepalive = glyph('responses_data_keepalive');
+    expect(keepalive.icon, Icons.remove);
+    expect(keepalive.color, context.viberColors.textMuted);
+    final websocket = glyph('responses_websocket_http_fallback');
+    expect(websocket.icon, Icons.check);
+    expect(websocket.color, context.viberColors.verified);
+    final tooltip = tester.widget<Tooltip>(
+      find.ancestor(
+        of: find.byKey(
+          const Key('capture-protection-responses_data_keepalive'),
+        ),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(
+      tooltip.message,
+      [
+        'Codex receives a keepalive it counts as progress, so a long tool '
+            'decision does not end its stream.',
+        'Signed by its publisher · re-proven daily on the newest release',
+        'This routing set sends the client\'s requests to their original '
+            'destination, where ViberMate does not hold the stream.',
+      ].join('\n'),
+    );
+    expect(
+      find.bySemanticsLabel('Keepalive while tools wait, Not used here'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final reader in [true, false]) {
+    testWidgets(
+      'no protections section ${reader ? 'for an empty answer' : 'without a reader'}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1180, 760));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final fixture = PreviewControlApi();
+        final api = reader
+            ? _ProtectionAnsweringApi(fixture)
+            : _SessionOnlyApi(fixture);
+        final controller = WorkbenchController(
+          api: api,
+          terminalCommands: PreviewTerminalCommandService(),
+          previewMode: true,
+          closeRuntime: fixture.close,
+        );
+        await controller.initialize();
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ViberTheme.light(),
+            home: WorkbenchShell(controller: controller),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final row = find.byKey(const Key('capture-row-managed_run:run-9'));
+        await tester.ensureVisible(row);
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+
+        if (api is _ProtectionAnsweringApi) {
+          expect(api.reads, contains('managed_run:run-9'));
+        }
+        expect(
+          find.byKey(
+            const Key('capture-client-compatibility-managed_run:run-9'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('capture-client-protections-managed_run:run-9')),
+          findsNothing,
+        );
+        expect(find.text('Protections'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        controller.dispose();
+        await fixture.close();
+      },
+    );
+  }
 
   for (final size in const [Size(1280, 800), Size(1024, 700), Size(390, 760)]) {
     testWidgets('Capture header leaves space for evidence at $size', (
@@ -4285,7 +4482,7 @@ void main() {
       expect(find.textContaining('Anthropic · Lab'), findsWidgets);
       expect(find.text('Future sessions only'), findsWidgets);
       expect(
-        find.text('6 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
+        find.text('7 RUNNING SESSIONS KEEP THEIR CURRENT REVISION'),
         findsOneWidget,
       );
       expect(find.text('r7'), findsWidgets);
@@ -4631,7 +4828,7 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-review')));
     await tester.pumpAndSettle();
     expect(find.text('发布后会改变什么'), findsOneWidget);
-    expect(find.text('6 条运行中记录保持当前修订'), findsOneWidget);
+    expect(find.text('7 条运行中记录保持当前修订'), findsOneWidget);
     expect(find.byKey(const Key('environment-publish')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -6343,6 +6540,93 @@ Future<void> _openUpstreamAccounts(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('workbench-tab-provider-accounts')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('provider-accounts-add')), findsOneWidget);
+}
+
+/// The reads a workbench needs to list and open sessions, from the preview,
+/// and nothing about client protections.
+final class _SessionOnlyApi implements ControlApi {
+  _SessionOnlyApi(this.delegate);
+
+  final PreviewControlApi delegate;
+
+  @override
+  Future<DashboardData> loadDashboard() => delegate.loadDashboard();
+
+  @override
+  Future<AccountFacts> accountFacts(String id, {bool history = false}) =>
+      delegate.accountFacts(id, history: history);
+
+  @override
+  Future<NativeSessionApprovalPage> nativeApprovalsAcrossSessions({
+    String cursor = '',
+    int limit = 50,
+  }) => delegate.nativeApprovalsAcrossSessions(cursor: cursor, limit: limit);
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ExchangeSummary> activitySummary(ActivitySummaryScope scope) =>
+      delegate.activitySummary(scope);
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() =>
+      delegate.pendingApprovals();
+
+  @override
+  Future<List<ApprovalRecord>> decidedApprovals() =>
+      delegate.decidedApprovals();
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) => delegate.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+  );
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) => delegate.activities(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+    environmentId: environmentId,
+    conversationId: conversationId,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
+
+/// A Runtime that answers every session with an empty protections list.
+final class _ProtectionAnsweringApi extends _SessionOnlyApi
+    implements CaptureProtectionReader {
+  _ProtectionAnsweringApi(super.delegate);
+
+  final List<String> reads = [];
+
+  @override
+  Future<CaptureClientProtections?> captureClientProtections(
+    String captureKey,
+  ) async {
+    reads.add(captureKey);
+    return CaptureClientProtections(captureKey: captureKey, protections: []);
+  }
 }
 
 final class _FailingDashboardApi implements ControlApi {

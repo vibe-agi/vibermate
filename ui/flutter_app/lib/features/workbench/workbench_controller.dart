@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/api/control_api.dart';
 import '../../core/api/acp_models.dart';
+import '../../core/api/client_protections.dart';
 import '../../core/api/launch_environment_snapshot.dart';
 import '../../core/api/control_failure.dart';
 import '../../core/api/account_facts_models.dart';
@@ -1076,6 +1077,12 @@ final class WorkbenchController extends ChangeNotifier
   EnvironmentImpact? reviewedEnvironmentImpact;
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
+
+  /// The client protections that act on the selected Capture, from a Runtime
+  /// that can say. Null while unread, when the Runtime cannot answer, and
+  /// when the read failed; the session then shows no protections.
+  CaptureClientProtections? selectedCaptureProtections;
+  int _captureProtectionsGeneration = 0;
   bool selectedCaptureLaunchIncomplete = false;
   String? captureDetailError;
   ControlFailure? captureInspectionFailure;
@@ -4375,6 +4382,8 @@ final class WorkbenchController extends ChangeNotifier
       if (selectedCaptureKey == captureKey) {
         selectedAssignment = updated;
         operationNotice = 'capture_environment_applied';
+        // What a protection acts on follows the routing set now in use.
+        _loadCaptureProtections(capture);
       }
       mutating = false;
       notifyListeners();
@@ -4576,6 +4585,8 @@ final class WorkbenchController extends ChangeNotifier
     if (!nativeApprovalsForAllSessions) _discardNativeApprovals();
     _selectionGeneration += 1;
     selectedAssignment = null;
+    _captureProtectionsGeneration += 1;
+    selectedCaptureProtections = null;
     selectedCaptureLaunchIncomplete = false;
     if (errorMessage == captureDetailError) errorMessage = null;
     captureDetailError = null;
@@ -5226,6 +5237,8 @@ final class WorkbenchController extends ChangeNotifier
       final acpFuture = capture.isACP && _api is ACPObservationApi
           ? (_api as ACPObservationApi).acpObservation(capture.key)
           : Future<ACPRecord?>.value();
+      // Optional, so it never waits on or fails the rest of the detail.
+      _loadCaptureProtections(capture);
       final values = await Future.wait<Object?>([
         assignmentFuture,
         summaryFuture,
@@ -5399,6 +5412,31 @@ final class WorkbenchController extends ChangeNotifier
       notifyListeners();
     } finally {
       _captureDetailLoads -= 1;
+    }
+  }
+
+  /// Reads which client protections act on [capture]. Only the newest read
+  /// for the selection still on screen applies, so a slower answer for an
+  /// earlier session or an earlier routing set is dropped. Any failure leaves
+  /// null, which hides the section.
+  void _loadCaptureProtections(CaptureRecord capture) {
+    if (_api case final CaptureProtectionReader reader) {
+      final generation = ++_captureProtectionsGeneration;
+      unawaited(() async {
+        CaptureClientProtections? protections;
+        try {
+          protections = await reader.captureClientProtections(capture.key);
+        } catch (_) {
+          protections = null;
+        }
+        if (_disposed ||
+            generation != _captureProtectionsGeneration ||
+            selectedCaptureKey != capture.key) {
+          return;
+        }
+        selectedCaptureProtections = protections;
+        notifyListeners();
+      }());
     }
   }
 

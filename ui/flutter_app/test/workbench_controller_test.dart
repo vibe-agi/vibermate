@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/account_facts_models.dart';
+import 'package:vibermate_app/core/api/client_protections.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/api/runtime_storage.dart';
@@ -1972,10 +1973,10 @@ void main() {
       await controller.loadMoreCaptures();
 
       final captures = controller.data!.captures;
-      expect(captures, hasLength(9));
-      expect(captures.map((capture) => capture.key).toSet(), hasLength(9));
+      expect(captures, hasLength(11));
+      expect(captures.map((capture) => capture.key).toSet(), hasLength(11));
       expect(controller.data!.captureNextCursor, isNull);
-      expect(controller.runningCaptures, hasLength(8));
+      expect(controller.runningCaptures, hasLength(10));
       expect(controller.historicalCaptures, hasLength(1));
       expect(controller.captureDirectoryError, isNull);
     },
@@ -2065,9 +2066,9 @@ void main() {
         cursor = page.nextCursor;
       } while (cursor != null);
 
-      expect(seen, hasLength(9));
-      expect(seen.toSet(), hasLength(9));
-      expect(seen.take(8).every((key) => key != 'managed_run:run-8'), isTrue);
+      expect(seen, hasLength(11));
+      expect(seen.toSet(), hasLength(11));
+      expect(seen.take(10).every((key) => key != 'managed_run:run-8'), isTrue);
       expect(seen.last, 'managed_run:run-8');
     },
   );
@@ -2347,7 +2348,7 @@ void main() {
 
     final impact = await controller.reviewSelectedEnvironment(candidate);
     expect(impact, isNotNull);
-    expect(impact!.continuingCaptures, hasLength(6));
+    expect(impact!.continuingCaptures, hasLength(7));
     expect(controller.reviewedEnvironmentDraft!.baseRevision, 7);
     expect(controller.reviewedEnvironmentDraft!.draftRevision, 8);
     expect(controller.selectedEnvironment!.name, 'Work');
@@ -2682,6 +2683,143 @@ void main() {
     await controller.codeLibrary(refresh: true);
     expect(api.codeLibraryCalls, 3);
   });
+
+  group('Capture client protections', () {
+    late PreviewControlApi fixture;
+    late _ProtectionReadingApi api;
+    late WorkbenchController controller;
+
+    setUp(() {
+      fixture = PreviewControlApi();
+      api = _ProtectionReadingApi(fixture);
+      controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+    });
+
+    tearDown(() => controller.dispose());
+
+    test('a selected session reads its own protections', () async {
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-9');
+      await pumpEventQueue();
+      expect(
+        controller.selectedCaptureProtections?.captureKey,
+        'managed_run:run-9',
+      );
+      expect(
+        controller.selectedCaptureProtections?.protections.map(
+          (value) => value.state,
+        ),
+        [ClientProtectionState.on, ClientProtectionState.on],
+      );
+    });
+
+    test('a reader that fails leaves them unknown, and nothing else', () async {
+      api.answer = (key) async => throw const ControlProblem(
+        status: 503,
+        reasonCode: 'capture_unavailable',
+        messageKey: 'error.capture_unavailable',
+      );
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-9');
+      await pumpEventQueue();
+      expect(api.reads, contains('managed_run:run-9'));
+      expect(controller.selectedCaptureProtections, isNull);
+      expect(controller.selectedAssignment?.captureKey, 'managed_run:run-9');
+      expect(controller.selectedCapturePage, isNotNull);
+      expect(controller.errorMessage, isNull);
+      expect(controller.captureDetailError, isNull);
+
+      // A reader that throws before it returns a Future is caught too.
+      api.answer = (key) => throw StateError('reader closed');
+      await controller.selectCapture('managed_run:run-1');
+      await pumpEventQueue();
+      expect(controller.selectedCaptureProtections, isNull);
+      expect(controller.selectedAssignment?.captureKey, 'managed_run:run-1');
+      expect(controller.errorMessage, isNull);
+    });
+
+    test('a later selection discards an earlier answer', () async {
+      final pending = <(String, Completer<CaptureClientProtections?>)>[];
+      api.answer = (key) {
+        final answer = Completer<CaptureClientProtections?>();
+        pending.add((key, answer));
+        return answer.future;
+      };
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-9');
+      await controller.selectCapture('managed_run:run-1');
+      final early = pending.lastWhere((read) => read.$1 == 'managed_run:run-9');
+      final latest = pending.last;
+      expect(latest.$1, 'managed_run:run-1');
+
+      early.$2.complete(
+        await fixture.captureClientProtections('managed_run:run-9'),
+      );
+      await pumpEventQueue();
+      expect(controller.selectedCaptureProtections, isNull);
+
+      latest.$2.complete(
+        await fixture.captureClientProtections('managed_run:run-1'),
+      );
+      await pumpEventQueue();
+      expect(
+        controller.selectedCaptureProtections?.captureKey,
+        'managed_run:run-1',
+      );
+
+      // Every earlier read for this session is older than the one applied.
+      for (final read in pending.where(
+        (read) => read.$1 == 'managed_run:run-1' && !read.$2.isCompleted,
+      )) {
+        read.$2.complete(null);
+      }
+      await pumpEventQueue();
+      expect(
+        controller.selectedCaptureProtections?.captureKey,
+        'managed_run:run-1',
+      );
+
+      // Leaving the session forgets its protections at once.
+      await controller.selectCapture('manual_capture:manual-figma');
+      expect(controller.selectedCaptureProtections, isNull);
+      for (final read in pending.where((read) => !read.$2.isCompleted)) {
+        read.$2.complete(null);
+      }
+    });
+
+    test('applying the latest routing set reads them again', () async {
+      final current = await fixture.environmentRevision('work', 7);
+      final draft = await fixture.saveEnvironmentDraft(
+        environmentId: current.id,
+        expectedBaseRevision: current.revision,
+        input: EnvironmentDraftInput.fromEnvironment(
+          current,
+          expectedDraftRevision: 0,
+          name: current.name,
+        ),
+      );
+      await fixture.publishEnvironmentDraft('work', draft.draftRevision);
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-9');
+      await pumpEventQueue();
+      final reads = api.reads.length;
+
+      expect(await controller.applyLatestSelectedCaptureEnvironment(), isTrue);
+      await pumpEventQueue();
+      expect(api.reads, hasLength(reads + 1));
+      expect(api.reads.last, 'managed_run:run-9');
+      expect(controller.selectedAssignment?.environmentRevision, 8);
+      expect(
+        controller.selectedCaptureProtections?.captureKey,
+        'managed_run:run-9',
+      );
+    });
+  });
 }
 
 final class _RecordingRootTrustInstaller implements RootTrustInstaller {
@@ -2800,6 +2938,27 @@ final class _UsageTrackingApi implements ControlApi {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _ProtectionReadingApi extends _UsageTrackingApi
+    implements CaptureProtectionReader {
+  _ProtectionReadingApi(super.delegate);
+
+  final List<String> reads = [];
+  Future<CaptureClientProtections?> Function(String captureKey)? answer;
+
+  @override
+  Future<CaptureClientProtections?> captureClientProtections(
+    String captureKey,
+  ) {
+    reads.add(captureKey);
+    return (answer ?? delegate.captureClientProtections)(captureKey);
+  }
+
+  @override
+  Future<CaptureAssignment> applyLatestCaptureEnvironment(
+    CaptureAssignment current,
+  ) => delegate.applyLatestCaptureEnvironment(current);
 }
 
 final class _LiveEvidenceApi extends _UsageTrackingApi {

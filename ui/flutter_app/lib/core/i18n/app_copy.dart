@@ -944,6 +944,36 @@ final class AppCopy {
     'capture.client.compatibility.unverified': 'Build not checked',
     'capture.client.compatibility.unknown': 'Client release unknown',
     'capture.client.compatibility.blocked': 'Can\'t connect through ViberMate',
+    'capture.protections.title': 'Protections',
+    'capture.protection.core_owned_streaming_fallback':
+        'Stream recovery by ViberMate',
+    'capture.protection.core_owned_streaming_fallback.detail':
+        'Claude Code\'s non-streaming retry is off: a stream that breaks ends the turn instead of being sent again as a second, separately billed request.',
+    'capture.protection.structured_workspace_tools': 'Safe file tools allowed',
+    'capture.protection.structured_workspace_tools.detail':
+        'With “Ask before tools run” or “Allow only proven-safe tools”, the client\'s built-in Read, Edit, Write and NotebookEdit inside this workspace run without a question. Changes to Git, editor, direnv and agent settings still ask.',
+    'capture.protection.responses_data_keepalive': 'Keepalive while tools wait',
+    'capture.protection.responses_data_keepalive.detail':
+        'Codex receives a keepalive it counts as progress, so a long tool decision does not end its stream.',
+    'capture.protection.responses_websocket_http_fallback':
+        'WebSocket requests use HTTP',
+    'capture.protection.responses_websocket_http_fallback.detail':
+        'ViberMate answers Codex\'s WebSocket upgrade with 426, and Codex continues over HTTP.',
+    'capture.protection.state.on': 'On',
+    'capture.protection.state.inactive': 'Not used here',
+    'capture.protection.state.off': 'Off',
+    'capture.protection.reason.original_destination':
+        'This routing set sends the client\'s requests to their original destination, where ViberMate does not hold the stream.',
+    'capture.protection.reason.remote_workspace':
+        'File tools are classified only in a workspace that a local vibermate run proved.',
+    'capture.protection.reason.operator_disabled':
+        'Turned off on this Runtime by VIBERMATE_RECOGNIZED_CLIENT_PROTECTIONS.',
+    'capture.protection.basis.exact_release': 'Proven for this exact release',
+    'capture.protection.basis.recognized_client':
+        'Signed by its publisher · re-proven daily on the newest release',
+    'capture.protection.basis.operation_catalog': 'Applies to every client',
+    'capture.protection.applied_by.launcher':
+        'Set by the vibermate command at launch; a command older than this release leaves it to the client.',
     'capture.cannot_connect.badge': 'Can\'t connect',
     'capture.cannot_connect.detail':
         'ViberMate can\'t verify this copy of {agent}, so it can\'t give it ViberMate\'s certificate, and its requests will fail. Start a supported version, or update ViberMate.',
@@ -4270,6 +4300,34 @@ final class AppCopy {
     'capture.client.compatibility.unverified': '未核验的构建',
     'capture.client.compatibility.unknown': '客户端版本未知',
     'capture.client.compatibility.blocked': '无法通过 ViberMate 连接',
+    'capture.protections.title': '保护',
+    'capture.protection.core_owned_streaming_fallback': '流式恢复由 ViberMate 负责',
+    'capture.protection.core_owned_streaming_fallback.detail':
+        'Claude Code 的非流式重试已关闭：流中断时本轮会结束，而不会再作为第二个单独计费的请求重新发送。',
+    'capture.protection.structured_workspace_tools': '安全文件工具自动放行',
+    'capture.protection.structured_workspace_tools.detail':
+        '在“工具执行前询问”或“仅允许已证明安全的工具”模式下，客户端内置的 Read、Edit、Write 和 NotebookEdit 在此工作区内无需询问即可运行。对 Git、编辑器、direnv 和智能体设置的修改仍会询问。',
+    'capture.protection.responses_data_keepalive': '工具等待期间保活',
+    'capture.protection.responses_data_keepalive.detail':
+        'Codex 会收到一个计为进展的保活信号，因此较长的工具决定不会中断其数据流。',
+    'capture.protection.responses_websocket_http_fallback':
+        'WebSocket 请求改用 HTTP',
+    'capture.protection.responses_websocket_http_fallback.detail':
+        'ViberMate 以 426 回应 Codex 的 WebSocket 升级，Codex 随后改用 HTTP 继续。',
+    'capture.protection.state.on': '已启用',
+    'capture.protection.state.inactive': '此处不适用',
+    'capture.protection.state.off': '已关闭',
+    'capture.protection.reason.original_destination':
+        '此流量策略将客户端请求发往其原始目标，ViberMate 不在其中持有数据流。',
+    'capture.protection.reason.remote_workspace':
+        '仅在本地 vibermate 运行所证明的工作区中才会对文件工具进行分类。',
+    'capture.protection.reason.operator_disabled':
+        '已在此 Runtime 上通过 VIBERMATE_RECOGNIZED_CLIENT_PROTECTIONS 关闭。',
+    'capture.protection.basis.exact_release': '已针对此精确版本验证',
+    'capture.protection.basis.recognized_client': '发布者已签名 · 每天在最新版本上重新验证',
+    'capture.protection.basis.operation_catalog': '适用于所有客户端',
+    'capture.protection.applied_by.launcher':
+        '由 vibermate 命令在启动时设置；早于此版本的命令会将其交由客户端处理。',
     'capture.cannot_connect.badge': '无法连接',
     'capture.cannot_connect.detail':
         'ViberMate 无法验证这份 {agent}，因此不能为它提供 ViberMate 证书，它的请求会失败。请改用受支持的版本，或更新 ViberMate。',

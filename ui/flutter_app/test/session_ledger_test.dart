@@ -236,6 +236,24 @@ void main() {
       expect(find.byKey(const Key('session-ledger-list')), findsOneWidget);
       expect(tester.takeException(), isNull);
 
+      // The detail keeps its scroll position. On a phone its close button
+      // can be scrolled out of view, so scroll up to it as a person would.
+      Future<void> closeInspector() async {
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('ledger-inspector-close')),
+          -200,
+          scrollable: find
+              .descendant(
+                of: find.byKey(const Key('ledger-inspector')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('ledger-inspector-close')));
+        await tester.pumpAndSettle();
+      }
+
       // Blocked: exactly the one request a script refused.
       // On a narrow pane the filter tabs scroll sideways.
       await tester.ensureVisible(
@@ -276,8 +294,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('ledger-inspector')), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('ledger-inspector-close')));
-      await tester.pumpAndSettle();
+      await closeInspector();
       // On a narrow pane the filter tabs scroll sideways.
       await tester.ensureVisible(
         find.byKey(const Key('ledger-filter-changed')),
@@ -303,8 +320,7 @@ void main() {
       await tester.tapAt(const Offset(4, 4));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('raw-evidence-diff-dialog')), findsNothing);
-      await tester.tap(find.byKey(const Key('ledger-inspector-close')));
-      await tester.pumpAndSettle();
+      await closeInspector();
 
       // The ledger covers the whole session by default and can be narrowed
       // to the conversation selected above it.

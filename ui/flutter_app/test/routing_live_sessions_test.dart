@@ -19,8 +19,9 @@ void main() {
 
     final live = find.byKey(const Key('environment-live-sessions'));
     expect(live, findsOneWidget);
-    // The preview runs five managed sessions and one manual session on Work.
-    expect(find.text('Running on it now · 6'), findsOneWidget);
+    // The preview runs six managed sessions (one of them an official build
+    // not yet listed) and one manual session on Work.
+    expect(find.text('Running on it now · 7'), findsOneWidget);
     final first = find.byKey(const Key('environment-live-managed_run:run-1'));
     expect(first, findsOneWidget);
     expect(tester.takeException(), isNull);

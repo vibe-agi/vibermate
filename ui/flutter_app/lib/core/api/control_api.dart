@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'acp_models.dart';
+import 'client_protections.dart';
 import 'content_cursor.dart';
 import 'control_models.dart';
 import 'native_tool_models.dart';
@@ -27,6 +28,13 @@ abstract interface class RuntimeStatusReader {
 /// that cannot answer leaves the counts out and nothing else changes.
 abstract interface class ScriptActivityReader {
   Future<ScriptActivity> scriptActivity({int days = 7});
+}
+
+/// The client protections that act on one Capture (ADR 0026). Optional: a
+/// Runtime from before this read answers 404, and an answer this build cannot
+/// read gives null; either way the App shows no protections.
+abstract interface class CaptureProtectionReader {
+  Future<CaptureClientProtections?> captureClientProtections(String captureKey);
 }
 
 /// The agent releases this build can connect through ViberMate on this
@@ -567,6 +575,7 @@ final class HttpControlApi
     implements
         ControlApi,
         ACPObservationApi,
+        CaptureProtectionReader,
         RuntimeStatusReader,
         ScriptActivityReader {
   @override
@@ -1552,6 +1561,27 @@ final class HttpControlApi
       );
     }
     return assignment;
+  }
+
+  @override
+  Future<CaptureClientProtections?> captureClientProtections(
+    String captureKey,
+  ) async {
+    final Object? payload;
+    try {
+      payload = await _read(
+        '/api/v1/captures/${Uri.encodeComponent(captureKey)}/client-protections',
+      );
+    } on ControlProblem catch (error) {
+      // An older Runtime has no such route, and a Capture deleted since it was
+      // listed has none to answer.
+      if (error.status == 404) return null;
+      rethrow;
+    } on ControlContractException {
+      return null;
+    }
+    final protections = CaptureClientProtections.tryParse(payload);
+    return protections?.captureKey == captureKey ? protections : null;
   }
 
   @override

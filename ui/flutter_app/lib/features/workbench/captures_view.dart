@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/api/client_protections.dart';
 import '../../core/api/control_models.dart';
 import '../../core/api/acp_models.dart';
 import '../../core/design/agent_identity.dart';
@@ -862,6 +863,7 @@ final class _CaptureDetail extends StatelessWidget {
             acp: controller.selectedACP,
             capture: capture,
             assignment: assignment,
+            protections: controller.selectedCaptureProtections,
             environments: controller.data?.environments ?? const [],
             conversations: controller.captureConversations,
             conversationsLoaded:
@@ -2048,6 +2050,7 @@ final class _CaptureContext extends StatelessWidget {
     this.acp,
     required this.capture,
     required this.assignment,
+    this.protections,
     required this.environments,
     required this.conversations,
     required this.conversationsLoaded,
@@ -2071,6 +2074,7 @@ final class _CaptureContext extends StatelessWidget {
   final CaptureRecord capture;
   final ACPRecord? acp;
   final CaptureAssignment? assignment;
+  final CaptureClientProtections? protections;
   final List<EnvironmentRecord> environments;
   final List<ConversationSummary> conversations;
   final bool conversationsLoaded;
@@ -2262,6 +2266,18 @@ final class _CaptureContext extends StatelessWidget {
                               ),
                             ),
                           ),
+                          if (protections case final value?
+                              when value.captureKey == capture.key &&
+                                  value.protections.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            _CaptureClientProtections(
+                              key: Key(
+                                'capture-client-protections-${capture.key}',
+                              ),
+                              protections: value.protections,
+                              copy: copy,
+                            ),
+                          ],
                         ],
                       ],
                     ),
@@ -2584,6 +2600,175 @@ final class _CaptureClientCompatibility extends StatelessWidget {
           constraints: const BoxConstraints.tightFor(width: 18, height: 18),
           padding: EdgeInsets.zero,
         ),
+      ],
+    );
+  }
+}
+
+/// The client protections under the agent build line: each one's short name
+/// and a glyph for whether it acts on this session. Hovering an entry shows
+/// what it does and why; a click or tap shows the same for every entry.
+final class _CaptureClientProtections extends StatelessWidget {
+  const _CaptureClientProtections({
+    required this.protections,
+    required this.copy,
+    super.key,
+  });
+
+  final List<CaptureClientProtection> protections;
+  final AppCopy copy;
+
+  static IconData _glyph(ClientProtectionState state) => switch (state) {
+    ClientProtectionState.on => Icons.check,
+    ClientProtectionState.inactive => Icons.remove,
+    ClientProtectionState.off => Icons.close,
+  };
+
+  // Outcome colours only: a protection that is withheld is worth a look, one
+  // the routing set gives nothing to act on is not.
+  static Color _colour(ViberColors colors, ClientProtectionState state) =>
+      switch (state) {
+        ClientProtectionState.on => colors.verified,
+        ClientProtectionState.inactive => colors.textMuted,
+        ClientProtectionState.off => colors.warning,
+      };
+
+  String _name(CaptureClientProtection protection) =>
+      copy('capture.protection.${protection.id.wire}');
+
+  String _state(CaptureClientProtection protection) =>
+      copy('capture.protection.state.${protection.state.wire}');
+
+  /// What it does, why the client receives it, and why it is not on or who
+  /// sets it.
+  List<String> _explanation(CaptureClientProtection protection) => [
+    copy('capture.protection.${protection.id.wire}.detail'),
+    copy('capture.protection.basis.${protection.basis.wire}'),
+    if (protection.reason case final reason?)
+      copy('capture.protection.reason.${reason.wire}')
+    else if (protection.appliedBy == ClientProtectionApplier.launcher)
+      copy('capture.protection.applied_by.launcher'),
+  ];
+
+  void _explain(BuildContext context) {
+    final colors = context.viberColors;
+    final theme = Theme.of(context).textTheme;
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          key: const Key('capture-client-protections-help'),
+          constraints: const BoxConstraints(maxWidth: 560),
+          scrollable: true,
+          title: Text(copy('capture.protections.title')),
+          content: SelectionArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (index, protection) in protections.indexed) ...[
+                  if (index > 0) const SizedBox(height: 14),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Icon(
+                          _glyph(protection.state),
+                          size: 14,
+                          color: _colour(colors, protection.state),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: _name(protection),
+                                style: theme.titleSmall,
+                              ),
+                              TextSpan(
+                                text: ' · ${_state(protection)}',
+                                style: theme.labelMedium?.copyWith(
+                                  color: _colour(colors, protection.state),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  for (final line in _explanation(protection))
+                    Padding(
+                      padding: const EdgeInsets.only(left: 20, top: 3),
+                      child: Text(line, style: theme.bodySmall),
+                    ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(copy('common.dismiss')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.viberColors;
+    final style = Theme.of(context).textTheme.labelSmall;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 2,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          copy('capture.protections.title'),
+          style: style?.copyWith(color: colors.textFaint),
+        ),
+        for (final protection in protections)
+          // The name and the state word are what a screen reader announces;
+          // the explanation is one tap away for everyone.
+          Semantics(
+            button: true,
+            label: '${_name(protection)}, ${_state(protection)}',
+            onTap: () => _explain(context),
+            excludeSemantics: true,
+            child: Tooltip(
+              message: _explanation(protection).join('\n'),
+              child: InkWell(
+                key: Key('capture-protection-${protection.id.wire}'),
+                onTap: () => _explain(context),
+                borderRadius: BorderRadius.circular(3),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _glyph(protection.state),
+                      size: 12,
+                      color: _colour(colors, protection.state),
+                    ),
+                    const SizedBox(width: 3),
+                    Flexible(
+                      child: Text(
+                        _name(protection),
+                        style: style?.copyWith(
+                          color: _colour(colors, protection.state),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

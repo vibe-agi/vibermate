@@ -43,7 +43,7 @@ void main() {
     final api = PreviewControlApi();
     addTearDown(api.close);
     final dashboard = await api.loadDashboard();
-    expect(dashboard.captures, hasLength(9));
+    expect(dashboard.captures, hasLength(11));
     expect(
       dashboard.environments.map((value) => value.id),
       orderedEquals(['system_transparent', 'work', 'research']),

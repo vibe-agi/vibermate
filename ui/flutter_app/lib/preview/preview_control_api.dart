@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import '../core/api/client_protections.dart';
 import '../core/api/control_api.dart';
 import '../core/api/account_facts_models.dart';
 import '../core/api/control_models.dart';
@@ -14,6 +15,7 @@ import '../core/api/runtime_storage.dart';
 final class PreviewControlApi
     implements
         ControlApi,
+        CaptureProtectionReader,
         RuntimeStatusReader,
         ScriptActivityReader,
         SupportedClientVersionsSource {
@@ -402,6 +404,15 @@ final class PreviewControlApi
         updatedAt: capture.createdAt,
       );
     }
+    // Official builds newer than the preview catalogue: Claude Code on a
+    // routing set that sends it Upstream, and Codex on the built-in set that
+    // keeps every request's original destination.
+    _seedRecognizedRun(id: 'run-9', codex: false, environmentId: 'work');
+    _seedRecognizedRun(
+      id: 'run-10',
+      codex: true,
+      environmentId: 'system_transparent',
+    );
     const manualId = 'manual-figma';
     final manual = CaptureRecord(
       key: 'manual_capture:$manualId',
@@ -449,6 +460,191 @@ final class PreviewControlApi
       lastObservedAt: manual.manualCapture!.lastObservedAt,
     );
     _manualVersions[manualId] = manual.manualCapture!.credentialRevision;
+  }
+
+  /// A running session of an official build that is not in the preview
+  /// catalogue: recognized by its publisher's signature, so it has no adapter
+  /// and no version, as the Runtime reports it.
+  void _seedRecognizedRun({
+    required String id,
+    required bool codex,
+    required String environmentId,
+  }) {
+    final index = _captures.length;
+    final activityAt = _now.subtract(Duration(minutes: 3 * index + 1));
+    final capture = CaptureRecord(
+      key: 'managed_run:$id',
+      id: id,
+      kind: 'managed_run',
+      displayName: codex ? 'Codex' : 'Claude Code',
+      state: 'attached',
+      observation: 'observed',
+      createdAt: _now.subtract(Duration(hours: index + 1)),
+      updatedAt: activityAt,
+      activityAt: activityAt,
+      managedRun: ManagedRunSummary(
+        executableLabel: codex ? 'codex' : 'claude',
+        cwd: '/Users/mira/Code/vibermate',
+        canonicalExecutablePath: codex
+            ? '/opt/homebrew/bin/codex'
+            : '/Users/mira/.local/bin/claude',
+        recognition: 'recognized',
+        clientAdapter: null,
+        expiresAt: _now.add(const Duration(hours: 1)),
+        localUserLabel: 'mira',
+        homeDirectory: '/Users/mira',
+        operatingSystem: 'darwin',
+        operatingSystemVersion: '26.0',
+        architecture: 'arm64',
+        timeZone: 'Asia/Singapore',
+        machineId: _previewMachineId,
+        machineRegistrationRevision: 1,
+        workspaceId: _previewWorkspaceId,
+        workspaceLabel: 'vibermate',
+        workspaceEvidence: 'local_launcher',
+        workspaceDerivationRevision: 1,
+        processId: 7300 + index,
+        firstObservedAt: activityAt.subtract(const Duration(minutes: 1)),
+      ),
+    );
+    _captures[capture.key] = capture;
+    final environment = _environments.firstWhere(
+      (value) => value.id == environmentId,
+    );
+    _assignments[capture.key] = CaptureAssignment(
+      captureKey: capture.key,
+      captureId: capture.id,
+      captureKind: capture.kind,
+      environmentId: environment.id,
+      environmentRevision: environment.revision,
+      environmentDigest: environment.digest,
+      launchEnvironmentRevision: environment.revision,
+      launchEnvironmentDigest: environment.digest,
+      revision: 1,
+      source: 'launch',
+      updatedAt: capture.createdAt,
+    );
+  }
+
+  /// Answers like the Runtime's client-protections route, from the session's
+  /// release tier and the routing set it launched with and uses now.
+  @override
+  Future<CaptureClientProtections?> captureClientProtections(
+    String captureKey,
+  ) async {
+    _requireOpen();
+    final capture = _captures[captureKey];
+    if (capture == null) return null;
+    final managed = capture.managedRun;
+    final adapter = managed?.clientAdapter;
+    final (client, basis) = switch (managed?.recognition) {
+      'verified' when adapter != null => (
+        adapter.id,
+        ClientProtectionBasis.exactRelease,
+      ),
+      'recognized' => (
+        switch (managed!.executableLabel) {
+          'claude' => 'claude-code',
+          'codex' => 'codex-cli',
+          _ => null,
+        },
+        ClientProtectionBasis.recognizedClient,
+      ),
+      _ => (null, null),
+    };
+    final assignment = _assignments[captureKey];
+    if (client == null || basis == null || assignment == null) {
+      return CaptureClientProtections(
+        captureKey: captureKey,
+        client: client,
+        protections: const [],
+      );
+    }
+    EnvironmentRecord? revision(int number) =>
+        _environmentHistory[_environmentRevisionKey(
+          assignment.environmentId,
+          number,
+        )] ??
+        _environments
+            .where(
+              (value) =>
+                  value.id == assignment.environmentId &&
+                  value.revision == number,
+            )
+            .firstOrNull;
+    bool upstream(EnvironmentRecord? environment, String protocol) =>
+        environment?.clientEndpoints.any(
+          (endpoint) => endpoint.protocolPlans.any(
+            (plan) =>
+                plan.clientProtocol == protocol &&
+                plan.destination.isUpstream &&
+                (plan.destination.upstream?.routes.isNotEmpty ?? false),
+          ),
+        ) ??
+        false;
+    final launch = revision(assignment.launchEnvironmentRevision);
+    final current = revision(assignment.environmentRevision);
+    CaptureClientProtection row(
+      ClientProtectionId id,
+      ClientProtectionBasis basis,
+      ClientProtectionApplier appliedBy, {
+      ClientProtectionReason? withheld,
+      bool active = true,
+    }) => CaptureClientProtection(
+      id: id,
+      basis: basis,
+      state: withheld != null
+          ? ClientProtectionState.off
+          : active
+          ? ClientProtectionState.on
+          : ClientProtectionState.inactive,
+      reason:
+          withheld ??
+          (active ? null : ClientProtectionReason.originalDestination),
+      appliedBy: appliedBy,
+    );
+    final protections = switch (client) {
+      'claude-code' => [
+        row(
+          ClientProtectionId.coreOwnedStreamingFallback,
+          basis,
+          ClientProtectionApplier.launcher,
+          // An exact release sets it wherever the launch protects an
+          // endpoint; a recognized one only toward an Upstream route.
+          active: basis == ClientProtectionBasis.exactRelease
+              ? launch?.clientEndpoints.isNotEmpty ?? false
+              : upstream(launch, 'anthropic_messages'),
+        ),
+        row(
+          ClientProtectionId.structuredWorkspaceTools,
+          basis,
+          ClientProtectionApplier.runtime,
+          withheld: managed!.workspaceEvidence == 'local_launcher'
+              ? null
+              : ClientProtectionReason.remoteWorkspace,
+          active: upstream(current, 'anthropic_messages'),
+        ),
+      ],
+      'codex-cli' => [
+        row(
+          ClientProtectionId.responsesDataKeepalive,
+          basis,
+          ClientProtectionApplier.runtime,
+          active: upstream(current, 'openai_responses'),
+        ),
+        row(
+          ClientProtectionId.responsesWebSocketHttpFallback,
+          ClientProtectionBasis.operationCatalog,
+          ClientProtectionApplier.runtime,
+        ),
+      ],
+      _ => const <CaptureClientProtection>[],
+    };
+    return CaptureClientProtections(
+      captureKey: captureKey,
+      client: client,
+      protections: protections,
+    );
   }
 
   static const _builtInEndpointIds = {
