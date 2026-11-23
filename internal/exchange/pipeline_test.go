@@ -2650,9 +2650,19 @@ func testEnvironment(
 	return aggregate, catalog, clientOrigin, requestPath
 }
 
+// mustEnvironmentCompiler compiles with the five production pairs.
 func mustEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) environment.Compiler {
 	t.Helper()
-	return mustEnvironmentCompilerWith(t, accounts)
+	protocols := testProtocolCatalog(t)
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
 }
 
 // testCodecPair is a catalog entry for a pair the test selector serves.
@@ -2684,29 +2694,9 @@ func testCodecPair(
 	}
 }
 
-// mustEnvironmentCompilerWith compiles with the five production pairs plus
-// extra.
-func mustEnvironmentCompilerWith(
-	t *testing.T,
-	accounts environment.AccountCatalog,
-	extra ...protocolspec.CodecPairDefinition,
-) environment.Compiler {
-	t.Helper()
-	protocols := testProtocolCatalog(t, extra...)
-	wires, err := wireprofile.BuiltInCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compiler
-}
-
 // testProtocolCatalog is the codec catalog of the test compiler: the five
-// production pairs plus extra.
-func testProtocolCatalog(t *testing.T, extra ...protocolspec.CodecPairDefinition) protocolspec.Catalog {
+// production pairs.
+func testProtocolCatalog(t *testing.T) protocolspec.Catalog {
 	t.Helper()
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
@@ -2719,7 +2709,7 @@ func testProtocolCatalog(t *testing.T, extra ...protocolspec.CodecPairDefinition
 		testCodecPair(t, responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
 		testCodecPair(t, anthropicresponses.CodecPairID, anthropicresponses.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses),
 	}
-	protocols, err := protocolspec.NewCatalog(operations.Definitions(), append(pairs, extra...))
+	protocols, err := protocolspec.NewCatalog(operations.Definitions(), pairs)
 	if err != nil {
 		t.Fatal(err)
 	}

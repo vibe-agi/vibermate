@@ -46,20 +46,11 @@ type fakeResponsesRequest struct {
 }
 
 type responsesRequestShape struct {
-	Model     string   `json:"model"`
-	Stream    bool     `json:"stream"`
-	Store     *bool    `json:"store"`
-	Include   []string `json:"include"`
-	Reasoning *struct {
-		Effort  string `json:"effort"`
-		Summary string `json:"summary"`
-	} `json:"reasoning"`
-	Text *struct {
-		Format *struct {
-			Type string `json:"type"`
-		} `json:"format"`
-	} `json:"text"`
-	Tools []struct {
+	Model   string   `json:"model"`
+	Stream  bool     `json:"stream"`
+	Store   *bool    `json:"store"`
+	Include []string `json:"include"`
+	Tools   []struct {
 		Type   string `json:"type"`
 		Name   string `json:"name"`
 		Strict *bool  `json:"strict"`
@@ -74,14 +65,9 @@ type responsesInputItem struct {
 	Phase            string          `json:"phase"`
 	CallID           string          `json:"call_id"`
 	Name             string          `json:"name"`
-	Arguments        string          `json:"arguments"`
 	EncryptedContent string          `json:"encrypted_content"`
 	Output           json.RawMessage `json:"output"`
 	Content          json.RawMessage `json:"content"`
-	Summary          []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"summary"`
 }
 
 // outputs is every function_call_output of the request, by call id.
@@ -103,12 +89,6 @@ func (shape responsesRequestShape) tool(name string) bool {
 	}) bool {
 		return tool.Name == name
 	})
-}
-
-// main reports Claude Code's main loop request: it declares tools. The title
-// and other side requests declare none.
-func (shape responsesRequestShape) main() bool {
-	return len(shape.Tools) != 0
 }
 
 // fakeResponsesReply is one answer: an HTTP error, or an event stream that
@@ -373,12 +353,10 @@ type recordingExchanges struct {
 }
 
 type recordedExchange struct {
-	mu       sync.Mutex
-	events   []downstreamEvent
-	done     bool
-	result   exchange.Result
-	err      error
-	finished time.Time
+	mu     sync.Mutex
+	events []downstreamEvent
+	result exchange.Result
+	err    error
 }
 
 type downstreamEvent struct {
@@ -394,7 +372,7 @@ func (recorder *recordingExchanges) Execute(ctx context.Context, request exchang
 	recorder.mu.Unlock()
 	result, err := recorder.next.Execute(ctx, request, &recordingDownstream{next: downstream, record: record, recorder: recorder})
 	record.mu.Lock()
-	record.done, record.result, record.err, record.finished = true, result, err, time.Now()
+	record.result, record.err = result, err
 	record.mu.Unlock()
 	return result, err
 }
