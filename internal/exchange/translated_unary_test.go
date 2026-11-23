@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -276,6 +277,102 @@ func TestTranslatedUnaryFailedResponseIsAnHTTPError(t *testing.T) {
 			if bytes.Contains(provider.requestsSnapshot()[1].Body(), []byte(`"type":"reasoning"`)) ||
 				!slices.Contains(noticeCodes(healed.result.Translation), string(protocolcore.NoticeReasoningNotReplayed)) {
 				t.Fatalf("the rejected seal was replayed: %s", provider.requestsSnapshot()[1].Body())
+			}
+		})
+	}
+}
+
+// An HTTP rejection of a Stream=false request is translated as on a stream
+// (design 8.3): the class on Failure.Provider, the Anthropic error with the
+// status and headers Claude Code's non-streaming fallback recovers from, and
+// no upstream text. Invalid reasoning state feeds the rejected-seal memory,
+// so the next turn drops the seal and succeeds.
+func TestTranslatedUnaryRejectionsAreTheAnthropicErrors(t *testing.T) {
+	const secret = "secret-upstream-text org-4242"
+	plan := translatedPlan(t, translatedPrimary)
+	message, _ := firstTurn(t, plan, translatedPrimary)
+	for _, test := range []struct {
+		name       string
+		body       []byte
+		rejection  *http.Response
+		class      protocolcore.ProviderErrorClass
+		status     int
+		errorType  string
+		message    string
+		retryAfter string
+		heals      bool
+	}{
+		{
+			name:      "invalid encrypted content",
+			body:      unaryRequest(t, replayedTurn(t, message)),
+			rejection: rejection(400, openAIError("invalid_encrypted_content", secret, "input[1].encrypted_content")),
+			class:     protocolcore.ProviderErrorReasoningState, status: 400, errorType: "invalid_request_error",
+			message: "capability_rejected: thinking_signature", heals: true,
+		},
+		{
+			name:      "rate limited with retry-after",
+			body:      unaryRequest(t, claudeBody(claudeFirstTurn)),
+			rejection: rejection(429, openAIError("rate_limit_exceeded", secret, ""), "Retry-After", "7"),
+			class:     protocolcore.ProviderErrorRateLimited, status: 429, errorType: "rate_limit_error",
+			message: "The upstream service is rate limiting this account.", retryAfter: "7",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &providerDouble{results: []providerResult{
+				{response: test.rejection},
+				{response: responsesStream(t, textTurnEvents("a.txt"))},
+			}}
+			pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
+			failed := runTranslated(t, pipeline, plan, "exchange-unary-rejected", test.body)
+			var failure *Failure
+			if !errors.As(failed.err, &failure) || failure.Code != ReasonProviderStatusRejected {
+				t.Fatalf("err = %v", failed.err)
+			}
+			if failure.Provider == nil || failure.Provider.Class != test.class {
+				t.Fatalf("class = %+v, want %s", failure.Provider, test.class)
+			}
+			native := failure.NativeError
+			if native.ForDialect(protocolspec.DialectOpenAIResponses) != nil {
+				t.Fatal("the provider's own error would reach the Anthropic client")
+			}
+			if got := native.ClientStatus(protocolspec.DialectAnthropicMessages); got != test.status {
+				t.Fatalf("client status = %d, want %d", got, test.status)
+			}
+			var rendered renderedAnthropicError
+			payload := native.ForDialect(protocolspec.DialectAnthropicMessages)
+			if err := json.Unmarshal(payload, &rendered.Error); err != nil ||
+				rendered.Error.Type != test.errorType || rendered.Error.Message != test.message {
+				t.Fatalf("rendered error = %s (%v)", payload, err)
+			}
+			headers := native.HeadersForDialect(protocolspec.DialectAnthropicMessages)
+			if headers.Get("Retry-After") != test.retryAfter {
+				t.Fatalf("rendered headers = %v", headers)
+			}
+			if everything := string(payload) + fmt.Sprint(headers) + failed.err.Error(); strings.Contains(everything, "secret") {
+				t.Fatalf("upstream text reached the client or the failure: %s", everything)
+			}
+			if len(failed.downstream.envelopesSnapshot()) != 0 || len(failed.downstream.bytesSnapshot()) != 0 ||
+				len(failed.downstream.abortsSnapshot()) != 0 {
+				t.Fatalf("the rejection began a response: %s", failed.downstream.bytesSnapshot())
+			}
+			if !test.heals {
+				if provider.callCount() != 1 || pipeline.reasoningRejections.size() != 0 {
+					t.Fatalf("provider calls = %d, rejected seals = %d", provider.callCount(), pipeline.reasoningRejections.size())
+				}
+				return
+			}
+			if pipeline.reasoningRejections.size() != 1 {
+				t.Fatalf("rejected seals = %d, want 1", pipeline.reasoningRejections.size())
+			}
+			healed := runTranslated(t, pipeline, plan, "exchange-unary-rejected-healed", test.body)
+			if got := unaryMessage(t, healed); len(got.Content) != 1 || got.Content[0].Text != "a.txt" {
+				t.Fatalf("healed answer = %s", healed.downstream.bytesSnapshot())
+			}
+			sent := provider.requestsSnapshot()
+			if !bytes.Contains(sent[0].Body(), []byte(`"encrypted_content":"ENC-1"`)) ||
+				slices.Contains(decodeResponsesBody(t, sent[1]).itemTypes(), "reasoning") ||
+				!slices.Contains(noticeCodes(healed.result.Translation), string(protocolcore.NoticeReasoningNotReplayed)) {
+				t.Fatalf("the rejected seal was replayed: %s", sent[1].Body())
 			}
 		})
 	}
