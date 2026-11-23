@@ -308,8 +308,13 @@ type stream struct {
 	started map[testKey]bool
 	// packageFailed holds every package whose own result is fail.
 	packageFailed map[string]bool
-	buildFailed   []string
-	malformed     int
+	// packages holds every package an event names, and packageEnded those
+	// with a result of their own: go test prints one for each package it
+	// finishes, so a package without one was cut off.
+	packages     map[string]bool
+	packageEnded map[string]bool
+	buildFailed  []string
+	malformed    int
 }
 
 // readStream reads a go test -json stream and copies each output event to
@@ -319,6 +324,8 @@ func readStream(input io.Reader, log io.Writer) (stream, error) {
 		final:         map[testKey]string{},
 		started:       map[testKey]bool{},
 		packageFailed: map[string]bool{},
+		packages:      map[string]bool{},
+		packageEnded:  map[string]bool{},
 	}
 	reader := bufio.NewReader(input)
 	for {
@@ -341,6 +348,9 @@ func readStream(input io.Reader, log io.Writer) (stream, error) {
 }
 
 func (parsed *stream) record(event testEvent, log io.Writer) {
+	if event.Package != "" {
+		parsed.packages[event.Package] = true
+	}
 	switch event.Action {
 	case "output", "build-output":
 		_, _ = io.WriteString(log, event.Output)
@@ -352,6 +362,7 @@ func (parsed *stream) record(event testEvent, log io.Writer) {
 		}
 	case "pass", "fail", "skip":
 		if event.Test == "" {
+			parsed.packageEnded[event.Package] = true
 			if event.Action == "fail" {
 				parsed.packageFailed[event.Package] = true
 			}
@@ -439,6 +450,15 @@ func judge(parsed stream, proofs []requiredProof) verdict {
 		if !failedPackages[pkg] {
 			result.unexplained = append(result.unexplained,
 				fmt.Sprintf("package %s failed outside any test", pkg))
+		}
+	}
+	// A stream that stops between two tests, because go test or its job
+	// died, still holds only results that passed. Every package it names
+	// must have ended with a result of its own.
+	for pkg := range parsed.packages {
+		if !parsed.packageEnded[pkg] {
+			result.unexplained = append(result.unexplained,
+				fmt.Sprintf("package %s has no result: the stream ended before go test finished it", pkg))
 		}
 	}
 	for _, importPath := range parsed.buildFailed {

@@ -327,6 +327,41 @@ func TestVerifyOutcomes(t *testing.T) {
 			protections: "structured_workspace_tools",
 		},
 		{
+			// go test died between two tests: every result it wrote passed,
+			// but the package never ended.
+			name:     "a stream cut off before its package result",
+			clientID: "claude-code", goos: "linux",
+			stream:  passingClaude(newStream()).String(),
+			outcome: outcomeBroken, results: []string{"pass", "pass"},
+		},
+		{
+			name:     "only test results, without run events or a package result",
+			clientID: "claude-code", goos: "linux",
+			stream: newStream().
+				event("pass", runlauncherPackage, claudeFallback, "").
+				event("pass", runlauncherPackage, claudeTools, "").String(),
+			outcome: outcomeBroken, results: []string{"pass", "pass"},
+		},
+		{
+			name:     "a drift cut off before its package result",
+			clientID: "claude-code", goos: "linux",
+			stream: newStream().
+				test(runlauncherPackage, claudeFallback, "fail",
+					subtest{"protected/recognized_upstream/cut", "pass"},
+					subtest{"control/recognized_original/cut", "fail"}).
+				test(runlauncherPackage, claudeTools, "pass").String(),
+			outcome: outcomeBroken, results: []string{"fail", "pass"},
+			protections: "core_owned_streaming_fallback",
+		},
+		{
+			// The required package ended; the next one started and was cut.
+			name:     "another package cut off after it started",
+			clientID: "claude-code", goos: "linux",
+			stream: passingClaude(newStream()).pkg(runlauncherPackage, "pass").
+				event("start", clientadapterPackage, "", "").String(),
+			outcome: outcomeBroken, results: []string{"pass", "pass"},
+		},
+		{
 			name:     "a line that is not a test event",
 			clientID: "claude-code", goos: "linux",
 			stream: passingClaude(newStream()).pkg(runlauncherPackage, "pass").
