@@ -731,7 +731,8 @@ var canaryWorkflowPath = filepath.Join(".github", "workflows", "client-canary.ym
 // policy entry must name a test that exists, that the daily canary selects
 // and judges on both operating systems, and that both compile. A -run pattern
 // that matches nothing still passes, and a darwin-only test file never
-// compiles on the ubuntu canary.
+// compiles on the ubuntu canary. The job that runs a release keeps no Go
+// cache, so the unreviewed release cannot write one.
 func TestEveryProtectionNamesItsDailyCanary(t *testing.T) {
 	t.Parallel()
 
@@ -902,6 +903,21 @@ func TestEveryProtectionNamesItsDailyCanary(t *testing.T) {
 			want:     "does not select TestInstalledClaudeLeavesStreamFallbackToCore",
 		},
 		{
+			name: "a job that keeps a Go cache",
+			workflow: func(text string) string {
+				// Only the Codex macOS job's setup-go step caches.
+				job := text[strings.Index(text, "  codex-latest-macos:"):]
+				step := strings.Replace(job, "cache: false", "cache: true", 1)
+				return strings.Replace(text, job, step, 1)
+			},
+			want: "job codex-latest-macos runs a release with a Go cache",
+		},
+		{
+			name:     "a job whose setup-go step caches by default",
+			workflow: replace("          check-latest: false\n          cache: false\n", "          check-latest: false\n"),
+			want:     "job claude-latest runs a release with a Go cache",
+		},
+		{
 			name:     "a job that selects without the proof checker's pattern",
 			workflow: replace("tests --client codex-cli --os darwin", "tests --client claude-code --os darwin"),
 			want:     "does not select TestInstalledCodexAcceptsTheDataKeepalive",
@@ -1032,6 +1048,9 @@ var (
 	canaryJobKey    = regexp.MustCompile(`^  ([A-Za-z_][A-Za-z0-9_-]*):\s*$`)
 	canaryJobRunsOn = regexp.MustCompile(`^    runs-on:\s*(\S+)\s*$`)
 	canaryRunPrefix = regexp.MustCompile(`-run ["']\^([A-Za-z0-9_]+)["']`)
+	// canarySetupGo is a setup-go step and its inputs, as the collapsed job
+	// text holds them.
+	canarySetupGo = regexp.MustCompile(`uses: actions/setup-go@\S+(?: # \S+)?((?: with:)?(?: [A-Za-z-]+: \S+)*)`)
 )
 
 func canaryWorkflowJobs(workflow string) []canaryWorkflowJob {
@@ -1074,8 +1093,8 @@ func canaryWorkflowJobs(workflow string) []canaryWorkflowJob {
 }
 
 // canaryJobProblems requires exactly one job that judges clientID on goos, on
-// a runner of that system, that selects every required canary and names its
-// package.
+// a runner of that system, that keeps no Go cache, and that selects every
+// required canary and names its package.
 func canaryJobProblems(
 	jobs []canaryWorkflowJob,
 	clientID, goos, prefix string,
@@ -1105,6 +1124,16 @@ func canaryJobProblems(
 		problems = append(problems, fmt.Sprintf(
 			"job %s verifies %s on %s but runs on %s", job.name, clientID, goos, job.runsOn,
 		))
+	}
+	// The job runs an unreviewed release. setup-go caches by default and
+	// saves on a key miss into the default branch's scope, which other
+	// workflows restore, so the release must find no cache to write.
+	for _, step := range canarySetupGo.FindAllStringSubmatch(job.text, -1) {
+		if !strings.Contains(step[1]+" ", " cache: false ") {
+			problems = append(problems, fmt.Sprintf(
+				"job %s runs a release with a Go cache: its setup-go step needs cache: false", job.name,
+			))
+		}
 	}
 	byChecker := strings.Contains(job.text,
 		"/vibermate-canary-proof tests --client "+clientID+" --os "+goos+")")

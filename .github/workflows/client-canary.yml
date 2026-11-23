@@ -16,8 +16,9 @@
 # the second verdict counts. Each job keeps its proof as an artifact.
 #
 # A release under test is unreviewed code, so its job holds a read-only token
-# that is not left in the checkout; only the reporting job, which runs nothing
-# from a release, may open an issue.
+# that is not left in the checkout, and it neither restores nor saves a Go
+# cache, which other workflows on the default branch would restore. Only the
+# reporting job, which runs nothing from a release, may open an issue.
 name: client canary
 
 on:
@@ -49,7 +50,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
@@ -114,7 +115,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
@@ -183,7 +184,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
@@ -251,7 +252,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
