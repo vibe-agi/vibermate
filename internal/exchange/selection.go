@@ -111,6 +111,9 @@ type frozenSelection struct {
 	wireProfile          wireprofile.CompiledUpstreamWireProfile
 	codecPlan            protocolspec.CodecPlan
 	policySet            environment.PolicySet
+	// chatGPTPlan marks a target that is a ChatGPT plan, which serves only
+	// clients of its own dialect (the frozen target's IsChatGPTPlan).
+	chatGPTPlan bool
 }
 
 func validateFrozenRequestPlan(plan environment.RequestPlan) error {
@@ -295,6 +298,7 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		selection.targetRevision = targetResource.Revision
 		selection.targetRealm = targetResource.RealmID
 		selection.target = target
+		selection.chatGPTPlan = targetResource.IsChatGPTPlan()
 		selection.provenance = provenance
 	default:
 		return frozenSelection{}, errors.New("Environment Destination is unsupported")

@@ -525,6 +525,14 @@ func (evidence WirePresentationEvidence) Validate() error {
 				ErrInvalidEvent,
 			)
 		}
+	case "own_identity":
+		// ViberMate presents itself: there is no product to name or prove.
+		if evidence.Product != "" || evidence.EvidenceDigest != "" {
+			return fmt.Errorf(
+				"%w: own-identity presentation contains product evidence",
+				ErrInvalidEvent,
+			)
+		}
 	default:
 		return fmt.Errorf(
 			"%w: wire presentation mode is invalid",
@@ -656,8 +664,11 @@ func (evidence TransportEvidence) Validate() error {
 		return err
 	}
 	expectedSource := "observed_client"
-	if evidence.Presentation.Mode == "emulate_product" {
+	switch evidence.Presentation.Mode {
+	case "emulate_product":
 		expectedSource = "named_profile"
+	case "own_identity":
+		expectedSource = "standard"
 	}
 	if evidence.Requested.Source != expectedSource {
 		return fmt.Errorf(

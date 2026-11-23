@@ -15,34 +15,44 @@ import (
 
 func TestProductionProtocolCompatibilityMatrixIsExact(t *testing.T) {
 	t.Parallel()
+	// generic is the provider every row but the ChatGPT ones uses.
+	generic := compatibilityTarget{origin: "https://provider.example", realm: "realm.test"}
+	chatGPT := compatibilityTarget{origin: "https://chatgpt.com/backend-api/codex", realm: "openai.chatgpt"}
 	tests := []struct {
 		name      string
 		client    environment.ClientProtocol
 		clientIR  protocolspec.Dialect
 		provider  protocolspec.Dialect
+		target    compatibilityTarget
 		supported bool
+		// refusal is the compile error of an unsupported row.
+		refusal error
 	}{
-		{"Claude to Anthropic Messages", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages, true},
-		{"Claude to OpenAI Responses", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses, false},
-		{"Claude to OpenAI Chat", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat, true},
-		{"Codex to Anthropic Messages", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectAnthropicMessages, false},
-		{"Codex to OpenAI Responses", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses, true},
-		{"Codex to OpenAI Chat", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat, true},
+		{"Claude to Anthropic Messages", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages, generic, true, nil},
+		{"Claude to OpenAI Responses", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses, generic, true, nil},
+		{"Claude to OpenAI Chat", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat, generic, true, nil},
+		{"Codex to Anthropic Messages", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectAnthropicMessages, generic, false, protocolspec.ErrUnsupportedCodecPair},
+		{"Codex to OpenAI Responses", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses, generic, true, nil},
+		{"Codex to OpenAI Chat", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat, generic, true, nil},
+		// Stage 1 never sends a translated client to a ChatGPT plan (design
+		// 13.1), while Codex keeps its own native route there.
+		{"Claude to ChatGPT", environment.ClientProtocolAnthropicMessages, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses, chatGPT, false, environment.ErrTranslatedChatGPTRoute},
+		{"Codex to ChatGPT", environment.ClientProtocolOpenAIResponses, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses, chatGPT, true, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiler, err := productionEnvironmentCompiler(
-				compatibilityAccounts(test.provider), nil,
+				compatibilityAccounts(test.provider, test.target), nil,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			aggregate, origin, path := compatibilityEnvironment(t, test.client, test.provider)
+			aggregate, origin, path := compatibilityEnvironmentFor(t, test.client, test.provider, test.target)
 			snapshot, err := compiler.Compile(aggregate)
 			if !test.supported {
-				if !errors.Is(err, protocolspec.ErrUnsupportedCodecPair) {
-					t.Fatalf("Compile() error = %v, want unsupported codec pair", err)
+				if !errors.Is(err, test.refusal) {
+					t.Fatalf("Compile() error = %v, want %v", err, test.refusal)
 				}
 				return
 			}
@@ -77,11 +87,17 @@ func (catalog compatibilityAccountCatalog) LookupAccount(
 	return account, found
 }
 
-func compatibilityAccounts(provider protocolspec.Dialect) compatibilityAccountCatalog {
+// compatibilityTarget is the provider a matrix row routes to.
+type compatibilityTarget struct {
+	origin string
+	realm  string
+}
+
+func compatibilityAccounts(provider protocolspec.Dialect, target compatibilityTarget) compatibilityAccountCatalog {
 	return compatibilityAccountCatalog{"account.test": {
 		ID: "account.test", Revision: 1, DisplayName: "Test Account",
 		UpstreamEndpointID: "target.test", UpstreamEndpointRevision: 1,
-		RealmID: "realm.test", Active: true,
+		RealmID: target.realm, Active: true,
 		BackendProtocols: []string{string(provider)},
 	}}
 }
@@ -92,6 +108,19 @@ func compatibilityEnvironment(
 	provider protocolspec.Dialect,
 ) (environment.Environment, originidentity.ClientOrigin, string) {
 	t.Helper()
+	return compatibilityEnvironmentFor(t, client, provider, compatibilityTarget{
+		origin: "https://provider.example", realm: "realm.test",
+	})
+}
+
+// compatibilityEnvironmentFor is compatibilityEnvironment routed to target.
+func compatibilityEnvironmentFor(
+	t *testing.T,
+	client environment.ClientProtocol,
+	provider protocolspec.Dialect,
+	target compatibilityTarget,
+) (environment.Environment, originidentity.ClientOrigin, string) {
+	t.Helper()
 	clientOriginValue, path := "https://api.anthropic.com", "/v1/messages"
 	if client == environment.ClientProtocolOpenAIResponses {
 		clientOriginValue, path = "https://api.openai.com", "/v1/responses"
@@ -100,7 +129,7 @@ func compatibilityEnvironment(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin("https://provider.example")
+	providerOrigin, err := originidentity.ParseProviderOrigin(target.origin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +153,7 @@ func compatibilityEnvironment(
 							ID: "route.test", Revision: 1,
 							ProviderTarget: environment.ProviderTarget{
 								ID: "target.test", Revision: 1, Origin: providerOrigin,
-								RealmID: "realm.test",
+								RealmID: target.realm,
 								Capabilities: []protocolspec.ProviderCapability{
 									protocolspec.ProviderCapabilityMessages,
 									protocolspec.ProviderCapabilityStreaming,

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/productbuild"
 )
 
 const (
@@ -26,6 +28,11 @@ const (
 
 	UpstreamWireProfileFollowClientValue = "follow-client"
 	UpstreamWireProfileClaudeCodeValue   = "claude-code"
+	UpstreamWireProfileViberMateValue    = "vibermate"
+
+	// ViberMateUserAgentPrefix starts every User-Agent an own-identity profile
+	// sends: the product token of ViberMate itself.
+	ViberMateUserAgentPrefix = "ViberMate/"
 )
 
 var ErrInvalidProfile = errors.New("wire profile is invalid")
@@ -57,6 +64,19 @@ func FollowClientUpstreamWireProfileRef() UpstreamWireProfileRef {
 
 func ClaudeCodeUpstreamWireProfileRef() UpstreamWireProfileRef {
 	return UpstreamWireProfileRef{value: UpstreamWireProfileClaudeCodeValue}
+}
+
+// ViberMateUpstreamWireProfileRef names the profile that presents ViberMate
+// itself upstream, for requests ViberMate translated from another client's
+// protocol.
+func ViberMateUpstreamWireProfileRef() UpstreamWireProfileRef {
+	return UpstreamWireProfileRef{value: UpstreamWireProfileViberMateValue}
+}
+
+// ViberMateUserAgent is the User-Agent of the vibermate profile:
+// "ViberMate/" and this build's label.
+func ViberMateUserAgent() string {
+	return ViberMateUserAgentPrefix + productbuild.Label()
 }
 
 type ApplicationProtocol string
@@ -144,6 +164,10 @@ type UpstreamWireMode string
 const (
 	UpstreamWireModeFollowClient   UpstreamWireMode = "follow_client"
 	UpstreamWireModeEmulateProduct UpstreamWireMode = "emulate_product"
+	// UpstreamWireModeOwnIdentity presents ViberMate itself: a constant
+	// ViberMate User-Agent over standard TLS, never the client's User-Agent or
+	// ClientHello and never another product's.
+	UpstreamWireModeOwnIdentity UpstreamWireMode = "own_identity"
 )
 
 type UpstreamWireProduct string
@@ -306,6 +330,10 @@ func (catalog Catalog) compileProfile(definition UpstreamWireProfileDefinition) 
 		if definition.Product == "" {
 			return CompiledUpstreamWireProfile{}, ErrInvalidProfile
 		}
+	case UpstreamWireModeOwnIdentity:
+		if definition.Product != "" {
+			return CompiledUpstreamWireProfile{}, ErrInvalidProfile
+		}
 	default:
 		return CompiledUpstreamWireProfile{}, ErrInvalidProfile
 	}
@@ -343,6 +371,9 @@ func (catalog Catalog) compileProfile(definition UpstreamWireProfileDefinition) 
 			strings.ContainsAny(variant.EvidenceDigest, " \t\r\n") {
 			return CompiledUpstreamWireProfile{}, ErrInvalidProfile
 		}
+		if definition.Mode == UpstreamWireModeOwnIdentity && !ownIdentityVariant(variant, transport) {
+			return CompiledUpstreamWireProfile{}, ErrInvalidProfile
+		}
 		variants = append(variants, CompiledUpstreamWireVariant{
 			protocol: variant.Protocol, transportPlan: plan,
 			userAgentPolicy: variant.UserAgentPolicy, semanticUserAgent: variant.SemanticUserAgent,
@@ -354,6 +385,19 @@ func (catalog Catalog) compileProfile(definition UpstreamWireProfileDefinition) 
 		ref: definition.Ref, revision: definition.Revision, mode: definition.Mode,
 		product: definition.Product, variants: variants,
 	}, nil
+}
+
+// ownIdentityVariant reports whether a variant presents only ViberMate: a
+// constant ViberMate User-Agent, no product evidence, and a standard TLS
+// transport with no fallback, so neither the client's ClientHello nor a
+// captured product's is ever sent.
+func ownIdentityVariant(variant UpstreamWireVariantDefinition, transport TransportFingerprintDefinition) bool {
+	return variant.UserAgentPolicy == UserAgentPolicyConstant &&
+		strings.HasPrefix(variant.SemanticUserAgent, ViberMateUserAgentPrefix) &&
+		len(variant.SemanticUserAgent) > len(ViberMateUserAgentPrefix) &&
+		variant.EvidenceDigest == "" &&
+		transport.Source == TransportFingerprintStandard &&
+		len(transport.FallbackRefs) == 0
 }
 
 func (catalog Catalog) compileTransportPlan(definition TransportFingerprintDefinition) (CompiledTransportFingerprintPlan, error) {
@@ -428,6 +472,10 @@ func BuiltInUpstreamWireProfileDefinitions() []UpstreamWireProfileDefinition {
 			UserAgentPolicy: UserAgentPolicyConstant, SemanticUserAgent: "claude-cli/2.1.220 (external, sdk-cli)",
 			EvidenceDigest: "5b4322f09d5dbf5cb3a56c3724a01a9c795f57d4b2e9178c2242b9e524543393",
 		}}},
+		{Ref: ViberMateUpstreamWireProfileRef(), Revision: 1, Mode: UpstreamWireModeOwnIdentity, Variants: []UpstreamWireVariantDefinition{
+			{Protocol: ApplicationProtocolHTTP1, TransportProfileRef: transport(TransportProfileStandardH1Value), UserAgentPolicy: UserAgentPolicyConstant, SemanticUserAgent: ViberMateUserAgent()},
+			{Protocol: ApplicationProtocolHTTP2, TransportProfileRef: transport(TransportProfileStandardH2Value), UserAgentPolicy: UserAgentPolicyConstant, SemanticUserAgent: ViberMateUserAgent()},
+		}},
 	}
 }
 

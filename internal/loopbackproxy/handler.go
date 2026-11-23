@@ -2328,7 +2328,18 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func exchangeStatus(err error) int {
+// exchangeStatus chooses the client status of an Exchange failure. A native
+// error of the client's own dialect may name the status its rendering needs,
+// for example 400 for a recovery token the client matches only on 400 (design
+// 8.3); only a composed path's client side renders one, so every other
+// failure keeps the status of its reason.
+func exchangeStatus(dialect protocolspec.Dialect, err error) int {
+	var failure *exchange.Failure
+	if errors.As(err, &failure) {
+		if status := failure.NativeError.ClientStatus(dialect); status != 0 {
+			return status
+		}
+	}
 	switch exchange.ReasonOf(err) {
 	case exchange.ReasonInvalidExchangeRequest:
 		return http.StatusBadRequest

@@ -53,6 +53,8 @@ type fakeProviderSide struct {
 	streamErr error
 	// finishErr, when set, is returned by FinishDecoded after Feed succeeded.
 	finishErr error
+	// decodeErr, when set, is returned by DecodeResponseFor.
+	decodeErr error
 }
 
 func (fakeProviderSide) Dialect() protocolspec.Dialect { return protocolspec.DialectOpenAIResponses }
@@ -80,6 +82,9 @@ func (side fakeProviderSide) EncodeRequestFor(providerContext ProviderContext, _
 
 func (side fakeProviderSide) DecodeResponseFor(providerContext ProviderContext, _ protocolcore.Request, _ []byte) (protocolcore.Response, protocolcore.TranslationReport, error) {
 	*side.contexts = append(*side.contexts, providerContext)
+	if side.decodeErr != nil {
+		return protocolcore.Response{}, protocolcore.TranslationReport{}, side.decodeErr
+	}
 	return terminalResponse(protocolcore.StopReasonEndTurn, textBlock(providerContext.ReasoningBinding)), protocolcore.TranslationReport{}, nil
 }
 
@@ -355,7 +360,8 @@ func TestComposedPathNeedsTheClientHalfOfATranslation(t *testing.T) {
 
 // Every stream a composed path hands out renders classified failures: the
 // aggregating stream too, and a failure that first appears at FinishDecoded.
-// A class that does not validate is never rendered.
+// So does the unary decode. A class that does not validate is never
+// rendered.
 func TestComposedStreamsRenderEveryClassifiedFailure(t *testing.T) {
 	t.Parallel()
 	var contexts []ProviderContext
@@ -394,6 +400,20 @@ func TestComposedStreamsRenderEveryClassifiedFailure(t *testing.T) {
 	}
 	if _, err := stream.FinishDecoded(context.Background()); !rendered(err) {
 		t.Fatalf("FinishDecoded() did not render a failure that first appeared there: %v", err)
+	}
+
+	// A unary body that reports a classified failure renders it too, so a
+	// Stream=false client whose upstream answered JSON gets the same error
+	// as one whose upstream streamed.
+	unaryFailure := composeFixture(t, fakeProviderSide{contexts: &contexts, decodeErr: classified(protocolcore.ProviderErrorOverloaded)})
+	if _, _, err := unaryFailure.DecodeProviderResponseFor(ProviderContext{}, unary, []byte("body")); !rendered(err) {
+		t.Fatalf("DecodeProviderResponseFor() did not render the class: %v", err)
+	}
+	plainDecode := protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", errors.New("bad body"))
+	unaryPlain := composeFixture(t, fakeProviderSide{contexts: &contexts, decodeErr: plainDecode})
+	if _, _, err := unaryPlain.DecodeProviderResponseFor(ProviderContext{}, unary, []byte("body")); !errors.Is(err, plainDecode) ||
+		protocolcore.NativeProviderErrorOf(err).ForDialect(protocolspec.DialectAnthropicMessages) != nil {
+		t.Fatalf("an unclassified decode failure was rewritten: %v", err)
 	}
 
 	invalid := composeFixture(t, fakeProviderSide{contexts: &contexts, streamErr: classified("not_a_class")})

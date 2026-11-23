@@ -1199,10 +1199,12 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 func CheckProtocolSDKIsolation(repositoryRoot string) []Violation {
 	protectedRoots := []string{
 		filepath.Join("internal", "anthropicchat"),
+		filepath.Join("internal", "anthropicresponses"),
 		filepath.Join("internal", "openairesponses"),
 		filepath.Join("internal", "protocolcore"),
 		filepath.Join("internal", "responseschat"),
 		filepath.Join("internal", "ssewire"),
+		filepath.Join("internal", "tokenestimate"),
 	}
 	blockedImportRoots := []string{
 		"github.com/anthropics/anthropic-sdk-go",

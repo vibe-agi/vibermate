@@ -627,7 +627,7 @@ func compileRoute(
 	// as frozen evidence does, so it cannot stop the runtime from starting.
 	// No cross-dialect Responses pair was registered before this check, so no
 	// stored revision holds the route it exists to stop.
-	if kind == compileCandidate && client != backend && targetsChatGPTPlan(route.ProviderTarget) {
+	if kind == compileCandidate && client != backend && route.ProviderTarget.IsChatGPTPlan() {
 		return CompiledRoutePlan{}, fmt.Errorf(
 			"%w: route %q: %w", ErrInvalidEnvironment, route.ID, ErrTranslatedChatGPTRoute,
 		)
@@ -662,11 +662,13 @@ func compileRoute(
 	}, nil
 }
 
-// targetsChatGPTPlan reports whether a provider target is a ChatGPT plan: the
+// IsChatGPTPlan reports whether a provider target is a ChatGPT plan: the
 // built-in ChatGPT realm, any origin on chatgpt.com or one of its subdomains
 // (whatever its scheme, port or base path), or an origin the Codex backend
-// paths apply to.
-func targetsChatGPTPlan(target ProviderTarget) bool {
+// paths apply to. The compiler refuses a translated route to such a target,
+// and the exchange, reading the frozen route's target, refuses one a
+// restored revision still holds, with this one predicate.
+func (target ProviderTarget) IsChatGPTPlan() bool {
 	if target.RealmID == chatGPTRealmID || upstreamendpoint.IsChatGPTCodexOrigin(target.Origin) {
 		return true
 	}

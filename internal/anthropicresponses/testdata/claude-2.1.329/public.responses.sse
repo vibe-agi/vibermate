@@ -1,0 +1,126 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_gold_public","object":"response","created_at":1763700000,"status":"in_progress","model":"gpt-6.2-astra","output":[]},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_gold_public","object":"response","created_at":1763700000,"status":"in_progress","model":"gpt-6.2-astra","output":[]},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_gold_public","type":"reasoning","summary":[]},"sequence_number":2}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_gold_public","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""},"sequence_number":3}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_gold_public","output_index":0,"summary_index":0,"delta":"Plan the t","sequence_number":4}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_gold_public","output_index":0,"summary_index":0,"delta":"ool calls.","sequence_number":5}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_gold_public","output_index":0,"summary_index":0,"text":"Plan the tool calls.","sequence_number":6}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"rs_gold_public","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"Plan the tool calls."},"sequence_number":7}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_gold_public","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":""},"sequence_number":8}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_gold_public","output_index":0,"summary_index":1,"delta":"Read the fix","sequence_number":9}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_gold_public","output_index":0,"summary_index":1,"delta":"tures first.","sequence_number":10}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_gold_public","output_index":0,"summary_index":1,"text":"Read the fixtures first.","sequence_number":11}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"rs_gold_public","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":"Read the fixtures first."},"sequence_number":12}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_gold_public","type":"reasoning","encrypted_content":"gAAAAAB-GOLDEN-PUBLIC-ENCRYPTED.reasoning.0001==","summary":[{"type":"summary_text","text":"Plan the tool calls."},{"type":"summary_text","text":"Read the fixtures first."}]},"sequence_number":13}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"msg_gold_public","type":"message","status":"in_progress","role":"assistant","content":[]},"sequence_number":14}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","item_id":"msg_gold_public","output_index":1,"content_index":0,"part":{"type":"output_text","annotations":[],"text":""},"sequence_number":15}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_gold_public","output_index":1,"content_index":0,"delta":"WIRE-ASSISTANT-","sequence_number":16}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_gold_public","output_index":1,"content_index":0,"delta":"PREAMBLE","sequence_number":17}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","item_id":"msg_gold_public","output_index":1,"content_index":0,"text":"WIRE-ASSISTANT-PREAMBLE","sequence_number":18}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","item_id":"msg_gold_public","output_index":1,"content_index":0,"part":{"type":"output_text","annotations":[],"text":"WIRE-ASSISTANT-PREAMBLE"},"sequence_number":19}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"msg_gold_public","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","annotations":[],"text":"WIRE-ASSISTANT-PREAMBLE"}]},"sequence_number":20}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc_gold_public_0","type":"function_call","status":"in_progress","arguments":"","call_id":"call_gold_search","name":"ToolSearch"},"sequence_number":21}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_gold_public_0","output_index":2,"delta":"{\"max_results\":20,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}","sequence_number":22}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_gold_public_0","output_index":2,"arguments":"{\"max_results\":20,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}","sequence_number":23}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"id":"fc_gold_public_0","type":"function_call","status":"completed","arguments":"{\"max_results\":20,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}","call_id":"call_gold_search","name":"ToolSearch"},"sequence_number":24}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":3,"item":{"id":"fc_gold_public_1","type":"function_call","status":"in_progress","arguments":"","call_id":"call_gold_png","name":"Read"},"sequence_number":25}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_gold_public_1","output_index":3,"delta":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.png\"}","sequence_number":26}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_gold_public_1","output_index":3,"arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.png\"}","sequence_number":27}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":3,"item":{"id":"fc_gold_public_1","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.png\"}","call_id":"call_gold_png","name":"Read"},"sequence_number":28}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":4,"item":{"id":"fc_gold_public_2","type":"function_call","status":"in_progress","arguments":"","call_id":"call_gold_txt","name":"Read"},"sequence_number":29}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_gold_public_2","output_index":4,"delta":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.txt\"}","sequence_number":30}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_gold_public_2","output_index":4,"arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.txt\"}","sequence_number":31}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":4,"item":{"id":"fc_gold_public_2","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.txt\"}","call_id":"call_gold_txt","name":"Read"},"sequence_number":32}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":5,"item":{"id":"fc_gold_public_3","type":"function_call","status":"in_progress","arguments":"","call_id":"call_gold_pdf","name":"Read"},"sequence_number":33}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_gold_public_3","output_index":5,"delta":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.pdf\"}","sequence_number":34}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_gold_public_3","output_index":5,"arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.pdf\"}","sequence_number":35}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":5,"item":{"id":"fc_gold_public_3","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.pdf\"}","call_id":"call_gold_pdf","name":"Read"},"sequence_number":36}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":6,"item":{"id":"fc_gold_public_4","type":"function_call","status":"in_progress","arguments":"","call_id":"call_gold_bash","name":"Bash"},"sequence_number":37}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_gold_public_4","output_index":6,"delta":"{\"command\":\"echo wire-fixture\",\"description\":\"Print a marker\"}","sequence_number":38}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_gold_public_4","output_index":6,"arguments":"{\"command\":\"echo wire-fixture\",\"description\":\"Print a marker\"}","sequence_number":39}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":6,"item":{"id":"fc_gold_public_4","type":"function_call","status":"completed","arguments":"{\"command\":\"echo wire-fixture\",\"description\":\"Print a marker\"}","call_id":"call_gold_bash","name":"Bash"},"sequence_number":40}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_gold_public","object":"response","created_at":1763700000,"status":"completed","model":"gpt-6.2-astra","output":[{"id":"rs_gold_public","type":"reasoning","encrypted_content":"gAAAAAB-GOLDEN-PUBLIC-ENCRYPTED.reasoning.0001==","summary":[{"type":"summary_text","text":"Plan the tool calls."},{"type":"summary_text","text":"Read the fixtures first."}]},{"id":"msg_gold_public","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","annotations":[],"text":"WIRE-ASSISTANT-PREAMBLE"}]},{"id":"fc_gold_public_0","type":"function_call","status":"completed","arguments":"{\"max_results\":20,\"query\":\"select:CronCreate,CronDelete,CronList,DesignSync,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,SendMessage,TaskStop,WebFetch,WebSearch\"}","call_id":"call_gold_search","name":"ToolSearch"},{"id":"fc_gold_public_1","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.png\"}","call_id":"call_gold_png","name":"Read"},{"id":"fc_gold_public_2","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.txt\"}","call_id":"call_gold_txt","name":"Read"},{"id":"fc_gold_public_3","type":"function_call","status":"completed","arguments":"{\"file_path\":\"/tmp/wire-skeleton/002/wire-fixture.pdf\"}","call_id":"call_gold_pdf","name":"Read"},{"id":"fc_gold_public_4","type":"function_call","status":"completed","arguments":"{\"command\":\"echo wire-fixture\",\"description\":\"Print a marker\"}","call_id":"call_gold_bash","name":"Bash"}],"usage":{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000},"output_tokens":300,"output_tokens_details":{"reasoning_tokens":120},"total_tokens":12300}},"sequence_number":41}
+

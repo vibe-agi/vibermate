@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/anthropicresponses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
@@ -93,8 +94,9 @@ func TestProductionCatalogAndSelectorAgree(t *testing.T) {
 }
 
 // The table is the four paths that existed before it, in the catalog order
-// the compiler used, with no ChatGPT-specific rule.
-func TestProductionProtocolPathTableIsTheExistingFour(t *testing.T) {
+// the compiler used, followed by the translated Anthropic Messages to OpenAI
+// Responses path. Only that path refuses a ChatGPT-plan target.
+func TestProductionProtocolPathTableIsTheExistingFourAndTheTranslatedPair(t *testing.T) {
 	t.Parallel()
 	specs, err := productionProtocolPaths()
 	if err != nil {
@@ -103,11 +105,13 @@ func TestProductionProtocolPathTableIsTheExistingFour(t *testing.T) {
 	want := []struct {
 		id       string
 		revision protocolspec.Revision
+		chatGPT  chatGPTTargetRule
 	}{
-		{anthropicchat.CodecPairID, anthropicchat.CodecRevision},
-		{anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision},
-		{responseschat.CodecPairID, responseschat.CodecRevision},
-		{responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision},
+		{anthropicchat.CodecPairID, anthropicchat.CodecRevision, chatGPTTargetNative},
+		{anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, chatGPTTargetNative},
+		{responseschat.CodecPairID, responseschat.CodecRevision, chatGPTTargetNative},
+		{responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, chatGPTTargetNative},
+		{anthropicresponses.CodecPairID, anthropicresponses.CodecRevision, chatGPTTargetRefused},
 	}
 	if len(specs) != len(want) {
 		t.Fatalf("table has %d paths, want %d", len(specs), len(want))
@@ -116,11 +120,19 @@ func TestProductionProtocolPathTableIsTheExistingFour(t *testing.T) {
 		if spec.Definition.ID.String() != want[index].id || spec.Definition.Revision != want[index].revision {
 			t.Fatalf("table[%d] = %s revision %d", index, spec.Definition.ID.String(), spec.Definition.Revision)
 		}
-		if spec.ChatGPTTarget != chatGPTTargetNative {
-			t.Fatalf("%s ChatGPT target rule = %q", spec.Definition.ID.String(), spec.ChatGPTTarget)
+		if spec.ChatGPTTarget != want[index].chatGPT {
+			t.Fatalf("%s ChatGPT target rule = %q, want %q", spec.Definition.ID.String(), spec.ChatGPTTarget, want[index].chatGPT)
 		}
 		if len(spec.Definition.RequiredCapabilities) != 3 {
 			t.Fatalf("%s required capabilities = %v", spec.Definition.ID.String(), spec.Definition.RequiredCapabilities)
+		}
+		path, err := spec.Build(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Only the composed path carries the refused rule.
+		if path.IsComposed() != (spec.ChatGPTTarget == chatGPTTargetRefused) {
+			t.Fatalf("%s composed=%v but ChatGPT rule %q", spec.Definition.ID.String(), path.IsComposed(), spec.ChatGPTTarget)
 		}
 	}
 }

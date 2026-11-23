@@ -147,13 +147,21 @@ func (stream composedStream) FinishDecoded(ctx context.Context) (PendingTerminal
 }
 
 func (stream composedStream) render(err error) error {
+	return renderProviderFailure(stream.client, stream.request, err)
+}
+
+// renderProviderFailure gives a failure the provider side classified, in a
+// stream or in a unary body, the client side's native error, so the
+// exchange writes it in the client's dialect. Any other error, and a class
+// the client side renders nothing of its own dialect for, is unchanged.
+func renderProviderFailure(client ClientSide, request protocolcore.Request, err error) error {
 	var failure *protocolcore.Failure
 	if err == nil || !errors.As(err, &failure) || failure.Provider == nil ||
 		failure.Provider.Validate() != nil {
 		return err
 	}
-	native := stream.client.RenderProviderError(stream.request, *failure.Provider)
-	if native.ForDialect(stream.client.Dialect()) != nil {
+	native := client.RenderProviderError(request, *failure.Provider)
+	if native.ForDialect(client.Dialect()) != nil {
 		failure.NativeError = native
 	}
 	return err
@@ -189,14 +197,18 @@ func (path *Path) NewStreamFor(providerContext ProviderContext, request protocol
 	return path.streaming.NewStream(request)
 }
 
-// DecodeProviderResponseFor decodes a unary provider response of one attempt.
+// DecodeProviderResponseFor decodes a unary provider response of one
+// attempt. On a composed path a failure the body reports and the provider
+// side classified carries the client side's native error, as a stream
+// failure does.
 func (path *Path) DecodeProviderResponseFor(
 	providerContext ProviderContext,
 	request protocolcore.Request,
 	body []byte,
 ) (protocolcore.Response, protocolcore.TranslationReport, error) {
 	if path.IsComposed() {
-		return path.composition.provider.DecodeResponseFor(providerContext, request, body)
+		response, report, err := path.composition.provider.DecodeResponseFor(providerContext, request, body)
+		return response, report, renderProviderFailure(path.composition.client, request, err)
 	}
 	if path == nil || path.backend == nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},

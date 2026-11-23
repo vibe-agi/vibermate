@@ -392,6 +392,36 @@ func TestProtocolSDKHotPathProtectsTypedCompositionThroughPublicCheck(
 	}
 }
 
+// The pair that composes Claude Code with OpenAI Responses and the token
+// estimate its count reads are protocol hot paths too: an SDK may appear in
+// their tests only.
+func TestProtocolSDKHotPathProtectsTheTranslationPairAndTokenEstimate(t *testing.T) {
+	t.Parallel()
+	for _, root := range []string{"anthropicresponses", "tokenestimate"} {
+		repository := t.TempDir()
+		directory := filepath.Join(repository, "internal", root)
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write := func(name, source string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(directory, name), []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("oracle_test.go", "package "+root+"\n\nimport _ \"github.com/openai/openai-go/v3/responses\"\n")
+		if violations := CheckProtocolSDKIsolation(repository); len(violations) != 0 {
+			t.Fatalf("%s: an oracle test was refused: %v", root, violations)
+		}
+		write("hot.go", "package "+root+"\n\nimport _ \"github.com/anthropics/anthropic-sdk-go\"\n")
+		violations := CheckProtocolSDKIsolation(repository)
+		if len(violations) != 1 || violations[0].Rule != "protocol-sdk-hotpath" ||
+			violations[0].Path != filepath.Join("internal", root, "hot.go") {
+			t.Fatalf("%s: production SDK import gave %v", root, violations)
+		}
+	}
+}
+
 func TestExternalEgressGateRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.T) {
 	t.Parallel()
 
