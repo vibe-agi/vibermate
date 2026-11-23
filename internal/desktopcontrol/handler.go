@@ -604,6 +604,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}", handler.getNativeApproval)
 	handler.mux.HandleFunc("POST /api/v1/captures/{captureKey}/native-tools/approvals/{approvalId}/actions/decide", handler.decideNativeApproval)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
+	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/client-protections", handler.getCaptureClientProtections)
 	handler.mux.HandleFunc(
 		"POST /api/v1/captures/{captureKey}/environment-assignment/actions/apply-latest",
 		handler.applyLatestCaptureEnvironment,

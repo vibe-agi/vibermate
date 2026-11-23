@@ -1,0 +1,155 @@
+[
+  {
+    "captureKey": "managed_run:verified-claude",
+    "client": "claude-code",
+    "protections": [
+      {
+        "id": "core_owned_streaming_fallback",
+        "basis": "exact_release",
+        "state": "on",
+        "appliedBy": "launcher"
+      },
+      {
+        "id": "structured_workspace_tools",
+        "basis": "exact_release",
+        "state": "on",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:verified-codex",
+    "client": "codex-cli",
+    "protections": [
+      {
+        "id": "responses_data_keepalive",
+        "basis": "exact_release",
+        "state": "on",
+        "appliedBy": "runtime"
+      },
+      {
+        "id": "responses_websocket_http_fallback",
+        "basis": "operation_catalog",
+        "state": "on",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-claude",
+    "client": "claude-code",
+    "protections": [
+      {
+        "id": "core_owned_streaming_fallback",
+        "basis": "recognized_client",
+        "state": "on",
+        "appliedBy": "launcher"
+      },
+      {
+        "id": "structured_workspace_tools",
+        "basis": "recognized_client",
+        "state": "on",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-claude-transparent",
+    "client": "claude-code",
+    "protections": [
+      {
+        "id": "core_owned_streaming_fallback",
+        "basis": "recognized_client",
+        "state": "inactive",
+        "reason": "original_destination",
+        "appliedBy": "launcher"
+      },
+      {
+        "id": "structured_workspace_tools",
+        "basis": "recognized_client",
+        "state": "inactive",
+        "reason": "original_destination",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-claude-companion",
+    "client": "claude-code",
+    "protections": [
+      {
+        "id": "core_owned_streaming_fallback",
+        "basis": "recognized_client",
+        "state": "on",
+        "appliedBy": "launcher"
+      },
+      {
+        "id": "structured_workspace_tools",
+        "basis": "recognized_client",
+        "state": "off",
+        "reason": "remote_workspace",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-codex",
+    "client": "codex-cli",
+    "protections": [
+      {
+        "id": "responses_data_keepalive",
+        "basis": "recognized_client",
+        "state": "on",
+        "appliedBy": "runtime"
+      },
+      {
+        "id": "responses_websocket_http_fallback",
+        "basis": "operation_catalog",
+        "state": "on",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-claude-switched-off",
+    "client": "claude-code",
+    "protections": [
+      {
+        "id": "core_owned_streaming_fallback",
+        "basis": "recognized_client",
+        "state": "on",
+        "appliedBy": "launcher"
+      },
+      {
+        "id": "structured_workspace_tools",
+        "basis": "recognized_client",
+        "state": "off",
+        "reason": "operator_disabled",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:recognized-codex-switched-off",
+    "client": "codex-cli",
+    "protections": [
+      {
+        "id": "responses_data_keepalive",
+        "basis": "recognized_client",
+        "state": "off",
+        "reason": "operator_disabled",
+        "appliedBy": "runtime"
+      },
+      {
+        "id": "responses_websocket_http_fallback",
+        "basis": "operation_catalog",
+        "state": "on",
+        "appliedBy": "runtime"
+      }
+    ]
+  },
+  {
+    "captureKey": "managed_run:generic-claude",
+    "protections": []
+  }
+]

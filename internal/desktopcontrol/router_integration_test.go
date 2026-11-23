@@ -547,6 +547,17 @@ func startRuntimeWithSecrets(t *testing.T, secrets secretstore.Store, resources 
 
 func startRuntimeAtPaths(t *testing.T, paths productruntime.RuntimePaths, secrets secretstore.Store, resources ...exchange.ResourcePolicy) *productruntime.Runtime {
 	t.Helper()
+	return startConfiguredRuntime(t, paths, secrets, func(options *productruntime.Options) {
+		if len(resources) > 0 {
+			options.Resources = &resources[0]
+		}
+	})
+}
+
+// startConfiguredRuntime starts the production runtime with the harness's
+// options, after configure has changed them.
+func startConfiguredRuntime(t *testing.T, paths productruntime.RuntimePaths, secrets secretstore.Store, configure func(*productruntime.Options)) *productruntime.Runtime {
+	t.Helper()
 	gate, err := offlinehold.New(offlinehold.DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -571,9 +582,7 @@ func startRuntimeAtPaths(t *testing.T, paths productruntime.RuntimePaths, secret
 		SecurityRandom: rand.Reader,
 		Lifecycle:      productruntime.DefaultLifecycleOptions(),
 	}
-	if len(resources) > 0 {
-		options.Resources = &resources[0]
-	}
+	configure(&options)
 	runtime, err := productruntime.Start(ctx, options)
 	if err != nil {
 		t.Fatal(err)
