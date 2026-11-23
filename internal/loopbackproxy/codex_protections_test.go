@@ -197,6 +197,10 @@ func countCodexUpgradeEvents(events []codexUpgradeEvent, kind string) int {
 // WebSocket-to-HTTP fallback (ADR 0026). The proxy answers every catalogued
 // Responses upgrade with the production 426 for every client; the release must
 // then complete the turn over HTTP without asking again.
+//
+// Each unanswered-upgrade control first runs as launch/unanswered_upgrade/<arm>,
+// which holds the fixture and the command, so a failure there reads as
+// broken. The control itself judges only what the release did.
 func TestInstalledCodexFallsBackToHTTPAfterProxy426(t *testing.T) {
 	installedCodexForProtections(t)
 	arms := []struct {
@@ -258,16 +262,26 @@ func TestInstalledCodexFallsBackToHTTPAfterProxy426(t *testing.T) {
 			t.Logf("%s attempted no upgrade, so it has no unanswered-upgrade control", arm.name)
 			continue
 		}
-		t.Run("control/unanswered_upgrade/"+arm.name, func(t *testing.T) {
+		var arrived int32
+		var completed bool
+		var events []codexUpgradeEvent
+		var output []byte
+		launched := t.Run("launch/unanswered_upgrade/"+arm.name, func(t *testing.T) {
 			fixture := newCodexUpgradeFixture(t, false)
-			output, stopped, err := runCodexProtectionCommand(t, arm.command(t, fixture.server.URL), 5*time.Second)
-			events := fixture.snapshot()
+			out, stopped, err := runCodexProtectionCommand(t, arm.command(t, fixture.server.URL), 5*time.Second)
+			events, arrived, output = fixture.snapshot(), fixture.arrived.Load(), out
+			completed = err == nil && !stopped && strings.Contains(string(out), codexProtectionReply)
 			t.Logf("%s against an unanswered upgrade: %d upgrade(s) read, stopped at 5 s=%v, err=%v, requests in order %v",
-				arm.name, fixture.arrived.Load(), stopped, err, events)
-			if fixture.arrived.Load() == 0 {
+				arm.name, arrived, stopped, err, events)
+		})
+		if !launched {
+			continue
+		}
+		t.Run("control/unanswered_upgrade/"+arm.name, func(t *testing.T) {
+			if arrived == 0 {
 				t.Fatalf("the release asked for no WebSocket this time, so the control proves nothing: %v output=%s", events, output)
 			}
-			if err == nil && !stopped && strings.Contains(string(output), codexProtectionReply) {
+			if completed {
 				t.Fatalf("the turn completed within 5 s without an answer to its upgrade, so the 426 is not what makes the fallback prompt: %v output=%s", events, output)
 			}
 		})
@@ -278,6 +292,11 @@ func TestInstalledCodexFallsBackToHTTPAfterProxy426(t *testing.T) {
 // stream idle budget on the exact data frame a recognized Codex receives on
 // /v1/responses (ADR 0026), and that the comment it would otherwise receive
 // does not, so the frame still matters.
+//
+// Each arm first runs as launch/<arm>, which holds the fixture's own checks
+// (the frozen wire, the response it began, one POST, an end within 15 s), so
+// a failure there reads as broken. The arm's own subtest judges only whether
+// the release completed the turn or gave up on it.
 func TestInstalledCodexAcceptsTheDataKeepalive(t *testing.T) {
 	installedCodexForProtections(t)
 	dataFrame, err := openairesponses.EncodeKeepalive()
@@ -288,15 +307,23 @@ func TestInstalledCodexAcceptsTheDataKeepalive(t *testing.T) {
 		t.Fatalf("the production data frame changed: %q", dataFrame)
 	}
 	for _, arm := range []struct {
+		kind      string // protected or control
 		name      string
 		data      bool
 		wire      []byte
 		completes bool
 	}{
-		{"protected/data_frame", true, dataFrame, true},
-		{"control/comment_only", false, []byte(": keepalive\n\n"), false},
+		{"protected", "data_frame", true, dataFrame, true},
+		{"control", "comment_only", false, []byte(": keepalive\n\n"), false},
 	} {
-		t.Run(arm.name, func(t *testing.T) {
+		var completed bool
+		var runErr error
+		var output []byte
+		// closed is the first error a write met when the release closed the
+		// stream.
+		var closedMutex sync.Mutex
+		var closed error
+		launched := t.Run("launch/"+arm.name, func(t *testing.T) {
 			var posts atomic.Int32
 			var keepalives atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -325,11 +352,13 @@ func TestInstalledCodexAcceptsTheDataKeepalive(t *testing.T) {
 					return
 				}
 				// A client that gives up on the stream is the control's expected
-				// outcome, so a write it refuses is not a fixture failure there;
-				// on the protected arm it is, and the exit status reports it too.
+				// outcome, so a write it refuses is not a fixture failure; the
+				// arm judges it, and the exit status reports it too.
 				gone := func(err error) {
-					if arm.completes {
-						t.Errorf("the release closed a stream kept alive by the data frame: %v", err)
+					closedMutex.Lock()
+					defer closedMutex.Unlock()
+					if closed == nil {
+						closed = err
 					}
 				}
 				for range 8 {
@@ -355,19 +384,34 @@ func TestInstalledCodexAcceptsTheDataKeepalive(t *testing.T) {
 			defer server.Close()
 			command := nativeCodexFixtureCommand(t, server.URL,
 				`model_providers.fixture.stream_idle_timeout_ms=180`, `model_providers.fixture.stream_max_retries=0`)
-			output, stopped, err := runCodexProtectionCommand(t, command, 15*time.Second)
-			completed := err == nil && !stopped && strings.Contains(string(output), codexProtectionReply)
+			out, stopped, err := runCodexProtectionCommand(t, command, 15*time.Second)
+			output, runErr = out, err
+			completed = err == nil && !stopped && strings.Contains(string(out), codexProtectionReply)
 			t.Logf("%s: %d keepalive(s) written of 8, %d POST(s), completed=%v, err=%v", arm.name, keepalives.Load(), posts.Load(), completed, err)
 			if stopped {
-				t.Fatalf("the release neither completed nor gave up within 15 s: output=%s", output)
+				t.Fatalf("the release neither completed nor gave up within 15 s: output=%s", out)
 			}
 			if posts.Load() != 1 {
-				t.Fatalf("the release sent %d POSTs, want exactly one: err=%v output=%s", posts.Load(), err, output)
+				t.Fatalf("the release sent %d POSTs, want exactly one: err=%v output=%s", posts.Load(), err, out)
 			}
-			if arm.completes && !completed {
-				t.Fatalf("the release gave up on a stream kept alive by the data frame: err=%v output=%s", err, output)
+		})
+		if !launched {
+			continue
+		}
+		t.Run(arm.kind+"/"+arm.name, func(t *testing.T) {
+			if arm.completes {
+				closedMutex.Lock()
+				err := closed
+				closedMutex.Unlock()
+				if err != nil {
+					t.Errorf("the release closed a stream kept alive by the data frame: %v", err)
+				}
+				if !completed {
+					t.Fatalf("the release gave up on a stream kept alive by the data frame: err=%v output=%s", runErr, output)
+				}
+				return
 			}
-			if !arm.completes && err == nil {
+			if runErr == nil {
 				t.Fatalf("the release completed a stream whose only liveness was comments, so it renews its idle budget on them and the data frame is not load-bearing: output=%s", output)
 			}
 		})

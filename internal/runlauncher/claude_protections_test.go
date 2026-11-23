@@ -37,6 +37,11 @@ import (
 // is its own non-streaming fallback. The fixture fails the first streaming
 // request that defines tools: it cuts the connection after a delta, or ends
 // the stream with the proxy's own in-band error.
+//
+// Each arm first runs as launch/<arm>, which holds what the arm needs to say
+// anything: the launch itself, the notice, the wire and a failed stream. A
+// failure there is a ViberMate regression or a broken fixture, never drift.
+// The arm's own subtest then judges only what the client did.
 func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 	binary := claudeNativeBinary(t)
 	catalogs, err := locales.New()
@@ -48,27 +53,29 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, test := range []struct {
+		kind      string // protected or control
 		name      string
 		shape     claudeGrantShape
 		managed   bool // the client's target is an Upstream-only authority
 		failure   claudeStreamFailure
 		inherited []string
-		protected bool
 	}{
-		{name: "protected/recognized_upstream/cut", shape: grantRecognized, managed: true, failure: streamCut, protected: true},
-		{name: "protected/recognized_upstream/in_band_error", shape: grantRecognized, managed: true, failure: streamInBandError, protected: true},
+		{kind: "protected", name: "recognized_upstream/cut", shape: grantRecognized, managed: true, failure: streamCut},
+		{kind: "protected", name: "recognized_upstream/in_band_error", shape: grantRecognized, managed: true, failure: streamInBandError},
 		// An inherited 0 keeps the release's own fallback; the launcher must
 		// replace it.
-		{name: "protected/recognized_replaces_inherited_zero/cut", shape: grantRecognized, managed: true, failure: streamCut,
-			inherited: []string{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0"}, protected: true},
-		{name: "protected/verified_core_owned/cut", shape: grantVerifiedCoreOwned, managed: true, failure: streamCut, protected: true},
+		{kind: "protected", name: "recognized_replaces_inherited_zero/cut", shape: grantRecognized, managed: true, failure: streamCut,
+			inherited: []string{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0"}},
+		{kind: "protected", name: "verified_core_owned/cut", shape: grantVerifiedCoreOwned, managed: true, failure: streamCut},
 		// The launcher must not set the variable for a recognized client on
 		// Original Destination, so the client keeps its own fallback.
-		{name: "control/recognized_original/cut", shape: grantRecognized, failure: streamCut},
-		{name: "control/verified_client_default/cut", shape: grantVerifiedClientDefault, managed: true, failure: streamCut},
-		{name: "control/verified_client_default/in_band_error", shape: grantVerifiedClientDefault, managed: true, failure: streamInBandError},
+		{kind: "control", name: "recognized_original/cut", shape: grantRecognized, failure: streamCut},
+		{kind: "control", name: "verified_client_default/cut", shape: grantVerifiedClientDefault, managed: true, failure: streamCut},
+		{kind: "control", name: "verified_client_default/in_band_error", shape: grantVerifiedClientDefault, managed: true, failure: streamInBandError},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		protected := test.kind == "protected"
+		var run claudeFallbackRun
+		launched := t.Run("launch/"+test.name, func(t *testing.T) {
 			home := t.TempDir()
 			command := []string{"claude", "-p", "Reply with the fixture text", "--output-format", "json"}
 			f := newClaudeNativeFixture(t, binary, home, command, byte(0x11+index*4), test.managed, test.shape)
@@ -79,67 +86,95 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 			defer cancel()
 			var stdout, stderr strings.Builder
 			code, err := f.launcher(binary, home, &stdout, &stderr).Run(ctx, runlauncher.LaunchRequest{EnvironmentID: "work", ManagedAuth: test.managed, Command: command})
-			result, parsed := claudeNativeResult(stdout.String(), false)
-			fallbacks := f.fallbackRequests(t)
-			t.Logf("exit=%d parsed=%v is_error=%v fallback requests=%d", code, parsed, result.IsError, fallbacks)
+			run = claudeFallbackRun{code: code, stdout: stdout.String(), stderr: stderr.String(), reply: f.reply}
+			run.result, run.parsed = claudeNativeResult(run.stdout, false)
+			run.failed, run.fallbacks, run.resends = f.resentRequests(t)
+			t.Logf("exit=%d parsed=%v is_error=%v fallback requests=%d streaming resends=%d",
+				code, run.parsed, run.result.IsError, run.fallbacks, run.resends)
 			if err != nil {
-				t.Fatalf("the launch itself failed: code=%d err=%v stderr=%s", code, err, stderr.String())
+				t.Fatalf("the launch itself failed: code=%d err=%v stderr=%s", code, err, run.stderr)
 			}
 			// The command says it left recovery to ViberMate exactly when it did.
-			if announced := strings.Contains(stderr.String(), notice); announced != test.protected {
-				t.Fatalf("the fallback notice was printed=%v, want %v: stderr=%s", announced, test.protected, stderr.String())
+			if announced := strings.Contains(run.stderr, notice); announced != protected {
+				t.Fatalf("the fallback notice was printed=%v, want %v: stderr=%s", announced, protected, run.stderr)
 			}
-			if test.protected {
-				if fallbacks != 0 {
-					t.Fatalf("the client sent the broken turn again without streaming (%d request(s)) although the launcher left recovery to ViberMate; stdout=%s stderr=%s",
-						fallbacks, stdout.String(), stderr.String())
-				}
-				if code == 0 && (!parsed || !result.IsError) {
-					t.Fatalf("the client reported success after its stream broke: stdout=%s stderr=%s", stdout.String(), stderr.String())
-				}
-			} else {
-				if fallbacks != 1 {
-					t.Fatalf("the client sent %d non-streaming fallback request(s), want exactly 1: the release may no longer fall back on its own; stdout=%s stderr=%s",
-						fallbacks, stdout.String(), stderr.String())
-				}
-				if code != 0 || !parsed || result.IsError || !strings.Contains(result.Result, f.reply) {
-					t.Fatalf("the client's own fallback did not complete the turn: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-				}
+			if !run.failed {
+				t.Fatal("no streaming request that defines tools reached the provider, so no stream was failed")
 			}
 			f.assertWire(t)
+		})
+		if !launched {
+			continue
+		}
+		t.Run(test.kind+"/"+test.name, func(t *testing.T) {
+			if protected {
+				if run.fallbacks != 0 {
+					t.Fatalf("the client sent the broken turn again without streaming (%d request(s)) although the launcher left recovery to ViberMate; stdout=%s stderr=%s",
+						run.fallbacks, run.stdout, run.stderr)
+				}
+				if run.code == 0 && (!run.parsed || !run.result.IsError) {
+					t.Fatalf("the client reported success after its stream broke: stdout=%s stderr=%s", run.stdout, run.stderr)
+				}
+				return
+			}
+			if run.fallbacks != 1 {
+				t.Fatalf("the client sent %d non-streaming fallback request(s), want exactly 1: the release may no longer fall back on its own; stdout=%s stderr=%s",
+					run.fallbacks, run.stdout, run.stderr)
+			}
+			if run.code != 0 || !run.parsed || run.result.IsError || !strings.Contains(run.result.Result, run.reply) {
+				t.Fatalf("the client's own fallback did not complete the turn: code=%d stdout=%s stderr=%s", run.code, run.stdout, run.stderr)
+			}
 		})
 	}
 }
 
-// fallbackRequests counts the later /v1/messages requests that resend the
-// failed turn without streaming: the same messages, and stream false or
-// absent. It logs every request so a resend that changed its messages is
+// claudeFallbackRun is what one C1 arm's launch left for its judgement.
+type claudeFallbackRun struct {
+	code           int
+	stdout, stderr string
+	reply          string
+	result         claudeNativeTurnResult
+	parsed         bool
+	// failed says a stream was failed; fallbacks and resends count the
+	// later requests that sent its turn again, without and with streaming.
+	failed             bool
+	fallbacks, resends int
+}
+
+// resentRequests finds the request whose stream the fixture failed and counts
+// the later /v1/messages requests that send its turn again: the same
+// messages, without streaming (the release's own fallback) or with it (a
+// retry). It logs every request so a resend that changed its messages is
 // visible rather than silently uncounted.
-func (f *claudeNativeFixture) fallbackRequests(t *testing.T) int {
+func (f *claudeNativeFixture) resentRequests(t *testing.T) (failed bool, fallbacks, resends int) {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	failed := -1
-	for index, request := range f.messages {
+	index := -1
+	for position, request := range f.messages {
 		marker := ""
 		if request.failed {
 			marker = " (failed here)"
 		}
-		t.Logf("request %d: stream=%v tools=%d messages=%s%s", index, request.stream, request.tools, request.messagesDigest[:12], marker)
-		if request.failed && failed < 0 {
-			failed = index
+		t.Logf("request %d: stream=%v tools=%d messages=%s%s", position, request.stream, request.tools, request.messagesDigest[:12], marker)
+		if request.failed && index < 0 {
+			index = position
 		}
 	}
-	if failed < 0 {
-		t.Fatal("no streaming request that defines tools reached the provider, so no stream was failed")
+	if index < 0 {
+		return false, 0, 0
 	}
-	fallbacks := 0
-	for _, request := range f.messages[failed+1:] {
-		if !request.stream && request.messagesDigest == f.messages[failed].messagesDigest {
+	for _, request := range f.messages[index+1:] {
+		if request.messagesDigest != f.messages[index].messagesDigest {
+			continue
+		}
+		if request.stream {
+			resends++
+		} else {
 			fallbacks++
 		}
 	}
-	return fallbacks
+	return true, fallbacks, resends
 }
 
 // claudeWorkspaceTools are the built-in tools whose definitions C2 logs.
