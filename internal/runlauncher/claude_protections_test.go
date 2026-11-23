@@ -32,11 +32,17 @@ import (
 // work; the controls show that the release still falls back on its own when
 // it is not told, so the instruction still matters.
 //
-// Each arm launches `claude -p` through the real launcher with
-// CLAUDE_CODE_MAX_RETRIES=0, so the only second request a release may send
-// is its own non-streaming fallback. The fixture fails the first streaming
-// request that defines tools: it cuts the connection after a delta, or ends
-// the stream with the proxy's own in-band error.
+// Each arm launches `claude -p` through the real launcher. The fixture fails
+// the first streaming request that defines tools: it cuts the connection
+// after a delta, or ends the stream with the proxy's own in-band error. Every
+// arm but one sets CLAUDE_CODE_MAX_RETRIES=0, so the only second request a
+// release may send is its own non-streaming fallback. The default_retries arm
+// keeps the client's own retries, as vibermate run does, and ends with the
+// in-band error, the shape Core writes when it cannot recover a stream: the
+// release must not send the turn again in any form. A cut connection is
+// resent as a second streaming request while retries are on (2.1.220 and
+// 2.1.330 do so whatever the fallback variable says); that is the client's
+// own retry, not the fallback the launcher turns off, so no arm asserts it.
 //
 // Each arm first runs as launch/<arm>, which holds what the arm needs to say
 // anything: the launch itself, the notice, the wire and a failed stream. A
@@ -59,6 +65,8 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 		managed   bool // the client's target is an Upstream-only authority
 		failure   claudeStreamFailure
 		inherited []string
+		// defaultRetries keeps the client's own retries.
+		defaultRetries bool
 	}{
 		{kind: "protected", name: "recognized_upstream/cut", shape: grantRecognized, managed: true, failure: streamCut},
 		{kind: "protected", name: "recognized_upstream/in_band_error", shape: grantRecognized, managed: true, failure: streamInBandError},
@@ -67,6 +75,8 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 		{kind: "protected", name: "recognized_replaces_inherited_zero/cut", shape: grantRecognized, managed: true, failure: streamCut,
 			inherited: []string{"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0"}},
 		{kind: "protected", name: "verified_core_owned/cut", shape: grantVerifiedCoreOwned, managed: true, failure: streamCut},
+		{kind: "protected", name: "recognized_default_retries/in_band_error", shape: grantRecognized, managed: true, failure: streamInBandError,
+			defaultRetries: true},
 		// The launcher must not set the variable for a recognized client on
 		// Original Destination, so the client keeps its own fallback.
 		{kind: "control", name: "recognized_original/cut", shape: grantRecognized, failure: streamCut},
@@ -80,7 +90,9 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 			command := []string{"claude", "-p", "Reply with the fixture text", "--output-format", "json"}
 			f := newClaudeNativeFixture(t, binary, home, command, byte(0x11+index*4), test.managed, test.shape)
 			f.failStream(test.failure)
-			f.environment = append(f.environment, "CLAUDE_CODE_MAX_RETRIES=0")
+			if !test.defaultRetries {
+				f.environment = append(f.environment, "CLAUDE_CODE_MAX_RETRIES=0")
+			}
 			f.environment = append(f.environment, test.inherited...)
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
@@ -111,6 +123,10 @@ func TestInstalledClaudeLeavesStreamFallbackToCore(t *testing.T) {
 				if run.fallbacks != 0 {
 					t.Fatalf("the client sent the broken turn again without streaming (%d request(s)) although the launcher left recovery to ViberMate; stdout=%s stderr=%s",
 						run.fallbacks, run.stdout, run.stderr)
+				}
+				if run.resends != 0 {
+					t.Fatalf("the client sent the broken turn again as %d streaming request(s) although the launcher left recovery to ViberMate; stdout=%s stderr=%s",
+						run.resends, run.stdout, run.stderr)
 				}
 				if run.code == 0 && (!run.parsed || !run.result.IsError) {
 					t.Fatalf("the client reported success after its stream broke: stdout=%s stderr=%s", run.stdout, run.stderr)
