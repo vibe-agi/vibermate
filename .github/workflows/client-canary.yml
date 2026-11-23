@@ -102,7 +102,7 @@ jobs:
   claude-latest:
     name: newest Claude Code release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.release.outputs.version }}
       outcome: ${{ steps.proof.outputs.outcome }}
@@ -156,9 +156,11 @@ jobs:
           # Not a protection proof: the release through the real runtime on
           # translated routes (TestInstalledClaudeOnResponses), kept out of
           # the stream the checker judges.
-          if ! go test -count=1 -v -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime; then
+          # A10 and A12 hold a turn for 150 s each, so the default 10-minute
+          # test timeout is too short.
+          if ! go test -count=1 -v -timeout 25m -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime; then
             echo "::warning::the translated-route test failed once against ${VERSION}; retrying"
-            go test -count=1 -v -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime
+            go test -count=1 -v -timeout 25m -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime
           fi
       - name: Keep the proof
         if: always()

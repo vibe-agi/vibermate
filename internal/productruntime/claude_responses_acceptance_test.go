@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
@@ -60,28 +61,35 @@ func TestInstalledClaudeOnResponses(t *testing.T) {
 	})
 	// Each scenario of design section 15.5 is unskipped by the step that makes
 	// it pass; "observe, then pin" scenarios record the first green run's
-	// behaviour and assert it from then on.
-	for _, scenario := range []struct{ id, name, step string }{
-		{"A1", "plain_text_in_stream_json_and_json", "S13"},
-		{"A2", "reasoning_round_trip_with_one_tool_call", "S13"},
-		{"A3", "media_tool_results_and_deferred_tools", "S13"},
-		{"A4", "parallel_calls_under_review", "S13"},
-		{"A5", "glob_model_rows", "S15"},
-		{"A6", "context_overflow_compacts", "S13"},
-		{"A7", "rate_limit_retry_after", "S13"},
-		{"A8", "insufficient_quota_stops", "S13"},
-		{"A9", "failure_after_text_in_band", "S13"},
-		{"A10", "silent_upstream_kept_alive", "S13"},
-		{"A11", "chatgpt_early_envelope", "T6"},
-		{"A12", "approval_longer_than_byte_watchdog", "S13"},
-		{"A13", "count_tokens_answered_locally", "S16"},
-		{"A14", "auto_mode_safeguards_unsupported", "S13"},
-		{"A15", "web_search_refused_visibly", "S13"},
-		{"A16", "invalid_encrypted_content_heals", "S13"},
-		{"A17", "invalid_image_heals", "S13"},
+	// behaviour and assert it from then on. A scenario without a function
+	// still needs its step.
+	for _, scenario := range []struct {
+		id, name, step string
+		run            func(*testing.T, string)
+	}{
+		{"A1", "plain_text_in_stream_json_and_json", "S13", testClaudeOnResponsesPlainText},
+		{"A2", "reasoning_round_trip_with_one_tool_call", "S13", testClaudeOnResponsesReasoningRoundTrip},
+		{"A3", "media_tool_results_and_deferred_tools", "S13", testClaudeOnResponsesMediaAndDeferredTools},
+		{"A4", "parallel_calls_under_review", "S13", testClaudeOnResponsesParallelCallsUnderReview},
+		{"A5", "glob_model_rows", "S15", nil},
+		{"A6", "context_overflow_compacts", "S13", testClaudeOnResponsesContextOverflow},
+		{"A7", "rate_limit_retry_after", "S13", testClaudeOnResponsesRateLimit},
+		{"A8", "insufficient_quota_stops", "S13", testClaudeOnResponsesInsufficientQuota},
+		{"A9", "failure_after_text_in_band", "S13", testClaudeOnResponsesFailureAfterText},
+		{"A10", "silent_upstream_kept_alive", "S13", testClaudeOnResponsesSilentUpstream},
+		{"A11", "chatgpt_early_envelope", "T6", nil},
+		{"A12", "approval_longer_than_byte_watchdog", "S13", testClaudeOnResponsesLongApproval},
+		{"A13", "count_tokens_answered_locally", "S16", nil},
+		{"A14", "auto_mode_safeguards_unsupported", "S13", testClaudeOnResponsesAutoModeSafeguards},
+		{"A15", "web_search_refused_visibly", "S13", testClaudeOnResponsesWebSearchRefused},
+		{"A16", "invalid_encrypted_content_heals", "S13", testClaudeOnResponsesInvalidEncryptedContent},
+		{"A17", "invalid_image_heals", "S13", testClaudeOnResponsesInvalidImage},
 	} {
 		t.Run(scenario.id+"_"+scenario.name, func(t *testing.T) {
-			t.Skip("needs " + scenario.step)
+			if scenario.run == nil {
+				t.Skip("needs " + scenario.step)
+			}
+			scenario.run(t, binary)
 		})
 	}
 }
@@ -235,15 +243,26 @@ func (upstream *claudeAcceptanceUpstream) serveChat(w http.ResponseWriter, r *ht
 
 // claudeAcceptanceRun is one prepared runtime, routing set and capture.
 type claudeAcceptanceRun struct {
-	fixture  *task7Fixture
-	upstream *claudeAcceptanceUpstream
-	proxy    *url.URL
-	home     string
-	rootPEM  string
-	grant    capturerun.LaunchGrant
+	fixture   *task7Fixture
+	proxy     *url.URL
+	home      string
+	rootPEM   string
+	grant     capturerun.LaunchGrant
+	exchanges *recordingExchanges
 }
 
-func newClaudeAcceptanceRun(t *testing.T, ctx context.Context, binary string, backend environment.ClientProtocol, serve http.HandlerFunc, upstream *claudeAcceptanceUpstream) *claudeAcceptanceRun {
+// claudeRunOptions is what one scenario's routing set and proxy need.
+type claudeRunOptions struct {
+	backend environment.ClientProtocol
+	serve   http.HandlerFunc
+	// wireProfile is the route's wire profile; empty keeps follow-client.
+	wireProfile string
+	// toolMode is the routing set's tool policy; empty keeps the default,
+	// Observe.
+	toolMode environment.ToolPolicyMode
+}
+
+func newClaudeAcceptanceRun(t *testing.T, ctx context.Context, binary string, options claudeRunOptions) *claudeAcceptanceRun {
 	t.Helper()
 	directory := t.TempDir()
 	f := task7Open(t, ctx, filepath.Join(directory, "data"))
@@ -252,18 +271,29 @@ func newClaudeAcceptanceRun(t *testing.T, ctx context.Context, binary string, ba
 		AccountID: claudeAcceptanceAccount, AccountName: "OpenAI API key", ProviderToken: claudeAcceptanceAccount,
 		EndpointID: upstreamendpoint.OpenAIPlatformID,
 		Environments: []task7EnvironmentConfig{{
-			ID: environmentID, Name: "Claude Code · OpenAI", Mode: environment.ContentRecordingFull,
+			ID: environmentID, Name: "Claude Code \u00b7 OpenAI", Mode: environment.ContentRecordingFull,
 			ClientProtocol: environment.ClientProtocolAnthropicMessages, ClientOrigin: "https://api.anthropic.com",
-			BackendProtocol: backend,
+			BackendProtocol: options.backend,
 			Customize: func(aggregate *environment.Environment) {
 				route := &aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
 				route.ModelPolicy = environment.ModelPolicy{Revision: 1, Mode: environment.ModelModeMap, Mappings: slices.Clone(claudeAcceptanceModels)}
+				if options.wireProfile != "" {
+					route.WireProfileRef = options.wireProfile
+				}
+				if options.toolMode != "" {
+					aggregate.PolicySet = &environment.PolicySet{ToolMode: options.toolMode}
+				}
 			},
 		}},
 	})
-	proxy := f.bindWith(serve, task7BindOptions{
+	exchanges := &recordingExchanges{}
+	proxy := f.bindWith(options.serve, task7BindOptions{
 		ProviderHost:    "api.openai.com",
 		ClientHostPorts: []task7HostPort{{RuleID: "claude.anthropic", Host: "api.anthropic.com", Port: 443}},
+		Exchanges: func(next exchange.Executor) exchange.Executor {
+			exchanges.next = next
+			return exchanges
+		},
 	})
 	home := filepath.Join(directory, "client")
 	task7Must(t, os.Mkdir(home, 0o700))
@@ -278,7 +308,7 @@ func newClaudeAcceptanceRun(t *testing.T, ctx context.Context, binary string, ba
 	_, _, err = f.runtime.assignments.CreateForLaunch(ctx, captureassignment.CreateCommand{Capture: capture, EnvironmentID: environmentID, Source: captureassignment.SourceLaunch, ClientProfile: profile})
 	task7Must(t, err)
 	proxy.User = url.UserPassword("capture", grant.ProxyCapability.Value())
-	return &claudeAcceptanceRun{fixture: f, upstream: upstream, proxy: proxy, home: home, rootPEM: rootPEM, grant: grant}
+	return &claudeAcceptanceRun{fixture: f, proxy: proxy, home: home, rootPEM: rootPEM, grant: grant, exchanges: exchanges}
 }
 
 // environment is the child environment of design section 15.5. No
@@ -315,7 +345,7 @@ func testInstalledClaudeBaselineOnChat(t *testing.T, binary string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	upstream := &claudeAcceptanceUpstream{t: t}
-	run := newClaudeAcceptanceRun(t, ctx, binary, environment.ClientProtocolOpenAIChat, upstream.serveChat, upstream)
+	run := newClaudeAcceptanceRun(t, ctx, binary, claudeRunOptions{backend: environment.ClientProtocolOpenAIChat, serve: upstream.serveChat})
 	for _, mode := range [][]string{{"--output-format", "json"}, {"--output-format", "stream-json", "--verbose"}} {
 		upstream.mu.Lock()
 		before := len(upstream.requests)

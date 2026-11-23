@@ -270,6 +270,9 @@ type task7HostPort struct {
 type task7BindOptions struct {
 	ProviderHost    string
 	ClientHostPorts []task7HostPort
+	// Exchanges, when set, wraps the Exchange the proxy runs, so a test can
+	// observe what each exchange wrote downstream and returned.
+	Exchanges func(exchange.Executor) exchange.Executor
 }
 
 func (f *task7Fixture) bind(upstream http.Handler) *url.URL {
@@ -308,6 +311,9 @@ func (f *task7Fixture) bindWith(upstream http.Handler, options task7BindOptions)
 	f.pipeline, e = buildExchange(request)
 	task7Must(t, e)
 	proxyRequest.exchanges = f.pipeline
+	if options.Exchanges != nil {
+		proxyRequest.exchanges = options.Exchanges(f.pipeline)
+	}
 	f.proxy, e = buildProxy(proxyRequest)
 	task7Must(t, e)
 	f.server = httptest.NewServer(f.proxy)
