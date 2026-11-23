@@ -138,7 +138,7 @@ func (pipeline *Pipeline) DryRun(ctx context.Context, request ClientRequest) (Dr
 	// The same frozen target facts a run would encode for, with the account
 	// this dry run would select.
 	providerRequest, _, err := path.EncodeProviderRequestFor(
-		pipeline.providerContext(selection.targetRef, selection.target.Origin(), candidate.mode, candidate.account.ID),
+		pipeline.providerContext(path, selection.targetRef, selection.target.Origin(), candidate.mode, candidate.account.ID),
 		decoded, logicalBody, request.protocolHeaders(),
 	)
 	if err != nil {

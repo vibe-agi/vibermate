@@ -672,7 +672,7 @@ func (pipeline *Pipeline) executeCandidate(
 	captured.request = &decodedForEvidence
 	pipeline.observeRequest(request, captured)
 	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequestFor(
-		pipeline.providerContext(selection.targetRef, selection.target.Origin(), credential.mode, credential.account.ID),
+		pipeline.providerContext(protocolPath, selection.targetRef, selection.target.Origin(), credential.mode, credential.account.ID),
 		decoded,
 		logicalBody,
 		request.protocolHeaders(),
@@ -812,13 +812,18 @@ func withPolicyRequestID(path *protocolpath.Path, exchangeID string, err error) 
 // all three call this one function, so a reasoning seal minted on one turn
 // carries the binding the next turn's replay checks. The binding's endpoint
 // is the upstream target, and a request on the client's own credential binds
-// to ClientCredentialAccount.
+// to ClientCredentialAccount. A path built with New ignores the context, so
+// it gets the zero context and its requests pay nothing for it.
 func (pipeline *Pipeline) providerContext(
+	path *protocolpath.Path,
 	targetRef string,
 	origin originidentity.ProviderOrigin,
 	mode providerauth.CredentialMode,
 	accountID string,
 ) protocolpath.ProviderContext {
+	if !path.IsComposed() {
+		return protocolpath.ProviderContext{}
+	}
 	if mode != providerauth.CredentialManaged {
 		accountID = protocolpath.ClientCredentialAccount
 	}
@@ -838,9 +843,12 @@ func (pipeline *Pipeline) providerContext(
 
 // providerContextOf rebuilds an attempt's ProviderContext from its frozen
 // provider request.
-func (pipeline *Pipeline) providerContextOf(frozen providertransport.Request) protocolpath.ProviderContext {
+func (pipeline *Pipeline) providerContextOf(path *protocolpath.Path, frozen providertransport.Request) protocolpath.ProviderContext {
+	if !path.IsComposed() {
+		return protocolpath.ProviderContext{}
+	}
 	account, _ := frozen.AccountRef()
-	return pipeline.providerContext(frozen.TargetRef(), frozen.Target().Origin(), frozen.CredentialMode(), account.ID)
+	return pipeline.providerContext(path, frozen.TargetRef(), frozen.Target().Origin(), frozen.CredentialMode(), account.ID)
 }
 
 // checkTranslatedTarget is the exchange's defence for the stage-1 compliance
@@ -1806,7 +1814,7 @@ func (pipeline *Pipeline) executeComplete(
 	// route. A path built with New ignores them.
 	providerResponse, backendResponseReport, err :=
 		protocolPath.DecodeProviderResponseFor(
-			pipeline.providerContextOf(frozenRequest),
+			pipeline.providerContextOf(protocolPath, frozenRequest),
 			decoded,
 			body,
 		)
@@ -1887,7 +1895,7 @@ func (pipeline *Pipeline) completeFromStream(
 		return newFailure(ReasonProviderResponseInvalid, request.exchangeID, statusCode,
 			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err))
 	}
-	stream, err := protocolPath.NewAggregatingStream(pipeline.providerContextOf(frozenRequest), decoded)
+	stream, err := protocolPath.NewAggregatingStream(pipeline.providerContextOf(protocolPath, frozenRequest), decoded)
 	if err != nil {
 		_ = streamBody.Close()
 		return newFailure(ReasonProviderResponseInvalid, request.exchangeID, statusCode, err)
@@ -2918,7 +2926,7 @@ func (pipeline *Pipeline) executeStream(
 					protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$.http.content_encoding", err)))
 		}
 
-		stream, err := protocolPath.NewStreamFor(pipeline.providerContextOf(frozenRequest), decoded)
+		stream, err := protocolPath.NewStreamFor(pipeline.providerContextOf(protocolPath, frozenRequest), decoded)
 		if err != nil {
 			_ = streamBody.Close()
 			return pipeline.failStream(

@@ -419,6 +419,7 @@ func TestTranslatedReasoningIsBoundToTheRouteAndReplayedOnTheNextTurn(t *testing
 // request built from them.
 func TestTranslatedProviderContextAgreesAtBothCallSites(t *testing.T) {
 	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), &providerDouble{}, approvedDecisions())
+	path := translatedProtocolPath(t)
 	for _, test := range []struct {
 		origin string
 		target protocolpath.ProviderTargetKind
@@ -436,7 +437,7 @@ func TestTranslatedProviderContextAgreesAtBothCallSites(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		encode := pipeline.providerContext(selection.targetRef, selection.target.Origin(), providerauth.CredentialManaged, translatedPrimary.id)
+		encode := pipeline.providerContext(path, selection.targetRef, selection.target.Origin(), providerauth.CredentialManaged, translatedPrimary.id)
 		if encode.Target != test.target ||
 			encode.ReasoningBinding != protocolpath.NewReasoningBinding("target.primary", translatedPrimary.id) {
 			t.Fatalf("%s: encode context = %+v", test.origin, encode)
@@ -444,7 +445,7 @@ func TestTranslatedProviderContextAgreesAtBothCallSites(t *testing.T) {
 		if encode.RejectedSeal == nil {
 			t.Fatal("the encode context has no rejected-seal memory")
 		}
-		passthrough := pipeline.providerContext(selection.targetRef, selection.target.Origin(), providerauth.CredentialClientPassthrough, "ignored")
+		passthrough := pipeline.providerContext(path, selection.targetRef, selection.target.Origin(), providerauth.CredentialClientPassthrough, "ignored")
 		if passthrough.ReasoningBinding != protocolpath.NewReasoningBinding("target.primary", protocolpath.ClientCredentialAccount) {
 			t.Fatalf("%s: a client credential binds to %s", test.origin, passthrough.ReasoningBinding)
 		}
@@ -454,10 +455,34 @@ func TestTranslatedProviderContextAgreesAtBothCallSites(t *testing.T) {
 	// checked directly.
 	plan := translatedPlan(t, translatedPrimary)
 	_, sent := firstTurn(t, plan, translatedPrimary)
-	stream := pipeline.providerContextOf(sent)
+	stream := pipeline.providerContextOf(path, sent)
 	if stream.Target != protocolpath.TargetOpenAIPlatform ||
 		stream.ReasoningBinding != protocolpath.NewReasoningBinding("target.primary", translatedPrimary.id) {
 		t.Fatalf("stream context = %+v", stream)
+	}
+}
+
+// A path built with New ignores the context, so neither call site builds
+// one for it: the four existing paths pay nothing for the binding hash or
+// the memory's method value.
+func TestProviderContextIsZeroForPathsBuiltWithNew(t *testing.T) {
+	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), &providerDouble{}, approvedDecisions())
+	chat, err := anthropicchat.NewProtocolPath(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := selectFrozenPlan(translatedPlan(t, translatedPrimary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sent := firstTurn(t, translatedPlan(t, translatedPrimary), translatedPrimary)
+	for name, context := range map[string]protocolpath.ProviderContext{
+		"encode site": pipeline.providerContext(chat, selection.targetRef, selection.target.Origin(), providerauth.CredentialManaged, translatedPrimary.id),
+		"stream site": pipeline.providerContextOf(chat, sent),
+	} {
+		if context.Target != protocolpath.TargetGeneric || context.ReasoningBinding != "" || context.RejectedSeal != nil {
+			t.Fatalf("%s: a path built with New got context %+v", name, context)
+		}
 	}
 }
 
