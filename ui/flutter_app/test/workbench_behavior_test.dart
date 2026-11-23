@@ -1970,55 +1970,127 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  for (final reader in [true, false]) {
-    testWidgets(
-      'no protections section ${reader ? 'for an empty answer' : 'without a reader'}',
-      (tester) async {
-        await tester.binding.setSurfaceSize(const Size(1180, 760));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final fixture = PreviewControlApi();
-        final api = reader
-            ? _ProtectionAnsweringApi(fixture)
-            : _SessionOnlyApi(fixture);
-        final controller = WorkbenchController(
-          api: api,
-          terminalCommands: PreviewTerminalCommandService(),
-          previewMode: true,
-          closeRuntime: fixture.close,
-        );
-        await controller.initialize();
-        await tester.pumpWidget(
-          MaterialApp(
-            theme: ViberTheme.light(),
-            home: WorkbenchShell(controller: controller),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final row = find.byKey(const Key('capture-row-managed_run:run-9'));
-        await tester.ensureVisible(row);
-        await tester.tap(row);
-        await tester.pumpAndSettle();
-
-        if (api is _ProtectionAnsweringApi) {
-          expect(api.reads, contains('managed_run:run-9'));
-        }
-        expect(
-          find.byKey(
-            const Key('capture-client-compatibility-managed_run:run-9'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('capture-client-protections-managed_run:run-9')),
-          findsNothing,
-        );
-        expect(find.text('Protections'), findsNothing);
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox.shrink());
-        controller.dispose();
-        await fixture.close();
-      },
+  Future<WorkbenchController> openRunNine(
+    WidgetTester tester,
+    ControlApi api,
+    PreviewControlApi fixture,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
     );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final row = find.byKey(const Key('capture-row-managed_run:run-9'));
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    return controller;
+  }
+
+  testWidgets('a withheld protection reads as off', (tester) async {
+    final fixture = PreviewControlApi();
+    final controller = await openRunNine(
+      tester,
+      _ProtectionAnsweringApi(
+        fixture,
+        answer: (key) => CaptureClientProtections(
+          captureKey: key,
+          client: 'claude-code',
+          protections: const [
+            CaptureClientProtection(
+              id: ClientProtectionId.structuredWorkspaceTools,
+              basis: ClientProtectionBasis.recognizedClient,
+              state: ClientProtectionState.off,
+              reason: ClientProtectionReason.operatorDisabled,
+              appliedBy: ClientProtectionApplier.runtime,
+            ),
+          ],
+        ),
+      ),
+      fixture,
+    );
+    final entry = find.byKey(
+      const Key('capture-protection-structured_workspace_tools'),
+    );
+    final glyph = tester.widget<Icon>(
+      find.descendant(of: entry, matching: find.byType(Icon)),
+    );
+    expect(glyph.icon, Icons.close);
+    expect(glyph.color, tester.element(entry).viberColors.warning);
+    expect(
+      tester
+          .widget<Tooltip>(
+            find.ancestor(of: entry, matching: find.byType(Tooltip)),
+          )
+          .message,
+      endsWith(
+        'Turned off on this Runtime by '
+        'VIBERMATE_RECOGNIZED_CLIENT_PROTECTIONS.',
+      ),
+    );
+    expect(
+      find.bySemanticsLabel('Safe file tools allowed, Off'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+    await fixture.close();
+  });
+
+  for (final variant in ['an empty answer', 'another session', 'no reader']) {
+    testWidgets('no protections section for $variant', (tester) async {
+      final fixture = PreviewControlApi();
+      final api = switch (variant) {
+        'an empty answer' => _ProtectionAnsweringApi(fixture),
+        // An answer that names another session never shows under this one.
+        'another session' => _ProtectionAnsweringApi(
+          fixture,
+          answer: (key) => CaptureClientProtections(
+            captureKey: 'managed_run:run-1',
+            client: 'claude-code',
+            protections: const [
+              CaptureClientProtection(
+                id: ClientProtectionId.structuredWorkspaceTools,
+                basis: ClientProtectionBasis.exactRelease,
+                state: ClientProtectionState.on,
+                appliedBy: ClientProtectionApplier.runtime,
+              ),
+            ],
+          ),
+        ),
+        _ => _SessionOnlyApi(fixture),
+      };
+      final controller = await openRunNine(tester, api, fixture);
+
+      if (api is _ProtectionAnsweringApi) {
+        expect(api.reads, contains('managed_run:run-9'));
+      }
+      expect(
+        find.byKey(const Key('capture-client-compatibility-managed_run:run-9')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('capture-client-protections-managed_run:run-9')),
+        findsNothing,
+      );
+      expect(find.text('Protections'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      await fixture.close();
+    });
   }
 
   for (final size in const [Size(1280, 800), Size(1024, 700), Size(390, 760)]) {
@@ -6613,11 +6685,13 @@ final class _SessionOnlyApi implements ControlApi {
       throw UnsupportedError('${invocation.memberName}');
 }
 
-/// A Runtime that answers every session with an empty protections list.
+/// A Runtime that answers every session with [answer], or with an empty
+/// protections list.
 final class _ProtectionAnsweringApi extends _SessionOnlyApi
     implements CaptureProtectionReader {
-  _ProtectionAnsweringApi(super.delegate);
+  _ProtectionAnsweringApi(super.delegate, {this.answer});
 
+  final CaptureClientProtections Function(String captureKey)? answer;
   final List<String> reads = [];
 
   @override
@@ -6625,7 +6699,8 @@ final class _ProtectionAnsweringApi extends _SessionOnlyApi
     String captureKey,
   ) async {
     reads.add(captureKey);
-    return CaptureClientProtections(captureKey: captureKey, protections: []);
+    return answer?.call(captureKey) ??
+        CaptureClientProtections(captureKey: captureKey, protections: []);
   }
 }
 
