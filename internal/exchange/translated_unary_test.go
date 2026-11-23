@@ -224,6 +224,54 @@ func TestTranslatedUnaryResponseScriptSeesTheUpstreamEvents(t *testing.T) {
 	}
 }
 
+// hostedTurnEvents is a public-API turn with a hosted web search and a
+// cited answer, losses only the provider side's stream decoder declares.
+func hostedTurnEvents() []string {
+	search := `{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"q"}}`
+	annotation := `{"type":"url_citation","start_index":0,"end_index":5,"url":"https://example.com","title":"t"}`
+	message := `{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Found it.","annotations":[` +
+		annotation + `]}]}`
+	return []string{
+		`{"type":"response.created","sequence_number":0,"response":` + responsesObject("in_progress", "", "null") + `}`,
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":` + search + `}`,
+		`{"type":"response.output_item.added","sequence_number":3,"output_index":1,"item":{"id":"msg_1","type":"message","status":"in_progress","content":[],"role":"assistant"}}`,
+		`{"type":"response.output_text.annotation.added","sequence_number":4,"item_id":"msg_1","output_index":1,"content_index":0,"annotation_index":0,"annotation":` +
+			annotation + `}`,
+		`{"type":"response.output_item.done","sequence_number":5,"output_index":1,"item":` + message + `}`,
+		`{"type":"response.completed","sequence_number":6,"response":` + responsesObject("completed", search+","+message, responsesUsage) + `}`,
+	}
+}
+
+// What the aggregating decoder could not carry reaches the attempt's
+// translation report, as on a stream: the hosted search and the citation
+// are declared once each, and neither reaches the client.
+func TestTranslatedUnaryAggregationReportsTheStreamDecodersNotices(t *testing.T) {
+	provider := &providerDouble{results: []providerResult{{response: responsesStream(t, hostedTurnEvents())}}}
+	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
+	turn := runTranslated(t, pipeline, translatedPlan(t, translatedPrimary), "exchange-unary-notices",
+		unaryRequest(t, claudeBody(claudeFirstTurn)))
+	message := unaryMessage(t, turn)
+	if len(message.Content) != 1 || message.Content[0].Text != "Found it." || message.StopReason != anthropic.StopReasonEndTurn {
+		t.Fatalf("message = %s", turn.downstream.bytesSnapshot())
+	}
+	if body := turn.downstream.bytesSnapshot(); bytes.Contains(body, []byte("ws_1")) || bytes.Contains(body, []byte("example.com")) {
+		t.Fatalf("hosted output reached the client: %s", body)
+	}
+	codes := noticeCodes(turn.result.Translation)
+	for _, code := range []protocolcore.NoticeCode{protocolcore.NoticeHostedOutputNotForwarded, protocolcore.NoticeCitationsNotForwarded} {
+		count := 0
+		for _, got := range codes {
+			if got == string(code) {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s declared %d times: %v", code, count, codes)
+		}
+	}
+}
+
 // A failed response is an ordinary HTTP error for a Stream=false client,
 // whether the upstream streamed it in band or answered a failed JSON body:
 // nothing was begun, so nothing is aborted, and the rendered error carries
