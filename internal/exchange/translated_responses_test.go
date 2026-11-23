@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,27 +18,26 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/anthropicresponses"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
-	"github.com/vibe-agi/vibermate/internal/openairesponses"
-	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
-	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
-// These tests run a composed Anthropic Messages to OpenAI Responses path
-// through the real Exchange pipeline before production registers one (S13).
-// The test catalog holds the four production pairs plus this one; its ID is
-// a test ID, and its sides are the ones the production pair will compose.
+// These tests run the production Anthropic Messages to OpenAI Responses path
+// through the real Exchange pipeline. The test catalog and selector hold the
+// five production pairs (pipeline_test.go).
 
 const (
-	translatedPairID = "test.anthropic.responses"
 	translatedModel  = "gpt-provider"
 	translatedOrigin = "https://api.openai.com"
 	translatedTools  = `"tools":[{"name":"Bash","description":"Run a command",` +
@@ -51,47 +51,18 @@ var (
 
 func translatedProtocolPath(t *testing.T) *protocolpath.Path {
 	t.Helper()
-	operations, err := operationcatalog.BuiltIn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientOptions := anthropicchat.DefaultOptions()
-	clientOptions.ClientInput = anthropicchat.TranslatedClientInputProfile()
-	client, err := anthropicchat.NewClientSide(clientOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider, err := openairesponses.NewProviderSide(openairesponses.DefaultProviderSideOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := protocolspec.NewCodecPairID(translatedPairID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path, err := protocolpath.Compose(protocolpath.ComposeOptions{
-		ID: id, Revision: 1,
-		ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectAnthropicMessages),
-		Client:             client, Provider: provider,
-	})
+	path, err := anthropicresponses.NewProtocolPath(anthropicresponses.DefaultOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-func mustTranslatedEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) environment.Compiler {
-	t.Helper()
-	return mustEnvironmentCompilerWith(t, accounts, testCodecPair(
-		t, translatedPairID, 1, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses,
-	))
-}
-
 func translatedPlanOptions(account testAccount, configure ...func(*testPlanOptions)) testPlanOptions {
 	options := testPlanOptions{
 		destination: environment.DestinationKindUpstream, providerOrigin: translatedOrigin,
 		backend: protocolspec.DialectOpenAIResponses, modelMode: environment.ModelModeMap, mappedModel: translatedModel,
-		accounts: []testAccount{account}, preferred: account.id, translated: true,
+		accounts: []testAccount{account}, preferred: account.id,
 	}
 	for _, change := range configure {
 		change(&options)
@@ -130,7 +101,7 @@ func newTranslatedPipeline(
 	}
 	options := Options{
 		OwnerContext: context.Background(), Actions: newTestActionGate(t), Accounts: accounts,
-		ProtocolPaths: mustProtocolPathSelectorWith(t, translatedProtocolPath(t)), Provider: provider,
+		ProtocolPaths: mustProtocolPathSelector(t), Provider: provider,
 		ToolDecisions: decisions, RetryWaiter: &retryWaiterDouble{}, Observer: &attemptObserverDouble{},
 		ContentObserver: &contentObserverDouble{}, ObservationTimeout: time.Second,
 		Hold:              HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
@@ -146,31 +117,6 @@ func newTranslatedPipeline(
 	}
 	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
 	return pipeline
-}
-
-func mustProtocolPathSelectorWith(t *testing.T, extra ...*protocolpath.Path) *protocolpath.Selector {
-	t.Helper()
-	managed, err := anthropicchat.NewProtocolPath(anthropicchat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	compatible, err := anthropicchat.NewMessagesProtocolPath(anthropicchat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	responses, err := responseschat.NewProtocolPath(responseschat.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	passthrough, err := responseschat.NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	selector, err := protocolpath.NewSelector(append([]*protocolpath.Path{managed, compatible, responses, passthrough}, extra...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return selector
 }
 
 type translatedTurn struct {
@@ -984,7 +930,7 @@ func TestTranslatedChatGPTRouteIsRefusedAtCompileAndInTheExchange(t *testing.T) 
 			// A candidate is refused at compile; a published revision restores.
 			options := translatedPlanOptions(translatedPrimary, configure)
 			aggregate, catalog, _, _ := testEnvironment(t, options)
-			compiler := mustTranslatedEnvironmentCompiler(t, catalog)
+			compiler := mustEnvironmentCompiler(t, catalog)
 			if _, err := compiler.Compile(aggregate); !errors.Is(err, environment.ErrTranslatedChatGPTRoute) ||
 				!errors.Is(err, environment.ErrInvalidEnvironment) {
 				t.Fatalf("Compile() error = %v", err)
@@ -1140,5 +1086,80 @@ func TestReasoningRejectionsRecordOnlyResponsesSeals(t *testing.T) {
 	context := protocolpath.ProviderContext{RejectedSeal: memory.contains}
 	if !context.SealRejected(responses) {
 		t.Fatal("the provider context does not read the memory")
+	}
+}
+
+// The tool gate sees a translated turn as it sees a native one (design 15.4):
+// the intents come from the Responses function_call under the client's tool
+// name, the request's own definitions travel with them, and the capture's
+// local workspace evidence gives the exact structured-tools basis. The gate
+// itself is exercised on these intents in internal/toolpolicy, which this
+// package cannot import.
+func TestTranslatedToolDecisionCarriesWorkspaceEvidence(t *testing.T) {
+	root := t.TempDir()
+	adapter, ok := clientadapter.BuiltInCatalog().ExpectedEvidence("claude-code", "2.1.220")
+	if !ok {
+		t.Fatal("built-in Claude evidence is unavailable")
+	}
+	scope, err := workspaceidentity.NewScope(
+		workspaceidentity.MachineID(base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("m", 32)))),
+		workspaceidentity.WorkspaceID(base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("w", 32)))),
+		"project", workspaceidentity.EvidenceLocalLauncher, 1, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID: "run-translated-workspace", SourceLabel: "claude",
+		WorkspaceRoot: root, Workspace: scope, Adapter: &adapter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := `{"file_path":` + strconv.Quote(root+"/notes.txt") + `}`
+	call := `{"id":"fc_read","type":"function_call","status":"completed","arguments":` + strconv.Quote(arguments) + `,"call_id":"call_read","name":"Read"}`
+	events := []string{
+		`{"type":"response.created","sequence_number":0,"response":` + responsesObject("in_progress", "", "null") + `}`,
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_read","type":"function_call","status":"in_progress","arguments":"","call_id":"call_read","name":"Read"}}`,
+		`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":` + call + `}`,
+		`{"type":"response.completed","sequence_number":3,"response":` + responsesObject("completed", call, responsesUsage) + `}`,
+	}
+	body := []byte(`{"model":"claude-client-alias","max_tokens":1024,"stream":true,` +
+		`"tools":[{"name":"Read","description":"Read a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}},` +
+		`{"name":"Bash","description":"Run a command","input_schema":{"type":"object","properties":{"command":{"type":"string"}}}}],` +
+		`"messages":[{"role":"user","content":"read notes"}]}`)
+	plan := translatedPlan(t, translatedPrimary)
+	decisions := &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionRejected, ReasonCode: "user_rejected"}}
+	provider := &providerDouble{results: []providerResult{{response: responsesStream(t, events)}}}
+	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, decisions)
+	lease, err := pipeline.bodyAdmission.AcquirePlan(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	downstream := &downstreamRecorder{}
+	_, err = pipeline.Execute(t.Context(), mustClientRequestWithOptions(t, "exchange-translated-workspace", plan, body,
+		WithBodyLease(lease), WithIngressCorrelation(admission, "connection-translated-workspace")), downstream)
+	if ReasonOf(err) != ReasonToolDecisionRejected || decisions.callCount() != 1 {
+		t.Fatalf("err=%v decisions=%d", err, decisions.callCount())
+	}
+	decision := decisions.lastRequest()
+	if got, ok := decision.Context().WorkspaceRoot(); !ok || got != root {
+		t.Fatalf("workspace root = %q, %v", got, ok)
+	}
+	if decision.Context().StructuredWorkspaceToolsBasis() != clientadapter.ProtectionExactRelease {
+		t.Fatalf("structured basis = %s", decision.Context().StructuredWorkspaceToolsBasis())
+	}
+	tools := decision.Context().Tools()
+	if len(tools) != 2 || tools[0].Name != "Read" || tools[1].Name != "Bash" {
+		t.Fatalf("decision tools = %+v", tools)
+	}
+	intents := decision.ToolIntents()
+	if len(intents) != 1 || intents[0].Call.Name != "Read" || intents[0].Call.Key.Source() != "openai-responses-call" ||
+		intents[0].Call.Key.WireID() != "call_read" || string(intents[0].Call.Arguments.Bytes()) != arguments {
+		t.Fatalf("decision intents = %+v", intents)
+	}
+	if written := downstream.bytesSnapshot(); bytes.Contains(written, []byte("tool_use")) {
+		t.Fatalf("a rejected call reached the client: %s", written)
 	}
 }

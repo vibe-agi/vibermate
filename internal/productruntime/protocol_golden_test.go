@@ -46,8 +46,12 @@ type protocolGoldenPath struct {
 	requests string // fixture name prefix: "claude" or "codex"
 }
 
-// protocolGoldenPaths builds every path of the production table exactly as
-// production does when no body-admission policy overrides resource limits.
+// protocolGoldenPaths builds every path of the production table that existed
+// before the table, exactly as production does when no body-admission policy
+// overrides resource limits. These goldens characterize those four paths. A
+// composed path is not one of them: its request, stream and round-trip
+// goldens are in internal/anthropicresponses, and the attempt-scoped
+// equality below holds only for paths built with New.
 func protocolGoldenPaths(t *testing.T) []protocolGoldenPath {
 	t.Helper()
 	specs, err := productionProtocolPaths()
@@ -60,6 +64,9 @@ func protocolGoldenPaths(t *testing.T) []protocolGoldenPath {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if path.IsComposed() {
+			continue
+		}
 		requests := ""
 		switch spec.Definition.ClientDialect {
 		case protocolspec.DialectAnthropicMessages:
@@ -70,6 +77,9 @@ func protocolGoldenPaths(t *testing.T) []protocolGoldenPath {
 			t.Fatalf("no golden requests for client dialect %s", spec.Definition.ClientDialect)
 		}
 		paths = append(paths, protocolGoldenPath{name: spec.Definition.ID.String(), path: path, requests: requests})
+	}
+	if len(paths) != 4 {
+		t.Fatalf("the goldens characterize %d paths, want the four existing ones", len(paths))
 	}
 	return paths
 }

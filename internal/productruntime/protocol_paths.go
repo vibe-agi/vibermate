@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/anthropicresponses"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -22,6 +23,12 @@ type chatGPTTargetRule string
 // dialect is OpenAI Chat can never select a ChatGPT target, because that
 // realm offers only OpenAI Responses.
 const chatGPTTargetNative chatGPTTargetRule = "native"
+
+// chatGPTTargetRefused marks a translated path that must never reach a
+// ChatGPT plan (design 13.1): the Environment compiler refuses such a route
+// at every candidate compile (environment.ErrTranslatedChatGPTRoute) and the
+// Exchange refuses a restored one after Select.
+const chatGPTTargetRefused chatGPTTargetRule = "refused"
 
 // protocolPathSpec is one production protocol path: the catalog definition
 // the Environment compiler accepts and the constructor of the path the
@@ -73,6 +80,7 @@ func productionProtocolPaths() ([]protocolPathSpec, error) {
 		client   protocolspec.Dialect
 		provider protocolspec.Dialect
 		build    func(*protocolcore.ResourceLimits) (*protocolpath.Path, error)
+		chatGPT  chatGPTTargetRule
 	}{
 		{
 			id: anthropicchat.CodecPairID, revision: anthropicchat.CodecRevision,
@@ -118,6 +126,18 @@ func productionProtocolPaths() ([]protocolPathSpec, error) {
 				return responseschat.NewResponsesPassthroughProtocolPath(options)
 			},
 		},
+		{
+			id: anthropicresponses.CodecPairID, revision: anthropicresponses.CodecRevision,
+			client: protocolspec.DialectAnthropicMessages, provider: protocolspec.DialectOpenAIResponses,
+			build: func(resources *protocolcore.ResourceLimits) (*protocolpath.Path, error) {
+				options := anthropicresponses.DefaultOptions()
+				if resources != nil {
+					options.Resources = resources
+				}
+				return anthropicresponses.NewProtocolPath(options)
+			},
+			chatGPT: chatGPTTargetRefused,
+		},
 	}
 	specs := make([]protocolPathSpec, 0, len(entries))
 	for _, entry := range entries {
@@ -125,8 +145,12 @@ func productionProtocolPaths() ([]protocolPathSpec, error) {
 		if err != nil {
 			return nil, err
 		}
+		rule := entry.chatGPT
+		if rule == "" {
+			rule = chatGPTTargetNative
+		}
 		specs = append(specs, protocolPathSpec{
-			Definition: pair, Build: entry.build, ChatGPTTarget: chatGPTTargetNative,
+			Definition: pair, Build: entry.build, ChatGPTTarget: rule,
 		})
 	}
 	return specs, nil

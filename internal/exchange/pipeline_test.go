@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/anthropicresponses"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
@@ -2464,9 +2465,6 @@ type testPlanOptions struct {
 	transform          messagetransform.Policy
 	// realm overrides the provider target's realm ("realm.provider").
 	realm string
-	// translated compiles with the test catalog that also holds a composed
-	// Anthropic to Responses pair (translated_responses_test.go).
-	translated bool
 	// restore builds the plan as a published revision is rebuilt, which
 	// skips the checks only candidates get.
 	restore bool
@@ -2489,9 +2487,6 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	t.Helper()
 	aggregate, catalog, clientOrigin, requestPath := testEnvironment(t, options)
 	compiler := mustEnvironmentCompiler(t, catalog)
-	if options.translated {
-		compiler = mustTranslatedEnvironmentCompiler(t, catalog)
-	}
 	compile := compiler.Compile
 	if options.restore {
 		compile = compiler.Restore
@@ -2689,13 +2684,29 @@ func testCodecPair(
 	}
 }
 
-// mustEnvironmentCompilerWith compiles with the four production pairs plus
+// mustEnvironmentCompilerWith compiles with the five production pairs plus
 // extra.
 func mustEnvironmentCompilerWith(
 	t *testing.T,
 	accounts environment.AccountCatalog,
 	extra ...protocolspec.CodecPairDefinition,
 ) environment.Compiler {
+	t.Helper()
+	protocols := testProtocolCatalog(t, extra...)
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
+}
+
+// testProtocolCatalog is the codec catalog of the test compiler: the five
+// production pairs plus extra.
+func testProtocolCatalog(t *testing.T, extra ...protocolspec.CodecPairDefinition) protocolspec.Catalog {
 	t.Helper()
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
@@ -2706,20 +2717,13 @@ func mustEnvironmentCompilerWith(
 		testCodecPair(t, anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages),
 		testCodecPair(t, responseschat.CodecPairID, responseschat.CodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat),
 		testCodecPair(t, responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
+		testCodecPair(t, anthropicresponses.CodecPairID, anthropicresponses.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIResponses),
 	}
 	protocols, err := protocolspec.NewCatalog(operations.Definitions(), append(pairs, extra...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wires, err := wireprofile.BuiltInCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compiler
+	return protocols
 }
 
 func mustClientOrigin(t *testing.T, value string) originidentity.ClientOrigin {
@@ -2846,7 +2850,11 @@ func mustProtocolPathSelector(t *testing.T) *protocolpath.Selector {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selector, err := protocolpath.NewSelector(managed, compatible, responses, responsesPassthrough)
+	translated, err := anthropicresponses.NewProtocolPath(anthropicresponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := protocolpath.NewSelector(managed, compatible, responses, responsesPassthrough, translated)
 	if err != nil {
 		t.Fatal(err)
 	}
