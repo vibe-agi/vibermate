@@ -1876,11 +1876,11 @@ func (pipeline *Pipeline) completeFromStream(
 ) error {
 	statusCode := response.StatusCode
 	responseHeaders := response.Header.Clone()
+	// A composed path never serves the native Codex operation (its sides
+	// differ in dialect), so no turn state is bound here; the upstream's own
+	// token is still stripped before a script can see it.
 	replaceCodexTurnToken(responseHeaders, "")
 	metadata := pipeline.managedResponseHeaders(request, selection, frozenRequest, decoded, response.Header)
-	if state := metadata.Get("X-Codex-Turn-State"); state != "" {
-		responseHeaders.Set("X-Codex-Turn-State", state)
-	}
 	transformer, err := newStreamMessageTransformer(transformTurn, statusCode, responseHeaders)
 	if err != nil {
 		return newFailure(ReasonMessageTransformFailed, request.exchangeID, statusCode, err)
