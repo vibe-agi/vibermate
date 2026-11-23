@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -1397,10 +1398,20 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 		t.Fatal(err)
 	}
 	// The Server's Runtime names the client the companion's claim was
-	// validated for (ADR 0026).
+	// validated for, with what the policy grants it (ADR 0026): the stream
+	// fallback, which the companion's own launcher applies, and the
+	// workspace tools, which need a local-launcher workspace a companion
+	// never has.
+	claude := clientadapter.FeatureCoreOwnedStreamingFallback | clientadapter.FeatureStructuredWorkspaceTools
 	if view, err := host.Runtime().CaptureRunReader().GetRun(context.Background(), grant.Run.ID); err != nil ||
-		view.RecognizedClient.ID != "claude-code" {
+		view.RecognizedClient != (clientadapter.RecognizedClient{ID: "claude-code", Policy: claude, Protections: claude}) {
 		t.Fatalf("the recognized companion run named %+v, %v", view.RecognizedClient, err)
+	}
+	// Admitted as the Server's proxy admits it, the companion has no local
+	// workspace, so the Exchange hands the tool gate no workspace root to
+	// approve within whatever basis the policy gives the tools.
+	if root, local := serverRunAdmission(t, host.Runtime(), grant.ProxyToken).LocalWorkspaceRoot(); local {
+		t.Fatalf("the recognized companion run admits local workspace %q", root)
 	}
 
 	waitServerRecording(t, host.Runtime())
@@ -1681,9 +1692,61 @@ func TestServerRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 					t.Fatalf("the companion run at revision %d named %+v, %v, want client %q",
 						revision, view.RecognizedClient, err, want(revision))
 				}
+				// The policy grants a recognized Codex the keepalive and
+				// nothing that bears authority, so the companion run carries
+				// the keepalive and no workspace tools.
+				keepalive := clientadapter.FeatureResponsesDataKeepalive
+				if view.RecognizedClient != (clientadapter.RecognizedClient{
+					ID: "codex-cli", Policy: keepalive, Protections: keepalive,
+				}) {
+					t.Fatalf("the companion run at revision %d carries %+v, want only the keepalive",
+						revision, view.RecognizedClient)
+				}
+				// Its connections, admitted as the Server's proxy admits them,
+				// have the recognized basis for the keepalive and none for the
+				// workspace tools or the stream fallback.
+				admission := serverRunAdmission(t, runtime, grant.ProxyToken)
+				for feature, basis := range map[clientadapter.Feature]clientadapter.ProtectionBasis{
+					clientadapter.FeatureResponsesDataKeepalive:     clientadapter.ProtectionRecognizedClient,
+					clientadapter.FeatureStructuredWorkspaceTools:   clientadapter.ProtectionNone,
+					clientadapter.FeatureCoreOwnedStreamingFallback: clientadapter.ProtectionNone,
+				} {
+					if got := admission.ProtectionBasis(feature); got != basis {
+						t.Fatalf("the companion run at revision %d has %s basis %s, want %s",
+							revision, feature.Name(), got, basis)
+					}
+				}
+				if root, local := admission.LocalWorkspaceRoot(); local {
+					t.Fatalf("the companion run at revision %d admits local workspace %q", revision, root)
+				}
 			}
 		})
 	}
+}
+
+// serverRunAdmission admits a run's proxy token through a capture admission
+// built from the Runtime's own capture runs and manual captures, as
+// productruntime builds the one its proxy uses.
+func serverRunAdmission(t *testing.T, runtime *productruntime.Runtime, proxyToken string) captureadmission.Admission {
+	t.Helper()
+	runs, runsOK := runtime.CaptureRuns().(capturerun.ProxyAuthorizer)
+	manuals, manualsOK := runtime.ManualCaptures().(manualcapture.ProxyAuthorizer)
+	if !runsOK || !manualsOK {
+		t.Fatalf("the Runtime's capture authorities do not authorize proxy credentials: runs %v, manual %v", runsOK, manualsOK)
+	}
+	authorizer, err := captureadmission.NewAuthorizer(runs, manuals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := captureadmission.NewProxyCredential(proxyToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := authorizer.Authorize(t.Context(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return admission
 }
 
 // loginRuntimeUserSession creates a Runtime User with every Environment and

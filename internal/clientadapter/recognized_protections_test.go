@@ -2,15 +2,25 @@ package clientadapter
 
 import (
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/build/constraint"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// designedRecognizedClientPolicies is the table ADR 0026 arrives at once every
-// grant has its installed-client proof. The live table grants nothing yet, so
-// the index, the fallback projection and the canary list are exercised against
-// this fixture through the unexported delegates.
+// designedRecognizedClientPolicies is the table ADR 0026 designs, every grant
+// with its installed-client proof. TestRecognizedClientPolicyIsPinned holds
+// the live table equal to it, so the tests that hand this fixture to the
+// unexported delegates (the index, the fallback projection and the canary
+// list) exercise the shipped policy through a table of their own, which a
+// test may change without touching the live one.
 func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 	return []RecognizedClientPolicy{
 		{
@@ -41,29 +51,78 @@ func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	t.Parallel()
 
-	// Both clients are named and nothing is granted: every reader of a
-	// recognized basis stays inactive until a grant arrives with its proof.
+	// Claude Code has its stream fallback grant, proven by C1, and its
+	// workspace tools grant, proven by C2. Codex has its keepalive grant,
+	// proven by C4, and its unconditional WebSocket fallback, proven by C3.
+	// Each row names its identity proof (C5). The table is now the one ADR
+	// 0026 designs.
+	claudeFallback := Canary{"internal/runlauncher", "TestInstalledClaudeLeavesStreamFallbackToCore"}
+	claudeTools := Canary{"internal/runlauncher", "TestInstalledClaudeWorkspaceToolsMatchTheClassifier"}
+	claudeIdentity := Canary{"internal/clientadapter", "TestInstalledClaudeIsRecognizedByItsSigner"}
+	codexKeepalive := Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
+	codexFallback := Canary{"internal/loopbackproxy", "TestInstalledCodexFallsBackToHTTPAfterProxy426"}
+	codexIdentity := Canary{"internal/clientadapter", "TestInstalledCodexIsRecognizedByItsSigner"}
 	want := []RecognizedClientPolicy{
-		{ClientID: "claude-code"},
-		{ClientID: "codex-cli"},
+		{
+			ClientID:       "claude-code",
+			IdentityCanary: claudeIdentity,
+			Grants: []ProtectionGrant{
+				{FeatureCoreOwnedStreamingFallback, ProofLaunchInstruction, claudeFallback},
+				{FeatureStructuredWorkspaceTools, ProofRequestDefinitions, claudeTools},
+			},
+		},
+		{
+			ClientID:       "codex-cli",
+			IdentityCanary: codexIdentity,
+			Grants: []ProtectionGrant{
+				{FeatureResponsesDataKeepalive, ProofStreamFrame, codexKeepalive},
+			},
+			Unconditional: []ProtectionGrant{
+				{FeatureResponsesWebSocketHTTPFallback, ProofOperationCatalog, codexFallback},
+			},
+		},
 	}
 	got := RecognizedClientPolicies()
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("RecognizedClientPolicies() = %+v, want %+v", got, want)
 	}
-	for _, clientID := range []string{"claude-code", "codex-cli", "other", ""} {
-		if features := RecognizedPolicyFeatures(clientID); features != 0 {
-			t.Fatalf("RecognizedPolicyFeatures(%q) = %b, want 0", clientID, features)
+	if designed := designedRecognizedClientPolicies(); !reflect.DeepEqual(want, designed) {
+		t.Fatalf("the pinned table %+v differs from the designed table %+v", want, designed)
+	}
+	for clientID, features := range map[string]Feature{
+		"claude-code": FeatureCoreOwnedStreamingFallback | FeatureStructuredWorkspaceTools,
+		"codex-cli":   FeatureResponsesDataKeepalive,
+		"other":       0,
+		"":            0,
+	} {
+		if got := RecognizedPolicyFeatures(clientID); got != features {
+			t.Fatalf("RecognizedPolicyFeatures(%q) = %b, want %b", clientID, got, features)
 		}
-		for _, goos := range []string{"linux", "darwin"} {
-			if canaries := ProtectionCanaries(clientID, goos); len(canaries) != 0 {
-				t.Fatalf("ProtectionCanaries(%q, %q) = %+v, want none", clientID, goos, canaries)
-			}
+	}
+	for _, testCase := range []struct {
+		clientID string
+		goos     string
+		want     []Canary
+	}{
+		{"codex-cli", "linux", []Canary{codexKeepalive, codexFallback}},
+		{"codex-cli", "darwin", []Canary{codexKeepalive, codexFallback, codexIdentity}},
+		{"claude-code", "linux", []Canary{claudeFallback, claudeTools}},
+		{"claude-code", "darwin", []Canary{claudeFallback, claudeTools, claudeIdentity}},
+		{"other", "darwin", nil},
+		{"", "darwin", nil},
+	} {
+		if canaries := ProtectionCanaries(testCase.clientID, testCase.goos); !reflect.DeepEqual(canaries, testCase.want) {
+			t.Fatalf("ProtectionCanaries(%q, %q) = %+v, want %+v",
+				testCase.clientID, testCase.goos, canaries, testCase.want)
 		}
 	}
 
 	got[0].ClientID = "changed"
-	got[1].Grants = append(got[1].Grants, ProtectionGrant{Feature: FeatureResponsesDataKeepalive})
+	got[0].Grants[0].Canary.Test = "changed"
+	got[0].Grants = append(got[0].Grants, ProtectionGrant{Feature: FeatureStructuredWorkspaceTools})
+	got[1].Grants[0].Feature = FeatureStructuredWorkspaceTools
+	got[1].Grants = append(got[1].Grants, ProtectionGrant{Feature: FeatureCoreOwnedStreamingFallback})
+	got[1].Unconditional[0].Canary.Test = "changed"
 	if again := RecognizedClientPolicies(); !reflect.DeepEqual(again, want) {
 		t.Fatalf("a caller changed the policy table through its copy: %+v", again)
 	}
@@ -80,6 +139,13 @@ func TestRecognizedClientPolicyIsPinned(t *testing.T) {
 	}
 }
 
+// installedTestPrefixes is the name prefix of each client's installed-client
+// tests. The canary and pull-request CI select those tests by it.
+var installedTestPrefixes = map[string]string{
+	"claude-code": "TestInstalledClaude",
+	"codex-cli":   "TestInstalledCodex",
+}
+
 // recognizedPolicyViolations applies the rules a compiled-in table cannot
 // check at start-up (ADR 0026).
 func recognizedPolicyViolations(policies []RecognizedClientPolicy) []string {
@@ -87,10 +153,7 @@ func recognizedPolicyViolations(policies []RecognizedClientPolicy) []string {
 	for _, signer := range BuiltInCatalog().signers {
 		signerIDs[signer.ID] = true
 	}
-	prefixes := map[string]string{
-		"claude-code": "TestInstalledClaude",
-		"codex-cli":   "TestInstalledCodex",
-	}
+	prefixes := installedTestPrefixes
 	var violations []string
 	seen := map[string]bool{}
 	for _, policy := range policies {
@@ -321,11 +384,27 @@ func TestRecognizedStreamingFallbackNeedsClaudeItsRecipeAndASignedBinary(t *test
 			t.Fatalf("%s got %q", testCase.name, policy)
 		}
 	}
-	// The live table grants no fallback yet.
+	// The live table grants Claude Code the fallback, under the same rule.
 	if policy := RecognizedStreamingFallbackPolicy(
 		"claude-code", LaunchNodeEnvProxy, InstallNativeSingleBinary,
-	); policy != StreamingFallbackClientDefault {
-		t.Fatalf("the live table gave Claude Code %q", policy)
+	); policy != StreamingFallbackCoreOwned {
+		t.Fatalf("the live table gave a signed Claude Code %q", policy)
+	}
+	for _, testCase := range []struct {
+		clientID string
+		recipe   LaunchRecipe
+		shape    InstallShape
+	}{
+		{"claude-code", LaunchNodeEnvProxy, InstallNPMWrapperNativeChild},
+		{"claude-code", LaunchCodexResponsesHTTP, InstallNativeSingleBinary},
+		{"codex-cli", LaunchCodexResponsesHTTP, InstallNativeSingleBinary},
+		{"codex-cli", LaunchNodeEnvProxy, InstallNativeSingleBinary},
+	} {
+		if policy := RecognizedStreamingFallbackPolicy(
+			testCase.clientID, testCase.recipe, testCase.shape,
+		); policy != StreamingFallbackClientDefault {
+			t.Fatalf("the live table gave %+v %q", testCase, policy)
+		}
 	}
 }
 
@@ -377,15 +456,27 @@ func TestRecognizedClientsNameOnlyTheCurrentRevision(t *testing.T) {
 		}
 	}
 
-	// The live table names both clients and grants neither anything.
+	// The live table names both clients, grants Claude Code its stream
+	// fallback and workspace tools and Codex its keepalive; a stored run at
+	// another revision names neither.
 	live, err := NewRecognizedClients(catalog, ProtectionsOn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for label, id := range map[string]string{"claude": "claude-code", "codex": "codex-cli"} {
+	for label, want := range map[string]RecognizedClient{
+		"claude": {ID: "claude-code", Policy: claude, Protections: claude},
+		"codex": {
+			ID:          "codex-cli",
+			Policy:      FeatureResponsesDataKeepalive,
+			Protections: FeatureResponsesDataKeepalive,
+		},
+	} {
 		got, found := live.Client(catalog.Revision(), label)
-		if !found || got != (RecognizedClient{ID: id}) {
-			t.Fatalf("live Client(%q) = %+v, %v", label, got, found)
+		if !found || got != want || got.SwitchedOff() {
+			t.Fatalf("live Client(%q) = %+v, %v, want %+v", label, got, found, want)
+		}
+		if got, found := live.Client(catalog.Revision()-1, label); found || got != (RecognizedClient{}) {
+			t.Fatalf("live Client(%d, %q) = %+v, %v", catalog.Revision()-1, label, got, found)
 		}
 	}
 }
@@ -564,14 +655,31 @@ func TestRecognizedClientsHonourTheSwitch(t *testing.T) {
 			t.Fatalf("Client(%q) = %+v, %v, want %+v switched off", label, got, found, want)
 		}
 	}
-	// A client the policy grants nothing is not switched off: there was
-	// nothing to withdraw.
+	// The live table: the switch withdraws Claude Code's fallback and
+	// workspace tools and Codex's keepalive, and keeps each policy.
 	live, err := NewRecognizedClients(catalog, ProtectionsOff)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := live.Client(catalog.Revision(), "claude"); got.SwitchedOff() {
-		t.Fatalf("an empty policy reads as switched off: %+v", got)
+	for label, want := range map[string]RecognizedClient{
+		"claude": {ID: "claude-code", Policy: claude},
+		"codex":  {ID: "codex-cli", Policy: FeatureResponsesDataKeepalive},
+	} {
+		if got, found := live.Client(catalog.Revision(), label); !found || got != want || !got.SwitchedOff() {
+			t.Fatalf("live Client(%q) with the switch off = %+v, %v, want %+v switched off", label, got, found, want)
+		}
+	}
+	// A client the policy grants nothing is not switched off, because there
+	// was nothing to withdraw.
+	empty, err := newRecognizedClients(catalog, ProtectionsOff, []RecognizedClientPolicy{
+		{ClientID: "claude-code"}, {ClientID: "codex-cli"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, found := empty.Client(catalog.Revision(), "claude"); !found ||
+		got != (RecognizedClient{ID: "claude-code"}) || got.SwitchedOff() {
+		t.Fatalf("an empty policy with the switch off = %+v, %v", got, found)
 	}
 	if (RecognizedClient{}).SwitchedOff() {
 		t.Fatal("no client reads as switched off")
@@ -614,4 +722,443 @@ func TestProtectionCanariesPerOperatingSystem(t *testing.T) {
 				testCase.clientID, testCase.goos, got, testCase.want)
 		}
 	}
+}
+
+// canaryWorkflowPath is the daily canary that re-proves every policy entry.
+var canaryWorkflowPath = filepath.Join(".github", "workflows", "client-canary.yml")
+
+// TestEveryProtectionNamesItsDailyCanary is the static guard of ADR 0026: a
+// policy entry must name a test that exists, that the daily canary selects
+// and judges on both operating systems, and that both compile. A -run pattern
+// that matches nothing still passes, and a darwin-only test file never
+// compiles on the ubuntu canary. The job that runs a release keeps no Go
+// cache, so the unreviewed release cannot write one.
+func TestEveryProtectionNamesItsDailyCanary(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("..", "..")
+	encoded, err := os.ReadFile(filepath.Join(root, canaryWorkflowPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(encoded)
+	if problems := dailyCanaryProblems(RecognizedClientPolicies(), root, workflow); len(problems) != 0 {
+		t.Fatalf("the policy and the daily canary disagree:\n%s", strings.Join(problems, "\n"))
+	}
+	if problems := dailyCanaryProblems(designedRecognizedClientPolicies(), root, workflow); len(problems) != 0 {
+		t.Fatalf("the designed policy and the daily canary disagree:\n%s", strings.Join(problems, "\n"))
+	}
+
+	// Each rule must be able to fail.
+	fixtureRoot := t.TempDir()
+	fixtureDirectory := filepath.Join(fixtureRoot, "internal", "fixture")
+	if err := os.MkdirAll(fixtureDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string]string{
+		"plain_test.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"type suite struct{}\n\n" +
+			"func (suite) TestInstalledClaudeMethod(t *testing.T) {}\n\n" +
+			"func TestInstalledClaudePlain(t *testing.T) {}\n",
+		"tagged_test.go": "// A comment before the constraint.\n\n//go:build linux || darwin\n\n" +
+			"package fixture\n\nimport \"testing\"\n\nfunc TestInstalledClaudeTagged(t *testing.T) {}\n",
+		"platform_darwin_test.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"func TestInstalledClaudeDarwinOnly(t *testing.T) {}\n",
+		"helper.go": "package fixture\n\nimport \"testing\"\n\n" +
+			"func TestInstalledClaudeOutsideATestFile(t *testing.T) {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(fixtureDirectory, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(fixtureRoot, canaryWorkflowPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's canary names its package in the Claude jobs, so a fixture
+	// case fails only on the rule it is about.
+	fixtureWorkflow := strings.ReplaceAll(workflow, "./internal/runlauncher", "./internal/runlauncher ./internal/fixture")
+	if fixtureWorkflow == workflow {
+		t.Fatal("the canary workflow names no ./internal/runlauncher")
+	}
+	fixtureCanary := func(test string) func([]RecognizedClientPolicy) []RecognizedClientPolicy {
+		return func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+			policies[0].Grants[0].Canary = Canary{"internal/fixture", test}
+			return policies
+		}
+	}
+	// The fixture root holds no other package, so only problems about the
+	// fixture count.
+	for _, problem := range dailyCanaryProblems(
+		fixtureCanary("TestInstalledClaudePlain")(RecognizedClientPolicies()), fixtureRoot, fixtureWorkflow,
+	) {
+		if strings.Contains(problem, "internal/fixture") || strings.Contains(problem, "TestInstalledClaudePlain") {
+			t.Fatalf("the fixture's plain test was refused: %s", problem)
+		}
+	}
+	replace := func(old, replacement string) func(string) string {
+		return func(text string) string {
+			if !strings.Contains(text, old) {
+				t.Fatalf("the canary workflow no longer holds %q", old)
+			}
+			return strings.ReplaceAll(text, old, replacement)
+		}
+	}
+	unchanged := func(policies []RecognizedClientPolicy) []RecognizedClientPolicy { return policies }
+	for _, testCase := range []struct {
+		name     string
+		policies func([]RecognizedClientPolicy) []RecognizedClientPolicy
+		workflow func(string) string
+		fixture  bool
+		want     string
+	}{
+		{
+			name: "a canary that names no function",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[0].Grants[1].Canary.Test = "TestInstalledClaudeDoesNotExist"
+				return policies
+			},
+			want: "no test function TestInstalledClaudeDoesNotExist",
+		},
+		{
+			name: "a canary in the wrong package",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[1].Grants[0].Canary.Package = "internal/runlauncher"
+				return policies
+			},
+			want: "no test function TestInstalledCodexAcceptsTheDataKeepalive in internal/runlauncher",
+		},
+		{
+			name: "a canary in a package that does not exist",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[1].IdentityCanary.Package = "internal/absent"
+				return policies
+			},
+			want: "no test function TestInstalledCodexIsRecognizedByItsSigner in internal/absent",
+		},
+		{
+			name: "a canary with another client's prefix",
+			policies: func(policies []RecognizedClientPolicy) []RecognizedClientPolicy {
+				policies[0].Grants[0].Canary = Canary{"internal/loopbackproxy", "TestInstalledCodexAcceptsTheDataKeepalive"}
+				return policies
+			},
+			want: "lacks the prefix TestInstalledClaude",
+		},
+		{
+			name:     "a canary that is a method",
+			policies: fixtureCanary("TestInstalledClaudeMethod"),
+			fixture:  true,
+			want:     "no test function TestInstalledClaudeMethod",
+		},
+		{
+			name:     "a canary outside a test file",
+			policies: fixtureCanary("TestInstalledClaudeOutsideATestFile"),
+			fixture:  true,
+			want:     "no test function TestInstalledClaudeOutsideATestFile",
+		},
+		{
+			name:     "a canary in a file with a build constraint",
+			policies: fixtureCanary("TestInstalledClaudeTagged"),
+			fixture:  true,
+			want:     "tagged_test.go has a build constraint",
+		},
+		{
+			name:     "a canary in a file named for one system",
+			policies: fixtureCanary("TestInstalledClaudeDarwinOnly"),
+			fixture:  true,
+			want:     "platform_darwin_test.go does not build on linux/amd64",
+		},
+		{
+			name:     "no job verifies a client on an operating system",
+			workflow: replace("verify --client claude-code --os linux", "verify --client claude-code --os linux-latest"),
+			want:     "no job of the daily canary runs vibermate-canary-proof verify --client claude-code --os linux",
+		},
+		{
+			name: "swapped operating systems",
+			workflow: func(text string) string {
+				text = replace("verify --client codex-cli --os linux", "verify --client codex-cli --os SWAP")(text)
+				text = replace("verify --client codex-cli --os darwin", "verify --client codex-cli --os linux")(text)
+				return replace("verify --client codex-cli --os SWAP", "verify --client codex-cli --os darwin")(text)
+			},
+			want: "verifies codex-cli on darwin but runs on ubuntu-latest",
+		},
+		{
+			name: "two jobs verify one client on one system",
+			workflow: replace("verify --client claude-code --os darwin",
+				"verify --client claude-code --os linux"),
+			want: "2 jobs of the daily canary run vibermate-canary-proof verify --client claude-code --os linux",
+		},
+		{
+			name:     "a job that does not name a canary's package",
+			workflow: replace("./internal/runlauncher ./internal/clientadapter", "./internal/runlauncher"),
+			want:     "does not name ./internal/clientadapter",
+		},
+		{
+			name:     "a job that names a package only as a prefix",
+			workflow: replace("./internal/loopbackproxy ./internal/clientadapter", "./internal/loopbackproxyx ./internal/clientadapter"),
+			want:     "does not name ./internal/loopbackproxy",
+		},
+		{
+			name:     "a job that does not select a canary",
+			workflow: replace("-run '^TestInstalledClaude'", "-run '^TestInstalledClaudeCompletes'"),
+			want:     "does not select TestInstalledClaudeLeavesStreamFallbackToCore",
+		},
+		{
+			name: "a job that keeps a Go cache",
+			workflow: func(text string) string {
+				// Only the Codex macOS job's setup-go step caches.
+				job := text[strings.Index(text, "  codex-latest-macos:"):]
+				step := strings.Replace(job, "cache: false", "cache: true", 1)
+				return strings.Replace(text, job, step, 1)
+			},
+			want: "job codex-latest-macos runs a release with a Go cache",
+		},
+		{
+			name:     "a job whose setup-go step caches by default",
+			workflow: replace("          check-latest: false\n          cache: false\n", "          check-latest: false\n"),
+			want:     "job claude-latest runs a release with a Go cache",
+		},
+		{
+			name:     "a job that selects without the proof checker's pattern",
+			workflow: replace("tests --client codex-cli --os darwin", "tests --client claude-code --os darwin"),
+			want:     "does not select TestInstalledCodexAcceptsTheDataKeepalive",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, text, policies := root, workflow, RecognizedClientPolicies()
+			if testCase.fixture {
+				root, text = fixtureRoot, fixtureWorkflow
+			}
+			if testCase.policies == nil {
+				testCase.policies = unchanged
+			}
+			if testCase.workflow != nil {
+				text = testCase.workflow(text)
+			}
+			problems := dailyCanaryProblems(testCase.policies(policies), root, text)
+			for _, problem := range problems {
+				if strings.Contains(problem, testCase.want) {
+					return
+				}
+			}
+			t.Fatalf("%s: no problem says %q; got %v", testCase.name, testCase.want, problems)
+		})
+	}
+}
+
+// dailyCanaryProblems checks every policy entry against the test sources
+// under root and the text of the canary workflow.
+func dailyCanaryProblems(policies []RecognizedClientPolicy, root, workflow string) []string {
+	var problems []string
+	jobs := canaryWorkflowJobs(workflow)
+	checked := map[Canary]bool{}
+	for _, policy := range policies {
+		prefix := installedTestPrefixes[policy.ClientID]
+		entries := []Canary{policy.IdentityCanary}
+		for _, grant := range append(append([]ProtectionGrant(nil), policy.Grants...), policy.Unconditional...) {
+			entries = append(entries, grant.Canary)
+		}
+		for _, canary := range entries {
+			if canary == (Canary{}) {
+				continue
+			}
+			if prefix == "" || !strings.HasPrefix(canary.Test, prefix) {
+				problems = append(problems, fmt.Sprintf(
+					"%s: canary %s lacks the prefix %s the canary selects",
+					policy.ClientID, canary.Test, prefix,
+				))
+			}
+			if !checked[canary] {
+				checked[canary] = true
+				problems = append(problems, canaryTestProblems(root, canary)...)
+			}
+		}
+		for _, goos := range []string{"linux", "darwin"} {
+			problems = append(problems, canaryJobProblems(
+				jobs, policy.ClientID, goos, prefix,
+				protectionCanaries(policies, policy.ClientID, goos),
+			)...)
+		}
+	}
+	return problems
+}
+
+// canaryTestProblems requires the canary's function in a _test.go file of its
+// package, in a file that builds on both systems the canary runs.
+func canaryTestProblems(root string, canary Canary) []string {
+	directory := filepath.Join(root, filepath.FromSlash(canary.Package))
+	paths, err := filepath.Glob(filepath.Join(directory, "*_test.go"))
+	if err != nil {
+		return []string{err.Error()}
+	}
+	for _, path := range paths {
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return []string{fmt.Sprintf("%s: %v", path, err)}
+		}
+		declared := false
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil && function.Name.Name == canary.Test {
+				declared = true
+			}
+		}
+		if !declared {
+			continue
+		}
+		var problems []string
+		name := filepath.Base(path)
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				if comment.Pos() < file.Package &&
+					(constraint.IsGoBuild(comment.Text) || constraint.IsPlusBuild(comment.Text)) {
+					problems = append(problems, fmt.Sprintf(
+						"%s: %s has a build constraint, so one canary may never compile %s",
+						canary.Package, name, canary.Test,
+					))
+				}
+			}
+		}
+		for _, target := range [][2]string{{"linux", "amd64"}, {"darwin", "arm64"}} {
+			context := build.Default
+			context.GOOS, context.GOARCH = target[0], target[1]
+			if matched, err := context.MatchFile(directory, name); err != nil || !matched {
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s does not build on %s/%s, so that canary never compiles %s",
+					canary.Package, name, target[0], target[1], canary.Test,
+				))
+			}
+		}
+		return problems
+	}
+	return []string{fmt.Sprintf("no test function %s in %s", canary.Test, canary.Package)}
+}
+
+// canaryWorkflowJob is one job of the canary workflow, its text with line
+// continuations joined and white space collapsed.
+type canaryWorkflowJob struct {
+	name   string
+	runsOn string
+	text   string
+}
+
+var (
+	canaryJobKey    = regexp.MustCompile(`^  ([A-Za-z_][A-Za-z0-9_-]*):\s*$`)
+	canaryJobRunsOn = regexp.MustCompile(`^    runs-on:\s*(\S+)\s*$`)
+	canaryRunPrefix = regexp.MustCompile(`-run ["']\^([A-Za-z0-9_]+)["']`)
+	// canarySetupGo is a setup-go step and its inputs, as the collapsed job
+	// text holds them.
+	canarySetupGo = regexp.MustCompile(`uses: actions/setup-go@\S+(?: # \S+)?((?: with:)?(?: [A-Za-z-]+: \S+)*)`)
+)
+
+func canaryWorkflowJobs(workflow string) []canaryWorkflowJob {
+	var jobs []canaryWorkflowJob
+	var current *canaryWorkflowJob
+	var body []string
+	flush := func() {
+		if current != nil {
+			joined := strings.ReplaceAll(strings.Join(body, "\n"), "\\\n", " ")
+			current.text = " " + strings.Join(strings.Fields(joined), " ") + " "
+			jobs = append(jobs, *current)
+		}
+		current, body = nil, nil
+	}
+	inJobs := false
+	for _, line := range strings.Split(workflow, "\n") {
+		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#") {
+			flush()
+			inJobs = strings.TrimSpace(line) == "jobs:"
+			continue
+		}
+		if !inJobs {
+			continue
+		}
+		if match := canaryJobKey.FindStringSubmatch(line); match != nil {
+			flush()
+			current = &canaryWorkflowJob{name: match[1]}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		body = append(body, line)
+		if match := canaryJobRunsOn.FindStringSubmatch(line); match != nil && current.runsOn == "" {
+			current.runsOn = match[1]
+		}
+	}
+	flush()
+	return jobs
+}
+
+// canaryJobProblems requires exactly one job that judges clientID on goos, on
+// a runner of that system, that keeps no Go cache, and that selects every
+// required canary and names its package.
+func canaryJobProblems(
+	jobs []canaryWorkflowJob,
+	clientID, goos, prefix string,
+	canaries []Canary,
+) []string {
+	if len(canaries) == 0 {
+		return nil
+	}
+	verify := "vibermate-canary-proof verify --client " + clientID + " --os " + goos
+	var matching []canaryWorkflowJob
+	for _, job := range jobs {
+		if strings.Contains(job.text, "/"+verify+" ") {
+			matching = append(matching, job)
+		}
+	}
+	switch len(matching) {
+	case 0:
+		return []string{fmt.Sprintf("no job of the daily canary runs %s", verify)}
+	case 1:
+	default:
+		return []string{fmt.Sprintf("%d jobs of the daily canary run %s", len(matching), verify)}
+	}
+	job := matching[0]
+	var problems []string
+	runner := map[string]string{"linux": "ubuntu-", "darwin": "macos-"}[goos]
+	if !strings.HasPrefix(job.runsOn, runner) {
+		problems = append(problems, fmt.Sprintf(
+			"job %s verifies %s on %s but runs on %s", job.name, clientID, goos, job.runsOn,
+		))
+	}
+	// The job runs an unreviewed release. setup-go caches by default and
+	// saves on a key miss into the default branch's scope, which other
+	// workflows restore, so the release must find no cache to write.
+	for _, step := range canarySetupGo.FindAllStringSubmatch(job.text, -1) {
+		if !strings.Contains(step[1]+" ", " cache: false ") {
+			problems = append(problems, fmt.Sprintf(
+				"job %s runs a release with a Go cache: its setup-go step needs cache: false", job.name,
+			))
+		}
+	}
+	byChecker := strings.Contains(job.text,
+		"/vibermate-canary-proof tests --client "+clientID+" --os "+goos+")")
+	var prefixes []string
+	for _, match := range canaryRunPrefix.FindAllStringSubmatch(job.text, -1) {
+		prefixes = append(prefixes, match[1])
+	}
+	for _, canary := range canaries {
+		selected := byChecker
+		for _, runPrefix := range prefixes {
+			if strings.HasPrefix(canary.Test, runPrefix) && strings.HasPrefix(runPrefix, prefix) {
+				selected = true
+			}
+		}
+		if !selected {
+			problems = append(problems, fmt.Sprintf(
+				"job %s does not select %s", job.name, canary.Test,
+			))
+		}
+		named := regexp.MustCompile(`[\s"'(]` + regexp.QuoteMeta("./"+canary.Package) + `[\s"')]`)
+		if !named.MatchString(job.text) {
+			problems = append(problems, fmt.Sprintf(
+				"job %s does not name ./%s, where %s lives", job.name, canary.Package, canary.Test,
+			))
+		}
+	}
+	return problems
 }

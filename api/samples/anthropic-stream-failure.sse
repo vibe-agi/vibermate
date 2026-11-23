@@ -1,0 +1,3 @@
+event: error
+data: {"type":"error","error":{"type":"api_error","message":"ViberMate could not complete this request (provider_transport_failed)."}}
+

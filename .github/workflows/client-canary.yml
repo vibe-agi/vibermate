@@ -4,12 +4,21 @@
 # a new release changes a surface ViberMate depends on, so a release is studied
 # rather than adopted blindly or discovered by users.
 #
-# The Claude tests launch with the grant a recognised build receives, so they
-# say whether a release would work once recognised, not whether it is.
+# The Claude tests launch with the signer grant a publisher-recognised build
+# receives. The protection tests prove, on Linux and Apple silicon, that the
+# newest releases still behave as each protection ADR 0026 grants assumes,
+# and the macOS jobs prove that those releases are still recognised by their
+# signature. A skipped or missing proof fails the run.
+#
+# cmd/vibermate-canary-proof judges each job from its go test -json stream:
+# pass, drift (only a control arm failed, so a release may no longer need a
+# protection) or broken. A job that does not pass is tried once more, and only
+# the second verdict counts. Each job keeps its proof as an artifact.
 #
 # A release under test is unreviewed code, so its job holds a read-only token
-# that is not left in the checkout; only the reporting job, which runs nothing
-# from a release, may open an issue.
+# that is not left in the checkout, and it neither restores nor saves a Go
+# cache, which other workflows on the default branch would restore. Only the
+# reporting job, which runs nothing from a release, may open an issue.
 name: client canary
 
 on:
@@ -31,6 +40,8 @@ jobs:
     timeout-minutes: 30
     outputs:
       version: ${{ steps.release.outputs.version }}
+      outcome: ${{ steps.proof.outputs.outcome }}
+      protections: ${{ steps.proof.outputs.protections }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -39,7 +50,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
@@ -51,6 +62,7 @@ jobs:
           version="$(npm view @openai/codex version)"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
       - name: Run the installed-Codex tests against it
+        id: proof
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -62,13 +74,30 @@ jobs:
           test -f "${codex_binary}"
           test "$("${codex_binary}" --version)" = "codex-cli ${VERSION}"
           export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
+          proof="${RUNNER_TEMP}/canary-proof"
+          mkdir -p "${proof}"
+          packages=(./internal/runlauncher ./internal/loopbackproxy ./internal/productruntime)
+          # go test fails when a test does; the checker judges the stream.
+          prove() {
+            go test -count=1 -json -run '^TestInstalledCodex' "${packages[@]}" \
+              > "${proof}/attempt-$1.json" || true
+            go run ./cmd/vibermate-canary-proof verify --client codex-cli --os linux \
+              --version "${VERSION}" --input "${proof}/attempt-$1.json" \
+              --proof "${proof}/proof.json" --github-output "${GITHUB_OUTPUT}"
+          }
           # These tests have a known transient TLS reset on hosted runners; a
           # release is reported only when it fails twice in a row.
-          packages=(./internal/runlauncher ./internal/loopbackproxy ./internal/productruntime)
-          if ! go test -count=1 -v -run '^TestInstalledCodex' "${packages[@]}"; then
-            echo "::warning::installed-Codex tests failed once against ${VERSION}; retrying"
-            go test -count=1 -v -run '^TestInstalledCodex' "${packages[@]}"
+          if ! prove 1; then
+            echo "::warning::installed-Codex tests did not pass once against ${VERSION}; retrying"
+            prove 2
           fi
+      - name: Keep the proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canary-proof-codex-cli-linux-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-proof
+          if-no-files-found: error
 
   claude-latest:
     name: newest Claude Code release
@@ -76,6 +105,8 @@ jobs:
     timeout-minutes: 30
     outputs:
       version: ${{ steps.release.outputs.version }}
+      outcome: ${{ steps.proof.outputs.outcome }}
+      protections: ${{ steps.proof.outputs.protections }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -84,7 +115,7 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-          cache: true
+          cache: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
@@ -96,6 +127,7 @@ jobs:
           version="$(npm view @anthropic-ai/claude-code version)"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
       - name: Run the installed-Claude tests against it
+        id: proof
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -107,44 +139,229 @@ jobs:
           test -f "${claude_binary}"
           test "$("${claude_binary}" --version)" = "${VERSION} (Claude Code)"
           export VIBERMATE_CLAUDE_ACCEPTANCE="${claude_binary}"
-          # The launcher tests and TestInstalledClaudeOnResponses, which runs
-          # the release through the real runtime on translated routes.
-          packages=(./internal/runlauncher ./internal/productruntime)
-          if ! go test -count=1 -v -run '^TestInstalledClaude' "${packages[@]}"; then
-            echo "::warning::installed-Claude tests failed once against ${VERSION}; retrying"
-            go test -count=1 -v -run '^TestInstalledClaude' "${packages[@]}"
+          proof="${RUNNER_TEMP}/canary-proof"
+          mkdir -p "${proof}"
+          # go test fails when a test does; the checker judges the stream.
+          prove() {
+            go test -count=1 -json -run '^TestInstalledClaude' ./internal/runlauncher \
+              > "${proof}/attempt-$1.json" || true
+            go run ./cmd/vibermate-canary-proof verify --client claude-code --os linux \
+              --version "${VERSION}" --input "${proof}/attempt-$1.json" \
+              --proof "${proof}/proof.json" --github-output "${GITHUB_OUTPUT}"
+          }
+          if ! prove 1; then
+            echo "::warning::installed-Claude tests did not pass once against ${VERSION}; retrying"
+            prove 2
           fi
+          # Not a protection proof: the release through the real runtime on
+          # translated routes (TestInstalledClaudeOnResponses), kept out of
+          # the stream the checker judges.
+          if ! go test -count=1 -v -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime; then
+            echo "::warning::the translated-route test failed once against ${VERSION}; retrying"
+            go test -count=1 -v -run '^TestInstalledClaudeOnResponses$' ./internal/productruntime
+          fi
+      - name: Keep the proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canary-proof-claude-code-linux-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-proof
+          if-no-files-found: error
+
+  codex-latest-macos:
+    name: newest Codex release on Apple silicon
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      outcome: ${{ steps.proof.outputs.outcome }}
+      protections: ${{ steps.proof.outputs.protections }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Find the newest Codex release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(npm view @openai/codex version)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Prove the protections and the signature against it
+        id: proof
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The identity proof needs the recognized tier, which exists only on
+          # Apple silicon; the flag turns its every skip into a failure.
+          test "$(uname -m)" = arm64
+          export VIBERMATE_REQUIRE_SIGNER_RECOGNITION=1
+          prefix="${RUNNER_TEMP}/vibermate-codex-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" "@openai/codex@${VERSION}"
+          codex_binary="$(find "${prefix}/node_modules" -type f -path '*/vendor/aarch64-apple-darwin/bin/codex')"
+          test -f "${codex_binary}"
+          test "$("${codex_binary}" --version)" = "codex-cli ${VERSION}"
+          export VIBERMATE_CODEX_ACCEPTANCE="${codex_binary}"
+          pattern="$(go run ./cmd/vibermate-canary-proof tests --client codex-cli --os darwin)"
+          test -n "${pattern}"
+          proof="${RUNNER_TEMP}/canary-proof"
+          mkdir -p "${proof}"
+          # go test fails when a test does; the checker judges the stream.
+          prove() {
+            go test -count=1 -json -run "${pattern}" ./internal/loopbackproxy ./internal/clientadapter \
+              > "${proof}/attempt-$1.json" || true
+            go run ./cmd/vibermate-canary-proof verify --client codex-cli --os darwin \
+              --version "${VERSION}" --input "${proof}/attempt-$1.json" \
+              --proof "${proof}/proof.json" --github-output "${GITHUB_OUTPUT}"
+          }
+          if ! prove 1; then
+            echo "::warning::the Codex proofs did not pass once against ${VERSION} on Apple silicon; retrying"
+            prove 2
+          fi
+      - name: Keep the proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canary-proof-codex-cli-darwin-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-proof
+          if-no-files-found: error
+
+  claude-latest-macos:
+    name: newest Claude Code release on Apple silicon
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      outcome: ${{ steps.proof.outputs.outcome }}
+      protections: ${{ steps.proof.outputs.protections }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+      - name: Find the newest Claude Code release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(npm view @anthropic-ai/claude-code version)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Prove the protections and the signature against it
+        id: proof
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The identity proof needs the recognized tier, which exists only on
+          # Apple silicon; the flag turns its every skip into a failure.
+          test "$(uname -m)" = arm64
+          export VIBERMATE_REQUIRE_SIGNER_RECOGNITION=1
+          prefix="${RUNNER_TEMP}/vibermate-claude-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --ignore-scripts --prefix "${prefix}" "@anthropic-ai/claude-code@${VERSION}"
+          claude_binary="$(find "${prefix}/node_modules/@anthropic-ai" -type f -name claude -path '*/claude-code-darwin-arm64/claude')"
+          test -f "${claude_binary}"
+          test "$("${claude_binary}" --version)" = "${VERSION} (Claude Code)"
+          export VIBERMATE_CLAUDE_ACCEPTANCE="${claude_binary}"
+          pattern="$(go run ./cmd/vibermate-canary-proof tests --client claude-code --os darwin)"
+          test -n "${pattern}"
+          proof="${RUNNER_TEMP}/canary-proof"
+          mkdir -p "${proof}"
+          # go test fails when a test does; the checker judges the stream.
+          prove() {
+            go test -count=1 -json -run "${pattern}" ./internal/runlauncher ./internal/clientadapter \
+              > "${proof}/attempt-$1.json" || true
+            go run ./cmd/vibermate-canary-proof verify --client claude-code --os darwin \
+              --version "${VERSION}" --input "${proof}/attempt-$1.json" \
+              --proof "${proof}/proof.json" --github-output "${GITHUB_OUTPUT}"
+          }
+          if ! prove 1; then
+            echo "::warning::the Claude Code proofs did not pass once against ${VERSION} on Apple silicon; retrying"
+            prove 2
+          fi
+      - name: Keep the proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canary-proof-claude-code-darwin-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-proof
+          if-no-files-found: error
 
   report:
     name: report a failing release
-    needs: [codex-latest, claude-latest]
-    if: failure()
+    needs: [codex-latest, claude-latest, codex-latest-macos, claude-latest-macos]
+    # Only the default branch reports: a canary dispatched on a branch is a
+    # probe of that branch's tests, and its failures belong to that branch.
+    if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: Open an issue per failing release unless one is already open
+      - name: Open an issue per failing job unless one is already open
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          CODEX_RESULT: ${{ needs.codex-latest.result }}
-          CODEX_VERSION: ${{ needs.codex-latest.outputs.version }}
-          CLAUDE_RESULT: ${{ needs.claude-latest.result }}
-          CLAUDE_VERSION: ${{ needs.claude-latest.outputs.version }}
+          CODEX_LINUX_RESULT: ${{ needs.codex-latest.result }}
+          CODEX_LINUX_VERSION: ${{ needs.codex-latest.outputs.version }}
+          CODEX_LINUX_OUTCOME: ${{ needs.codex-latest.outputs.outcome }}
+          CODEX_LINUX_PROTECTIONS: ${{ needs.codex-latest.outputs.protections }}
+          CLAUDE_LINUX_RESULT: ${{ needs.claude-latest.result }}
+          CLAUDE_LINUX_VERSION: ${{ needs.claude-latest.outputs.version }}
+          CLAUDE_LINUX_OUTCOME: ${{ needs.claude-latest.outputs.outcome }}
+          CLAUDE_LINUX_PROTECTIONS: ${{ needs.claude-latest.outputs.protections }}
+          CODEX_DARWIN_RESULT: ${{ needs.codex-latest-macos.result }}
+          CODEX_DARWIN_VERSION: ${{ needs.codex-latest-macos.outputs.version }}
+          CODEX_DARWIN_OUTCOME: ${{ needs.codex-latest-macos.outputs.outcome }}
+          CODEX_DARWIN_PROTECTIONS: ${{ needs.codex-latest-macos.outputs.protections }}
+          CLAUDE_DARWIN_RESULT: ${{ needs.claude-latest-macos.result }}
+          CLAUDE_DARWIN_VERSION: ${{ needs.claude-latest-macos.outputs.version }}
+          CLAUDE_DARWIN_OUTCOME: ${{ needs.claude-latest-macos.outputs.outcome }}
+          CLAUDE_DARWIN_PROTECTIONS: ${{ needs.claude-latest-macos.outputs.protections }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           report() {
-            local client="$1" result="$2" version="$3"
+            local client="$1" os="$2" result="$3" version="$4" outcome="$5" protections="$6"
             [ "${result}" = "failure" ] || return 0
-            local title="Client canary: ${client} ${version:-latest} fails the installed-client tests"
+            local subject="Client canary: ${client} ${version:-latest} (${os})"
+            local named="${protections//,/, }"
+            local title body
+            if [ "${outcome}" = "drift" ]; then
+              title="${subject}: a protection's control no longer discriminates (${named})"
+              body="Every protected arm still holds against the newest published ${client} release (${version:-unknown}) on ${os}, but a control arm no longer fails, so the release may no longer need ${named}. The protection stays granted."
+            elif [ -n "${protections}" ]; then
+              title="${subject} breaks ${named}"
+              body="The daily client canary could not prove ${named} against the newest published ${client} release (${version:-unknown}) on ${os}. A failing canary changes nothing at runtime; ADR 0026 says how to withdraw a protection."
+            else
+              title="${subject} fails the installed-client tests"
+              body="The daily client canary failed against the newest published ${client} release (${version:-unknown}) on ${os}."
+            fi
             local open
             open="$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq 'length')"
             if [ "${open}" = "0" ]; then
-              gh issue create --title "${title}" --body "The daily client canary failed against the newest published ${client} release (${version:-unknown}). Pull requests are unaffected; they test the accepted versions. Run: ${RUN_URL}"
+              gh issue create --title "${title}" --body "${body} Pull requests are unaffected; they test the accepted versions. Run: ${RUN_URL}"
             fi
           }
-          report "Codex" "${CODEX_RESULT}" "${CODEX_VERSION}"
-          report "Claude Code" "${CLAUDE_RESULT}" "${CLAUDE_VERSION}"
+          report "Codex" linux "${CODEX_LINUX_RESULT}" "${CODEX_LINUX_VERSION}" "${CODEX_LINUX_OUTCOME}" "${CODEX_LINUX_PROTECTIONS}"
+          report "Claude Code" linux "${CLAUDE_LINUX_RESULT}" "${CLAUDE_LINUX_VERSION}" "${CLAUDE_LINUX_OUTCOME}" "${CLAUDE_LINUX_PROTECTIONS}"
+          report "Codex" darwin "${CODEX_DARWIN_RESULT}" "${CODEX_DARWIN_VERSION}" "${CODEX_DARWIN_OUTCOME}" "${CODEX_DARWIN_PROTECTIONS}"
+          report "Claude Code" darwin "${CLAUDE_DARWIN_RESULT}" "${CLAUDE_DARWIN_VERSION}" "${CLAUDE_DARWIN_OUTCOME}" "${CLAUDE_DARWIN_PROTECTIONS}"

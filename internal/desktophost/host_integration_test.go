@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
@@ -23,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -602,7 +604,10 @@ func controlCreateProbe(
 
 // The Desktop's Runtime names a recognized run's client from the catalog the
 // Desktop verifies clients against (ADR 0026). With a catalog at another
-// revision, a row stored under the built-in revision names none.
+// revision, a row stored under the built-in revision names none. A named
+// Claude Code's connections, admitted the way the Runtime's proxy admits
+// them, carry its local-launcher workspace and the recognized basis for the
+// workspace tools, which is what the Exchange hands the tool gate.
 func TestDesktopRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -644,28 +649,59 @@ func TestDesktopRuntimeIndexesRecognizedClientsFromItsCatalog(t *testing.T) {
 			host := startHost(t, options)
 			defer shutdownHost(t, host)
 			for revision, want := range testCase.want {
-				if got := recognizedRunClient(t, host.Runtime(), "claude", revision); got.ID != want {
+				got, admission, workspace := recognizedRunClient(t, host.Runtime(), "claude", revision)
+				if got.ID != want {
 					t.Fatalf("revision %d named %+v, want client %q", revision, got, want)
+				}
+				// A named Claude Code carries the stream fallback the policy
+				// grants it, which its launcher applies, and the workspace
+				// tools, which the tool gate applies.
+				claude := clientadapter.FeatureCoreOwnedStreamingFallback | clientadapter.FeatureStructuredWorkspaceTools
+				if want != "" && got != (clientadapter.RecognizedClient{ID: want, Policy: claude, Protections: claude}) {
+					t.Fatalf("revision %d carries %+v, want the stream fallback and the workspace tools", revision, got)
+				}
+				if root, local := admission.LocalWorkspaceRoot(); !local || root != workspace {
+					t.Fatalf("revision %d admits workspace %q, local=%v, want %q", revision, root, local, workspace)
+				}
+				basis := clientadapter.ProtectionNone
+				if want != "" {
+					basis = clientadapter.ProtectionRecognizedClient
+				}
+				if got := admission.ProtectionBasis(clientadapter.FeatureStructuredWorkspaceTools); got != basis {
+					t.Fatalf("revision %d has workspace tools basis %s, want %s", revision, got, basis)
 				}
 			}
 		})
 	}
 }
 
+// recognizedRunClient stores a recognized run from the local launcher, with
+// the workspace scope the Runtime's resolver proves for its directory, as the
+// issuer does for a local CLI. It returns the client the reader names, the
+// capture admission built from the Runtime's own capture authorities as the
+// Runtime builds its proxy's, and the workspace.
 func recognizedRunClient(
 	t *testing.T,
 	runtime *productruntime.Runtime,
 	label string,
 	revision clientadapter.CatalogRevision,
-) clientadapter.RecognizedClient {
+) (clientadapter.RecognizedClient, captureadmission.Admission, string) {
 	t.Helper()
-	directory := t.TempDir()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := runtime.WorkspaceIdentity().ResolveLocal(t.Context(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	grant, err := runtime.CaptureRuns().Create(t.Context(), capturerun.CreateCommand{
 		CWD:                     directory,
 		CanonicalExecutablePath: filepath.Join(directory, label),
 		ExecutableLabel:         label,
 		CatalogRevision:         revision,
 		Recognition:             clientadapter.RecognitionRecognized,
+		Workspace:               workspace,
 		Lifetime:                time.Minute,
 	})
 	if err != nil {
@@ -680,7 +716,24 @@ func recognizedRunClient(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return view.RecognizedClient
+	runs, runsOK := runtime.CaptureRuns().(capturerun.ProxyAuthorizer)
+	manuals, manualsOK := runtime.ManualCaptures().(manualcapture.ProxyAuthorizer)
+	if !runsOK || !manualsOK {
+		t.Fatalf("the Runtime's capture authorities do not authorize proxy credentials: runs %v, manual %v", runsOK, manualsOK)
+	}
+	authorizer, err := captureadmission.NewAuthorizer(runs, manuals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := captureadmission.NewProxyCredential(grant.ProxyCapability.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := authorizer.Authorize(t.Context(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return view.RecognizedClient, admission, directory
 }
 
 func newHostPaths(t *testing.T, cache string) desktophost.Paths {
