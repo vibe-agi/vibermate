@@ -868,6 +868,34 @@ func TestTranslatedInBandOverloadIsAnAnthropicErrorEvent(t *testing.T) {
 	}
 }
 
+// A policy refusal after the stream began is an in-band Anthropic error
+// event in the plain envelope: Claude Code acts on its policy_blocked type,
+// and the request_id envelope belongs to the HTTP body only.
+func TestTranslatedInBandPolicyRefusalIsAPlainErrorEvent(t *testing.T) {
+	provider := &providerDouble{results: []providerResult{{
+		response: responsesStream(t, append(slices.Clone(textTurnEvents("partial")[:4]), streamFailedEvent("cyber_policy"))),
+	}}}
+	pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
+	turn := runTranslated(t, pipeline, translatedPlan(t, translatedPrimary), "exchange-policy-in-band", claudeBody(claudeFirstTurn))
+	var failure *Failure
+	if !errors.As(turn.err, &failure) || failure.Provider == nil || failure.Provider.Class != protocolcore.ProviderErrorPolicy {
+		t.Fatalf("err = %v", turn.err)
+	}
+	aborts := turn.downstream.abortsSnapshot()
+	if len(aborts) != 1 {
+		t.Fatalf("aborts = %d", len(aborts))
+	}
+	name, data := aborts[0].NativeError.StreamEvent(protocolspec.DialectAnthropicMessages)
+	var event renderedAnthropicError
+	if err := json.Unmarshal(data, &event); err != nil || name != "error" || event.Type != "error" ||
+		event.RequestID != "" || bytes.Contains(data, []byte("request_id")) || event.Error.Type != "policy_blocked" {
+		t.Fatalf("in-band error = %s %s", name, data)
+	}
+	if !bytes.Contains(turn.downstream.bytesSnapshot(), []byte("partial")) {
+		t.Fatal("text streamed before the refusal was lost")
+	}
+}
+
 // An attachment the provider side cannot carry (a provider file reference)
 // is refused right after decode with the capability token Claude Code strips
 // attachments on, and nothing is sent. Without body admission the refusal

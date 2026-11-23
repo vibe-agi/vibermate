@@ -378,6 +378,59 @@ func TestTranslatedUnaryRejectionsAreTheAnthropicErrors(t *testing.T) {
 	}
 }
 
+// A policy refusal reaches a Stream=false client as the policy_blocked error
+// in the envelope design 8.3 gives that row, with the Exchange ID as its
+// request_id, whichever form the upstream refused in: an HTTP rejection, an
+// in-band response.failed or a failed JSON body.
+func TestTranslatedUnaryPolicyRefusalCarriesTheRequestID(t *testing.T) {
+	const secret = "secret upstream text org-4242"
+	failedJSON := `{"id":"resp_1","object":"response","created_at":1700000000,"status":"failed","model":"` + translatedModel +
+		`","output":[],"error":{"code":"cyber_policy","message":"` + secret + `"}}`
+	for _, form := range []struct {
+		name     string
+		response func() *http.Response
+		code     ReasonCode
+	}{
+		{"HTTP rejection", func() *http.Response {
+			return rejection(400, `{"error":{"message":"`+secret+`","type":"invalid_request_error","param":null,"code":"cyber_policy"}}`)
+		}, ReasonProviderStatusRejected},
+		{"in band", func() *http.Response {
+			return responsesStream(t, append(slices.Clone(textTurnEvents("partial")[:4]), streamFailedEvent("cyber_policy")))
+		}, ReasonProviderResponseFailed},
+		{"failed JSON body", func() *http.Response { return jsonResponse(http.StatusOK, []byte(failedJSON)) }, ReasonProviderResponseFailed},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			provider := &providerDouble{results: []providerResult{{response: form.response()}}}
+			pipeline := newTranslatedPipeline(t, newAccountAuthority(t, translatedPrimary), provider, approvedDecisions())
+			turn := runTranslated(t, pipeline, translatedPlan(t, translatedPrimary), "exchange-unary-policy",
+				unaryRequest(t, claudeBody(claudeFirstTurn)))
+			var failure *Failure
+			if !errors.As(turn.err, &failure) || failure.Code != form.code || failure.Provider == nil ||
+				failure.Provider.Class != protocolcore.ProviderErrorPolicy {
+				t.Fatalf("err = %v", turn.err)
+			}
+			native := failure.NativeError
+			if got := native.ClientStatus(protocolspec.DialectAnthropicMessages); got != http.StatusBadRequest {
+				t.Fatalf("client status = %d", got)
+			}
+			body := native.HTTPBodyForDialect(protocolspec.DialectAnthropicMessages)
+			var rendered renderedAnthropicError
+			if err := json.Unmarshal(body, &rendered); err != nil || rendered.Type != "error" ||
+				rendered.RequestID != "exchange-unary-policy" || rendered.Error.Type != "policy_blocked" ||
+				rendered.Error.Message != "OpenAI declined this request under its usage policies (cyber_policy)." {
+				t.Fatalf("policy body = %s", body)
+			}
+			if bytes.Contains(body, []byte("secret")) || bytes.Contains(body, []byte("4242")) {
+				t.Fatalf("upstream text reached the client: %s", body)
+			}
+			if len(turn.downstream.envelopesSnapshot()) != 0 || len(turn.downstream.bytesSnapshot()) != 0 ||
+				len(turn.downstream.abortsSnapshot()) != 0 {
+				t.Fatalf("the refusal began a response: %s", turn.downstream.bytesSnapshot())
+			}
+		})
+	}
+}
+
 // pipedStream is an upstream event stream the test writes as it goes.
 func pipedStream() (*http.Response, *io.PipeWriter, *idleBudgetBody) {
 	reader, writer := io.Pipe()

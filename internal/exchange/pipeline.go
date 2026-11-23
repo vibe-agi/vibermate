@@ -787,7 +787,22 @@ func (pipeline *Pipeline) executeCandidate(
 		)
 	}
 	pipeline.rememberRejectedReasoning(protocolPath, decoded, err)
+	withPolicyRequestID(protocolPath, request.exchangeID, err)
 	return err
+}
+
+// withPolicyRequestID gives a composed path's policy refusal the HTTP body
+// design 8.3 gives that row, whichever form the upstream refused in: an HTTP
+// rejection, or a failure in band or in a failed JSON body that reaches a
+// Stream=false client as an HTTP error. A begun stream writes its in-band
+// event, which never carries the HTTP body.
+func withPolicyRequestID(path *protocolpath.Path, exchangeID string, err error) {
+	var failure *Failure
+	if !path.IsComposed() || !errors.As(err, &failure) || failure.Provider == nil ||
+		failure.Provider.Class != protocolcore.ProviderErrorPolicy {
+		return
+	}
+	failure.NativeError = withAnthropicRequestID(failure.NativeError, path.Client().Dialect(), exchangeID)
 }
 
 // providerContext carries the frozen target facts of one attempt to a
@@ -1691,7 +1706,7 @@ func (pipeline *Pipeline) executeComplete(
 		return newProviderStatusFailure(
 			request.exchangeID,
 			response.StatusCode,
-			classifyProviderRejectionResponse(response, selection, protocolPath, decoded, request.exchangeID),
+			classifyProviderRejectionResponse(response, selection, protocolPath, decoded),
 		)
 	}
 	// A path that always streams upstream answers a Stream=false client by
@@ -2778,7 +2793,7 @@ func (pipeline *Pipeline) executeStream(
 
 		statusCode := response.StatusCode
 		if statusCode < 200 || statusCode > 299 {
-			providerField := classifyProviderRejectionResponse(response, selection, protocolPath, decoded, request.exchangeID)
+			providerField := classifyProviderRejectionResponse(response, selection, protocolPath, decoded)
 			_ = response.Body.Close()
 			failure := newProviderStatusFailure(
 				request.exchangeID,
@@ -3688,11 +3703,10 @@ func classifyProviderRejectionResponse(
 	selection frozenSelection,
 	path *protocolpath.Path,
 	request protocolcore.Request,
-	exchangeID string,
 ) providerRejection {
 	logical, err := newLogicalResponseStream(response.Body, strings.Join(response.Header.Values("Content-Encoding"), ","))
 	if err != nil {
-		return translateProviderRejection(providerRejection{}, response, nil, path, request, exchangeID)
+		return translateProviderRejection(providerRejection{}, response, nil, path, request)
 	}
 	defer logical.Close()
 	body, err := readBounded(logical, maxProviderErrorBytes)
@@ -3703,7 +3717,7 @@ func classifyProviderRejectionResponse(
 		body = nil
 	}
 	if path.IsComposed() {
-		return translateProviderRejection(diagnosis, response, body, path, request, exchangeID)
+		return translateProviderRejection(diagnosis, response, body, path, request)
 	}
 	if selection.codecPlan.ClientDialect() != selection.codecPlan.ProviderDialect() {
 		diagnosis.native = protocolcore.NativeProviderError{}
@@ -3727,7 +3741,6 @@ func translateProviderRejection(
 	body []byte,
 	path *protocolpath.Path,
 	request protocolcore.Request,
-	exchangeID string,
 ) providerRejection {
 	diagnosis.native = protocolcore.NativeProviderError{}
 	if !path.IsComposed() {
@@ -3736,9 +3749,6 @@ func translateProviderRejection(
 	native, class, translated := path.TranslateProviderRejection(request, response.StatusCode, response.Header, body)
 	if !translated {
 		return diagnosis
-	}
-	if class.Class == protocolcore.ProviderErrorPolicy {
-		native = withAnthropicRequestID(native, path.Client().Dialect(), exchangeID)
 	}
 	diagnosis.native = native
 	diagnosis.provider = &class
