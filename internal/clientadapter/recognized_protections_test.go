@@ -15,11 +15,12 @@ import (
 	"testing"
 )
 
-// designedRecognizedClientPolicies is the table ADR 0026 arrives at once every
-// grant has its installed-client proof. The live table does not grant Claude
-// Code its workspace tools yet, so the index, the fallback projection and the
-// canary list are also exercised against this fixture through the unexported
-// delegates.
+// designedRecognizedClientPolicies is the table ADR 0026 designs, every grant
+// with its installed-client proof. TestRecognizedClientPolicyIsPinned holds
+// the live table equal to it, so the tests that hand this fixture to the
+// unexported delegates (the index, the fallback projection and the canary
+// list) exercise the shipped policy through a table of their own, which a
+// test may change without touching the live one.
 func designedRecognizedClientPolicies() []RecognizedClientPolicy {
 	return []RecognizedClientPolicy{
 		{
