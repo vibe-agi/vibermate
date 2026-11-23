@@ -169,7 +169,10 @@ func TestProtectionNoticeFollowsTheLaunchDecision(t *testing.T) {
 		if err := validateGrant(test.grant); err != nil {
 			t.Fatalf("%s: the fixture grant is invalid: %v", test.name, err)
 		}
-		decision := decideStreamingFallback(base, test.grant, usesManagedClientCredential(base, test.grant))
+		_, decision, err := buildChildEnvironment(base, test.grant)
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
 		got := noticeLines(t, base, decision)
 		var want []string
 		for _, key := range test.want {

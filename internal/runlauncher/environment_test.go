@@ -2,6 +2,8 @@ package runlauncher
 
 import (
 	"github.com/vibe-agi/vibermate/internal/capturescope"
+	"net"
+	"net/url"
 	"runtime"
 	"slices"
 	"strings"
@@ -755,7 +757,10 @@ func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 				if withheld {
 					policy = clientadapter.StreamingFallbackClientDefault
 				}
-				decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
+				environment, decision, err := buildChildEnvironment(base, testCase.grant)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if decision.policy != policy || decision.switchedOff != withheld {
 					t.Fatalf("decision = %+v, want policy %s and switchedOff %v", decision, policy, withheld)
 				}
@@ -765,10 +770,6 @@ func TestStreamingFallbackDecisionFollowsTheGrant(t *testing.T) {
 					}
 				} else if decision.switchValue != "" || decision.switchUnrecognized {
 					t.Fatalf("a grant without a signer read the switch: %+v", decision)
-				}
-				environment, err := buildEnvironment(base, testCase.grant)
-				if err != nil {
-					t.Fatal(err)
 				}
 				want := "0"
 				if policy == clientadapter.StreamingFallbackCoreOwned {
@@ -811,7 +812,12 @@ func TestRecognizedClaudeLeavesStreamFallbackToCoreOnlyOnUpstreamTargets(t *test
 		notice []string
 	}{
 		{"recognized claude, managed target", claude(anthropic), nil, true, []string{fallback}},
-		{"recognized claude, managed base URL", claude([]string{"gateway.example:443"}),
+		// A managed credential drops the base URL with the user's
+		// credential, so the child reaches api.anthropic.com. The decision
+		// follows that authority, not the one the base URL named.
+		{"recognized claude, managed base URL the launcher drops", claude([]string{"gateway.example:443"}),
+			[]string{"ANTHROPIC_BASE_URL=https://gateway.example"}, false, nil},
+		{"recognized claude, managed base URL and a managed default", claude([]string{"api.anthropic.com:443", "gateway.example:443"}),
 			[]string{"ANTHROPIC_BASE_URL=https://gateway.example"}, true, []string{fallback}},
 		{"recognized claude, unmanaged target", claude([]string{}), nil, false, nil},
 		{"recognized claude, base URL at an unmanaged host", claude(anthropic),
@@ -841,7 +847,7 @@ func TestRecognizedClaudeLeavesStreamFallbackToCoreOnlyOnUpstreamTargets(t *test
 		if err := validateGrant(test.grant); err != nil {
 			t.Fatalf("%s: the fixture grant is invalid: %v", test.name, err)
 		}
-		environment, err := buildEnvironment(base, test.grant)
+		environment, decision, err := buildChildEnvironment(base, test.grant)
 		if err != nil {
 			t.Fatalf("%s: %v", test.name, err)
 		}
@@ -855,6 +861,26 @@ func TestRecognizedClaudeLeavesStreamFallbackToCoreOnlyOnUpstreamTargets(t *test
 		if test.set {
 			want = map[string]string{claudeDisableNonStreamingFallback: "1"}
 		}
+		// A recognized grant leaves recovery to Core only when the authority
+		// the child itself reaches is managed.
+		if test.set && test.grant.Adapter == nil {
+			target := environmentMap(environment)["ANTHROPIC_BASE_URL"]
+			if target == "" {
+				target = "https://api.anthropic.com"
+			}
+			parsed, err := url.Parse(target)
+			if err != nil {
+				t.Fatalf("%s: child base URL %q: %v", test.name, target, err)
+			}
+			authority := net.JoinHostPort(parsed.Hostname(), "443")
+			if parsed.Port() != "" {
+				authority = parsed.Host
+			}
+			if !slices.Contains(test.grant.ManagedCredentialAuthorities, authority) {
+				t.Fatalf("%s: the launcher set the variable although the child reaches %s, which is not managed (%v)",
+					test.name, authority, test.grant.ManagedCredentialAuthorities)
+			}
+		}
 		if len(got) != len(want) {
 			t.Fatalf("%s: fallback variables %v, want %v", test.name, got, want)
 		}
@@ -863,7 +889,6 @@ func TestRecognizedClaudeLeavesStreamFallbackToCoreOnlyOnUpstreamTargets(t *test
 				t.Fatalf("%s: fallback variables %v, want %v", test.name, got, want)
 			}
 		}
-		decision := decideStreamingFallback(base, test.grant, usesManagedClientCredential(base, test.grant))
 		_, value, _ := clientadapter.ProtectionSwitchFromEnvironment(base)
 		var lines []string
 		for _, key := range test.notice {
@@ -904,8 +929,7 @@ func TestStreamingFallbackDecisionIsTheSameForSetAndDrop(t *testing.T) {
 	for _, testCase := range fallbackGrantCases() {
 		for index, values := range inherited {
 			base := append([]string{"PATH=/usr/bin:/bin"}, values...)
-			decision := decideStreamingFallback(base, testCase.grant, usesManagedClientCredential(base, testCase.grant))
-			environment, err := buildEnvironment(base, testCase.grant)
+			environment, decision, err := buildChildEnvironment(base, testCase.grant)
 			if err != nil {
 				t.Fatalf("%s/%d: %v", testCase.name, index, err)
 			}

@@ -71,18 +71,28 @@ func buildEnvironment(
 	base []string,
 	grant capturecontrol.LaunchGrant,
 ) ([]string, error) {
+	environment, _, err := buildChildEnvironment(base, grant)
+	return environment, err
+}
+
+// buildChildEnvironment builds the child environment and returns the stream
+// fallback decision it applied, so the command announces exactly what the
+// child received.
+func buildChildEnvironment(
+	base []string,
+	grant capturecontrol.LaunchGrant,
+) ([]string, streamingFallbackDecision, error) {
 	if err := validateGrant(grant); err != nil {
-		return nil, err
+		return nil, streamingFallbackDecision{}, err
 	}
 	proxy, err := authenticatedProxyURL(
 		grant.ProxyAddress,
 		grant.ProxyToken,
 	)
 	if err != nil {
-		return nil, err
+		return nil, streamingFallbackDecision{}, err
 	}
 	managedClientCredential := usesManagedClientCredential(base, grant)
-	fallback := decideStreamingFallback(base, grant, managedClientCredential)
 	preserved := make(map[string]string)
 	deletedByEnvironment := make(
 		map[string]struct{},
@@ -109,7 +119,7 @@ func buildEnvironment(
 			key,
 			grant.LaunchRecipe,
 			managedClientCredential,
-		) || launchPolicyManagesEnvironment(key, fallback.policy) {
+		) {
 			continue
 		}
 		preserved[key] = value
@@ -127,9 +137,6 @@ func buildEnvironment(
 	preserved["NO_PROXY"] = noProxy
 	preserved["no_proxy"] = noProxy
 	preserved["VIBERMATE_CAPTURE_RUN_ID"] = grant.Run.ID
-	if fallback.policy == clientadapter.StreamingFallbackCoreOwned {
-		preserved[claudeDisableNonStreamingFallback] = "1"
-	}
 	switch grant.LaunchRecipe {
 	case clientadapter.LaunchGeneric:
 	case clientadapter.LaunchNodeEnvProxy:
@@ -153,23 +160,39 @@ func buildEnvironment(
 			preserved["CODEX_CA_CERTIFICATE"] = grant.RootPEMPath
 		}
 	default:
-		return nil, errors.New("CaptureRun launch recipe is unsupported")
+		return nil, streamingFallbackDecision{}, errors.New("CaptureRun launch recipe is unsupported")
 	}
-	keys := make([]string, 0, len(preserved))
-	for key := range preserved {
+	// The fallback follows the authority the child itself will reach, which
+	// is not always the base environment's: a managed credential drops the
+	// base URL along with the user's credential.
+	fallback := decideStreamingFallback(base, grant, childTargetIsManaged(sortedEnvironment(preserved), grant))
+	if fallback.policy == clientadapter.StreamingFallbackCoreOwned {
+		for key := range preserved {
+			if launchPolicyManagesEnvironment(key, fallback.policy) {
+				delete(preserved, key)
+			}
+		}
+		preserved[claudeDisableNonStreamingFallback] = "1"
+	}
+	return sortedEnvironment(preserved), fallback, nil
+}
+
+func sortedEnvironment(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	result := make([]string, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, key+"="+preserved[key])
+		result = append(result, key+"="+values[key])
 	}
-	return result, nil
+	return result
 }
 
 // launchPolicyManagesEnvironment drops every inherited casing of the fallback
 // variable exactly when the launcher sets it, so the set and the drop read one
-// decision.
+// decision. A Launch Environment cannot set or delete any casing of it.
 func launchPolicyManagesEnvironment(
 	key string,
 	policy clientadapter.StreamingFallbackPolicy,
@@ -192,9 +215,11 @@ type streamingFallbackDecision struct {
 // only when its own target is an authority whose every route is Upstream,
 // where the Exchange holds the stream, and the launcher's operator switch is
 // not off. On Original Destination Core performs no recovery, so the client
-// keeps its own. Every input is a field restart recovery already compares, or
-// the launcher's own BaseEnvironment, so a recomputed child environment is
-// identical.
+// keeps its own. managedTarget says whether the child's own target, read from
+// its prepared environment, is such an authority. Every input is a field
+// restart recovery already compares, or the launcher's own BaseEnvironment,
+// or the child environment built from them, so a recomputed child
+// environment is identical.
 func decideStreamingFallback(
 	base []string,
 	grant capturecontrol.LaunchGrant,
@@ -265,8 +290,28 @@ func environmentManaged(
 	return false
 }
 
+// usesManagedClientCredential reports whether the client's target in the
+// launcher's own environment is a managed authority, so the launcher replaces
+// the user's credential inputs, its base URL among them.
 func usesManagedClientCredential(
 	base []string,
+	grant capturecontrol.LaunchGrant,
+) bool {
+	return targetIsManaged(base, grant)
+}
+
+// childTargetIsManaged reports whether the authority the child will reach,
+// read from its prepared environment as prepareManagedAuth reads it, is a
+// managed authority, whose every route is Upstream.
+func childTargetIsManaged(
+	child []string,
+	grant capturecontrol.LaunchGrant,
+) bool {
+	return targetIsManaged(child, grant)
+}
+
+func targetIsManaged(
+	environment []string,
 	grant capturecontrol.LaunchGrant,
 ) bool {
 	if len(grant.ManagedCredentialAuthorities) == 0 {
@@ -278,7 +323,7 @@ func usesManagedClientCredential(
 	} else if grant.Signer != nil {
 		clientID = grant.Signer.ID
 	}
-	authority, ok := clientTargetAuthority(base, clientID)
+	authority, ok := clientTargetAuthority(environment, clientID)
 	if !ok {
 		return false
 	}

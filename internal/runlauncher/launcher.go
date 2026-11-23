@@ -298,7 +298,7 @@ func (launcher *Launcher) Run(
 			environmentGrant = recovery.childGrant(grant)
 		}
 	}
-	environment, err := buildEnvironment(
+	environment, fallback, err := buildChildEnvironment(
 		launcher.config.BaseEnvironment,
 		environmentGrant,
 	)
@@ -306,11 +306,7 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
-	launcher.announceProtections(decideStreamingFallback(
-		launcher.config.BaseEnvironment,
-		environmentGrant,
-		usesManagedClientCredential(launcher.config.BaseEnvironment, environmentGrant),
-	))
+	launcher.announceProtections(fallback)
 	var providerArguments []string
 	explainResume := false
 	if request.ManagedAuth {
