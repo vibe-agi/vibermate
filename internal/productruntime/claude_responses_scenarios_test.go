@@ -671,7 +671,10 @@ func (shape responsesRequestShape) has(kind string) bool {
 // A16: the replayed reasoning is rejected as invalid_encrypted_content.
 // Pinned as design 8.6 predicts: the 400 capability_rejected:
 // thinking_signature makes Claude Code strip its thinking and retry, and the
-// retried request replays no reasoning item.
+// retried request replays no reasoning item. The same 400 feeds the
+// rejected-seal memory, which would heal a retry that replayed the thinking
+// by dropping its seal; no exchange may report that drop, so the healing is
+// Claude Code's own.
 func testClaudeOnResponsesInvalidEncryptedContent(t *testing.T, binary string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -696,6 +699,11 @@ func testClaudeOnResponsesInvalidEncryptedContent(t *testing.T, binary string) {
 	retried := requests[2].shape
 	if !retried.has("function_call") || !bytes.Contains(retried.outputs()["call_a16"], []byte("a16-marker")) {
 		t.Errorf("the retry lost the tool round: %s", requests[2].body)
+	}
+	for index, record := range run.exchanges.snapshot() {
+		if slices.Contains(record.notices(), "reasoning_not_replayed") {
+			t.Errorf("exchange %d dropped a replayed seal: the rejected-seal memory healed the turn, not Claude Code", index)
+		}
 	}
 }
 
